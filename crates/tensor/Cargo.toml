@@ -1,0 +1,16 @@
+[package]
+name = "tensor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+kernels_core = { path = "../kernels-core" }
+runtime = { path = "../runtime" }
+
+[dev-dependencies]
+criterion = "0.7.0"
+kernels_simd = { path = "../kernels-simd" }
+
+[[bench]]
+name = "gemm_cpu"
+harness = false

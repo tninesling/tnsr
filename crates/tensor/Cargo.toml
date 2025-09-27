@@ -4,18 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cust = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main", optional = true }
 kernels-core = { path = "../kernels-core" }
 kernels-cuda = { path = "../kernels-cuda", optional = true }
 runtime = { path = "../runtime" }
 
 [dev-dependencies]
 criterion = "0.7.0"
-cust = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main" }
 kernels-simd = { path = "../kernels-simd" }
 
 [features]
 default = []
-cuda = ["kernels-cuda"]
+cuda = ["cust", "kernels-cuda", "runtime/cuda"]
 
 [[bench]]
 name = "gemm_cpu"

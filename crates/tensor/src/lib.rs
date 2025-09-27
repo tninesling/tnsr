@@ -1,3 +1,4 @@
+use kernels_core::Gemm;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -49,6 +50,44 @@ impl Tensor {
 
         // Dispatch GEMM via runtime
         let gemm = runtime::get_preferred_gemm();
+        gemm.gemm(
+            self.rows,
+            other.cols,
+            self.cols,
+            1.0,
+            &a_view,
+            self.cols,
+            &b_view,
+            other.cols,
+            0.0,
+            &mut c_view,
+            c.cols,
+        );
+
+        c
+    }
+
+    pub fn matmul_with_gemm(&self, other: &Tensor, gemm: &dyn Gemm) -> Tensor {
+        assert_eq!(self.cols, other.rows);
+        let mut c = Tensor::new(self.rows, other.cols, 0.0);
+
+        // Prepare view wrappers
+        let a_view = kernels_core::Mat {
+            rows: self.rows,
+            cols: self.cols,
+            data: &self.data,
+        };
+        let b_view = kernels_core::Mat {
+            rows: other.rows,
+            cols: other.cols,
+            data: &other.data,
+        };
+        let mut c_view = kernels_core::MatMut {
+            rows: c.rows,
+            cols: c.cols,
+            data: Arc::make_mut(&mut c.data).as_mut_slice(),
+        };
+
         gemm.gemm(
             self.rows,
             other.cols,

@@ -1,3 +1,7 @@
+// TODO: Use `cust` deps to launch CUDA stream from runtime
+// use cust::module::Module;
+// use cust::stream::Stream;
+// use cust::stream::StreamFlags;
 use kernels_core::Gemm;
 use std::sync::Arc;
 use std::sync::Mutex;

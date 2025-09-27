@@ -1,0 +1,17 @@
+[package]
+name = "kernels-cuda"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kernels-core = { path = "../kernels-core" }
+cuda_std = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main" }
+cust = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main" }
+
+[build-dependencies]
+cuda_builder = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main", features = [
+  "rustc_codegen_nvvm",
+] }

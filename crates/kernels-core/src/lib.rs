@@ -6,10 +6,22 @@ pub struct Mat<'a> {
     pub data: &'a [f32],
 }
 
+impl Mat<'_> {
+    pub fn len(&self) -> usize {
+        self.rows * self.cols
+    }
+}
+
 pub struct MatMut<'a> {
     pub rows: usize,
     pub cols: usize,
     pub data: &'a mut [f32],
+}
+
+impl MatMut<'_> {
+    pub fn len(&self) -> usize {
+        self.rows * self.cols
+    }
 }
 
 /// GEMM trait: C = alpha * A @ B + beta * C

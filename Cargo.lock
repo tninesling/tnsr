@@ -637,24 +637,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "kernels-core"
-version = "0.1.0"
-
-[[package]]
 name = "kernels-cuda"
 version = "0.1.0"
 dependencies = [
  "cuda_builder",
  "cuda_std",
  "cust",
- "kernels-core",
-]
-
-[[package]]
-name = "kernels-simd"
-version = "0.1.0"
-dependencies = [
- "kernels-core",
 ]
 
 [[package]]
@@ -1062,7 +1050,6 @@ dependencies = [
  "criterion",
  "cuda_builder",
  "cust",
- "kernels-core",
  "kernels-cuda",
  "lazy_static",
  "rstest",

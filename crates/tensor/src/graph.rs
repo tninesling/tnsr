@@ -1,10 +1,14 @@
-use crate::{BinaryOp, ReduceOp, UnaryOp};
+use std::ops::Index;
+use std::sync::Arc;
+
 use itertools::Itertools;
-use petgraph::{
-    graph::{Graph, NodeIndex},
-    visit::EdgeRef,
-};
-use std::{ops::Index, sync::Arc};
+use petgraph::graph::Graph;
+use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
+
+use crate::BinaryOp;
+use crate::ReduceOp;
+use crate::UnaryOp;
 
 pub enum TensorGraphNode<D> {
     Constant { data: Arc<Vec<D>> },

@@ -4,9 +4,7 @@ A tensor library, written in Rust.
 
 ## Crates
 
-- [`kernels-core`] - Core traits and types for kernels.
 - [`kernels-cuda`]- CUDA backend for kernels.
-- [`kernels-simd`]- SIMD backend for kernels.
 - [`runtime`] - Runtime for managing devices and dispatching to backend kernels.
 - [`tensor`] - Frontend tensor type and operations.
 
@@ -44,9 +42,7 @@ benchmarks, use:
   against naive implementation on GPU.
 
 [`cuda-device-kernels`]: crates/kernels-cuda/device
-[`kernels-core`]: crates/kernels-core
 [`kernels-cuda`]: crates/kernels-cuda
-[`kernels-simd`]: crates/kernels-simd
 [`runtime`]: crates/runtime
 [`tensor`]: crates/tensor
 [`runtime/benches`]: crates/tensor/benches

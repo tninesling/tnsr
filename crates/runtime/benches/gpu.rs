@@ -2,10 +2,15 @@
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::BenchmarkId;
+use criterion::Criterion;
+use criterion::Throughput;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use runtime::Executor;
 use runtime::cuda::CudaExecutor;
-use tensor::{Constant, Tensor};
+use tensor::Constant;
+use tensor::Tensor;
 
 pub fn benches(c: &mut Criterion) {
     let exec = Arc::new(CudaExecutor::new());
@@ -15,7 +20,9 @@ pub fn benches(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("neg");
         for &n in &sizes {
-            group.throughput(Throughput::Bytes((n * n * std::mem::size_of::<f32>() * 2) as u64));
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 2) as u64,
+            ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
@@ -40,7 +47,9 @@ pub fn benches(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("exp");
         for &n in &sizes {
-            group.throughput(Throughput::Bytes((n * n * std::mem::size_of::<f32>() * 2) as u64));
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 2) as u64,
+            ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
@@ -65,7 +74,9 @@ pub fn benches(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("log");
         for &n in &sizes {
-            group.throughput(Throughput::Bytes((n * n * std::mem::size_of::<f32>() * 2) as u64));
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 2) as u64,
+            ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
@@ -90,7 +101,9 @@ pub fn benches(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("relu");
         for &n in &sizes {
-            group.throughput(Throughput::Bytes((n * n * std::mem::size_of::<f32>() * 2) as u64));
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 2) as u64,
+            ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
@@ -115,7 +128,9 @@ pub fn benches(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("add");
         for &n in &sizes {
-            group.throughput(Throughput::Bytes((n * n * std::mem::size_of::<f32>() * 3) as u64));
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 3) as u64,
+            ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let b = Constant::new(vec![0.5f32; n * n], shape.clone());
@@ -141,7 +156,9 @@ pub fn benches(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("sub");
         for &n in &sizes {
-            group.throughput(Throughput::Bytes((n * n * std::mem::size_of::<f32>() * 3) as u64));
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 3) as u64,
+            ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let b = Constant::new(vec![0.5f32; n * n], shape.clone());
@@ -167,7 +184,9 @@ pub fn benches(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("mul");
         for &n in &sizes {
-            group.throughput(Throughput::Bytes((n * n * std::mem::size_of::<f32>() * 3) as u64));
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 3) as u64,
+            ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let b = Constant::new(vec![0.5f32; n * n], shape.clone());
@@ -193,7 +212,9 @@ pub fn benches(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("div");
         for &n in &sizes {
-            group.throughput(Throughput::Bytes((n * n * std::mem::size_of::<f32>() * 3) as u64));
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 3) as u64,
+            ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let b = Constant::new(vec![0.5f32; n * n], shape.clone());

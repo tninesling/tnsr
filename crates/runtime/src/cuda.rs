@@ -1,15 +1,23 @@
 use std::collections::HashMap;
 
-use crate::Executor;
 use cust::memory::CopyDestination;
 use cust::memory::DeviceBuffer;
 use cust::stream::Stream;
 use cust::stream::StreamFlags;
 use cust::util::SliceExt;
 use kernels_cuda::PTX;
-use kernels_cuda::elementwise::{add, div, exp, log, mul, neg, relu, sub};
+use kernels_cuda::elementwise::add;
+use kernels_cuda::elementwise::div;
+use kernels_cuda::elementwise::exp;
+use kernels_cuda::elementwise::log;
+use kernels_cuda::elementwise::mul;
+use kernels_cuda::elementwise::neg;
+use kernels_cuda::elementwise::relu;
+use kernels_cuda::elementwise::sub;
 use tensor::graph::TensorGraph;
 use tensor::graph::TensorGraphNode;
+
+use crate::Executor;
 
 pub struct CudaExecutor {
     _context: cust::context::Context,
@@ -233,9 +241,11 @@ impl Executor<f32> for CudaExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
-    use tensor::{Constant, Tensor};
+    use tensor::Constant;
+    use tensor::Tensor;
+
+    use super::*;
 
     const EPSILON: f32 = 1e-5;
 

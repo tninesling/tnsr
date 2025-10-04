@@ -1,6 +1,10 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use runtime::{Executor, SimpleExecutor};
-use tensor::{Constant, Tensor};
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use runtime::Executor;
+use runtime::SimpleExecutor;
+use tensor::Constant;
+use tensor::Tensor;
 
 fn bench_op<F>(c: &mut Criterion, name: &str, make: F)
 where

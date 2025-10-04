@@ -7,7 +7,6 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-kernels-core = { path = "../kernels-core" }
 cuda_std = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main" }
 cust = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main" }
 

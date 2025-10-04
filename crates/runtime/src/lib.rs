@@ -1,10 +1,10 @@
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
+use std::collections::HashMap;
+
 use tensor::graph::TensorGraph;
 use tensor::graph::TensorGraphNode;
-
-use std::collections::HashMap;
 
 pub trait Executor<D> {
     fn execute(&self, graph: &TensorGraph<D>, inputs: HashMap<String, Vec<D>>) -> Vec<D>;
@@ -85,7 +85,8 @@ mod tests {
     use std::f32::consts::E;
 
     use rstest::rstest;
-    use tensor::{Constant, Tensor};
+    use tensor::Constant;
+    use tensor::Tensor;
 
     use super::*;
 

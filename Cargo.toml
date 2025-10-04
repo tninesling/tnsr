@@ -1,7 +1,5 @@
 [workspace]
 members = [
-  "crates/kernels-core",
-  "crates/kernels-simd",
   "crates/runtime",
   "crates/tensor",
 ]

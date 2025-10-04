@@ -6,9 +6,28 @@ edition = "2024"
 [dependencies]
 cust = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main", optional = true }
 kernels-core = { path = "../kernels-core" }
+kernels-cuda = { path = "../kernels-cuda", optional = true }
 lazy_static = "1.5.0"
 tensor = { path = "../tensor" }
 
+[build-dependencies]
+cuda_builder = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main", features = [
+  "rustc_codegen_nvvm",
+], optional = true }
+
 [features]
 default = []
-cuda = ["cust"]
+cuda = ["cuda_builder", "cust", "kernels-cuda"]
+
+[[bench]]
+name = "cpu"
+harness = false
+
+[[bench]]
+name = "gpu"
+harness = false
+required-features = ["cuda"]
+
+[dev-dependencies]
+criterion = "0.7.0"
+rstest = "0.26.1"

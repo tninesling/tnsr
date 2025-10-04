@@ -1,8 +1,4 @@
-mod naive_gemm;
-mod tiled_gemm;
-
-pub use naive_gemm::NaiveGemm;
-pub use tiled_gemm::TiledGemm;
+pub mod elementwise;
 
 pub static PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/kernels.ptx"));
 

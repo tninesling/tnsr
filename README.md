@@ -35,12 +35,12 @@ for JIT compilation.
 
 ## Benchmarking
 
-Benchmarks are defined in [`tensor/benches`] using `criterion`. To run the
+Benchmarks are defined in [`runtime/benches`] using `criterion`. To run the
 benchmarks, use:
 
-- `cargo bench --bench gemm_cpu` - Benchmark SIMD GEMM kernel against naive
+- `cargo bench --bench cpu` - Benchmark SIMD kernels against naive
   implementation on CPU.
-- `cargo bench --bench gemm_gpu --features cuda` - Benchmark CUDA GEMM kernel
+- `cargo bench --bench gpu --features cuda` - Benchmark CUDA kernels
   against naive implementation on GPU.
 
 [`cuda-device-kernels`]: crates/kernels-cuda/device
@@ -49,5 +49,5 @@ benchmarks, use:
 [`kernels-simd`]: crates/kernels-simd
 [`runtime`]: crates/runtime
 [`tensor`]: crates/tensor
+[`runtime/benches`]: crates/tensor/benches
 [`rust-cuda`]: https://github.com/Rust-GPU/rust-cuda/tree/main
-[`tensor/benches`]: crates/tensor/benches

@@ -1,42 +1,21 @@
-// TODO: Use `cust` deps to launch CUDA stream from runtime
-// use cust::module::Module;
-// use cust::stream::Stream;
-// use cust::stream::StreamFlags;
-use kernels_core::Gemm;
+#[cfg(feature = "cuda")]
+pub mod cuda;
+
 use tensor::graph::TensorGraph;
 use tensor::graph::TensorGraphNode;
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
-
-lazy_static::lazy_static! {
-    static ref GEMM_REGISTRY: Mutex<Vec<Arc<dyn Gemm + Send + Sync>>> = Mutex::new(Vec::new());
-}
-
-pub fn register_gemm(g: Arc<dyn Gemm + Send + Sync>) {
-    GEMM_REGISTRY.lock().unwrap().push(g);
-}
-
-pub fn get_preferred_gemm() -> Arc<dyn Gemm + Send + Sync> {
-    GEMM_REGISTRY
-        .lock()
-        .unwrap()
-        .last()
-        .expect("No GEMM registered")
-        .clone()
-}
 
 pub trait Executor<D> {
     fn execute(&self, graph: &TensorGraph<D>, inputs: HashMap<String, Vec<D>>) -> Vec<D>;
 }
 
-struct SimpleExecutor {}
+pub struct SimpleExecutor {}
 
 impl Executor<f32> for SimpleExecutor {
     fn execute(&self, graph: &TensorGraph<f32>, inputs: HashMap<String, Vec<f32>>) -> Vec<f32> {
-        let mut values: HashMap<_, Vec<f32>> = HashMap::new();
         let order = graph.toposort();
+        let mut values: HashMap<_, Vec<f32>> = HashMap::with_capacity(order.len());
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
             let result = match node {
@@ -91,22 +70,24 @@ impl Executor<f32> for SimpleExecutor {
                 }
                 // The next two require understanding the shape
                 TensorGraphNode::MatMul => todo!(),
-                TensorGraphNode::Reduce { op, axis } => todo!(),
+                TensorGraphNode::Reduce { op: _, axis: _ } => todo!(),
             };
             values.insert(*node_idx, result);
         }
 
-        let last_node = order.last().unwrap();
-        values.remove(last_node).unwrap()
+        let last_node = order.last().expect("Graph is empty");
+        values.remove(last_node).expect("Output not found")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::f32::consts::E;
-    use tensor::Constant;
-    use tensor::Tensor;
+
+    use rstest::rstest;
+    use tensor::{Constant, Tensor};
+
+    use super::*;
 
     const EPSILON: f32 = 1e-5;
 
@@ -125,119 +106,113 @@ mod tests {
         };
     }
 
-    #[test]
-    fn elementwise_neg_f32() {
-        let a = Constant::new(vec![1.0f32, -2.0, 3.0, -4.0], vec![2, 2]);
-        let b = -a;
-
-        let mut graph = TensorGraph::new();
-        b.lower_to_graph(&mut graph);
-
-        let executor = SimpleExecutor {};
-        let result = executor.execute(&graph, Default::default());
-
-        assert_approx_eq!(result, vec![-1.0, 2.0, -3.0, 4.0]);
+    type UnaryApply = fn(Constant<f32>) -> Box<dyn Tensor<f32>>;
+    fn neg_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> {
+        Box::new(-a)
+    }
+    fn exp_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> {
+        Box::new(a.exp())
+    }
+    fn log_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> {
+        Box::new(a.log())
+    }
+    fn relu_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> {
+        Box::new(a.relu())
     }
 
-    #[test]
-    fn elementwise_exp_f32() {
-        let a = Constant::new(vec![0.0f32, 1.0, 2.0, 3.0], vec![2, 2]);
-        let b = a.exp();
+    #[rstest]
+    #[case::neg(
+        vec![1.0f32, -2.0, 3.0, -4.0],
+        vec![-1.0, 2.0, -3.0, 4.0],
+        neg_node as UnaryApply
+    )]
+    #[case::exp(
+        vec![0.0f32, 1.0, 2.0, 3.0],
+        vec![1.0, E, E.powi(2), E.powi(3)],
+        exp_node as UnaryApply
+    )]
+    #[case::log(
+        vec![1.0f32, E, E.powi(2), E.powi(3)],
+        vec![0.0, 1.0, 2.0, 3.0],
+        log_node as UnaryApply
+    )]
+    #[case::relu(
+        vec![-1.0f32, 2.0, -3.0, 4.0],
+        vec![0.0, 2.0, 0.0, 4.0],
+        relu_node as UnaryApply
+    )]
+    fn elementwise_unary_f32(
+        #[case] input: Vec<f32>,
+        #[case] expected: Vec<f32>,
+        #[case] apply: UnaryApply,
+    ) {
+        let a = Constant::new(input, vec![2, 2]);
+        let node = apply(a);
 
         let mut graph = TensorGraph::new();
-        b.lower_to_graph(&mut graph);
+        node.lower_to_graph(&mut graph);
 
         let executor = SimpleExecutor {};
         let result = executor.execute(&graph, Default::default());
 
-        assert_approx_eq!(result, vec![1.0, E, E.powi(2), E.powi(3)]);
+        assert_approx_eq!(result, expected);
     }
 
-    #[test]
-    fn elementwise_log_f32() {
-        let a = Constant::new(vec![1.0f32, E, E.powi(2), E.powi(3)], vec![2, 2]);
-        let b = a.log();
-
-        let mut graph = TensorGraph::new();
-        b.lower_to_graph(&mut graph);
-
-        let executor = SimpleExecutor {};
-        let result = executor.execute(&graph, Default::default());
-
-        assert_approx_eq!(result, vec![0.0, 1.0, 2.0, 3.0]);
+    type BinaryApply = fn(Constant<f32>, Constant<f32>) -> Box<dyn Tensor<f32>>;
+    fn add_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> {
+        Box::new(a + b)
+    }
+    fn sub_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> {
+        Box::new(a - b)
+    }
+    fn mul_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> {
+        Box::new(a * b)
+    }
+    fn div_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> {
+        Box::new(a / b)
     }
 
-    #[test]
-    fn elementwise_relu_f32() {
-        let a = Constant::new(vec![-1.0f32, 2.0, -3.0, 4.0], vec![2, 2]);
-        let b = a.relu();
+    #[rstest]
+    #[case::add(
+        vec![1.0f32, 2.0, 3.0, 4.0],
+        vec![5.0f32, 6.0, 7.0, 8.0],
+        vec![6.0, 8.0, 10.0, 12.0],
+        add_node as BinaryApply
+    )]
+    #[case::sub(
+        vec![5.0f32, 6.0, 7.0, 8.0],
+        vec![1.0f32, 2.0, 3.0, 4.0],
+        vec![4.0, 4.0, 4.0, 4.0],
+        sub_node as BinaryApply
+    )]
+    #[case::mul(
+        vec![1.0f32, 2.0, 3.0, 4.0],
+        vec![5.0f32, 6.0, 7.0, 8.0],
+        vec![5.0, 12.0, 21.0, 32.0],
+        mul_node as BinaryApply
+    )]
+    #[case::div(
+        vec![5.0f32, 12.0, 21.0, 32.0],
+        vec![1.0f32, 2.0, 3.0, 4.0],
+        vec![5.0, 6.0, 7.0, 8.0],
+        div_node as BinaryApply
+    )]
+    fn elementwise_binary_f32(
+        #[case] a_in: Vec<f32>,
+        #[case] b_in: Vec<f32>,
+        #[case] expected: Vec<f32>,
+        #[case] apply: BinaryApply,
+    ) {
+        let a = Constant::new(a_in, vec![2, 2]);
+        let b = Constant::new(b_in, vec![2, 2]);
+        let node = apply(a, b);
 
         let mut graph = TensorGraph::new();
-        b.lower_to_graph(&mut graph);
+        node.lower_to_graph(&mut graph);
 
         let executor = SimpleExecutor {};
         let result = executor.execute(&graph, Default::default());
 
-        assert_approx_eq!(result, vec![0.0, 2.0, 0.0, 4.0]);
-    }
-
-    #[test]
-    fn elementwise_add_f32() {
-        let a = Constant::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
-        let b = Constant::new(vec![5.0f32, 6.0, 7.0, 8.0], vec![2, 2]);
-        let c = a + b;
-
-        let mut graph = TensorGraph::new();
-        c.lower_to_graph(&mut graph);
-
-        let executor = SimpleExecutor {};
-        let result = executor.execute(&graph, Default::default());
-
-        assert_approx_eq!(result, vec![6.0, 8.0, 10.0, 12.0]);
-    }
-
-    #[test]
-    fn elementwise_sub_f32() {
-        let a = Constant::new(vec![5.0f32, 6.0, 7.0, 8.0], vec![2, 2]);
-        let b = Constant::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
-        let c = a - b;
-
-        let mut graph = TensorGraph::new();
-        c.lower_to_graph(&mut graph);
-
-        let executor = SimpleExecutor {};
-        let result = executor.execute(&graph, Default::default());
-
-        assert_approx_eq!(result, vec![4.0, 4.0, 4.0, 4.0]);
-    }
-
-    #[test]
-    fn elementwise_mul_f32() {
-        let a = Constant::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
-        let b = Constant::new(vec![5.0f32, 6.0, 7.0, 8.0], vec![2, 2]);
-        let c = a * b;
-
-        let mut graph = TensorGraph::new();
-        c.lower_to_graph(&mut graph);
-
-        let executor = SimpleExecutor {};
-        let result = executor.execute(&graph, Default::default());
-
-        assert_approx_eq!(result, vec![5.0, 12.0, 21.0, 32.0]);
-    }
-
-    #[test]
-    fn elementwise_div_f32() {
-        let a = Constant::new(vec![5.0f32, 12.0, 21.0, 32.0], vec![2, 2]);
-        let b = Constant::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
-        let c = a / b;
-
-        let mut graph = TensorGraph::new();
-        c.lower_to_graph(&mut graph);
-
-        let executor = SimpleExecutor {};
-        let result = executor.execute(&graph, Default::default());
-
-        assert_approx_eq!(result, vec![5.0, 6.0, 7.0, 8.0]);
+        assert_approx_eq!(result, expected);
     }
 }

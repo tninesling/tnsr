@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::ops::Index;
 use std::sync::Arc;
-use std::collections::HashMap;
+use std::sync::Mutex;
 
 use itertools::Itertools;
 use petgraph::graph::Graph;
-use petgraph::graph::NodeIndex;
+pub use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 
 use crate::BinaryOp;
@@ -14,6 +15,7 @@ use crate::UnaryOp;
 pub enum TensorGraphNode<D> {
     Constant { data: Arc<Vec<D>> },
     Input { name: &'static str },
+    Parameter { id: usize, data: Arc<Mutex<Vec<D>>> },
     Neg,
     Exp,
     Log,
@@ -52,6 +54,12 @@ impl<D> From<BinaryOp> for TensorGraphNode<D> {
 pub struct TensorGraph<D> {
     pub graph: Graph<TensorGraphNode<D>, usize>,
     pub shapes: HashMap<NodeIndex, crate::Shape>,
+}
+
+impl<D> Default for TensorGraph<D> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<D> TensorGraph<D> {

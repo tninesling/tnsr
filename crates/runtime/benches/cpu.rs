@@ -7,11 +7,10 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use runtime::Executor;
 use runtime::SimpleExecutor;
-use tensor::Constant;
-use tensor::Tensor;
-
 #[cfg(feature = "simd")]
 use runtime::simd::SimdExecutor;
+use tensor::Constant;
+use tensor::Tensor;
 
 pub fn benches(c: &mut Criterion) {
     let simple = Arc::new(SimpleExecutor {});
@@ -41,7 +40,8 @@ pub fn benches(c: &mut Criterion) {
                 &n,
                 move |b, &_| {
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -55,7 +55,9 @@ pub fn benches(c: &mut Criterion) {
                     &n,
                     move |b, &_| {
                         b.iter(|| {
-                            let _ = std::hint::black_box(exec.execute(&*graph_simd, Default::default()));
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_simd, Default::default()),
+                            );
                         });
                     },
                 );
@@ -85,7 +87,8 @@ pub fn benches(c: &mut Criterion) {
                 &n,
                 move |b, &_| {
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -99,7 +102,9 @@ pub fn benches(c: &mut Criterion) {
                     &n,
                     move |b, &_| {
                         b.iter(|| {
-                            let _ = std::hint::black_box(exec.execute(&*graph_simd, Default::default()));
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_simd, Default::default()),
+                            );
                         });
                     },
                 );
@@ -129,7 +134,8 @@ pub fn benches(c: &mut Criterion) {
                 &n,
                 move |b, &_| {
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -143,7 +149,9 @@ pub fn benches(c: &mut Criterion) {
                     &n,
                     move |b, &_| {
                         b.iter(|| {
-                            let _ = std::hint::black_box(exec.execute(&*graph_simd, Default::default()));
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_simd, Default::default()),
+                            );
                         });
                     },
                 );
@@ -173,7 +181,8 @@ pub fn benches(c: &mut Criterion) {
                 &n,
                 move |b, &_| {
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -187,7 +196,9 @@ pub fn benches(c: &mut Criterion) {
                     &n,
                     move |b, &_| {
                         b.iter(|| {
-                            let _ = std::hint::black_box(exec.execute(&*graph_simd, Default::default()));
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_simd, Default::default()),
+                            );
                         });
                     },
                 );
@@ -218,7 +229,8 @@ pub fn benches(c: &mut Criterion) {
                 &n,
                 move |bch, &_| {
                     bch.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -232,7 +244,9 @@ pub fn benches(c: &mut Criterion) {
                     &n,
                     move |bch, &_| {
                         bch.iter(|| {
-                            let _ = std::hint::black_box(exec.execute(&*graph_simd, Default::default()));
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_simd, Default::default()),
+                            );
                         });
                     },
                 );
@@ -263,7 +277,8 @@ pub fn benches(c: &mut Criterion) {
                 &n,
                 move |bch, &_| {
                     bch.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -277,7 +292,9 @@ pub fn benches(c: &mut Criterion) {
                     &n,
                     move |bch, &_| {
                         bch.iter(|| {
-                            let _ = std::hint::black_box(exec.execute(&*graph_simd, Default::default()));
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_simd, Default::default()),
+                            );
                         });
                     },
                 );
@@ -308,7 +325,8 @@ pub fn benches(c: &mut Criterion) {
                 &n,
                 move |bch, &_| {
                     bch.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -322,7 +340,9 @@ pub fn benches(c: &mut Criterion) {
                     &n,
                     move |bch, &_| {
                         bch.iter(|| {
-                            let _ = std::hint::black_box(exec.execute(&*graph_simd, Default::default()));
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_simd, Default::default()),
+                            );
                         });
                     },
                 );
@@ -353,7 +373,8 @@ pub fn benches(c: &mut Criterion) {
                 &n,
                 move |bch, &_| {
                     bch.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -367,7 +388,9 @@ pub fn benches(c: &mut Criterion) {
                     &n,
                     move |bch, &_| {
                         bch.iter(|| {
-                            let _ = std::hint::black_box(exec.execute(&*graph_simd, Default::default()));
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_simd, Default::default()),
+                            );
                         });
                     },
                 );

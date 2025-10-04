@@ -8,6 +8,8 @@ cust = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main", optiona
 kernels-cuda = { path = "../kernels-cuda", optional = true }
 lazy_static = "1.5.0"
 tensor = { path = "../tensor" }
+petgraph = "0.8.3"
+tracing = "0.1.41"
 
 [build-dependencies]
 cuda_builder = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main", features = [

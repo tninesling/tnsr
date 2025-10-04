@@ -1,8 +1,5 @@
 [workspace]
-members = [
-  "crates/runtime",
-  "crates/tensor",
-]
+members = ["crates/nn", "crates/runtime", "crates/tensor"]
 # Excluded by default so `cargo build` succeeds on non-CUDA systems.
 # These crates will be build transitively if building with `--features cuda`.
 exclude = ["crates/kernels-cuda", "crates/kernels-cuda/device"]

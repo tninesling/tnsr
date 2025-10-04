@@ -1,5 +1,6 @@
 use std::ops::Index;
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use itertools::Itertools;
 use petgraph::graph::Graph;
@@ -22,6 +23,7 @@ pub enum TensorGraphNode<D> {
     Mul,
     Div,
     MatMul,
+    Broadcast,
     Reduce { op: ReduceOp, axis: usize },
 }
 
@@ -49,12 +51,14 @@ impl<D> From<BinaryOp> for TensorGraphNode<D> {
 
 pub struct TensorGraph<D> {
     pub graph: Graph<TensorGraphNode<D>, usize>,
+    pub shapes: HashMap<NodeIndex, crate::Shape>,
 }
 
 impl<D> TensorGraph<D> {
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
+            shapes: HashMap::new(),
         }
     }
 

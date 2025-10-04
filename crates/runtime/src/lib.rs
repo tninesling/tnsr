@@ -72,8 +72,88 @@ impl Executor<f32> for SimpleExecutor {
                     let b = values.get(&inputs[1]).unwrap();
                     a.iter().zip(b.iter()).map(|(x, y)| x / y).collect()
                 }
-                // The next two require understanding the shape
-                TensorGraphNode::MatMul => todo!(),
+                // MatMul: expects two inputs, shapes available in graph.shapes
+                TensorGraphNode::MatMul => {
+                    let inputs_idx = graph.inputs(*node_idx);
+                    let a_idx = inputs_idx[0];
+                    let b_idx = inputs_idx[1];
+                    let a = values.get(&a_idx).unwrap();
+                    let b = values.get(&b_idx).unwrap();
+                    let a_shape = graph.shapes.get(&a_idx).expect("shape missing for lhs");
+                    let b_shape = graph.shapes.get(&b_idx).expect("shape missing for rhs");
+                    if a_shape.len() != 2 || b_shape.len() != 2 {
+                        panic!("MatMul only supports 2D tensors in executor");
+                    }
+                    let m = a_shape[0];
+                    let k = a_shape[1];
+                    let kb = b_shape[0];
+                    let n = b_shape[1];
+                    if k != kb {
+                        panic!("MatMul inner dims mismatch at execute time");
+                    }
+                    let mut out = vec![0.0f32; m * n];
+                    for i in 0..m {
+                        for j in 0..n {
+                            let mut sum = 0.0f32;
+                            for p in 0..k {
+                                let aval = a[i * k + p];
+                                let bval = b[p * n + j];
+                                sum += aval * bval;
+                            }
+                            out[i * n + j] = sum;
+                        }
+                    }
+                    out
+                }
+                TensorGraphNode::Broadcast => {
+                    // Single input; broadcast according to graph.shapes[node_idx]
+                    let inputs_idx = graph.inputs(*node_idx);
+                    let in_idx = inputs_idx[0];
+                    let in_val = values.get(&in_idx).unwrap();
+                    let in_shape = graph.shapes.get(&in_idx).expect("shape missing for broadcast input");
+                    let out_shape = graph.shapes.get(node_idx).expect("shape missing for broadcast node");
+                    // Support broadcasting where input rank <= out rank and trailing dims match or are 1
+                    let mut out = vec![0.0f32; out_shape.iter().product()];
+                    // We'll implement a simple indexing loop over output and map to input indices
+                    let in_rank = in_shape.len();
+                    let out_rank = out_shape.len();
+                    let mut out_strides = vec![0usize; out_rank];
+                    let mut in_strides = vec![0usize; in_rank];
+                    // compute row-major strides
+                    out_strides[out_rank - 1] = 1;
+                    for i in (0..out_rank - 1).rev() {
+                        out_strides[i] = out_strides[i + 1] * out_shape[i + 1];
+                    }
+                    if in_rank > 0 {
+                        in_strides[in_rank - 1] = 1;
+                        for i in (0..in_rank - 1).rev() {
+                            in_strides[i] = in_strides[i + 1] * in_shape[i + 1];
+                        }
+                    }
+                    // iterate over output linear index and compute corresponding input index
+                    for out_idx in 0..out.len() {
+                        // decompose out_idx into coords
+                        let mut rem = out_idx;
+                        let mut in_linear = 0usize;
+                        for dim in 0..out_rank {
+                            let coord = rem / out_strides[dim];
+                            rem = rem % out_strides[dim];
+                            // corresponding input dim index (align right)
+                            let in_dim_opt = if dim + in_rank >= out_rank {
+                                Some(dim + in_rank - out_rank)
+                            } else {
+                                None
+                            };
+                            if let Some(in_dim) = in_dim_opt {
+                                let in_dim_size = in_shape[in_dim];
+                                let idx_in_dim = if in_dim_size == 1 { 0 } else { coord };
+                                in_linear += idx_in_dim * in_strides[in_dim];
+                            }
+                        }
+                        out[out_idx] = in_val[in_linear];
+                    }
+                    out
+                }
                 TensorGraphNode::Reduce { op: _, axis: _ } => todo!(),
             };
             values.insert(*node_idx, result);
@@ -220,4 +300,101 @@ mod tests {
 
         assert_approx_eq!(result, expected);
     }
+
+    #[test]
+    fn matmul_small_2x3_3x4() {
+        let a_vals = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let b_vals = vec![
+            1.0f32, 2.0, 3.0, 4.0,
+            5.0, 6.0, 7.0, 8.0,
+            9.0, 10.0, 11.0, 12.0,
+        ];
+        let a = Constant::new(a_vals.clone(), vec![2, 3]);
+        let b = Constant::new(b_vals.clone(), vec![3, 4]);
+        let node = Box::new(a.matmul(b)) as Box<dyn Tensor<f32>>;
+
+        let mut graph = TensorGraph::new();
+        node.lower_to_graph(&mut graph);
+
+        let executor = SimpleExecutor {};
+        let result = executor.execute(&graph, Default::default());
+
+        fn matmul_ref(a: &[f32], a_shape: &[usize], b: &[f32], b_shape: &[usize]) -> Vec<f32> {
+            let m = a_shape[0];
+            let k = a_shape[1];
+            let n = b_shape[1];
+            let mut out = vec![0.0f32; m * n];
+            for i in 0..m {
+                for j in 0..n {
+                    let mut sum = 0.0f32;
+                    for p in 0..k {
+                        sum += a[i * k + p] * b[p * n + j];
+                    }
+                    out[i * n + j] = sum;
+                }
+            }
+            out
+        }
+
+        let expected = matmul_ref(&a_vals, &[2, 3], &b_vals, &[3, 4]);
+        assert_approx_eq!(result, expected);
+    }
+
+    #[test]
+    #[should_panic]
+    fn matmul_mismatch_panics() {
+        let a = Constant::new(vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+        let b = Constant::new(vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], vec![4, 2]);
+        // constructor should panic due to inner-dimension mismatch
+        let _ = a.matmul(b);
+    }
+
+    #[test]
+    fn broadcast_vector_to_matrix() {
+        let v = Constant::new(vec![10.0f32, 20.0f32], vec![2]);
+        let node = Box::new(v.broadcast(vec![3, 2])) as Box<dyn Tensor<f32>>;
+        let mut graph = TensorGraph::new();
+        node.lower_to_graph(&mut graph);
+        let exec = SimpleExecutor {};
+        let result = exec.execute(&graph, Default::default());
+        let expected = vec![10.0f32, 20.0f32, 10.0, 20.0, 10.0, 20.0];
+        assert_approx_eq!(result, expected);
+    }
+
+    #[test]
+    fn broadcast_scalar_to_matrix() {
+        let s = Constant::new(vec![7.0f32], vec![]);
+        let node = Box::new(s.broadcast(vec![2, 3])) as Box<dyn Tensor<f32>>;
+        let mut graph = TensorGraph::new();
+        node.lower_to_graph(&mut graph);
+        let exec = SimpleExecutor {};
+        let result = exec.execute(&graph, Default::default());
+        let expected = vec![7.0f32; 6];
+        assert_approx_eq!(result, expected);
+    }
+
+    #[test]
+    fn broadcast_singleton_right_aligned() {
+        let v = Constant::new(vec![10.0f32, 20.0f32, 30.0f32], vec![3, 1]);
+        let node = Box::new(v.broadcast(vec![3, 4])) as Box<dyn Tensor<f32>>;
+        let mut graph = TensorGraph::new();
+        node.lower_to_graph(&mut graph);
+        let exec = SimpleExecutor {};
+        let result = exec.execute(&graph, Default::default());
+        let expected = vec![
+            10.0f32, 10.0, 10.0, 10.0,
+            20.0, 20.0, 20.0, 20.0,
+            30.0, 30.0, 30.0, 30.0,
+        ];
+        assert_approx_eq!(result, expected);
+    }
+
+    #[test]
+    #[should_panic]
+    fn broadcast_invalid_panics() {
+        let v = Constant::new(vec![1.0f32, 2.0f32], vec![2]);
+        // cannot broadcast [2] to [2,3]
+        let _ = v.broadcast(vec![2, 3]);
+    }
+
 }

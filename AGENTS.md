@@ -2,7 +2,7 @@
 
 - Build (CPU): `cargo build --workspace`.
 - Build (CUDA): use `./build-cuda.sh` once, then `./run-cuda.sh`; inside container: `cargo build -p kernels-cuda && cargo build -p runtime --features cuda`.
-- Test (all): `cargo test --workspace`. Single test: `cargo test -p runtime elementwise_neg_f32` (use a substring filter; add `-- --exact` only with full path).
+- Test (all): `cargo nextest run`. Test filter: `cargo nextest run -p runtime elementwise_binary_f32`.
 - Bench: CPU `cargo bench -p runtime --bench cpu`; GPU `cargo bench -p runtime --bench gpu --features cuda` (criterion dev-dep; CUDA toolchain required).
 - Lint/Format: `cargo fmt --all --check` and `cargo clippy --workspace --all-targets --all-features -D warnings`.
 - Toolchain: pinned nightly (see `rust-toolchain.toml`); AVX2 enabled via `.cargo/config.toml` (`-C target-cpu=native`).

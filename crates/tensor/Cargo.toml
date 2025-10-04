@@ -3,6 +3,10 @@ name = "tensor"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["implicit_broadcast"]
+implicit_broadcast = []
+
 [dependencies]
 itertools = "0.14.0"
 petgraph = "0.8.3"

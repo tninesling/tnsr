@@ -1,5 +1,9 @@
+#![feature(portable_simd)]
+
 #[cfg(feature = "cuda")]
 pub mod cuda;
+#[cfg(feature = "simd")]
+pub mod simd;
 
 use std::collections::HashMap;
 

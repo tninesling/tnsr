@@ -7,6 +7,7 @@ edition = "2024"
 cust = { git = "https://github.com/Rust-GPU/Rust-CUDA", branch = "main", optional = true }
 kernels-core = { path = "../kernels-core" }
 lazy_static = "1.5.0"
+tensor = { path = "../tensor" }
 
 [features]
 default = []

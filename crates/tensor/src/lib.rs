@@ -51,31 +51,6 @@ pub fn broadcast_output_shape(a: &Shape, b: &Shape) -> Shape {
     out
 }
 
-pub trait TensorOps<D: DType>: Tensor<D> + Sized {
-    fn matmul(self, rhs: impl Tensor<D> + 'static) -> MatMulNode<D>;
-    fn broadcast(self, shape: Shape) -> BroadcastNode<D>;
-}
-
-impl<D, T> TensorOps<D> for T
-where
-    D: DType + 'static,
-    T: Tensor<D> + Sized + 'static,
-{
-    fn matmul(self, rhs: impl Tensor<D> + 'static) -> MatMulNode<D> {
-        MatMulNode::new(Arc::new(self), Arc::new(rhs))
-    }
-
-    fn broadcast(self, shape: Shape) -> BroadcastNode<D> {
-        BroadcastNode::new(Arc::new(self), shape)
-    }
-}
-
-pub trait Tensor<D: DType> {
-    fn shape(&self) -> &Shape;
-
-    fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex;
-}
-
 #[derive(Clone)]
 pub struct Constant<D: DType> {
     data: Arc<Vec<D>>,
@@ -89,19 +64,9 @@ impl<D: DType> Constant<D> {
             shape,
         }
     }
-}
 
-impl<D: DType> Tensor<D> for Constant<D> {
-    fn shape(&self) -> &Shape {
+    pub fn shape(&self) -> &Shape {
         &self.shape
-    }
-
-    fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
-        let idx = graph.graph.add_node(TensorGraphNode::Constant {
-            data: self.data.clone(),
-        });
-        graph.shapes.insert(idx, self.shape.clone());
-        idx
     }
 }
 
@@ -120,33 +85,9 @@ impl<D: DType> Input<D> {
             _marker: std::marker::PhantomData,
         }
     }
-}
 
-impl<D: DType> Tensor<D> for Input<D> {
-    fn shape(&self) -> &Shape {
+    pub fn shape(&self) -> &Shape {
         &self.shape
-    }
-
-    fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
-        // Reuse existing input node with the same name to ensure gradients accumulate
-        for idx in graph.graph.node_indices() {
-            if let TensorGraphNode::Input { name } = &graph[idx]
-                && *name == self.name
-            {
-                let existing_shape = graph.shapes.get(&idx).expect("shape missing for input");
-                assert_eq!(
-                    existing_shape, &self.shape,
-                    "Input '{:?}' shape mismatch: {:?} vs {:?}",
-                    self.name, existing_shape, self.shape
-                );
-                return idx;
-            }
-        }
-        let idx = graph
-            .graph
-            .add_node(TensorGraphNode::Input { name: self.name });
-        graph.shapes.insert(idx, self.shape.clone());
-        idx
     }
 }
 
@@ -158,27 +99,6 @@ pub enum UnaryOp {
     Relu,
 }
 
-#[derive(Clone)]
-pub struct UnaryOpNode<D: DType> {
-    op: UnaryOp,
-    input: Arc<dyn Tensor<D>>,
-    shape: Shape,
-}
-
-impl<D: DType> Tensor<D> for UnaryOpNode<D> {
-    fn shape(&self) -> &Shape {
-        &self.shape
-    }
-
-    fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
-        let input_idx = self.input.lower_to_graph(graph);
-        let node_idx = graph.graph.add_node(self.op.clone().into());
-        graph.shapes.insert(node_idx, self.shape.clone());
-        graph.graph.add_edge(input_idx, node_idx, 0);
-        node_idx
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum BinaryOp {
     Add,
@@ -187,413 +107,11 @@ pub enum BinaryOp {
     Div,
 }
 
-#[derive(Clone)]
-pub struct BinaryOpNode<D: DType> {
-    op: BinaryOp,
-    lhs: Arc<dyn Tensor<D>>,
-    rhs: Arc<dyn Tensor<D>>,
-    shape: Shape,
-}
-
-impl<D: DType + 'static> BinaryOpNode<D> {
-    pub fn new(lhs: impl Tensor<D> + 'static, rhs: impl Tensor<D> + 'static, op: BinaryOp) -> Self {
-        #[cfg(feature = "implicit_broadcast")]
-        {
-            let out_shape = broadcast_output_shape(lhs.shape(), rhs.shape());
-            let lhs_box: Arc<dyn Tensor<D>> = if lhs.shape() == &out_shape {
-                Arc::new(lhs)
-            } else {
-                Arc::new(BroadcastNode::new(Arc::new(lhs), out_shape.clone()))
-            };
-            let rhs_box: Arc<dyn Tensor<D>> = if rhs.shape() == &out_shape {
-                Arc::new(rhs)
-            } else {
-                Arc::new(BroadcastNode::new(Arc::new(rhs), out_shape.clone()))
-            };
-            BinaryOpNode {
-                op,
-                lhs: lhs_box,
-                rhs: rhs_box,
-                shape: out_shape,
-            }
-        }
-        #[cfg(not(feature = "implicit_broadcast"))]
-        {
-            let shape = lhs.shape().clone();
-            BinaryOpNode {
-                op,
-                lhs: Arc::new(lhs),
-                rhs: Arc::new(rhs),
-                shape,
-            }
-        }
-    }
-}
-
-impl<D: DType> Tensor<D> for BinaryOpNode<D> {
-    fn shape(&self) -> &Shape {
-        &self.shape
-    }
-
-    fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
-        let lhs_idx = self.lhs.lower_to_graph(graph);
-        let rhs_idx = self.rhs.lower_to_graph(graph);
-        let node_idx = graph.graph.add_node(self.op.clone().into());
-        graph.shapes.insert(node_idx, self.shape.clone());
-        graph.graph.add_edge(lhs_idx, node_idx, 0);
-        graph.graph.add_edge(rhs_idx, node_idx, 1);
-        node_idx
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum ReduceOp {
     Sum,
     Max,
     Mean,
-}
-
-#[derive(Clone)]
-pub struct ReduceOpNode<D: DType> {
-    op: ReduceOp,
-    input: Arc<dyn Tensor<D>>,
-    axis: usize,
-    shape: Shape,
-}
-
-impl<D: DType> ReduceOpNode<D> {
-    pub fn new(input: impl Tensor<D> + 'static, op: ReduceOp, axis: usize) -> Self {
-        let shape_in = input.shape().clone();
-        assert!(axis < shape_in.len(), "reduce axis out of bounds");
-        let mut shape = shape_in.clone();
-        shape.remove(axis);
-        Self {
-            op,
-            input: Arc::new(input),
-            axis,
-            shape,
-        }
-    }
-
-    pub fn from_dyn(input: Arc<dyn Tensor<D>>, op: ReduceOp, axis: usize) -> Self {
-        let shape_in = input.shape().clone();
-        assert!(axis < shape_in.len(), "reduce axis out of bounds");
-        let mut shape = shape_in.clone();
-        shape.remove(axis);
-        Self {
-            op,
-            input,
-            axis,
-            shape,
-        }
-    }
-}
-
-impl<D: DType> Tensor<D> for ReduceOpNode<D> {
-    fn shape(&self) -> &Shape {
-        &self.shape
-    }
-
-    fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
-        let input_idx = self.input.lower_to_graph(graph);
-        let node_idx = graph.graph.add_node(TensorGraphNode::Reduce {
-            op: self.op.clone(),
-            axis: self.axis,
-        });
-        graph.shapes.insert(node_idx, self.shape.clone());
-        graph.graph.add_edge(input_idx, node_idx, 0);
-        node_idx
-    }
-}
-
-macro_rules! impl_un_ops_for_type {
-    ($Type:ident) => {
-        impl<D> std::ops::Neg for $Type<D>
-        where
-            D: DType + 'static,
-        {
-            type Output = UnaryOpNode<D>;
-            fn neg(self) -> Self::Output {
-                let shape = self.shape().clone();
-                UnaryOpNode {
-                    op: UnaryOp::Neg,
-                    input: Arc::new(self),
-                    shape,
-                }
-            }
-        }
-
-        impl<D> $Type<D>
-        where
-            D: DType + 'static,
-        {
-            pub fn exp(self) -> UnaryOpNode<D> {
-                let shape = self.shape().clone();
-                UnaryOpNode {
-                    op: UnaryOp::Exp,
-                    input: Arc::new(self),
-                    shape,
-                }
-            }
-
-            pub fn log(self) -> UnaryOpNode<D> {
-                let shape = self.shape().clone();
-                UnaryOpNode {
-                    op: UnaryOp::Log,
-                    input: Arc::new(self),
-                    shape,
-                }
-            }
-
-            pub fn relu(self) -> UnaryOpNode<D> {
-                let shape = self.shape().clone();
-                UnaryOpNode {
-                    op: UnaryOp::Relu,
-                    input: Arc::new(self),
-                    shape,
-                }
-            }
-        }
-    };
-}
-
-impl_un_ops_for_type!(Constant);
-impl_un_ops_for_type!(Input);
-impl_un_ops_for_type!(UnaryOpNode);
-impl_un_ops_for_type!(BinaryOpNode);
-impl_un_ops_for_type!(ReduceOpNode);
-impl_un_ops_for_type!(Parameter);
-
-macro_rules! impl_bin_ops_for_type {
-    ($Type:ident) => {
-        impl<D, T> Add<T> for $Type<D>
-        where
-            D: DType + 'static,
-            T: Tensor<D> + 'static,
-        {
-            type Output = BinaryOpNode<D>;
-            fn add(self, rhs: T) -> Self::Output {
-                #[cfg(feature = "implicit_broadcast")]
-                {
-                    let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-                    let lhs_box: Arc<dyn Tensor<D>> = if self.shape() == &out_shape {
-                        Arc::new(self)
-                    } else {
-                        Arc::new(BroadcastNode::new(Arc::new(self), out_shape.clone()))
-                    };
-                    let rhs_box: Arc<dyn Tensor<D>> = if rhs.shape() == &out_shape {
-                        Arc::new(rhs)
-                    } else {
-                        Arc::new(BroadcastNode::new(Arc::new(rhs), out_shape.clone()))
-                    };
-                    return BinaryOpNode {
-                        op: BinaryOp::Add,
-                        lhs: lhs_box,
-                        rhs: rhs_box,
-                        shape: out_shape,
-                    };
-                }
-                #[cfg(not(feature = "implicit_broadcast"))]
-                {
-                    let shape = self.shape().clone();
-                    BinaryOpNode {
-                        op: BinaryOp::Add,
-                        lhs: Arc::new(self),
-                        rhs: Arc::new(rhs),
-                        shape,
-                    }
-                }
-            }
-        }
-
-        impl<D, T> Sub<T> for $Type<D>
-        where
-            D: DType + 'static,
-            T: Tensor<D> + 'static,
-        {
-            type Output = BinaryOpNode<D>;
-            fn sub(self, rhs: T) -> Self::Output {
-                #[cfg(feature = "implicit_broadcast")]
-                {
-                    let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-                    let lhs_box: Arc<dyn Tensor<D>> = if self.shape() == &out_shape {
-                        Arc::new(self)
-                    } else {
-                        Arc::new(BroadcastNode::new(Arc::new(self), out_shape.clone()))
-                    };
-                    let rhs_box: Arc<dyn Tensor<D>> = if rhs.shape() == &out_shape {
-                        Arc::new(rhs)
-                    } else {
-                        Arc::new(BroadcastNode::new(Arc::new(rhs), out_shape.clone()))
-                    };
-                    return BinaryOpNode {
-                        op: BinaryOp::Sub,
-                        lhs: lhs_box,
-                        rhs: rhs_box,
-                        shape: out_shape,
-                    };
-                }
-                #[cfg(not(feature = "implicit_broadcast"))]
-                {
-                    let shape = self.shape().clone();
-                    BinaryOpNode {
-                        op: BinaryOp::Sub,
-                        lhs: Arc::new(self),
-                        rhs: Arc::new(rhs),
-                        shape,
-                    }
-                }
-            }
-        }
-
-        impl<D, T> Mul<T> for $Type<D>
-        where
-            D: DType + 'static,
-            T: Tensor<D> + 'static,
-        {
-            type Output = BinaryOpNode<D>;
-            fn mul(self, rhs: T) -> Self::Output {
-                #[cfg(feature = "implicit_broadcast")]
-                {
-                    let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-                    let lhs_box: Arc<dyn Tensor<D>> = if self.shape() == &out_shape {
-                        Arc::new(self)
-                    } else {
-                        Arc::new(BroadcastNode::new(Arc::new(self), out_shape.clone()))
-                    };
-                    let rhs_box: Arc<dyn Tensor<D>> = if rhs.shape() == &out_shape {
-                        Arc::new(rhs)
-                    } else {
-                        Arc::new(BroadcastNode::new(Arc::new(rhs), out_shape.clone()))
-                    };
-                    return BinaryOpNode {
-                        op: BinaryOp::Mul,
-                        lhs: lhs_box,
-                        rhs: rhs_box,
-                        shape: out_shape,
-                    };
-                }
-                #[cfg(not(feature = "implicit_broadcast"))]
-                {
-                    let shape = self.shape().clone();
-                    BinaryOpNode {
-                        op: BinaryOp::Mul,
-                        lhs: Arc::new(self),
-                        rhs: Arc::new(rhs),
-                        shape,
-                    }
-                }
-            }
-        }
-
-        impl<D, T> Div<T> for $Type<D>
-        where
-            D: DType + 'static,
-            T: Tensor<D> + 'static,
-        {
-            type Output = BinaryOpNode<D>;
-            fn div(self, rhs: T) -> Self::Output {
-                #[cfg(feature = "implicit_broadcast")]
-                {
-                    let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-                    let lhs_box: Arc<dyn Tensor<D>> = if self.shape() == &out_shape {
-                        Arc::new(self)
-                    } else {
-                        Arc::new(BroadcastNode::new(Arc::new(self), out_shape.clone()))
-                    };
-                    let rhs_box: Arc<dyn Tensor<D>> = if rhs.shape() == &out_shape {
-                        Arc::new(rhs)
-                    } else {
-                        Arc::new(BroadcastNode::new(Arc::new(rhs), out_shape.clone()))
-                    };
-                    return BinaryOpNode {
-                        op: BinaryOp::Div,
-                        lhs: lhs_box,
-                        rhs: rhs_box,
-                        shape: out_shape,
-                    };
-                }
-                #[cfg(not(feature = "implicit_broadcast"))]
-                {
-                    let shape = self.shape().clone();
-                    BinaryOpNode {
-                        op: BinaryOp::Div,
-                        lhs: Arc::new(self),
-                        rhs: Arc::new(rhs),
-                        shape,
-                    }
-                }
-            }
-        }
-
-        impl<D> $Type<D>
-        where
-            D: DType + 'static,
-        {
-            pub fn matmul(self, rhs: impl Tensor<D> + 'static) -> MatMulNode<D> {
-                MatMulNode::new(Arc::new(self), Arc::new(rhs))
-            }
-
-            pub fn broadcast(self, shape: Shape) -> BroadcastNode<D> {
-                BroadcastNode::new(Arc::new(self), shape)
-            }
-        }
-    };
-}
-
-impl_bin_ops_for_type!(Constant);
-impl_bin_ops_for_type!(Input);
-impl_bin_ops_for_type!(UnaryOpNode);
-impl_bin_ops_for_type!(BinaryOpNode);
-impl_bin_ops_for_type!(ReduceOpNode);
-impl_bin_ops_for_type!(MatMulNode);
-impl_bin_ops_for_type!(BroadcastNode);
-impl_bin_ops_for_type!(Parameter);
-
-#[derive(Clone)]
-pub struct MatMulNode<D: DType> {
-    lhs: Arc<dyn Tensor<D>>,
-    rhs: Arc<dyn Tensor<D>>,
-    shape: Shape,
-}
-
-impl<D: DType> MatMulNode<D> {
-    pub fn new(lhs: Arc<dyn Tensor<D>>, rhs: Arc<dyn Tensor<D>>) -> Self {
-        // Basic shape inference for 2D matmul: [M,K] x [K,N] -> [M,N]
-        let lshape = lhs.shape().clone();
-        let rshape = rhs.shape().clone();
-        if lshape.len() != 2 || rshape.len() != 2 {
-            panic!("MatMul only supports 2D tensors for now");
-        }
-        if lshape[1] != rshape[0] {
-            panic!("MatMul inner dimensions must match: got {lshape:?} and {rshape:?}");
-        }
-        let shape = vec![lshape[0], rshape[1]];
-        Self { lhs, rhs, shape }
-    }
-}
-
-impl<D: DType> Tensor<D> for MatMulNode<D> {
-    fn shape(&self) -> &Shape {
-        &self.shape
-    }
-
-    fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
-        let lhs_idx = self.lhs.lower_to_graph(graph);
-        let rhs_idx = self.rhs.lower_to_graph(graph);
-        let node_idx = graph.graph.add_node(TensorGraphNode::MatMul);
-        // insert inferred shape
-        graph.shapes.insert(node_idx, self.shape.clone());
-        graph.graph.add_edge(lhs_idx, node_idx, 0);
-        graph.graph.add_edge(rhs_idx, node_idx, 1);
-        node_idx
-    }
-}
-
-#[derive(Clone)]
-pub struct BroadcastNode<D: DType> {
-    input: Arc<dyn Tensor<D>>,
-    shape: Shape,
 }
 
 #[derive(Clone)]
@@ -619,65 +137,484 @@ impl<D: DType> Parameter<D> {
             shape,
         }
     }
-}
 
-impl<D: DType> Tensor<D> for Parameter<D> {
-    fn shape(&self) -> &Shape {
+    pub fn shape(&self) -> &Shape {
         &self.shape
     }
-    fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
-        // Reuse existing parameter node with same id to share state and accumulate grads
-        for idx in graph.graph.node_indices() {
-            if let TensorGraphNode::Parameter { id, .. } = &graph[idx]
-                && *id == self.id
-            {
-                let existing_shape = graph.shapes.get(&idx).expect("shape missing for parameter");
-                assert_eq!(
-                    existing_shape, &self.shape,
-                    "Parameter id {} shape mismatch: {:?} vs {:?}",
-                    self.id, existing_shape, self.shape
-                );
-                return idx;
-            }
-        }
-        let idx = graph.graph.add_node(TensorGraphNode::Parameter {
-            id: self.id,
-            data: self.data.clone(),
-        });
-        graph.shapes.insert(idx, self.shape.clone());
-        idx
-    }
 }
 
-impl<D: DType> BroadcastNode<D> {
-    pub fn new(input: Arc<dyn Tensor<D>>, shape: Shape) -> Self {
-        // Basic validation: input can broadcast to target shape if input rank <= target rank and
-        // trailing dims of input match or are 1.
-        let in_shape = input.shape().clone();
-        if in_shape.len() > shape.len() {
+#[derive(Clone)]
+pub struct TensorExpr<D: DType>(Arc<ExprNode<D>>);
+
+#[derive(Clone)]
+struct ExprNode<D: DType> {
+    shape: Shape,
+    kind: ExprKind<D>,
+}
+
+#[derive(Clone)]
+enum ExprKind<D: DType> {
+    Constant {
+        data: Arc<Vec<D>>,
+    },
+    Input {
+        name: &'static str,
+    },
+    Parameter {
+        id: usize,
+        data: Arc<Mutex<Vec<D>>>,
+    },
+    Unary {
+        op: UnaryOp,
+        x: TensorExpr<D>,
+    },
+    Binary {
+        op: BinaryOp,
+        a: TensorExpr<D>,
+        b: TensorExpr<D>,
+    },
+    MatMul {
+        a: TensorExpr<D>,
+        b: TensorExpr<D>,
+    },
+    Broadcast {
+        x: TensorExpr<D>,
+    }, // shape stored in node
+    Reduce {
+        op: ReduceOp,
+        x: TensorExpr<D>,
+        axis: usize,
+    },
+}
+
+impl<D: DType> TensorExpr<D> {
+    pub fn shape(&self) -> &Shape {
+        &self.0.shape
+    }
+
+    pub fn input(name: &'static str, shape: Shape) -> Self {
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Input { name },
+        }))
+    }
+
+    pub fn constant(data: Vec<D>, shape: Shape) -> Self {
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Constant {
+                data: Arc::new(data),
+            },
+        }))
+    }
+
+    pub fn parameter(data: Vec<D>, shape: Shape) -> Self {
+        let id = PARAM_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Parameter {
+                id,
+                data: Arc::new(Mutex::new(data)),
+            },
+        }))
+    }
+
+    pub fn parameter_with_id(id: usize, data: Vec<D>, shape: Shape) -> Self {
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Parameter {
+                id,
+                data: Arc::new(Mutex::new(data)),
+            },
+        }))
+    }
+
+    pub fn exp(self) -> Self
+    where
+        D: 'static,
+    {
+        Self(Arc::new(ExprNode {
+            shape: self.shape().clone(),
+            kind: ExprKind::Unary {
+                op: UnaryOp::Exp,
+                x: self,
+            },
+        }))
+    }
+
+    pub fn log(self) -> Self
+    where
+        D: 'static,
+    {
+        Self(Arc::new(ExprNode {
+            shape: self.shape().clone(),
+            kind: ExprKind::Unary {
+                op: UnaryOp::Log,
+                x: self,
+            },
+        }))
+    }
+
+    pub fn relu(self) -> Self
+    where
+        D: 'static,
+    {
+        Self(Arc::new(ExprNode {
+            shape: self.shape().clone(),
+            kind: ExprKind::Unary {
+                op: UnaryOp::Relu,
+                x: self,
+            },
+        }))
+    }
+
+    pub fn matmul(self, rhs: impl Into<TensorExpr<D>>) -> Self
+    where
+        D: 'static,
+    {
+        let rhs = rhs.into();
+        let lshape = self.shape().clone();
+        let rshape = rhs.shape().clone();
+        if lshape.len() != 2 || rshape.len() != 2 {
+            panic!("MatMul only supports 2D tensors for now");
+        }
+        if lshape[1] != rshape[0] {
+            panic!("MatMul inner dimensions must match: got {lshape:?} and {rshape:?}");
+        }
+        let shape = vec![lshape[0], rshape[1]];
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::MatMul { a: self, b: rhs },
+        }))
+    }
+
+    pub fn broadcast(self, to: Shape) -> Self
+    where
+        D: 'static,
+    {
+        // Validate broadcasting compatibility
+        let in_shape = self.shape();
+        if in_shape.len() > to.len() {
             panic!("Cannot broadcast to smaller rank");
         }
-        // align right
         for (i, &dim) in in_shape.iter().rev().enumerate() {
-            let target_dim = shape[shape.len() - 1 - i];
+            let target_dim = to[to.len() - 1 - i];
             if dim != target_dim && dim != 1 {
                 panic!("Cannot broadcast dim {dim} -> {target_dim}");
             }
         }
-        Self { input, shape }
+        Self(Arc::new(ExprNode {
+            shape: to,
+            kind: ExprKind::Broadcast { x: self },
+        }))
+    }
+
+    pub fn reduce_sum(self, axis: usize) -> Self {
+        let rank = self.shape().len();
+        assert!(axis < rank, "reduce axis out of bounds");
+        let mut out_shape = self.shape().clone();
+        out_shape.remove(axis);
+        Self(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Reduce {
+                op: ReduceOp::Sum,
+                x: self,
+                axis,
+            },
+        }))
+    }
+
+    pub fn reduce_mean(self, axis: usize) -> Self {
+        let rank = self.shape().len();
+        assert!(axis < rank, "reduce axis out of bounds");
+        let mut out_shape = self.shape().clone();
+        out_shape.remove(axis);
+        Self(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Reduce {
+                op: ReduceOp::Mean,
+                x: self,
+                axis,
+            },
+        }))
+    }
+
+    pub fn reduce_max(self, axis: usize) -> Self {
+        let rank = self.shape().len();
+        assert!(axis < rank, "reduce axis out of bounds");
+        let mut out_shape = self.shape().clone();
+        out_shape.remove(axis);
+        Self(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Reduce {
+                op: ReduceOp::Max,
+                x: self,
+                axis,
+            },
+        }))
+    }
+
+    pub fn mean_all(self) -> Self {
+        let mut expr = self;
+        while !expr.shape().is_empty() {
+            let axis = expr.shape().len() - 1;
+            expr = expr.reduce_mean(axis);
+        }
+        expr
     }
 }
 
-impl<D: DType> Tensor<D> for BroadcastNode<D> {
-    fn shape(&self) -> &Shape {
-        &self.shape
+impl<D: DType> std::ops::Neg for TensorExpr<D> {
+    type Output = TensorExpr<D>;
+    fn neg(self) -> Self::Output {
+        TensorExpr(Arc::new(ExprNode {
+            shape: self.shape().clone(),
+            kind: ExprKind::Unary {
+                op: UnaryOp::Neg,
+                x: self,
+            },
+        }))
     }
+}
 
-    fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
-        let input_idx = self.input.lower_to_graph(graph);
-        let node_idx = graph.graph.add_node(TensorGraphNode::Broadcast);
-        graph.shapes.insert(node_idx, self.shape.clone());
-        graph.graph.add_edge(input_idx, node_idx, 0);
-        node_idx
+impl<D: DType, R: Into<TensorExpr<D>>> Add<R> for TensorExpr<D> {
+    type Output = TensorExpr<D>;
+    fn add(self, rhs: R) -> Self::Output {
+        let rhs = rhs.into();
+        #[cfg(feature = "implicit_broadcast")]
+        let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
+        #[cfg(not(feature = "implicit_broadcast"))]
+        let out_shape = self.shape().clone();
+        TensorExpr(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Binary {
+                op: BinaryOp::Add,
+                a: self,
+                b: rhs,
+            },
+        }))
+    }
+}
+
+impl<D: DType, R: Into<TensorExpr<D>>> Sub<R> for TensorExpr<D> {
+    type Output = TensorExpr<D>;
+    fn sub(self, rhs: R) -> Self::Output {
+        let rhs = rhs.into();
+        #[cfg(feature = "implicit_broadcast")]
+        let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
+        #[cfg(not(feature = "implicit_broadcast"))]
+        let out_shape = self.shape().clone();
+        TensorExpr(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Binary {
+                op: BinaryOp::Sub,
+                a: self,
+                b: rhs,
+            },
+        }))
+    }
+}
+
+impl<D: DType, R: Into<TensorExpr<D>>> Mul<R> for TensorExpr<D> {
+    type Output = TensorExpr<D>;
+    fn mul(self, rhs: R) -> Self::Output {
+        let rhs = rhs.into();
+        #[cfg(feature = "implicit_broadcast")]
+        let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
+        #[cfg(not(feature = "implicit_broadcast"))]
+        let out_shape = self.shape().clone();
+        TensorExpr(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Binary {
+                op: BinaryOp::Mul,
+                a: self,
+                b: rhs,
+            },
+        }))
+    }
+}
+
+impl<D: DType, R: Into<TensorExpr<D>>> Div<R> for TensorExpr<D> {
+    type Output = TensorExpr<D>;
+    fn div(self, rhs: R) -> Self::Output {
+        let rhs = rhs.into();
+        #[cfg(feature = "implicit_broadcast")]
+        let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
+        #[cfg(not(feature = "implicit_broadcast"))]
+        let out_shape = self.shape().clone();
+        TensorExpr(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Binary {
+                op: BinaryOp::Div,
+                a: self,
+                b: rhs,
+            },
+        }))
+    }
+}
+
+impl<D: DType> TensorExpr<D> {
+    pub fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
+        fn lower_rec<D: DType>(expr: &TensorExpr<D>, g: &mut graph::TensorGraph<D>) -> NodeIndex {
+            match &expr.0.kind {
+                ExprKind::Constant { data } => {
+                    let idx = g
+                        .graph
+                        .add_node(TensorGraphNode::Constant { data: data.clone() });
+                    g.shapes.insert(idx, expr.shape().clone());
+                    idx
+                }
+                ExprKind::Input { name } => {
+                    // Reuse semantics like Input::lower_to_graph
+                    for idx in g.graph.node_indices() {
+                        if let TensorGraphNode::Input { name: n } = &g[idx]
+                            && n == name
+                        {
+                            let existing_shape =
+                                g.shapes.get(&idx).expect("shape missing for input");
+                            assert_eq!(
+                                existing_shape,
+                                expr.shape(),
+                                "Input '{:?}' shape mismatch: {:?} vs {:?}",
+                                name,
+                                existing_shape,
+                                expr.shape()
+                            );
+                            return idx;
+                        }
+                    }
+                    let idx = g.graph.add_node(TensorGraphNode::Input { name });
+                    g.shapes.insert(idx, expr.shape().clone());
+                    idx
+                }
+                ExprKind::Parameter { id, data } => {
+                    for idx in g.graph.node_indices() {
+                        if let TensorGraphNode::Parameter { id: pid, .. } = &g[idx]
+                            && pid == id
+                        {
+                            let existing_shape =
+                                g.shapes.get(&idx).expect("shape missing for parameter");
+                            assert_eq!(
+                                existing_shape,
+                                expr.shape(),
+                                "Parameter id {} shape mismatch: {:?} vs {:?}",
+                                id,
+                                existing_shape,
+                                expr.shape()
+                            );
+                            return idx;
+                        }
+                    }
+                    let idx = g.graph.add_node(TensorGraphNode::Parameter {
+                        id: *id,
+                        data: data.clone(),
+                    });
+                    g.shapes.insert(idx, expr.shape().clone());
+                    idx
+                }
+                ExprKind::Unary { op, x } => {
+                    let x_idx = lower_rec(x, g);
+                    let node_idx = g.graph.add_node(op.clone().into());
+                    g.shapes.insert(node_idx, expr.shape().clone());
+                    g.graph.add_edge(x_idx, node_idx, 0);
+                    node_idx
+                }
+                ExprKind::Binary { op, a, b } => {
+                    let a_idx = lower_rec(a, g);
+                    let b_idx = lower_rec(b, g);
+                    // If implicit broadcasting is enabled and input shapes differ from out, insert broadcast nodes
+                    #[cfg(feature = "implicit_broadcast")]
+                    let a_idx = {
+                        if a.shape() != expr.shape() {
+                            let bnode = g.graph.add_node(TensorGraphNode::Broadcast);
+                            g.shapes.insert(bnode, expr.shape().clone());
+                            g.graph.add_edge(a_idx, bnode, 0);
+                            bnode
+                        } else {
+                            a_idx
+                        }
+                    };
+                    #[cfg(feature = "implicit_broadcast")]
+                    let b_idx = {
+                        if b.shape() != expr.shape() {
+                            let bnode = g.graph.add_node(TensorGraphNode::Broadcast);
+                            g.shapes.insert(bnode, expr.shape().clone());
+                            g.graph.add_edge(b_idx, bnode, 0);
+                            bnode
+                        } else {
+                            b_idx
+                        }
+                    };
+                    let node_idx = g.graph.add_node(op.clone().into());
+                    g.shapes.insert(node_idx, expr.shape().clone());
+                    g.graph.add_edge(a_idx, node_idx, 0);
+                    g.graph.add_edge(b_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::MatMul { a, b } => {
+                    let a_idx = lower_rec(a, g);
+                    let b_idx = lower_rec(b, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::MatMul);
+                    g.shapes.insert(node_idx, expr.shape().clone());
+                    g.graph.add_edge(a_idx, node_idx, 0);
+                    g.graph.add_edge(b_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::Broadcast { x } => {
+                    let x_idx = lower_rec(x, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Broadcast);
+                    g.shapes.insert(node_idx, expr.shape().clone());
+                    g.graph.add_edge(x_idx, node_idx, 0);
+                    node_idx
+                }
+                ExprKind::Reduce { op, x, axis } => {
+                    let x_idx = lower_rec(x, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Reduce {
+                        op: op.clone(),
+                        axis: *axis,
+                    });
+                    g.shapes.insert(node_idx, expr.shape().clone());
+                    g.graph.add_edge(x_idx, node_idx, 0);
+                    node_idx
+                }
+            }
+        }
+        lower_rec(self, graph)
+    }
+}
+
+impl<D: DType + Clone> From<D> for TensorExpr<D> {
+    fn from(v: D) -> Self {
+        TensorExpr::constant(vec![v], vec![])
+    }
+}
+
+impl<D: DType> From<Constant<D>> for TensorExpr<D> {
+    fn from(c: Constant<D>) -> Self {
+        TensorExpr(Arc::new(ExprNode {
+            shape: c.shape().clone(),
+            kind: ExprKind::Constant { data: c.data },
+        }))
+    }
+}
+
+impl<D: DType> From<Input<D>> for TensorExpr<D> {
+    fn from(i: Input<D>) -> Self {
+        TensorExpr(Arc::new(ExprNode {
+            shape: i.shape().clone(),
+            kind: ExprKind::Input { name: i.name },
+        }))
+    }
+}
+
+impl<D: DType> From<Parameter<D>> for TensorExpr<D> {
+    fn from(p: Parameter<D>) -> Self {
+        TensorExpr(Arc::new(ExprNode {
+            shape: p.shape().clone(),
+            kind: ExprKind::Parameter {
+                id: p.id,
+                data: p.data,
+            },
+        }))
     }
 }

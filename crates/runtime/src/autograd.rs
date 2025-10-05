@@ -546,8 +546,7 @@ fn expand_to(x: &[f32], x_shape: &[usize], target_shape: &[usize]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use tensor::Input;
-    use tensor::Tensor;
-    use tensor::TensorOps;
+    use tensor::TensorExpr;
 
     use super::*;
 
@@ -560,12 +559,12 @@ mod tests {
         }
     }
 
-    fn find_input<'a>(graph: &'a TensorGraph<f32>, name: &'static str) -> NodeIndex {
+    fn find_input(graph: &TensorGraph<f32>, name: &'static str) -> NodeIndex {
         for idx in graph.graph.node_indices() {
-            if let TensorGraphNode::Input { name: n } = &graph[idx] {
-                if *n == name {
-                    return idx;
-                }
+            if let TensorGraphNode::Input { name: n } = &graph[idx]
+                && *n == name
+            {
+                return idx;
             }
         }
         panic!("input {name} not found");
@@ -574,8 +573,8 @@ mod tests {
     #[test]
     fn unary_exp_backward_mean() {
         let x = Input::<f32>::new("x", vec![4]);
-        let y = x.clone().exp();
-        let loss = tensor::ReduceOpNode::new(y, tensor::ReduceOp::Mean, 0);
+        let y: TensorExpr<f32> = TensorExpr::from(x.clone()).exp();
+        let loss = y.reduce_mean(0);
         let mut g = TensorGraph::new();
         let loss_idx = loss.lower_to_graph(&mut g);
         let x_idx = find_input(&g, "x");
@@ -592,8 +591,8 @@ mod tests {
     #[test]
     fn unary_log_backward_mean() {
         let x = Input::<f32>::new("x", vec![4]);
-        let y = x.clone().log();
-        let loss = tensor::ReduceOpNode::new(y, tensor::ReduceOp::Mean, 0);
+        let y: TensorExpr<f32> = TensorExpr::from(x.clone()).log();
+        let loss = y.reduce_mean(0);
         let mut g = TensorGraph::new();
         let loss_idx = loss.lower_to_graph(&mut g);
         let x_idx = find_input(&g, "x");
@@ -609,8 +608,8 @@ mod tests {
     #[test]
     fn unary_neg_backward_mean() {
         let x = Input::<f32>::new("x", vec![4]);
-        let y = -x.clone();
-        let loss = tensor::ReduceOpNode::new(y, tensor::ReduceOp::Mean, 0);
+        let y: TensorExpr<f32> = -TensorExpr::from(x.clone());
+        let loss = y.reduce_mean(0);
         let mut g = TensorGraph::new();
         let loss_idx = loss.lower_to_graph(&mut g);
         let x_idx = find_input(&g, "x");
@@ -626,8 +625,8 @@ mod tests {
     #[test]
     fn relu_backward_mean() {
         let x = Input::<f32>::new("x", vec![4]);
-        let y = x.clone().relu();
-        let loss = tensor::ReduceOpNode::new(y, tensor::ReduceOp::Mean, 0);
+        let y: TensorExpr<f32> = TensorExpr::from(x.clone()).relu();
+        let loss = y.reduce_mean(0);
         let mut g = TensorGraph::new();
         let loss_idx = loss.lower_to_graph(&mut g);
         let x_idx = find_input(&g, "x");
@@ -644,10 +643,9 @@ mod tests {
     fn add_broadcast_backward_mean() {
         let a = Input::<f32>::new("a", vec![2, 3]);
         let b = Input::<f32>::new("b", vec![3]);
-        let y = a.clone() + b.clone().broadcast(vec![2, 3]);
-        let loss = tensor::ReduceOpNode::new(y, tensor::ReduceOp::Mean, 1);
-        // After first mean over axis=1, shape becomes [2]; mean over axis=0 to scalar
-        let loss = tensor::ReduceOpNode::new(loss, tensor::ReduceOp::Mean, 0);
+        let y: TensorExpr<f32> =
+            TensorExpr::from(a.clone()) + TensorExpr::from(b.clone()).broadcast(vec![2, 3]);
+        let loss = y.reduce_mean(1).reduce_mean(0);
         let mut g = TensorGraph::new();
         let loss_idx = loss.lower_to_graph(&mut g);
         let a_idx = find_input(&g, "a");
@@ -661,9 +659,9 @@ mod tests {
         let da = res.grads_by_node.get(&a_idx).expect("da missing");
         let db = res.grads_by_node.get(&b_idx).expect("db missing");
         // loss is mean over 6 elements => each dy element = 1/6
-        approx_eq(da, &vec![1.0 / 6.0; 6], 1e-6);
+        approx_eq(da, &[1.0 / 6.0; 6], 1e-6);
         // db accumulates over 2 rows: 2 * (1/6) per class
-        approx_eq(db, &vec![2.0 / 6.0; 3], 1e-6);
+        approx_eq(db, &[2.0 / 6.0; 3], 1e-6);
     }
 
     #[test]
@@ -671,8 +669,8 @@ mod tests {
         let a = Input::<f32>::new("a", vec![3]);
         let b = Input::<f32>::new("b", vec![3]);
         // y1 = mean(a*b)
-        let y1 = a.clone() * b.clone();
-        let loss1 = tensor::ReduceOpNode::new(y1, tensor::ReduceOp::Mean, 0);
+        let y1: TensorExpr<f32> = TensorExpr::from(a.clone()) * TensorExpr::from(b.clone());
+        let loss1 = y1.reduce_mean(0);
         let mut g1 = TensorGraph::new();
         let loss1_idx = loss1.lower_to_graph(&mut g1);
         let a_idx1 = find_input(&g1, "a");
@@ -691,8 +689,8 @@ mod tests {
         approx_eq(db1, &exp_db1, 1e-6);
 
         // y2 = mean(a/b)
-        let y2 = a.clone() / b.clone();
-        let loss2 = tensor::ReduceOpNode::new(y2, tensor::ReduceOp::Mean, 0);
+        let y2: TensorExpr<f32> = TensorExpr::from(a.clone()) / TensorExpr::from(b.clone());
+        let loss2 = y2.reduce_mean(0);
         let mut g2 = TensorGraph::new();
         let loss2_idx = loss2.lower_to_graph(&mut g2);
         let a_idx2 = find_input(&g2, "a");
@@ -715,9 +713,10 @@ mod tests {
         // Check: loss = mean(sum(labels * logits, axis=1)) => dlogits = labels / B
         let logits = Input::<f32>::new("logits", vec![2, 3]);
         let labels = Input::<f32>::new("labels", vec![2, 3]);
-        let prod = tensor::BinaryOpNode::new(logits.clone(), labels.clone(), tensor::BinaryOp::Mul);
-        let picked = tensor::ReduceOpNode::new(prod, tensor::ReduceOp::Sum, 1);
-        let loss = tensor::ReduceOpNode::new(picked, tensor::ReduceOp::Mean, 0);
+        let prod: TensorExpr<f32> =
+            TensorExpr::from(logits.clone()) * TensorExpr::from(labels.clone());
+        let picked = prod.reduce_sum(1);
+        let loss = picked.reduce_mean(0);
         let mut g = TensorGraph::new();
         let loss_idx = loss.lower_to_graph(&mut g);
         let logits_idx = find_input(&g, "logits");
@@ -741,8 +740,8 @@ mod tests {
     fn reduce_sum_mean_max_backward() {
         let x = Input::<f32>::new("x", vec![2, 3]);
         // loss_sum = mean(sum(x, axis=1)) => scalar
-        let sum = tensor::ReduceOpNode::new(x.clone(), tensor::ReduceOp::Sum, 1);
-        let loss_sum = tensor::ReduceOpNode::new(sum, tensor::ReduceOp::Mean, 0);
+        let sum: TensorExpr<f32> = TensorExpr::from(x.clone()).reduce_sum(1);
+        let loss_sum = sum.reduce_mean(0);
         let mut gsum = TensorGraph::new();
         let loss_sum_idx = loss_sum.lower_to_graph(&mut gsum);
         let x_idx_sum = find_input(&gsum, "x");
@@ -751,37 +750,36 @@ mod tests {
         inputs.insert("x".to_string(), xval.clone());
         let res_sum = forward_and_backward(&gsum, &inputs, loss_sum_idx, None);
         let dx_sum = res_sum.grads_by_node.get(&x_idx_sum).unwrap();
-        approx_eq(dx_sum, &vec![0.5f32; 6], 1e-6);
+        approx_eq(dx_sum, &[0.5f32; 6], 1e-6);
 
         // loss_mean = mean(mean(x, axis=1)) => scalar == global mean
-        let mean = tensor::ReduceOpNode::new(x.clone(), tensor::ReduceOp::Mean, 1);
-        let loss_mean = tensor::ReduceOpNode::new(mean, tensor::ReduceOp::Mean, 0);
+        let mean: TensorExpr<f32> = TensorExpr::from(x.clone()).reduce_mean(1);
+        let loss_mean = mean.reduce_mean(0);
         let mut gmean = TensorGraph::new();
         let loss_mean_idx = loss_mean.lower_to_graph(&mut gmean);
         let x_idx_mean = find_input(&gmean, "x");
         let res_mean = forward_and_backward(&gmean, &inputs, loss_mean_idx, None);
         let dx_mean = res_mean.grads_by_node.get(&x_idx_mean).unwrap();
-        approx_eq(dx_mean, &vec![1.0f32 / 6.0; 6], 1e-6);
+        approx_eq(dx_mean, &[1.0f32 / 6.0; 6], 1e-6);
 
         // loss_max = mean(max(x, axis=1)) => grads are zeros (not implemented)
-        let max = tensor::ReduceOpNode::new(x, tensor::ReduceOp::Max, 1);
-        let loss_max = tensor::ReduceOpNode::new(max, tensor::ReduceOp::Mean, 0);
+        let max: TensorExpr<f32> = TensorExpr::from(x).reduce_max(1);
+        let loss_max = max.reduce_mean(0);
         let mut gmax = TensorGraph::new();
         let loss_max_idx = loss_max.lower_to_graph(&mut gmax);
         let x_idx_max = find_input(&gmax, "x");
         let res_max = forward_and_backward(&gmax, &inputs, loss_max_idx, None);
         let dx_max = res_max.grads_by_node.get(&x_idx_max).unwrap();
-        approx_eq(dx_max, &vec![0.0f32; 6], 1e-6);
+        approx_eq(dx_max, &[0.0f32; 6], 1e-6);
     }
 
     #[test]
     fn matmul_backward_mean() {
         let a = Input::<f32>::new("a", vec![2, 3]);
         let b = Input::<f32>::new("b", vec![3, 2]);
-        let y = a.clone().matmul(b.clone());
+        let y: TensorExpr<f32> = TensorExpr::from(a.clone()).matmul(b.clone());
         // loss = mean over axis 1 then axis 0 (equiv to global mean)
-        let loss = tensor::ReduceOpNode::new(y, tensor::ReduceOp::Mean, 1);
-        let loss = tensor::ReduceOpNode::new(loss, tensor::ReduceOp::Mean, 0);
+        let loss = y.reduce_mean(1).reduce_mean(0);
         let mut g = TensorGraph::new();
         let loss_idx = loss.lower_to_graph(&mut g);
         let a_idx = find_input(&g, "a");
@@ -795,7 +793,7 @@ mod tests {
         let da = res.grads_by_node.get(&a_idx).unwrap();
         let db = res.grads_by_node.get(&b_idx).unwrap();
         // dL/dY is ones of shape [2,2] scaled by 1/4 (global mean)
-        let dy = vec![0.25f32; 4];
+        let dy = [0.25f32; 4];
         // compute expected da = dy * B^T
         let mut exp_da = vec![0.0f32; 2 * 3];
         // dy shape [2,2], B shape [3,2]

@@ -7,7 +7,6 @@ use runtime::autograd::forward_and_backward;
 use runtime::optimizer::SGD;
 use tensor::Input;
 use tensor::Parameter;
-use tensor::Tensor;
 use tensor::graph::TensorGraph;
 
 #[derive(Parser, Debug)]
@@ -52,11 +51,10 @@ fn build_mlp_graph(
     // Forward: h = relu(images @ w1 + b1), logits = h @ w2 + b2
     let h = nn::relu(nn::linear(images.clone(), w1.clone(), Some(b1.clone())));
     let logits = nn::linear(h, w2.clone(), Some(b2.clone()));
-
     let mut graph = TensorGraph::new();
 
     if need_loss {
-        let loss = nn::cross_entropy_one_hot_logits(logits, labels.clone(), 1);
+        let loss = nn::cross_entropy_one_hot_logits(logits, labels, 1);
         let _ = loss.lower_to_graph(&mut graph);
     } else {
         let _ = logits.lower_to_graph(&mut graph);
@@ -89,14 +87,14 @@ fn main() {
     let train_labels_raw: Vec<u8> = ds.train_labels.to_vec1().expect("to_vec1 for train_labels");
     assert_eq!(n_train, train_labels_raw.len());
     let train_labels_oh = one_hot(&train_labels_raw, 10);
-    println!("Training samples: {}", n_train);
+    println!("Training samples: {n_train}");
 
     let test_images_2d: Vec<Vec<f32>> = ds.test_images.to_vec2().expect("to_vec2 for test_images");
     let n_test = test_images_2d.len();
     let test_images: Vec<f32> = test_images_2d.into_iter().flatten().collect();
     let test_labels_raw: Vec<u8> = ds.test_labels.to_vec1().expect("to_vec1 for test_labels");
     assert_eq!(n_test, test_labels_raw.len());
-    println!("Test samples: {}", n_test);
+    println!("Test samples: {n_test}");
 
     // Parameters
     let w1 = Parameter::new(xavier_init(&mut rng, 784, 128), vec![784, 128]);
@@ -112,7 +110,7 @@ fn main() {
     let opt = SGD::new(args.lr);
 
     // Training loop
-    let batches_per_epoch = (n_train + args.batch_size - 1) / args.batch_size;
+    let batches_per_epoch = n_train.div_ceil(args.batch_size);
     for epoch in 0..args.epochs {
         let epoch_span = tracing::span!(
             tracing::Level::INFO,
@@ -167,10 +165,10 @@ fn main() {
             let _fb = fwd_bwd_span.enter();
             let res = forward_and_backward(&train_graph, &inputs, loss_node, None);
             drop(_fb);
-            if steps % 50 == 0 {
-                if let Some(&lv) = res.loss_value.get(0) {
-                    epoch_loss += lv;
-                }
+            if steps.is_multiple_of(50)
+                && let Some(&lv) = res.loss_value.first()
+            {
+                epoch_loss += lv;
             }
             let opt_span = tracing::span!(tracing::Level::TRACE, "optimizer_step");
             let _og = opt_span.enter();
@@ -185,7 +183,7 @@ fn main() {
         );
 
         // Evaluate
-        let test_batches = (n_test + args.batch_size - 1) / args.batch_size;
+        let test_batches = n_test.div_ceil(args.batch_size);
         let eval_span = tracing::span!(
             tracing::Level::INFO,
             "evaluate",

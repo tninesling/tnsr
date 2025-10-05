@@ -118,7 +118,7 @@ impl Executor<f32> for SimdExecutor {
 mod tests {
     use super::*;
     use rstest::rstest;
-    use tensor::{Constant, Tensor};
+    use tensor::{Constant, TensorExpr};
 
     const EPSILON: f32 = 1e-5;
 
@@ -137,12 +137,12 @@ mod tests {
         };
     }
 
-    type UnaryApply = fn(Constant<f32>) -> Box<dyn Tensor<f32>>;
+    type UnaryApply = fn(Constant<f32>) -> TensorExpr<f32>;
 
-    fn neg_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> { Box::new(-a) }
-    fn relu_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> { Box::new(a.relu()) }
-    fn exp_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> { Box::new(a.exp()) }
-    fn log_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> { Box::new(a.log()) }
+    fn neg_node(a: Constant<f32>) -> TensorExpr<f32> { -TensorExpr::from(a) }
+    fn relu_node(a: Constant<f32>) -> TensorExpr<f32> { TensorExpr::from(a).relu() }
+    fn exp_node(a: Constant<f32>) -> TensorExpr<f32> { TensorExpr::from(a).exp() }
+    fn log_node(a: Constant<f32>) -> TensorExpr<f32> { TensorExpr::from(a).log() }
 
     fn sizes() -> Vec<usize> {
         vec![0usize, 1, LANES - 1, LANES, LANES + 1, 1024]
@@ -172,12 +172,12 @@ mod tests {
         }
     }
 
-    type BinaryApply = fn(Constant<f32>, Constant<f32>) -> Box<dyn Tensor<f32>>;
+    type BinaryApply = fn(Constant<f32>, Constant<f32>) -> TensorExpr<f32>;
 
-    fn add_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> { Box::new(a + b) }
-    fn sub_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> { Box::new(a - b) }
-    fn mul_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> { Box::new(a * b) }
-    fn div_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> { Box::new(a / b) }
+    fn add_node(a: Constant<f32>, b: Constant<f32>) -> TensorExpr<f32> { TensorExpr::from(a) + TensorExpr::from(b) }
+    fn sub_node(a: Constant<f32>, b: Constant<f32>) -> TensorExpr<f32> { TensorExpr::from(a) - TensorExpr::from(b) }
+    fn mul_node(a: Constant<f32>, b: Constant<f32>) -> TensorExpr<f32> { TensorExpr::from(a) * TensorExpr::from(b) }
+    fn div_node(a: Constant<f32>, b: Constant<f32>) -> TensorExpr<f32> { TensorExpr::from(a) / TensorExpr::from(b) }
 
     #[rstest]
     #[case::add(add_node as BinaryApply)]

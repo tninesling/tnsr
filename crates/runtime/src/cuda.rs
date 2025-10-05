@@ -243,7 +243,7 @@ impl Executor<f32> for CudaExecutor {
 mod tests {
     use rstest::rstest;
     use tensor::Constant;
-    use tensor::Tensor;
+    use tensor::TensorExpr;
 
     use super::*;
 
@@ -264,18 +264,18 @@ mod tests {
         };
     }
 
-    type UnaryApply = fn(Constant<f32>) -> Box<dyn Tensor<f32>>;
-    fn neg_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> {
-        Box::new(-a)
+    type UnaryApply = fn(Constant<f32>) -> TensorExpr<f32>;
+    fn neg_node(a: Constant<f32>) -> TensorExpr<f32> {
+        -TensorExpr::from(a)
     }
-    fn exp_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> {
-        Box::new(a.exp())
+    fn exp_node(a: Constant<f32>) -> TensorExpr<f32> {
+        TensorExpr::from(a).exp()
     }
-    fn log_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> {
-        Box::new(a.log())
+    fn log_node(a: Constant<f32>) -> TensorExpr<f32> {
+        TensorExpr::from(a).log()
     }
-    fn relu_node(a: Constant<f32>) -> Box<dyn Tensor<f32>> {
-        Box::new(a.relu())
+    fn relu_node(a: Constant<f32>) -> TensorExpr<f32> {
+        TensorExpr::from(a).relu()
     }
 
     #[rstest]
@@ -316,18 +316,18 @@ mod tests {
         assert_approx_eq!(result, expected);
     }
 
-    type BinaryApply = fn(Constant<f32>, Constant<f32>) -> Box<dyn Tensor<f32>>;
-    fn add_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> {
-        Box::new(a + b)
+    type BinaryApply = fn(Constant<f32>, Constant<f32>) -> TensorExpr<f32>;
+    fn add_node(a: Constant<f32>, b: Constant<f32>) -> TensorExpr<f32> {
+        TensorExpr::from(a) + TensorExpr::from(b)
     }
-    fn sub_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> {
-        Box::new(a - b)
+    fn sub_node(a: Constant<f32>, b: Constant<f32>) -> TensorExpr<f32> {
+        TensorExpr::from(a) - TensorExpr::from(b)
     }
-    fn mul_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> {
-        Box::new(a * b)
+    fn mul_node(a: Constant<f32>, b: Constant<f32>) -> TensorExpr<f32> {
+        TensorExpr::from(a) * TensorExpr::from(b)
     }
-    fn div_node(a: Constant<f32>, b: Constant<f32>) -> Box<dyn Tensor<f32>> {
-        Box::new(a / b)
+    fn div_node(a: Constant<f32>, b: Constant<f32>) -> TensorExpr<f32> {
+        TensorExpr::from(a) / TensorExpr::from(b)
     }
 
     #[rstest]

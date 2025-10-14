@@ -21,6 +21,7 @@ harness = false
 [[bench]]
 name = "gpu"
 harness = false
+required-features = ["cuda"]
 
 [dev-dependencies]
 criterion = "0.7.0"

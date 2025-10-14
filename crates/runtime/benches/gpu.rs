@@ -1,5 +1,3 @@
-#![cfg(feature = "cuda")]
-
 use std::sync::Arc;
 
 use criterion::BenchmarkId;

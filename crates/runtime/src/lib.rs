@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 pub mod autograd;
+#[cfg(feature = "cuda")]
+pub mod cuda;
 pub mod optimizer;
 
 use tensor::graph::TensorGraph;

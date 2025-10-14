@@ -1,4 +1,6 @@
 pub mod graph;
+pub mod ptx;
+pub mod tile;
 
 use std::ops::Add;
 use std::ops::Div;
@@ -67,6 +69,14 @@ impl<D: DType> Constant<D> {
 
     pub fn shape(&self) -> &Shape {
         &self.shape
+    }
+}
+
+impl<D: DType, R: Into<TensorExpr<D>>> Add<R> for Constant<D> {
+    type Output = TensorExpr<D>;
+    fn add(self, rhs: R) -> Self::Output {
+        let lhs_expr: TensorExpr<D> = self.into();
+        lhs_expr + rhs
     }
 }
 
@@ -143,16 +153,16 @@ impl<D: DType> Parameter<D> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TensorExpr<D: DType>(Arc<ExprNode<D>>);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ExprNode<D: DType> {
     shape: Shape,
     kind: ExprKind<D>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum ExprKind<D: DType> {
     Constant {
         data: Arc<Vec<D>>,

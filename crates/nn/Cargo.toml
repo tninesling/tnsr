@@ -10,6 +10,10 @@ clap = { version = "4.5", features = ["derive"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
+[features]
+default = []
+cuda = ["runtime/cuda"]
+
 [dev-dependencies]
 runtime = { path = "../runtime" }
 candle-datasets = "0.9"

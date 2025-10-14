@@ -13,3 +13,4 @@ petgraph = "0.8.3"
 
 [dev-dependencies]
 criterion = "0.7.0"
+insta = "1.43.2"

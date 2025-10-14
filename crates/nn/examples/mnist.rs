@@ -1,13 +1,19 @@
+use std::time::Instant;
+
 use candle_datasets::vision::mnist;
 use clap::Parser;
 use rand::prelude::*;
 use runtime::Executor;
-use runtime::SimpleExecutor;
 use runtime::autograd::forward_and_backward;
 use runtime::optimizer::SGD;
 use tensor::Input;
 use tensor::Parameter;
 use tensor::graph::TensorGraph;
+
+#[cfg(not(feature = "cuda"))]
+use runtime::SimpleExecutor;
+#[cfg(feature = "cuda")]
+use runtime::cuda::CudaExecutor;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -103,15 +109,24 @@ fn main() {
     let b2 = Parameter::new(vec![0.0f32; 10], vec![10]);
 
     // Graphs
+    println!("Building computation graphs...");
     let train_graph = build_mlp_graph(args.batch_size, &w1, &b1, &w2, &b2, true);
     let loss_node = *train_graph.toposort().last().expect("train graph empty");
     let infer_graph = build_mlp_graph(args.batch_size, &w1, &b1, &w2, &b2, false);
 
     let opt = SGD::new(args.lr);
 
+    #[cfg(feature = "cuda")]
+    let exec = CudaExecutor::new();
+    #[cfg(not(feature = "cuda"))]
+    let exec = SimpleExecutor {};
+
     // Training loop
+    println!("Starting training for {} epochs...", args.epochs);
     let batches_per_epoch = n_train.div_ceil(args.batch_size);
+    let training_start = Instant::now();
     for epoch in 0..args.epochs {
+        let epoch_start = Instant::now();
         let epoch_span = tracing::span!(
             tracing::Level::INFO,
             "epoch",
@@ -177,9 +192,10 @@ fn main() {
             steps += 1;
         }
         println!(
-            "epoch {} avg loss ~ {:.4}",
+            "epoch {} avg loss ~ {:.4}, execution time {:.2}",
             epoch + 1,
-            epoch_loss.max(1e-8) / (steps.max(1) as f32 / 50.0)
+            epoch_loss.max(1e-8) / (steps.max(1) as f32 / 50.0),
+            epoch_start.elapsed().as_secs_f32()
         );
 
         // Evaluate
@@ -190,7 +206,6 @@ fn main() {
             test_batches = test_batches
         );
         let _ev = eval_span.enter();
-        let exec = SimpleExecutor {};
         let mut correct = 0usize;
         let mut seen = 0usize;
         for b in 0..test_batches {
@@ -235,5 +250,9 @@ fn main() {
         }
         let acc = correct as f32 / seen as f32;
         println!("test accuracy: {:.2}% ({}/{})", acc * 100.0, correct, seen);
+        println!(
+            "evaluation time {:.2}s",
+            training_start.elapsed().as_secs_f32()
+        );
     }
 }

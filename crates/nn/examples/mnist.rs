@@ -4,7 +4,6 @@ use candle_datasets::vision::mnist;
 use clap::Parser;
 use rand::prelude::*;
 use runtime::Executor;
-use runtime::autograd::forward_and_backward;
 use runtime::optimizer::SGD;
 use tensor::Input;
 use tensor::Parameter;
@@ -178,16 +177,23 @@ fn main() {
 
             let fwd_bwd_span = tracing::span!(tracing::Level::TRACE, "forward_backward");
             let _fb = fwd_bwd_span.enter();
-            let res = forward_and_backward(&train_graph, &inputs, loss_node, None);
+
+            // Forward pass to get loss value
+            let loss_value = exec.execute(&train_graph, inputs.clone());
+
+            // Backward pass to get gradients
+            let backward_result = exec.backward(&train_graph, inputs, loss_node, None);
+            let grads = backward_result.grads_by_param;
             drop(_fb);
+
             if steps.is_multiple_of(50)
-                && let Some(&lv) = res.loss_value.first()
+                && let Some(&lv) = loss_value.first()
             {
                 epoch_loss += lv;
             }
             let opt_span = tracing::span!(tracing::Level::TRACE, "optimizer_step");
             let _og = opt_span.enter();
-            opt.step(&train_graph, &res.grads_by_param);
+            opt.step(&train_graph, &grads);
             drop(_og);
             steps += 1;
         }

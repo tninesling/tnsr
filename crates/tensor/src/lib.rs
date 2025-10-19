@@ -518,6 +518,7 @@ impl<D: DType> TensorExpr<D> {
                     let idx = g.graph.add_node(TensorGraphNode::Parameter {
                         id: *id,
                         data: data.clone(),
+                        grad: Arc::new(Mutex::new(Vec::new())),
                     });
                     g.shapes.insert(idx, expr.shape().clone());
                     idx

@@ -1,6 +1,10 @@
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use itertools::Itertools;
+use petgraph::graph::Graph;
+
+use crate::tile;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Type {
@@ -177,5 +181,171 @@ impl fmt::Display for Operand {
             Self::ImmF32(v) => write!(f, "{v}"),
             Self::Addr(sym) => write!(f, "[{sym}]"),
         }
+    }
+}
+
+pub struct PtxGraph {
+    pub graph: Graph<PtxGraphNode, usize>,
+}
+
+#[derive(Clone, Debug)]
+pub enum PtxGraphNode {
+    Function {
+        func: Function,
+    },
+    Constant {
+        data: Arc<Vec<f32>>,
+    },
+    Input {
+        name: &'static str,
+    },
+    Parameter {
+        id: usize,
+        data: Arc<Mutex<Vec<f32>>>,
+    },
+}
+
+impl PtxGraphNode {
+    pub fn as_function(&self) -> Option<&Function> {
+        if let PtxGraphNode::Function { func } = self {
+            Some(func)
+        } else {
+            None
+        }
+    }
+}
+
+impl From<tile::TileGraph> for PtxGraph {
+    fn from(tile_graph: tile::TileGraph) -> Self {
+        let ptx_graph = tile_graph.graph.map_owned(
+            |_idx, n| match n {
+                tile::TileGraphNode::Function {
+                    func:
+                        tile::Function {
+                            name, inputs, body, ..
+                        },
+                } => {
+                    let ptx_body = body.iter().flat_map(|op| match op {
+                        tile::Op::Add {
+                            lhs,
+                            rhs,
+                            out,
+                            elements_per_thread,
+                        } => {
+                            let vec_width = match elements_per_thread {
+                                1 => VecWidth::Scalar,
+                                2 => VecWidth::V2,
+                                4 => VecWidth::V4,
+                                _ => panic!("Unsupported elements_per_thread"),
+                            };
+                            let ty = Type::F32;
+
+                            let mut insts = Vec::new();
+
+                            // Load lhs
+                            insts.push(Inst::LdGlobal {
+                                dst: (0..*elements_per_thread)
+                                    .map(|i| Operand::Reg(format!("%r{}", i), ty))
+                                    .collect(),
+                                addr: Operand::Reg(
+                                    format!(
+                                        "[{} + threadIdx.x * {}]",
+                                        lhs,
+                                        elements_per_thread * 4
+                                    ),
+                                    ty,
+                                ),
+                                ty,
+                                vec: vec_width,
+                            });
+
+                            // Load rhs
+                            insts.push(Inst::LdGlobal {
+                                dst: (0..*elements_per_thread)
+                                    .map(|i| {
+                                        Operand::Reg(format!("%r{}", i + elements_per_thread), ty)
+                                    })
+                                    .collect(),
+                                addr: Operand::Reg(
+                                    format!(
+                                        "[{} + threadIdx.x * {}]",
+                                        rhs,
+                                        elements_per_thread * 4
+                                    ),
+                                    ty,
+                                ),
+                                ty,
+                                vec: vec_width,
+                            });
+
+                            // Add
+                            for i in 0..*elements_per_thread {
+                                insts.push(Inst::Add {
+                                    dst: Operand::Reg(
+                                        format!("%r{}", i + 2 * elements_per_thread),
+                                        ty,
+                                    ),
+                                    a: Operand::Reg(format!("r{}", i), ty),
+                                    b: Operand::Reg(format!("%r{}", i + elements_per_thread), ty),
+                                    ty,
+                                });
+                            }
+
+                            // Store out
+                            insts.push(Inst::StGlobal {
+                                addr: Operand::Reg(
+                                    format!(
+                                        "[{} + threadIdx.x * {}]",
+                                        out,
+                                        elements_per_thread * 4
+                                    ),
+                                    ty,
+                                ),
+                                src: (0..*elements_per_thread)
+                                    .map(|i| {
+                                        Operand::Reg(
+                                            format!("%r{}", i + 2 * elements_per_thread),
+                                            ty,
+                                        )
+                                    })
+                                    .collect(),
+                                ty,
+                                vec: vec_width,
+                            });
+
+                            insts
+                        }
+                    });
+                    let func = Function {
+                        name,
+                        params: inputs
+                            .iter()
+                            .enumerate()
+                            .map(|(i, _inp)| (format!("param{}", i), Type::F32))
+                            .collect(),
+                        body: ptx_body.collect(),
+                    };
+                    PtxGraphNode::Function { func }
+                }
+                tile::TileGraphNode::Constant { data } => {
+                    PtxGraphNode::Constant { data: data.clone() }
+                }
+                tile::TileGraphNode::Input { .. } => todo!(),
+                tile::TileGraphNode::Parameter { .. } => todo!(),
+            },
+            |_idx, e| e,
+        );
+        Self { graph: ptx_graph }
+    }
+}
+
+impl From<PtxGraph> for Module {
+    fn from(ptx_graph: PtxGraph) -> Self {
+        let functions = ptx_graph
+            .graph
+            .node_indices()
+            .filter_map(|idx| ptx_graph.graph[idx].as_function().cloned())
+            .collect();
+        Module { functions }
     }
 }

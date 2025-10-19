@@ -70,7 +70,6 @@ pub fn cross_entropy_one_hot_logits(
 mod tests {
     use runtime::Executor;
     use runtime::SimpleExecutor;
-    use runtime::autograd::forward_and_backward;
     use tensor::Input;
     use tensor::graph::TensorGraph;
     use tensor::graph::TensorGraphNode;
@@ -184,7 +183,8 @@ mod tests {
         let xval = vec![1.0f32, 2.0, 3.0, -0.5, 2.0, 0.0]; // two rows
         let mut inputs = std::collections::HashMap::new();
         inputs.insert("x".to_string(), xval.clone());
-        let res = forward_and_backward(&g, &inputs, loss_idx, None);
+        let exec = SimpleExecutor {};
+        let res = exec.backward(&g, inputs, loss_idx, None);
         // expected dx = softmax(x_row)/2 per row
         let mut expected = vec![0.0f32; 6];
         for row in 0..2 {
@@ -232,7 +232,8 @@ mod tests {
         let mut inputs = std::collections::HashMap::new();
         inputs.insert("logits".to_string(), z.clone());
         inputs.insert("labels".to_string(), y.clone());
-        let res = forward_and_backward(&g, &inputs, loss_idx, None);
+        let exec = SimpleExecutor {};
+        let res = exec.backward(&g, inputs, loss_idx, None);
         let dz = res.grads_by_node.get(&logits_idx).expect("dz missing");
         // expected dz = (softmax(z) - y) / B
         let mut expected = vec![0.0f32; 6];

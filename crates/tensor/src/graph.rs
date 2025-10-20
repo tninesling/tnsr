@@ -14,29 +14,43 @@ use crate::TensorExpr;
 use crate::UnaryOp;
 
 pub enum TensorGraphNode<D> {
-    Constant {
-        data: Arc<Vec<D>>,
-    },
-    Input {
-        name: &'static str,
-    },
-    Parameter {
-        id: usize,
-        data: Arc<Mutex<Vec<D>>>,
-        grad: Arc<Mutex<Vec<D>>>,
-    },
-    Unary {
-        op: UnaryOp,
-    },
-    Binary {
-        op: BinaryOp,
-    },
+    Constant { data: Arc<Vec<D>> },
+    Input { name: &'static str },
+    Parameter { id: usize, data: Arc<Mutex<Vec<D>>> },
+    Unary { op: UnaryOp },
+    Binary { op: BinaryOp },
     MatMul,
     Broadcast,
-    Reduce {
-        op: ReduceOp,
-        axis: usize,
-    },
+    Reduce { op: ReduceOp, axis: usize },
+}
+
+impl<D> TensorGraphNode<D> {
+    pub fn name(&self) -> &'static str {
+        match self {
+            TensorGraphNode::Constant { .. } => "Constant",
+            TensorGraphNode::Input { .. } => "Input",
+            TensorGraphNode::Parameter { .. } => "Parameter",
+            TensorGraphNode::Unary { op } => match op {
+                UnaryOp::Neg => "Neg",
+                UnaryOp::Exp => "Exp",
+                UnaryOp::Log => "Log",
+                UnaryOp::Relu => "Relu",
+            },
+            TensorGraphNode::Binary { op } => match op {
+                BinaryOp::Add => "Add",
+                BinaryOp::Sub => "Sub",
+                BinaryOp::Mul => "Mul",
+                BinaryOp::Div => "Div",
+            },
+            TensorGraphNode::MatMul => "MatMul",
+            TensorGraphNode::Broadcast => "Broadcast",
+            TensorGraphNode::Reduce { op, .. } => match op {
+                ReduceOp::Sum => "ReduceSum",
+                ReduceOp::Max => "ReduceMax",
+                ReduceOp::Mean => "ReduceMean",
+            },
+        }
+    }
 }
 
 impl<D> From<UnaryOp> for TensorGraphNode<D> {
@@ -68,6 +82,14 @@ impl<D> TensorGraph<D> {
             graph: Graph::new(),
             shapes: HashMap::new(),
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.graph.node_count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.graph.node_count() == 0
     }
 
     pub fn toposort(&self) -> Vec<NodeIndex> {

@@ -69,12 +69,13 @@ fn build_mlp_graph(
 }
 
 fn main() {
-    // Initialize tracing (no-op if already set up)
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
-
     let args = Args::parse();
+
+    // Initialize chrome tracing
+    let guard = runtime::init_chrome_tracing("mnist_trace.json")
+        .expect("Failed to initialize chrome tracing");
+    println!("Chrome tracing initialized. Trace will be written to mnist_trace.json");
+
     let mut rng = StdRng::seed_from_u64(args.seed);
 
     // Load dataset from HF hub.
@@ -116,9 +117,9 @@ fn main() {
     let opt = SGD::new(args.lr);
 
     #[cfg(feature = "cuda")]
-    let exec = CudaExecutor::new();
+    let mut exec = CudaExecutor::new();
     #[cfg(not(feature = "cuda"))]
-    let exec = SimpleExecutor {};
+    let mut exec = SimpleExecutor::new();
 
     // Training loop
     println!("Starting training for {} epochs...", args.epochs);
@@ -135,74 +136,74 @@ fn main() {
             batch_size = args.batch_size
         );
         let _eg = epoch_span.enter();
-        // Shuffle indices
-        let mut indices: Vec<usize> = (0..n_train).collect();
-        indices.shuffle(&mut rng);
-        let mut epoch_loss = 0.0f32;
-        let mut steps = 0usize;
 
-        for b in 0..batches_per_epoch {
-            let start = b * args.batch_size;
-            let end = ((b + 1) * args.batch_size).min(n_train);
-            let bs = end - start;
-            if bs == 0 {
-                continue;
+        // Training phase
+        {
+            // Shuffle indices
+            let mut indices: Vec<usize> = (0..n_train).collect();
+            indices.shuffle(&mut rng);
+            let mut epoch_loss = 0.0f32;
+            let mut steps = 0usize;
+
+            for b in 0..batches_per_epoch {
+                let start = b * args.batch_size;
+                let end = ((b + 1) * args.batch_size).min(n_train);
+                let bs = end - start;
+                if bs == 0 {
+                    continue;
+                }
+                let batch_span = tracing::span!(
+                    tracing::Level::TRACE,
+                    "batch",
+                    idx = b,
+                    bs = bs,
+                    start = start,
+                    end = end
+                );
+                let _bg = batch_span.enter();
+                // Collect batch
+                let mut x = vec![0.0f32; args.batch_size * 784];
+                let mut y = vec![0.0f32; args.batch_size * 10];
+                for (i, idx) in (start..end).enumerate() {
+                    let j = indices[idx];
+                    let src_x = &train_images[j * 784..(j + 1) * 784];
+                    let dst_x = &mut x[i * 784..(i + 1) * 784];
+                    dst_x.copy_from_slice(src_x);
+                    let src_y = &train_labels_oh[j * 10..(j + 1) * 10];
+                    let dst_y = &mut y[i * 10..(i + 1) * 10];
+                    dst_y.copy_from_slice(src_y);
+                }
+                // For last batch if bs < batch_size, pad remaining already zeros; network ignores extra rows statistically; or we could rebuild graphs but we keep it simple.
+
+                let mut inputs = std::collections::HashMap::new();
+                inputs.insert("images".to_string(), x);
+                inputs.insert("labels".to_string(), y);
+
+                // Forward pass to get loss value
+                let loss_value = exec.forward(&train_graph, inputs.clone());
+
+                // Backward pass to get gradients
+                let backward_result = exec.backward(&train_graph, loss_node, None);
+                let grads = backward_result.grads_by_param;
+
+                if steps.is_multiple_of(50)
+                    && let Some(&lv) = loss_value.first()
+                {
+                    epoch_loss += lv;
+                }
+                let opt_span = tracing::span!(tracing::Level::TRACE, "optimizer_step");
+                let _og = opt_span.enter();
+                opt.step(&train_graph, &grads);
+                drop(_og);
+                steps += 1;
             }
-            let batch_span = tracing::span!(
-                tracing::Level::TRACE,
-                "batch",
-                idx = b,
-                bs = bs,
-                start = start,
-                end = end
+            println!(
+                "epoch {} avg loss ~ {:.4}, execution time {:.2}",
+                epoch + 1,
+                epoch_loss.max(1e-8) / (steps.max(1) as f32 / 50.0),
+                epoch_start.elapsed().as_secs_f32()
             );
-            let _bg = batch_span.enter();
-            // Collect batch
-            let mut x = vec![0.0f32; args.batch_size * 784];
-            let mut y = vec![0.0f32; args.batch_size * 10];
-            for (i, idx) in (start..end).enumerate() {
-                let j = indices[idx];
-                let src_x = &train_images[j * 784..(j + 1) * 784];
-                let dst_x = &mut x[i * 784..(i + 1) * 784];
-                dst_x.copy_from_slice(src_x);
-                let src_y = &train_labels_oh[j * 10..(j + 1) * 10];
-                let dst_y = &mut y[i * 10..(i + 1) * 10];
-                dst_y.copy_from_slice(src_y);
-            }
-            // For last batch if bs < batch_size, pad remaining already zeros; network ignores extra rows statistically; or we could rebuild graphs but we keep it simple.
-
-            let mut inputs = std::collections::HashMap::new();
-            inputs.insert("images".to_string(), x);
-            inputs.insert("labels".to_string(), y);
-
-            let fwd_bwd_span = tracing::span!(tracing::Level::TRACE, "forward_backward");
-            let _fb = fwd_bwd_span.enter();
-
-            // Forward pass to get loss value
-            let loss_value = exec.execute(&train_graph, inputs.clone());
-
-            // Backward pass to get gradients
-            let backward_result = exec.backward(&train_graph, inputs, loss_node, None);
-            let grads = backward_result.grads_by_param;
-            drop(_fb);
-
-            if steps.is_multiple_of(50)
-                && let Some(&lv) = loss_value.first()
-            {
-                epoch_loss += lv;
-            }
-            let opt_span = tracing::span!(tracing::Level::TRACE, "optimizer_step");
-            let _og = opt_span.enter();
-            opt.step(&train_graph, &grads);
-            drop(_og);
-            steps += 1;
         }
-        println!(
-            "epoch {} avg loss ~ {:.4}, execution time {:.2}",
-            epoch + 1,
-            epoch_loss.max(1e-8) / (steps.max(1) as f32 / 50.0),
-            epoch_start.elapsed().as_secs_f32()
-        );
 
         // Evaluate
         let test_batches = n_test.div_ceil(args.batch_size);
@@ -238,7 +239,7 @@ fn main() {
             }
             let mut inputs = std::collections::HashMap::new();
             inputs.insert("images".to_string(), x);
-            let logits = exec.execute(&infer_graph, inputs);
+            let logits = exec.forward(&infer_graph, inputs);
             for i in 0..bs {
                 let row = &logits[i * 10..(i + 1) * 10];
                 let pred = row
@@ -260,5 +261,14 @@ fn main() {
             "evaluation time {:.2}s",
             training_start.elapsed().as_secs_f32()
         );
+
+        // End of epoch - _eg guard will be dropped here
     }
+
+    println!("Training completed. Flushing chrome trace...");
+
+    // Explicitly flush the tracing guard to ensure all spans are written
+    drop(guard);
+    println!("Chrome trace written to mnist_trace.json");
+    println!("Open chrome://tracing in Chrome browser and load the trace file to visualize timing");
 }

@@ -8,6 +8,8 @@ lazy_static = "1.5.0"
 tensor = { path = "../tensor" }
 petgraph = "0.8.3"
 tracing = "0.1.41"
+tracing-chrome = "0.7.2"
+tracing-subscriber = "0.3.18"
 cudarc = { version = "0.17.3", features = ["cuda-12090"], optional = true }
 
 [features]

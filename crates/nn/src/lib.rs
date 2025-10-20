@@ -115,8 +115,8 @@ mod tests {
         let mut graph = TensorGraph::new();
         node.lower_to_graph(&mut graph);
 
-        let exec = SimpleExecutor {};
-        let out = exec.execute(&graph, Default::default());
+        let mut exec = SimpleExecutor::new();
+        let out = exec.forward(&graph, Default::default());
 
         let expected = {
             let a = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -149,8 +149,8 @@ mod tests {
         let mut graph = TensorGraph::new();
         node.lower_to_graph(&mut graph);
 
-        let exec = SimpleExecutor {};
-        let out = exec.execute(&graph, Default::default());
+        let mut exec = SimpleExecutor::new();
+        let out = exec.forward(&graph, Default::default());
 
         let a = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
         let bmat = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -183,8 +183,9 @@ mod tests {
         let xval = vec![1.0f32, 2.0, 3.0, -0.5, 2.0, 0.0]; // two rows
         let mut inputs = std::collections::HashMap::new();
         inputs.insert("x".to_string(), xval.clone());
-        let exec = SimpleExecutor {};
-        let res = exec.backward(&g, inputs, loss_idx, None);
+        let mut exec = SimpleExecutor::new();
+        exec.forward(&g, inputs);
+        let res = exec.backward(&g, loss_idx, None);
         // expected dx = softmax(x_row)/2 per row
         let mut expected = vec![0.0f32; 6];
         for row in 0..2 {
@@ -210,8 +211,8 @@ mod tests {
         let loss = cross_entropy_one_hot_logits(logits, labels, 1);
         let mut g = TensorGraph::new();
         loss.lower_to_graph(&mut g);
-        let exec = SimpleExecutor {};
-        let out = exec.execute(&g, Default::default());
+        let mut exec = SimpleExecutor::new();
+        let out = exec.forward(&g, Default::default());
         assert_eq!(out.len(), 1);
         let expected = (3.0f32).ln();
         assert!((out[0] - expected).abs() < 1e-6);
@@ -232,8 +233,9 @@ mod tests {
         let mut inputs = std::collections::HashMap::new();
         inputs.insert("logits".to_string(), z.clone());
         inputs.insert("labels".to_string(), y.clone());
-        let exec = SimpleExecutor {};
-        let res = exec.backward(&g, inputs, loss_idx, None);
+        let mut exec = SimpleExecutor::new();
+        exec.forward(&g, inputs);
+        let res = exec.backward(&g, loss_idx, None);
         let dz = res.grads_by_node.get(&logits_idx).expect("dz missing");
         // expected dz = (softmax(z) - y) / B
         let mut expected = vec![0.0f32; 6];

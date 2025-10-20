@@ -6,9 +6,21 @@ pub mod optimizer;
 
 use tensor::graph::TensorGraph;
 use tensor::graph::TensorGraphNode;
-use tracing::Level;
-use tracing::debug;
-use tracing::span;
+use tracing::trace_span;
+use tracing_chrome::ChromeLayerBuilder;
+use tracing_subscriber::prelude::*;
+
+pub struct TracingGuard {
+    _guard: tracing_chrome::FlushGuard,
+}
+
+pub fn init_chrome_tracing(file_path: &str) -> Result<TracingGuard, Box<dyn std::error::Error>> {
+    let (chrome_layer, guard) = ChromeLayerBuilder::new().file(file_path).build();
+
+    tracing_subscriber::registry().with(chrome_layer).init();
+
+    Ok(TracingGuard { _guard: guard })
+}
 
 pub struct BackwardResult<D> {
     pub grads_by_node: HashMap<petgraph::graph::NodeIndex, Vec<D>>,
@@ -17,140 +29,215 @@ pub struct BackwardResult<D> {
 }
 
 pub trait Executor<D> {
-    fn execute(&self, graph: &TensorGraph<D>, inputs: HashMap<String, Vec<D>>) -> Vec<D>;
+    fn forward(&mut self, graph: &TensorGraph<D>, inputs: HashMap<String, Vec<D>>) -> Vec<D>;
 
     fn backward(
-        &self,
+        &mut self,
         graph: &TensorGraph<D>,
-        inputs: HashMap<String, Vec<D>>,
         loss_node: petgraph::graph::NodeIndex,
         seed_grad: Option<Vec<D>>,
     ) -> BackwardResult<D>;
 }
 
-pub struct SimpleExecutor {}
+pub struct SimpleExecutor {
+    values: HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+    grads: HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+}
+
+impl SimpleExecutor {
+    pub fn new() -> Self {
+        SimpleExecutor {
+            values: HashMap::new(),
+            grads: HashMap::new(),
+        }
+    }
+
+    fn neg(&self, x: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("neg").entered();
+        x.iter().map(|v| -v).collect()
+    }
+
+    fn exp(&self, x: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("exp").entered();
+        x.iter().copied().map(f32::exp).collect()
+    }
+
+    fn log(&self, x: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("log").entered();
+        x.iter().copied().map(f32::ln).collect()
+    }
+
+    fn relu(&self, x: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("relu").entered();
+        x.iter().map(|v| v.max(0.0)).collect()
+    }
+
+    fn add(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("add").entered();
+        a.iter().zip(b.iter()).map(|(x, y)| x + y).collect()
+    }
+
+    fn sub(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("sub").entered();
+        a.iter().zip(b.iter()).map(|(x, y)| x - y).collect()
+    }
+
+    fn mul(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("mul").entered();
+        a.iter().zip(b.iter()).map(|(x, y)| x * y).collect()
+    }
+
+    fn div(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("div").entered();
+        a.iter().zip(b.iter()).map(|(x, y)| x / y).collect()
+    }
+
+    fn neg_grad(&self, dy: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("neg").entered();
+        dy.iter().map(|g| -g).collect()
+    }
+
+    fn exp_grad(&self, dy: &[f32], y: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("exp").entered();
+        dy.iter().zip(y.iter()).map(|(g, y)| g * y).collect()
+    }
+
+    fn log_grad(&self, dy: &[f32], x: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("log").entered();
+        dy.iter().zip(x.iter()).map(|(g, x)| g / x).collect()
+    }
+
+    fn relu_grad(&self, dy: &[f32], x: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("relu").entered();
+        dy.iter()
+            .zip(x.iter())
+            .map(|(g, x)| if *x > 0.0 { *g } else { 0.0 })
+            .collect()
+    }
+
+    fn add_grad(&self, dy: &[f32], output_shape: &[usize], a_shape: &[usize], b_shape: &[usize]) -> (Vec<f32>, Vec<f32>) {
+        let _span = trace_span!("add").entered();
+        let da = reduce_like(dy, output_shape, a_shape);
+        let db = reduce_like(dy, output_shape, b_shape);
+        (da, db)
+    }
+
+    fn sub_grad(&self, dy: &[f32], output_shape: &[usize], a_shape: &[usize], b_shape: &[usize]) -> (Vec<f32>, Vec<f32>) {
+        let _span = trace_span!("sub").entered();
+        let da = reduce_like(dy, output_shape, a_shape);
+        let mut db = reduce_like(dy, output_shape, b_shape);
+        for v in db.iter_mut() {
+            *v = -*v;
+        }
+        (da, db)
+    }
+
+    fn mul_grad(&self, dy: &[f32], output_shape: &[usize], a_shape: &[usize], b_shape: &[usize], a_val: &[f32], b_val: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        let _span = trace_span!("mul").entered();
+        let tmp_a: Vec<f32> = dy.iter().zip(b_val.iter()).map(|(g, b)| g * b).collect();
+        let tmp_b: Vec<f32> = dy.iter().zip(a_val.iter()).map(|(g, a)| g * a).collect();
+        let da = reduce_like(&tmp_a, output_shape, a_shape);
+        let db = reduce_like(&tmp_b, output_shape, b_shape);
+        (da, db)
+    }
+
+    fn div_grad(&self, dy: &[f32], output_shape: &[usize], a_shape: &[usize], b_shape: &[usize], a_val: &[f32], b_val: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        let _span = trace_span!("div").entered();
+        let tmp_a: Vec<f32> = dy.iter().zip(b_val.iter()).map(|(g, b)| g / b).collect();
+        let tmp_b: Vec<f32> = dy.iter().zip(a_val.iter()).map(|(g, a)| -g * a).collect();
+        let mut b_sq = b_val.to_vec();
+        for v in b_sq.iter_mut() {
+            *v = *v * *v;
+        }
+        let tmp_b: Vec<f32> = tmp_b
+            .iter()
+            .zip(b_sq.iter())
+            .map(|(t, bsq)| t / bsq)
+            .collect();
+        let da = reduce_like(&tmp_a, output_shape, a_shape);
+        let db = reduce_like(&tmp_b, output_shape, b_shape);
+        (da, db)
+    }
+}
 
 impl Executor<f32> for SimpleExecutor {
-    fn execute(&self, graph: &TensorGraph<f32>, inputs: HashMap<String, Vec<f32>>) -> Vec<f32> {
+    fn forward(&mut self, graph: &TensorGraph<f32>, inputs: HashMap<String, Vec<f32>>) -> Vec<f32> {
         let order = graph.toposort();
-        let exec_span = span!(Level::TRACE, "execute_graph", nodes = order.len());
-        let _enter = exec_span.enter();
+        let _fwd_span = trace_span!("forward", nodes = order.len()).entered();
 
-        let mut values: HashMap<_, Vec<f32>> = HashMap::with_capacity(order.len());
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
             let result = match node {
-                TensorGraphNode::Constant { data } => data.as_ref().clone(),
+                TensorGraphNode::Constant { data } => {
+                    let _span = trace_span!("constant", node = node_idx.index()).entered();
+                    data.as_ref().clone()
+                }
                 TensorGraphNode::Input { name } => {
+                    let _span =
+                        trace_span!("input", node = node_idx.index(), name = name).entered();
                     inputs.get::<str>(name).expect("Input not found").clone()
                 }
-                TensorGraphNode::Parameter { data, .. } => data.lock().unwrap().clone(),
+                TensorGraphNode::Parameter { data, .. } => {
+                    let _span = trace_span!("parameter", node = node_idx.index()).entered();
+                    data.lock().unwrap().clone()
+                }
                 TensorGraphNode::Unary { op } => {
                     let inputs = graph.inputs(*node_idx);
-                    let x = values.get(&inputs[0]).unwrap();
+                    let x = self.values.get(&inputs[0]).unwrap();
                     match op {
-                        tensor::UnaryOp::Neg => x.iter().map(|v| -v).collect(),
-                        tensor::UnaryOp::Exp => x.iter().copied().map(f32::exp).collect(),
-                        tensor::UnaryOp::Log => x.iter().copied().map(f32::ln).collect(),
-                        tensor::UnaryOp::Relu => x.iter().map(|v| v.max(0.0)).collect(),
+                        tensor::UnaryOp::Neg => self.neg(x),
+                        tensor::UnaryOp::Exp => self.exp(x),
+                        tensor::UnaryOp::Log => self.log(x),
+                        tensor::UnaryOp::Relu => self.relu(x),
                     }
                 }
                 TensorGraphNode::Binary { op } => {
                     let ins = graph.inputs(*node_idx);
-                    let a = values.get(&ins[0]).unwrap();
-                    let b = values.get(&ins[1]).unwrap();
+                    let a = self.values.get(&ins[0]).unwrap();
+                    let b = self.values.get(&ins[1]).unwrap();
                     assert_eq!(a.len(), b.len());
                     match op {
-                        tensor::BinaryOp::Add => {
-                            a.iter().zip(b.iter()).map(|(x, y)| x + y).collect()
-                        }
-                        tensor::BinaryOp::Sub => {
-                            a.iter().zip(b.iter()).map(|(x, y)| x - y).collect()
-                        }
-                        tensor::BinaryOp::Mul => {
-                            a.iter().zip(b.iter()).map(|(x, y)| x * y).collect()
-                        }
-                        tensor::BinaryOp::Div => {
-                            a.iter().zip(b.iter()).map(|(x, y)| x / y).collect()
-                        }
+                        tensor::BinaryOp::Add => self.add(a, b),
+                        tensor::BinaryOp::Sub => self.sub(a, b),
+                        tensor::BinaryOp::Mul => self.mul(a, b),
+                        tensor::BinaryOp::Div => self.div(a, b),
                     }
                 }
-                TensorGraphNode::MatMul => matmul_forward(graph, &values, *node_idx),
-                TensorGraphNode::Broadcast => broadcast_forward(graph, &values, *node_idx),
+                TensorGraphNode::MatMul => {
+                    let _span = trace_span!("matmul", node = node_idx.index()).entered();
+                    matmul_forward(graph, &self.values, *node_idx)
+                }
+                TensorGraphNode::Broadcast => {
+                    let _span = trace_span!("broadcast", node = node_idx.index()).entered();
+                    broadcast_forward(graph, &self.values, *node_idx)
+                }
                 TensorGraphNode::Reduce { op, axis } => {
-                    reduce_forward(graph, &values, *node_idx, op, *axis)
+                    let _span = trace_span!(
+                        "reduce",
+                        op = node.name(),
+                        axis = *axis,
+                        node = node_idx.index()
+                    )
+                    .entered();
+                    reduce_forward(graph, &self.values, *node_idx, op, *axis)
                 }
             };
-            values.insert(*node_idx, result);
+            self.values.insert(*node_idx, result);
         }
         let last_node = order.last().expect("Graph is empty");
-        let out = values.remove(last_node).expect("Output not found");
-        debug!(len = out.len(), "execute_graph_done");
-        out
+        let out = self.values.get(last_node).expect("Output not found");
+        out.clone()
     }
 
     fn backward(
-        &self,
+        &mut self,
         graph: &TensorGraph<f32>,
-        inputs: HashMap<String, Vec<f32>>,
         loss_node: petgraph::graph::NodeIndex,
         seed_grad: Option<Vec<f32>>,
     ) -> BackwardResult<f32> {
         let order = graph.toposort();
-        let exec_span = span!(Level::TRACE, "backward_pass", nodes = order.len());
-        let _enter = exec_span.enter();
+        let _bwd_span = trace_span!("backward", nodes = order.len()).entered();
 
-        // Forward pass to cache values needed for backward pass
-        let mut values: HashMap<_, Vec<f32>> = HashMap::with_capacity(order.len());
-        for node_idx in order.iter() {
-            let node = &graph[*node_idx];
-            let result = match node {
-                TensorGraphNode::Constant { data } => data.as_ref().clone(),
-                TensorGraphNode::Input { name } => {
-                    inputs.get::<str>(name).expect("Input not found").clone()
-                }
-                TensorGraphNode::Parameter { data, .. } => data.lock().unwrap().clone(),
-                TensorGraphNode::Unary { op } => {
-                    let inputs = graph.inputs(*node_idx);
-                    let x = values.get(&inputs[0]).unwrap();
-                    match op {
-                        tensor::UnaryOp::Neg => x.iter().map(|v| -v).collect(),
-                        tensor::UnaryOp::Exp => x.iter().copied().map(f32::exp).collect(),
-                        tensor::UnaryOp::Log => x.iter().copied().map(f32::ln).collect(),
-                        tensor::UnaryOp::Relu => x.iter().map(|v| v.max(0.0)).collect(),
-                    }
-                }
-                TensorGraphNode::Binary { op } => {
-                    let ins = graph.inputs(*node_idx);
-                    let a = values.get(&ins[0]).unwrap();
-                    let b = values.get(&ins[1]).unwrap();
-                    assert_eq!(a.len(), b.len());
-                    match op {
-                        tensor::BinaryOp::Add => {
-                            a.iter().zip(b.iter()).map(|(x, y)| x + y).collect()
-                        }
-                        tensor::BinaryOp::Sub => {
-                            a.iter().zip(b.iter()).map(|(x, y)| x - y).collect()
-                        }
-                        tensor::BinaryOp::Mul => {
-                            a.iter().zip(b.iter()).map(|(x, y)| x * y).collect()
-                        }
-                        tensor::BinaryOp::Div => {
-                            a.iter().zip(b.iter()).map(|(x, y)| x / y).collect()
-                        }
-                    }
-                }
-                TensorGraphNode::MatMul => matmul_forward(graph, &values, *node_idx),
-                TensorGraphNode::Broadcast => broadcast_forward(graph, &values, *node_idx),
-                TensorGraphNode::Reduce { op, axis } => {
-                    reduce_forward(graph, &values, *node_idx, op, *axis)
-                }
-            };
-            values.insert(*node_idx, result);
-        }
-
-        // Backward pass
-        let mut grads: HashMap<petgraph::graph::NodeIndex, Vec<f32>> = HashMap::new();
         let mut param_grads: HashMap<usize, Vec<f32>> = HashMap::new();
 
         // Initialize gradient for loss node
@@ -159,12 +246,13 @@ impl Executor<f32> for SimpleExecutor {
             .get(&loss_node)
             .expect("Loss node shape missing");
         let seed = seed_grad.unwrap_or_else(|| vec![1.0f32; loss_shape.iter().product()]);
-        grads.insert(loss_node, seed);
+        self.grads.insert(loss_node, seed);
 
         // Backward pass in reverse topological order
         for &node_idx in order.iter().rev() {
-            if let Some(dy) = grads.get(&node_idx).cloned() {
-                match &graph[node_idx] {
+            if let Some(dy) = self.grads.get(&node_idx).cloned() {
+                let node = &graph[node_idx];
+                match node {
                     TensorGraphNode::Constant { .. } => {}
                     TensorGraphNode::Input { .. } => {}
                     TensorGraphNode::Parameter { id, .. } => {
@@ -176,24 +264,21 @@ impl Executor<f32> for SimpleExecutor {
                     TensorGraphNode::Unary { op } => {
                         let x_idx = graph.inputs(node_idx)[0];
                         let dx = match op {
-                            tensor::UnaryOp::Neg => dy.iter().map(|g| -g).collect(),
+                            tensor::UnaryOp::Neg => self.neg_grad(&dy),
                             tensor::UnaryOp::Exp => {
-                                let y = values.get(&node_idx).unwrap();
-                                dy.iter().zip(y.iter()).map(|(g, y)| g * y).collect()
+                                let y = self.values.get(&node_idx).unwrap();
+                                self.exp_grad(&dy, y)
                             }
                             tensor::UnaryOp::Log => {
-                                let x = values.get(&x_idx).unwrap();
-                                dy.iter().zip(x.iter()).map(|(g, x)| g / x).collect()
+                                let x = self.values.get(&x_idx).unwrap();
+                                self.log_grad(&dy, x)
                             }
                             tensor::UnaryOp::Relu => {
-                                let x = values.get(&x_idx).unwrap();
-                                dy.iter()
-                                    .zip(x.iter())
-                                    .map(|(g, x)| if *x > 0.0 { *g } else { 0.0 })
-                                    .collect()
+                                let x = self.values.get(&x_idx).unwrap();
+                                self.relu_grad(&dy, x)
                             }
                         };
-                        accumulate_grad(&mut grads, x_idx, dx);
+                        accumulate_grad(&mut self.grads, x_idx, dx);
                     }
                     TensorGraphNode::Binary { op } => {
                         let ins = graph.inputs(node_idx);
@@ -201,82 +286,26 @@ impl Executor<f32> for SimpleExecutor {
                         let b_idx = ins[1];
                         let a_shape = graph.shapes.get(&a_idx).unwrap();
                         let b_shape = graph.shapes.get(&b_idx).unwrap();
-                        let a_val = values.get(&a_idx).unwrap();
-                        let b_val = values.get(&b_idx).unwrap();
+                        let a_val = self.values.get(&a_idx).unwrap();
+                        let b_val = self.values.get(&b_idx).unwrap();
+                        let output_shape = graph.shapes.get(&node_idx).unwrap();
 
-                        match op {
-                            tensor::BinaryOp::Add => {
-                                let da =
-                                    reduce_like(&dy, graph.shapes.get(&node_idx).unwrap(), a_shape);
-                                let db =
-                                    reduce_like(&dy, graph.shapes.get(&node_idx).unwrap(), b_shape);
-                                accumulate_grad(&mut grads, a_idx, da);
-                                accumulate_grad(&mut grads, b_idx, db);
-                            }
-                            tensor::BinaryOp::Sub => {
-                                let da =
-                                    reduce_like(&dy, graph.shapes.get(&node_idx).unwrap(), a_shape);
-                                let mut db =
-                                    reduce_like(&dy, graph.shapes.get(&node_idx).unwrap(), b_shape);
-                                for v in db.iter_mut() {
-                                    *v = -*v;
-                                }
-                                accumulate_grad(&mut grads, a_idx, da);
-                                accumulate_grad(&mut grads, b_idx, db);
-                            }
-                            tensor::BinaryOp::Mul => {
-                                let tmp_a: Vec<f32> =
-                                    dy.iter().zip(b_val.iter()).map(|(g, b)| g * b).collect();
-                                let tmp_b: Vec<f32> =
-                                    dy.iter().zip(a_val.iter()).map(|(g, a)| g * a).collect();
-                                let da = reduce_like(
-                                    &tmp_a,
-                                    graph.shapes.get(&node_idx).unwrap(),
-                                    a_shape,
-                                );
-                                let db = reduce_like(
-                                    &tmp_b,
-                                    graph.shapes.get(&node_idx).unwrap(),
-                                    b_shape,
-                                );
-                                accumulate_grad(&mut grads, a_idx, da);
-                                accumulate_grad(&mut grads, b_idx, db);
-                            }
-                            tensor::BinaryOp::Div => {
-                                let tmp_a: Vec<f32> =
-                                    dy.iter().zip(b_val.iter()).map(|(g, b)| g / b).collect();
-                                let tmp_b: Vec<f32> =
-                                    dy.iter().zip(a_val.iter()).map(|(g, a)| -g * a).collect();
-                                let mut b_sq = b_val.clone();
-                                for v in b_sq.iter_mut() {
-                                    *v = *v * *v;
-                                }
-                                let tmp_b: Vec<f32> = tmp_b
-                                    .iter()
-                                    .zip(b_sq.iter())
-                                    .map(|(t, bsq)| t / bsq)
-                                    .collect();
-                                let da = reduce_like(
-                                    &tmp_a,
-                                    graph.shapes.get(&node_idx).unwrap(),
-                                    a_shape,
-                                );
-                                let db = reduce_like(
-                                    &tmp_b,
-                                    graph.shapes.get(&node_idx).unwrap(),
-                                    b_shape,
-                                );
-                                accumulate_grad(&mut grads, a_idx, da);
-                                accumulate_grad(&mut grads, b_idx, db);
-                            }
-                        }
+                        let (da, db) = match op {
+                            tensor::BinaryOp::Add => self.add_grad(&dy, output_shape, a_shape, b_shape),
+                            tensor::BinaryOp::Sub => self.sub_grad(&dy, output_shape, a_shape, b_shape),
+                            tensor::BinaryOp::Mul => self.mul_grad(&dy, output_shape, a_shape, b_shape, a_val, b_val),
+                            tensor::BinaryOp::Div => self.div_grad(&dy, output_shape, a_shape, b_shape, a_val, b_val),
+                        };
+                        accumulate_grad(&mut self.grads, a_idx, da);
+                        accumulate_grad(&mut self.grads, b_idx, db);
                     }
                     TensorGraphNode::MatMul => {
+                        let _span = trace_span!("matmul", node = node_idx.index()).entered();
                         let ins = graph.inputs(node_idx);
                         let a_idx = ins[0];
                         let b_idx = ins[1];
-                        let a_val = values.get(&a_idx).unwrap();
-                        let b_val = values.get(&b_idx).unwrap();
+                        let a_val = self.values.get(&a_idx).unwrap();
+                        let b_val = self.values.get(&b_idx).unwrap();
                         let a_shape = graph.shapes.get(&a_idx).unwrap();
                         let b_shape = graph.shapes.get(&b_idx).unwrap();
                         let dy_shape = graph.shapes.get(&node_idx).unwrap();
@@ -285,17 +314,25 @@ impl Executor<f32> for SimpleExecutor {
                         let da = matmul_grad_left(&dy, dy_shape, b_val, b_shape);
                         // dB = A^T * dY
                         let db = matmul_grad_right(a_val, a_shape, &dy, dy_shape);
-                        accumulate_grad(&mut grads, a_idx, da);
-                        accumulate_grad(&mut grads, b_idx, db);
+                        accumulate_grad(&mut self.grads, a_idx, da);
+                        accumulate_grad(&mut self.grads, b_idx, db);
                     }
                     TensorGraphNode::Broadcast => {
+                        let _span = trace_span!("broadcast", node = node_idx.index()).entered();
                         let x_idx = graph.inputs(node_idx)[0];
                         let x_shape = graph.shapes.get(&x_idx).unwrap();
                         let y_shape = graph.shapes.get(&node_idx).unwrap();
                         let dx = reduce_like(&dy, y_shape, x_shape);
-                        accumulate_grad(&mut grads, x_idx, dx);
+                        accumulate_grad(&mut self.grads, x_idx, dx);
                     }
                     TensorGraphNode::Reduce { op, axis } => {
+                        let _span = trace_span!(
+                            "reduce",
+                            op = node.name(),
+                            axis = *axis,
+                            node = node_idx.index()
+                        )
+                        .entered();
                         let x_idx = graph.inputs(node_idx)[0];
                         let x_shape = graph.shapes.get(&x_idx).unwrap();
                         match op {
@@ -303,7 +340,7 @@ impl Executor<f32> for SimpleExecutor {
                                 let mut y_aligned_shape = x_shape.clone();
                                 y_aligned_shape[*axis] = 1;
                                 let dx = expand_to(&dy, &y_aligned_shape, x_shape);
-                                accumulate_grad(&mut grads, x_idx, dx);
+                                accumulate_grad(&mut self.grads, x_idx, dx);
                             }
                             tensor::ReduceOp::Mean => {
                                 let mut y_aligned_shape = x_shape.clone();
@@ -313,12 +350,12 @@ impl Executor<f32> for SimpleExecutor {
                                 for v in dx.iter_mut() {
                                     *v /= axis_size as f32;
                                 }
-                                accumulate_grad(&mut grads, x_idx, dx);
+                                accumulate_grad(&mut self.grads, x_idx, dx);
                             }
                             tensor::ReduceOp::Max => {
                                 // For max, gradient goes to the element that was the maximum
                                 accumulate_grad(
-                                    &mut grads,
+                                    &mut self.grads,
                                     x_idx,
                                     vec![0.0f32; x_shape.iter().product()],
                                 );
@@ -329,15 +366,10 @@ impl Executor<f32> for SimpleExecutor {
             }
         }
 
-        let loss_value = values.get(&loss_node).unwrap().clone();
+        let loss_value = self.values.get(&loss_node).unwrap().clone();
 
-        debug!(
-            params = param_grads.len(),
-            nodes = grads.len(),
-            "backward_pass_done"
-        );
         BackwardResult {
-            grads_by_node: grads,
+            grads_by_node: self.grads.drain().collect(),
             grads_by_param: param_grads,
             loss_value,
         }
@@ -635,38 +667,19 @@ fn expand_to(x: &[f32], x_shape: &[usize], target_shape: &[usize]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_simple_backward_pass() {
         // Create a simple computation graph: x^2 where x is a parameter
-        let mut graph = TensorGraph::new();
+        let x = tensor::Parameter::new(vec![2.0f32], vec![1]);
+        let x_sq = x.clone() * x;
+        let graph: TensorGraph<f32> = x_sq.into();
 
-        // Add parameter node with data = [2.0]
-        let param_data = Arc::new(Mutex::new(vec![2.0f32]));
-        let param_grad = Arc::new(Mutex::new(vec![0.0f32]));
-        let param_node = graph.graph.add_node(TensorGraphNode::Parameter {
-            id: 0,
-            data: param_data,
-            grad: param_grad,
-        });
-        graph.shapes.insert(param_node, vec![1]);
-
-        // Add multiplication node: x * x
-        let mul_node = graph.graph.add_node(TensorGraphNode::Binary {
-            op: tensor::BinaryOp::Mul,
-        });
-        graph.shapes.insert(mul_node, vec![1]);
-
-        // Connect parameter to both inputs of multiplication
-        graph.graph.add_edge(param_node, mul_node, 0);
-        graph.graph.add_edge(param_node, mul_node, 1);
-
-        let executor = SimpleExecutor {};
-        let inputs = HashMap::new();
+        let mut executor = SimpleExecutor::new();
 
         // Test backward pass - gradient of x^2 at x=2 should be 2*x = 4
-        let param_grads = executor.backward(&graph, inputs, mul_node, Some(vec![1.0f32]));
+        executor.forward(&graph, Default::default());
+        let param_grads = executor.backward(&graph, 1.into(), Some(vec![1.0f32]));
 
         assert_eq!(param_grads.grads_by_param.len(), 1);
         let grad = param_grads
@@ -684,30 +697,15 @@ mod tests {
     #[test]
     fn test_unary_backward_pass() {
         // Test backward pass for exp(x) where x = [1.0]
-        let mut graph = TensorGraph::new();
+        let x = tensor::Parameter::new(vec![1.0f32], vec![1]);
+        let exp = x.exp();
+        let graph: TensorGraph<f32> = exp.into();
 
-        // Add parameter node
-        let param_data = Arc::new(Mutex::new(vec![1.0f32]));
-        let param_grad = Arc::new(Mutex::new(vec![0.0f32]));
-        let param_node = graph.graph.add_node(TensorGraphNode::Parameter {
-            id: 0,
-            data: param_data,
-            grad: param_grad,
-        });
-        graph.shapes.insert(param_node, vec![1]);
-
-        // Add exp node
-        let exp_node = graph.graph.add_node(TensorGraphNode::Unary {
-            op: tensor::UnaryOp::Exp,
-        });
-        graph.shapes.insert(exp_node, vec![1]);
-        graph.graph.add_edge(param_node, exp_node, 0);
-
-        let executor = SimpleExecutor {};
-        let inputs = HashMap::new();
+        let mut executor = SimpleExecutor::new();
 
         // Gradient of exp(x) at x=1 should be exp(1) ≈ 2.718
-        let param_grads = executor.backward(&graph, inputs, exp_node, Some(vec![1.0f32]));
+        executor.forward(&graph, Default::default());
+        let param_grads = executor.backward(&graph, 1.into(), Some(vec![1.0f32]));
 
         assert_eq!(param_grads.grads_by_param.len(), 1);
         let grad = param_grads

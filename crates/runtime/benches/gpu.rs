@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
@@ -11,7 +9,6 @@ use tensor::Constant;
 use tensor::TensorExpr;
 
 pub fn benches(c: &mut Criterion) {
-    let exec = Arc::new(CudaExecutor::new());
     let sizes: [usize; 2] = [32, 256];
 
     // Unary: neg
@@ -27,13 +24,13 @@ pub fn benches(c: &mut Criterion) {
             let expr = -TensorExpr::from(a.clone());
             expr.lower_to_graph(&mut graph);
 
-            let exec = exec.clone();
+            let mut exec = CudaExecutor::new();
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("{}x{}", n, n)),
                 &n,
                 move |b, &_| {
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&graph, Default::default()));
+                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
                     });
                 },
             );
@@ -54,13 +51,13 @@ pub fn benches(c: &mut Criterion) {
             let expr = TensorExpr::from(a.clone()).exp();
             expr.lower_to_graph(&mut graph);
 
-            let exec = exec.clone();
+            let mut exec = CudaExecutor::new();
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("{}x{}", n, n)),
                 &n,
                 move |b, &_| {
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&graph, Default::default()));
+                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
                     });
                 },
             );
@@ -81,13 +78,13 @@ pub fn benches(c: &mut Criterion) {
             let expr = TensorExpr::from(a.clone()).log();
             expr.lower_to_graph(&mut graph);
 
-            let exec = exec.clone();
+            let mut exec = CudaExecutor::new();
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("{}x{}", n, n)),
                 &n,
                 move |b, &_| {
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&graph, Default::default()));
+                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
                     });
                 },
             );
@@ -108,13 +105,13 @@ pub fn benches(c: &mut Criterion) {
             let expr = TensorExpr::from(a.clone()).relu();
             expr.lower_to_graph(&mut graph);
 
-            let exec = exec.clone();
+            let mut exec = CudaExecutor::new();
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("{}x{}", n, n)),
                 &n,
                 move |b, &_| {
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&graph, Default::default()));
+                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
                     });
                 },
             );
@@ -136,13 +133,13 @@ pub fn benches(c: &mut Criterion) {
             let expr = TensorExpr::from(a.clone()) + TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
 
-            let exec = exec.clone();
+            let mut exec = CudaExecutor::new();
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("{}x{}", n, n)),
                 &n,
                 move |bch, &_| {
                     bch.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&graph, Default::default()));
+                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
                     });
                 },
             );
@@ -164,13 +161,13 @@ pub fn benches(c: &mut Criterion) {
             let expr = TensorExpr::from(a.clone()) - TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
 
-            let exec = exec.clone();
+            let mut exec = CudaExecutor::new();
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("{}x{}", n, n)),
                 &n,
                 move |bch, &_| {
                     bch.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&graph, Default::default()));
+                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
                     });
                 },
             );
@@ -192,13 +189,13 @@ pub fn benches(c: &mut Criterion) {
             let expr = TensorExpr::from(a.clone()) * TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
 
-            let exec = exec.clone();
+            let mut exec = CudaExecutor::new();
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("{}x{}", n, n)),
                 &n,
                 move |bch, &_| {
                     bch.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&graph, Default::default()));
+                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
                     });
                 },
             );
@@ -220,13 +217,13 @@ pub fn benches(c: &mut Criterion) {
             let expr = TensorExpr::from(a.clone()) / TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
 
-            let exec = exec.clone();
+            let mut exec = CudaExecutor::new();
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("{}x{}", n, n)),
                 &n,
                 move |bch, &_| {
                     bch.iter(|| {
-                        let _ = std::hint::black_box(exec.execute(&graph, Default::default()));
+                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
                     });
                 },
             );

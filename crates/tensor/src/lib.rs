@@ -151,6 +151,46 @@ impl<D: DType> Parameter<D> {
     pub fn shape(&self) -> &Shape {
         &self.shape
     }
+
+    pub fn exp(self) -> TensorExpr<D>
+    where
+        D: 'static,
+    {
+        let expr: TensorExpr<D> = self.into();
+        expr.exp()
+    }
+}
+
+impl<D: DType, R: Into<TensorExpr<D>>> Add<R> for Parameter<D> {
+    type Output = TensorExpr<D>;
+    fn add(self, rhs: R) -> Self::Output {
+        let lhs_expr: TensorExpr<D> = self.into();
+        lhs_expr + rhs
+    }
+}
+
+impl<D: DType, R: Into<TensorExpr<D>>> Sub<R> for Parameter<D> {
+    type Output = TensorExpr<D>;
+    fn sub(self, rhs: R) -> Self::Output {
+        let lhs_expr: TensorExpr<D> = self.into();
+        lhs_expr - rhs
+    }
+}
+
+impl<D: DType, R: Into<TensorExpr<D>>> Mul<R> for Parameter<D> {
+    type Output = TensorExpr<D>;
+    fn mul(self, rhs: R) -> Self::Output {
+        let lhs_expr: TensorExpr<D> = self.into();
+        lhs_expr * rhs
+    }
+}
+
+impl<D: DType, R: Into<TensorExpr<D>>> Div<R> for Parameter<D> {
+    type Output = TensorExpr<D>;
+    fn div(self, rhs: R) -> Self::Output {
+        let lhs_expr: TensorExpr<D> = self.into();
+        lhs_expr / rhs
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -518,7 +558,6 @@ impl<D: DType> TensorExpr<D> {
                     let idx = g.graph.add_node(TensorGraphNode::Parameter {
                         id: *id,
                         data: data.clone(),
-                        grad: Arc::new(Mutex::new(Vec::new())),
                     });
                     g.shapes.insert(idx, expr.shape().clone());
                     idx

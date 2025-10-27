@@ -47,8 +47,7 @@ fn build_mlp_graph(
     b1: &Parameter<f32>,
     w2: &Parameter<f32>,
     b2: &Parameter<f32>,
-    need_loss: bool,
-) -> TensorGraph<f32> {
+) -> (TensorGraph<f32>, tensor::graph::NodeIndex, tensor::graph::NodeIndex) {
     // Inputs
     let images = Input::<f32>::new("images", vec![batch, 784]);
     let labels = Input::<f32>::new("labels", vec![batch, 10]);
@@ -58,14 +57,12 @@ fn build_mlp_graph(
     let logits = nn::linear(h, w2.clone(), Some(b2.clone()));
     let mut graph = TensorGraph::new();
 
-    if need_loss {
-        let loss = nn::cross_entropy_one_hot_logits(logits, labels, 1);
-        let _ = loss.lower_to_graph(&mut graph);
-    } else {
-        let _ = logits.lower_to_graph(&mut graph);
-    }
+    // Always build both logits and loss nodes
+    let logits_idx = logits.clone().lower_to_graph(&mut graph);
+    let loss = nn::cross_entropy_one_hot_logits(logits, labels, 1);
+    let loss_idx = loss.lower_to_graph(&mut graph);
 
-    graph
+    (graph, logits_idx, loss_idx)
 }
 
 fn main() {
@@ -108,11 +105,9 @@ fn main() {
     let w2 = Parameter::new(xavier_init(&mut rng, 128, 10), vec![128, 10]);
     let b2 = Parameter::new(vec![0.0f32; 10], vec![10]);
 
-    // Graphs
-    println!("Building computation graphs...");
-    let train_graph = build_mlp_graph(args.batch_size, &w1, &b1, &w2, &b2, true);
-    let loss_node = *train_graph.toposort().last().expect("train graph empty");
-    let infer_graph = build_mlp_graph(args.batch_size, &w1, &b1, &w2, &b2, false);
+    // Graph
+    println!("Building computation graph...");
+    let (graph, logits_idx, loss_idx) = build_mlp_graph(args.batch_size, &w1, &b1, &w2, &b2);
 
     let opt = SGD::new(args.lr);
 
@@ -180,10 +175,10 @@ fn main() {
                 inputs.insert("labels".to_string(), y);
 
                 // Forward pass to get loss value
-                let loss_value = exec.forward(&train_graph, inputs.clone());
+                let loss_value = exec.forward(&graph, inputs.clone());
 
                 // Backward pass to get gradients
-                let backward_result = exec.backward(&train_graph, loss_node, None);
+                let backward_result = exec.backward(&graph, loss_idx, None);
                 let grads = backward_result.grads_by_param;
 
                 if steps.is_multiple_of(50)
@@ -193,7 +188,7 @@ fn main() {
                 }
                 let opt_span = tracing::span!(tracing::Level::TRACE, "optimizer_step");
                 let _og = opt_span.enter();
-                opt.step(&train_graph, &grads);
+                opt.step(&graph, &grads);
                 drop(_og);
                 steps += 1;
             }
@@ -237,9 +232,21 @@ fn main() {
                 let dst = &mut x[i * 784..(i + 1) * 784];
                 dst.copy_from_slice(src);
             }
+            // Dummy labels input (graph expects labels but we don't need loss for inference)
+            let dummy_labels = vec![0.0f32; args.batch_size * 10];
             let mut inputs = std::collections::HashMap::new();
             inputs.insert("images".to_string(), x);
-            let logits = exec.forward(&infer_graph, inputs);
+            inputs.insert("labels".to_string(), dummy_labels);
+            
+            // Forward pass through the unified graph
+            exec.forward(&graph, inputs);
+            
+            // Extract logits using get_value()
+            #[cfg(feature = "cuda")]
+            let logits = exec.get_value(logits_idx).unwrap();
+            #[cfg(not(feature = "cuda"))]
+            let logits = exec.get_value(logits_idx).unwrap().clone();
+            
             for i in 0..bs {
                 let row = &logits[i * 10..(i + 1) * 10];
                 let pred = row

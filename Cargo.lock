@@ -2761,6 +2761,7 @@ dependencies = [
  "cudarc",
  "lazy_static",
  "petgraph",
+ "rayon",
  "rstest",
  "tensor",
  "test-log",

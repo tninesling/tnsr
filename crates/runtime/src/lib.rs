@@ -4,11 +4,19 @@ use std::collections::HashMap;
 pub mod cuda;
 pub mod optimizer;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use tensor::graph::TensorGraph;
 use tensor::graph::TensorGraphNode;
 use tracing::trace_span;
 use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::prelude::*;
+
+#[cfg(feature = "parallel")]
+pub type SliceIter<'a, T> = rayon::iter::MinLen<rayon::slice::Iter<'a, T>>;
+
+#[cfg(not(feature = "parallel"))]
+pub type SliceIter<'a, T> = std::slice::Iter<'a, T>;
 
 pub struct TracingGuard {
     _guard: tracing_chrome::FlushGuard,
@@ -58,63 +66,68 @@ impl SimpleExecutor {
 
     fn neg(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("neg").entered();
-        x.iter().map(|v| -v).collect()
+        get_iter(x).map(|v| -v).collect()
     }
 
     fn exp(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("exp").entered();
-        x.iter().copied().map(f32::exp).collect()
+
+        get_iter(x).copied().map(f32::exp).collect()
     }
 
     fn log(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("log").entered();
-        x.iter().copied().map(f32::ln).collect()
+
+        get_iter(x).copied().map(f32::ln).collect()
     }
 
     fn relu(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("relu").entered();
-        x.iter().map(|v| v.max(0.0)).collect()
+
+        get_iter(x).map(|v| v.max(0.0)).collect()
     }
 
     fn add(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
         let _span = trace_span!("add").entered();
-        a.iter().zip(b.iter()).map(|(x, y)| x + y).collect()
+
+        get_iter(a).zip(get_iter(b)).map(|(x, y)| x + y).collect()
     }
 
     fn sub(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
         let _span = trace_span!("sub").entered();
-        a.iter().zip(b.iter()).map(|(x, y)| x - y).collect()
+
+        get_iter(a).zip(get_iter(b)).map(|(x, y)| x - y).collect()
     }
 
     fn mul(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
         let _span = trace_span!("mul").entered();
-        a.iter().zip(b.iter()).map(|(x, y)| x * y).collect()
+        get_iter(a).zip(get_iter(b)).map(|(x, y)| x * y).collect()
     }
 
     fn div(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
         let _span = trace_span!("div").entered();
-        a.iter().zip(b.iter()).map(|(x, y)| x / y).collect()
+        get_iter(a).zip(get_iter(b)).map(|(x, y)| x / y).collect()
     }
 
     fn neg_grad(&self, dy: &[f32]) -> Vec<f32> {
         let _span = trace_span!("neg").entered();
-        dy.iter().map(|g| -g).collect()
+        get_iter(dy).map(|g| -g).collect()
     }
 
     fn exp_grad(&self, dy: &[f32], y: &[f32]) -> Vec<f32> {
         let _span = trace_span!("exp").entered();
-        dy.iter().zip(y.iter()).map(|(g, y)| g * y).collect()
+        get_iter(dy).zip(get_iter(y)).map(|(g, y)| g * y).collect()
     }
 
     fn log_grad(&self, dy: &[f32], x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("log").entered();
-        dy.iter().zip(x.iter()).map(|(g, x)| g / x).collect()
+        get_iter(dy).zip(get_iter(x)).map(|(g, x)| g / x).collect()
     }
 
     fn relu_grad(&self, dy: &[f32], x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("relu").entered();
-        dy.iter()
-            .zip(x.iter())
+        get_iter(dy)
+            .zip(get_iter(x))
             .map(|(g, x)| if *x > 0.0 { *g } else { 0.0 })
             .collect()
     }
@@ -158,8 +171,14 @@ impl SimpleExecutor {
         b_val: &[f32],
     ) -> (Vec<f32>, Vec<f32>) {
         let _span = trace_span!("mul").entered();
-        let tmp_a: Vec<f32> = dy.iter().zip(b_val.iter()).map(|(g, b)| g * b).collect();
-        let tmp_b: Vec<f32> = dy.iter().zip(a_val.iter()).map(|(g, a)| g * a).collect();
+        let tmp_a: Vec<f32> = get_iter(dy)
+            .zip(get_iter(b_val))
+            .map(|(g, b)| g * b)
+            .collect();
+        let tmp_b: Vec<f32> = get_iter(dy)
+            .zip(get_iter(a_val))
+            .map(|(g, a)| g * a)
+            .collect();
         let da = reduce_like(&tmp_a, output_shape, a_shape);
         let db = reduce_like(&tmp_b, output_shape, b_shape);
         (da, db)
@@ -175,15 +194,20 @@ impl SimpleExecutor {
         b_val: &[f32],
     ) -> (Vec<f32>, Vec<f32>) {
         let _span = trace_span!("div").entered();
-        let tmp_a: Vec<f32> = dy.iter().zip(b_val.iter()).map(|(g, b)| g / b).collect();
-        let tmp_b: Vec<f32> = dy.iter().zip(a_val.iter()).map(|(g, a)| -g * a).collect();
+        let tmp_a: Vec<f32> = get_iter(dy)
+            .zip(get_iter(b_val))
+            .map(|(g, b)| g / b)
+            .collect();
+        let tmp_b: Vec<f32> = get_iter(dy)
+            .zip(get_iter(a_val))
+            .map(|(g, a)| -g * a)
+            .collect();
         let mut b_sq = b_val.to_vec();
         for v in b_sq.iter_mut() {
             *v = *v * *v;
         }
-        let tmp_b: Vec<f32> = tmp_b
-            .iter()
-            .zip(b_sq.iter())
+        let tmp_b: Vec<f32> = get_iter(&tmp_b)
+            .zip(get_iter(&b_sq))
             .map(|(t, bsq)| t / bsq)
             .collect();
         let da = reduce_like(&tmp_a, output_shape, a_shape);
@@ -277,7 +301,7 @@ impl Executor<f32> for SimpleExecutor {
             .shapes
             .get(&loss_node)
             .expect("Loss node shape missing");
-        let seed = seed_grad.unwrap_or_else(|| vec![1.0f32; loss_shape.iter().product()]);
+        let seed = seed_grad.unwrap_or_else(|| vec![1.0f32; get_iter(loss_shape).product()]);
         self.grads.insert(loss_node, seed);
 
         // Backward pass in reverse topological order
@@ -397,7 +421,7 @@ impl Executor<f32> for SimpleExecutor {
                                 accumulate_grad(
                                     &mut self.grads,
                                     x_idx,
-                                    vec![0.0f32; x_shape.iter().product()],
+                                    vec![0.0f32; get_iter(x_shape).product()],
                                 );
                             }
                         }
@@ -704,6 +728,17 @@ fn expand_to(x: &[f32], x_shape: &[usize], target_shape: &[usize]) -> Vec<f32> {
     out
 }
 
+#[cfg(feature = "parallel")]
+pub fn get_iter<T: Sync>(slice: &[T]) -> SliceIter<'_, T> {
+    const PARALLEL_THRESHOLD: usize = 4096;
+    slice.par_iter().with_min_len(PARALLEL_THRESHOLD)
+}
+
+#[cfg(not(feature = "parallel"))]
+pub fn get_iter<T>(slice: &[T]) -> SliceIter<'_, T> {
+    slice.iter()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -813,19 +848,19 @@ mod tests {
         // Test matmul_grad_left: dA = dC @ B^T
         // Forward: A[2,3] @ B[3,2] = C[2,2]
         // Given dC[2,2] and B[3,2], compute dA[2,3]
-        
+
         let dy = vec![1.0f32, 2.0, 3.0, 4.0]; // dC: [2,2]
         let dy_shape = vec![2, 2];
         let b = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // B: [3,2]
         let b_shape = vec![3, 2];
-        
+
         let da = matmul_grad_left(&dy, &dy_shape, &b, &b_shape);
-        
+
         // Expected: dC @ B^T = [[1,2],[3,4]] @ [[1,3,5],[2,4,6]]
         // = [[1*1+2*2, 1*3+2*4, 1*5+2*6], [3*1+4*2, 3*3+4*4, 3*5+4*6]]
         // = [[5, 11, 17], [11, 25, 39]]
         let expected = vec![5.0f32, 11.0, 17.0, 11.0, 25.0, 39.0];
-        
+
         assert_eq!(da.len(), 6);
         assert_approx_eq!(da, expected);
     }
@@ -835,19 +870,19 @@ mod tests {
         // Test matmul_grad_right: dB = A^T @ dC
         // Forward: A[2,3] @ B[3,2] = C[2,2]
         // Given A[2,3] and dC[2,2], compute dB[3,2]
-        
+
         let a = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // A: [2,3]
         let a_shape = vec![2, 3];
         let dy = vec![1.0f32, 2.0, 3.0, 4.0]; // dC: [2,2]
         let dy_shape = vec![2, 2];
-        
+
         let db = matmul_grad_right(&a, &a_shape, &dy, &dy_shape);
-        
+
         // Expected: A^T @ dC = [[1,4],[2,5],[3,6]] @ [[1,2],[3,4]]
         // = [[1*1+4*3, 1*2+4*4], [2*1+5*3, 2*2+5*4], [3*1+6*3, 3*2+6*4]]
         // = [[13, 18], [17, 24], [21, 30]]
         let expected = vec![13.0f32, 18.0, 17.0, 24.0, 21.0, 30.0];
-        
+
         assert_eq!(db.len(), 6);
         assert_approx_eq!(db, expected);
     }
@@ -856,25 +891,25 @@ mod tests {
         // Test matmul gradient with identity matrix
         // Forward: A[3,3] @ I[3,3] = A[3,3]
         // dA should equal dC when B is identity
-        
+
         let a_data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let identity = vec![1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
-        
+
         let a = tensor::Parameter::new(a_data.clone(), vec![3, 3]);
         let b = tensor::Parameter::new(identity, vec![3, 3]);
         let node = tensor::TensorExpr::from(a).matmul(b);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = node.lower_to_graph(&mut graph);
-        
+
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-        
+
         executor.forward(&graph, inputs);
         let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
-        
+
         let grad_a = result.grads_by_param.get(&0).unwrap();
-        
+
         // dA = dC @ I^T = dC @ I = dC
         assert_eq!(grad_a.len(), 9);
         assert_approx_eq!(grad_a, &seed_grad);
@@ -894,33 +929,33 @@ mod tests {
     fn test_matmul_grad_asymmetric_impl<E: Executor<f32>>(mut executor: E) {
         // Test with very asymmetric matrices to catch dimension errors
         // Forward: A[5,100] @ B[100,3] = C[5,3]
-        
+
         let m = 5;
         let k = 100;
         let n = 3;
-        
+
         let a_data = vec![0.1f32; m * k];
         let b_data = vec![0.2f32; k * n];
-        
+
         let a = tensor::Parameter::new(a_data, vec![m, k]);
         let b = tensor::Parameter::new(b_data, vec![k, n]);
         let node = tensor::TensorExpr::from(a).matmul(b);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = node.lower_to_graph(&mut graph);
-        
+
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32; m * n];
-        
+
         executor.forward(&graph, inputs);
         let result = executor.backward(&graph, loss_node, Some(seed_grad));
-        
+
         let grad_a = result.grads_by_param.get(&0).unwrap();
         let grad_b = result.grads_by_param.get(&1).unwrap();
-        
+
         assert_eq!(grad_a.len(), m * k, "dA should have shape [5, 100]");
         assert_eq!(grad_b.len(), k * n, "dB should have shape [100, 3]");
-        
+
         // Verify gradients are non-zero and finite
         for &val in grad_a.iter() {
             assert!(val.is_finite(), "dA contains non-finite value");
@@ -945,36 +980,36 @@ mod tests {
         // Test matmul backward pass integrated in graph
         // Forward: A[2,3] @ B[3,2] = C[2,2]
         // Backward: dA = dC @ B^T, dB = A^T @ dC
-        
+
         let a_data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // [2, 3]
         let b_data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // [3, 2]
-        
+
         let a = tensor::Parameter::new(a_data.clone(), vec![2, 3]);
         let b = tensor::Parameter::new(b_data.clone(), vec![3, 2]);
         let node = tensor::TensorExpr::from(a).matmul(b);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = node.lower_to_graph(&mut graph);
-        
+
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32, 1.0, 1.0, 1.0]; // [2, 2]
-        
+
         executor.forward(&graph, inputs);
         let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
-        
+
         // Verify we have gradients for both parameters
         assert_eq!(result.grads_by_param.len(), 2);
-        
+
         let grad_a = result.grads_by_param.get(&0).unwrap();
         let grad_b = result.grads_by_param.get(&1).unwrap();
-        
+
         assert_eq!(grad_a.len(), 6, "dA should have 6 elements [2,3]");
         assert_eq!(grad_b.len(), 6, "dB should have 6 elements [3,2]");
-        
+
         // Manually compute expected gradients
         let expected_da = matmul_grad_left(&seed_grad, &[2, 2], &b_data, &[3, 2]);
         let expected_db = matmul_grad_right(&a_data, &[2, 3], &seed_grad, &[2, 2]);
-        
+
         assert_approx_eq!(grad_a, &expected_da);
         assert_approx_eq!(grad_b, &expected_db);
     }
@@ -993,26 +1028,26 @@ mod tests {
     fn test_matmul_grad_chain_rule_impl<E: Executor<f32>>(mut executor: E) {
         // Test that matmul gradients compose correctly with chain rule
         // z = (A @ B) @ C, verify dA and dB are correct
-        
+
         let a = tensor::Parameter::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
         let b = tensor::Parameter::new(vec![1.0f32, 0.0, 0.0, 1.0], vec![2, 2]); // Identity
         let c = tensor::Parameter::new(vec![2.0f32, 0.0, 0.0, 2.0], vec![2, 2]); // 2*Identity
-        
+
         let ab = tensor::TensorExpr::from(a).matmul(b);
         let z = ab.matmul(c);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = z.lower_to_graph(&mut graph);
-        
+
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32; 4]; // [2, 2]
-        
+
         executor.forward(&graph, inputs);
         let result = executor.backward(&graph, loss_node, Some(seed_grad));
-        
+
         // With B=I and C=2I, z = 2A, so dA should be 2*seed_grad
         let grad_a = result.grads_by_param.get(&0).unwrap();
-        
+
         assert_eq!(grad_a.len(), 4);
         for &val in grad_a.iter() {
             assert!(
@@ -1042,48 +1077,61 @@ mod tests {
     ) {
         let a_data = vec![0.5f32; m * k];
         let b_data = vec![0.3f32; k * n];
-        
+
         let a = tensor::Parameter::new(a_data, vec![m, k]);
         let b = tensor::Parameter::new(b_data, vec![k, n]);
         let node = tensor::TensorExpr::from(a).matmul(b);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = node.lower_to_graph(&mut graph);
-        
+
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32; m * n];
-        
+
         executor.forward(&graph, inputs);
         let result = executor.backward(&graph, loss_node, Some(seed_grad));
-        
+
         // Get all available parameter IDs (sorted)
         let mut param_ids: Vec<_> = result.grads_by_param.keys().copied().collect();
         param_ids.sort();
-        
+
         assert_eq!(
             param_ids.len(),
             2,
             "Expected 2 parameters, found {} for test case ({}, {}) @ ({}, {})",
             param_ids.len(),
-            m, k, k, n
+            m,
+            k,
+            k,
+            n
         );
-        
+
         let grad_a = result.grads_by_param.get(&param_ids[0]).unwrap();
         let grad_b = result.grads_by_param.get(&param_ids[1]).unwrap();
-        
+
         assert_eq!(
             grad_a.len(),
             m * k,
             "dA should have shape [{}, {}] for test case ({}, {}) @ ({}, {})",
-            m, k, m, k, k, n
+            m,
+            k,
+            m,
+            k,
+            k,
+            n
         );
         assert_eq!(
             grad_b.len(),
             k * n,
             "dB should have shape [{}, {}] for test case ({}, {}) @ ({}, {})",
-            k, n, m, k, k, n
+            k,
+            n,
+            m,
+            k,
+            k,
+            n
         );
-        
+
         // Verify all gradients are finite
         for &val in grad_a.iter().chain(grad_b.iter()) {
             assert!(val.is_finite(), "Gradient contains non-finite value");
@@ -1111,24 +1159,24 @@ mod tests {
         // Numerical gradient check using finite differences
         let a_data = vec![1.0f32, 2.0, 3.0, 4.0]; // [2, 2]
         let b_data = vec![0.5f32, 1.0, 1.5, 2.0]; // [2, 2]
-        
+
         let epsilon = 1e-4;
-        
+
         // Create graph for forward pass
         let a = tensor::Parameter::new(a_data.clone(), vec![2, 2]);
         let b = tensor::Parameter::new(b_data.clone(), vec![2, 2]);
         let node = tensor::TensorExpr::from(a).matmul(b);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = node.lower_to_graph(&mut graph);
-        
+
         // Forward and backward
         executor.forward(&graph, Default::default());
         let seed_grad = vec![1.0f32; 4];
         let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
-        
+
         let grad_a = result.grads_by_param.get(&0).unwrap();
-        
+
         // Numerical gradient for each element of A
         for idx in 0..4 {
             let mut a_plus = a_data.clone();
@@ -1139,7 +1187,7 @@ mod tests {
             let mut graph_plus = tensor::graph::TensorGraph::new();
             let _loss_plus_node = node_plus.lower_to_graph(&mut graph_plus);
             let out_plus = executor.forward(&graph_plus, Default::default());
-            
+
             let mut a_minus = a_data.clone();
             a_minus[idx] -= epsilon;
             let a_param_minus = tensor::Parameter::new(a_minus, vec![2, 2]);
@@ -1148,21 +1196,25 @@ mod tests {
             let mut graph_minus = tensor::graph::TensorGraph::new();
             let _loss_minus_node = node_minus.lower_to_graph(&mut graph_minus);
             let out_minus = executor.forward(&graph_minus, Default::default());
-            
+
             // Compute numerical gradient: (f(x+h) - f(x-h)) / 2h
             let mut numerical_grad = 0.0f32;
             for i in 0..4 {
                 numerical_grad += (out_plus[i] - out_minus[i]) / (2.0 * epsilon) * seed_grad[i];
             }
-            
+
             let analytical_grad = grad_a[idx];
-            let rel_error = ((analytical_grad - numerical_grad).abs() 
-                / (analytical_grad.abs() + numerical_grad.abs() + 1e-8)).abs();
-            
+            let rel_error = ((analytical_grad - numerical_grad).abs()
+                / (analytical_grad.abs() + numerical_grad.abs() + 1e-8))
+                .abs();
+
             assert!(
                 rel_error < 1e-3,
                 "Numerical gradient check failed for A[{}]: analytical={}, numerical={}, rel_error={}",
-                idx, analytical_grad, numerical_grad, rel_error
+                idx,
+                analytical_grad,
+                numerical_grad,
+                rel_error
             );
         }
     }

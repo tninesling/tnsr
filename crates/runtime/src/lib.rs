@@ -21,21 +21,14 @@ pub type SliceIter<'a, T> = std::slice::Iter<'a, T>;
 #[cfg(feature = "parallel")]
 mod parallel_config {
 
-    // For 4096 threshold: test 512, 1024, 2048, 4096, 8192, 16384, 32768
-    //   - For matmul: test dimensions 16, 32, 64, 128, 256, 512
-    //
-    //
     /// Minimum number of elements for parallel iteration
-    pub const ELEMENTWISE_THRESHOLD: usize = 512;
+    pub const ELEMENTWISE_THRESHOLD: usize = 8192;
 
     /// Minimum matrix dimension for parallel matmul
-    pub const MATMUL_THRESHOLD: usize = 16;
+    pub const MATMUL_THRESHOLD: usize = 128;
 
     /// Minimum output size for parallel broadcast
-    pub const BROADCAST_THRESHOLD: usize = 512;
-
-    /// Minimum output size for parallel reduce
-    pub const REDUCE_THRESHOLD: usize = 4096;
+    pub const BROADCAST_THRESHOLD: usize = 8192;
 }
 
 pub struct TracingGuard {

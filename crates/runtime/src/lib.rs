@@ -18,6 +18,26 @@ pub type SliceIter<'a, T> = rayon::iter::MinLen<rayon::slice::Iter<'a, T>>;
 #[cfg(not(feature = "parallel"))]
 pub type SliceIter<'a, T> = std::slice::Iter<'a, T>;
 
+#[cfg(feature = "parallel")]
+mod parallel_config {
+
+    // For 4096 threshold: test 512, 1024, 2048, 4096, 8192, 16384, 32768
+    //   - For matmul: test dimensions 16, 32, 64, 128, 256, 512
+    //
+    //
+    /// Minimum number of elements for parallel iteration
+    pub const ELEMENTWISE_THRESHOLD: usize = 512;
+
+    /// Minimum matrix dimension for parallel matmul
+    pub const MATMUL_THRESHOLD: usize = 16;
+
+    /// Minimum output size for parallel broadcast
+    pub const BROADCAST_THRESHOLD: usize = 512;
+
+    /// Minimum output size for parallel reduce
+    pub const REDUCE_THRESHOLD: usize = 4096;
+}
+
 pub struct TracingGuard {
     _guard: tracing_chrome::FlushGuard,
 }
@@ -462,11 +482,51 @@ fn broadcast_forward(
     let in_shape = graph.shapes.get(&in_idx).unwrap();
     let out_shape = graph.shapes.get(&node_idx).unwrap();
     let out_size: usize = out_shape.iter().product();
-    let mut out = vec![0.0f32; out_size];
     let in_rank = in_shape.len();
     let out_rank = out_shape.len();
     let out_strides = rowmajor_strides(out_shape);
     let in_strides = rowmajor_strides(in_shape);
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+
+        if out_size >= parallel_config::BROADCAST_THRESHOLD {
+            let mut out = vec![0.0f32; out_size];
+            out.par_iter_mut()
+                .enumerate()
+                .for_each(|(out_idx, out_elem)| {
+                    let mut rem = out_idx;
+                    let mut in_linear = 0usize;
+                    for (dim, stride) in out_strides.iter().enumerate().take(out_rank) {
+                        let coord = if out_rank == 0 { 0 } else { rem / *stride };
+                        if out_rank > 0 {
+                            rem %= *stride;
+                        }
+                        let in_dim_opt = if dim + in_rank >= out_rank {
+                            Some(dim + in_rank - out_rank)
+                        } else {
+                            None
+                        };
+                        if let Some(in_dim) = in_dim_opt {
+                            let in_dim_size = in_shape[in_dim];
+                            let idx_in_dim = if in_dim_size == 1 { 0 } else { coord };
+                            let stride = if in_strides.is_empty() {
+                                0
+                            } else {
+                                in_strides[in_dim]
+                            };
+                            in_linear += idx_in_dim * stride;
+                        }
+                    }
+                    *out_elem = in_val[in_linear];
+                });
+            return out;
+        }
+    }
+
+    // Sequential fallback
+    let mut out = vec![0.0f32; out_size];
     for (out_idx, out_elem) in out.iter_mut().enumerate() {
         let mut rem = out_idx;
         let mut in_linear = 0usize;
@@ -577,6 +637,27 @@ fn matmul_forward(
     let m = a_shape[0];
     let k = a_shape[1];
     let n = b_shape[1];
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+
+        if m >= parallel_config::MATMUL_THRESHOLD {
+            let mut out = vec![0.0f32; m * n];
+            out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+                for j in 0..n {
+                    let mut sum = 0.0f32;
+                    for p in 0..k {
+                        sum += a[i * k + p] * b[p * n + j];
+                    }
+                    row[j] = sum;
+                }
+            });
+            return out;
+        }
+    }
+
+    // Sequential fallback
     let mut out = vec![0.0f32; m * n];
     for i in 0..m {
         for j in 0..n {
@@ -611,6 +692,27 @@ fn matmul_grad_left(dy: &[f32], dy_shape: &[usize], b: &[f32], b_shape: &[usize]
     let (kb, nb) = (b_shape[0], b_shape[1]);
     assert_eq!(n, nb);
     let k = kb;
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+
+        if m >= parallel_config::MATMUL_THRESHOLD {
+            let mut da = vec![0.0f32; m * k];
+            da.par_chunks_mut(k).enumerate().for_each(|(i, row)| {
+                for p in 0..k {
+                    let mut sum = 0.0f32;
+                    for j in 0..n {
+                        sum += dy[i * n + j] * b[p * n + j];
+                    }
+                    row[p] = sum;
+                }
+            });
+            return da;
+        }
+    }
+
+    // Sequential fallback
     let mut da = vec![0.0f32; m * k];
     for i in 0..m {
         for p in 0..k {
@@ -628,6 +730,27 @@ fn matmul_grad_right(a: &[f32], a_shape: &[usize], dy: &[f32], dy_shape: &[usize
     let (m, k) = (a_shape[0], a_shape[1]);
     let (mdy, n) = (dy_shape[0], dy_shape[1]);
     assert_eq!(m, mdy);
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+
+        if k >= parallel_config::MATMUL_THRESHOLD {
+            let mut db = vec![0.0f32; k * n];
+            db.par_chunks_mut(n).enumerate().for_each(|(p, row)| {
+                for j in 0..n {
+                    let mut sum = 0.0f32;
+                    for i in 0..m {
+                        sum += a[i * k + p] * dy[i * n + j];
+                    }
+                    row[j] = sum;
+                }
+            });
+            return db;
+        }
+    }
+
+    // Sequential fallback
     let mut db = vec![0.0f32; k * n];
     for p in 0..k {
         for j in 0..n {
@@ -730,8 +853,9 @@ fn expand_to(x: &[f32], x_shape: &[usize], target_shape: &[usize]) -> Vec<f32> {
 
 #[cfg(feature = "parallel")]
 pub fn get_iter<T: Sync>(slice: &[T]) -> SliceIter<'_, T> {
-    const PARALLEL_THRESHOLD: usize = 4096;
-    slice.par_iter().with_min_len(PARALLEL_THRESHOLD)
+    slice
+        .par_iter()
+        .with_min_len(parallel_config::ELEMENTWISE_THRESHOLD)
 }
 
 #[cfg(not(feature = "parallel"))]

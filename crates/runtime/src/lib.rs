@@ -741,6 +741,7 @@ mod tests {
     fn test_simple_backward_pass_impl<E: Executor<f32>>(mut executor: E) {
         // Create a simple computation graph: x^2 where x is a parameter
         let x = tensor::Parameter::new(vec![2.0f32], vec![1]);
+        let x_id = x.id();
         let x_sq = x.clone() * x;
         let graph: TensorGraph<f32> = x_sq.into();
 
@@ -751,7 +752,7 @@ mod tests {
         assert_eq!(param_grads.grads_by_param.len(), 1);
         let grad = param_grads
             .grads_by_param
-            .get(&0)
+            .get(&x_id)
             .expect("Parameter gradient missing");
         assert_eq!(grad.len(), 1);
         assert!(
@@ -775,6 +776,7 @@ mod tests {
     fn test_unary_backward_pass_impl<E: Executor<f32>>(mut executor: E) {
         // Test backward pass for exp(x) where x = [1.0]
         let x = tensor::Parameter::new(vec![1.0f32], vec![1]);
+        let x_id = x.id();
         let exp = x.exp();
         let graph: TensorGraph<f32> = exp.into();
 
@@ -785,7 +787,7 @@ mod tests {
         assert_eq!(param_grads.grads_by_param.len(), 1);
         let grad = param_grads
             .grads_by_param
-            .get(&0)
+            .get(&x_id)
             .expect("Parameter gradient missing");
         assert_eq!(grad.len(), 1);
         let expected = 1.0f32.exp();
@@ -859,21 +861,22 @@ mod tests {
         
         let a_data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let identity = vec![1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
-        
+
         let a = tensor::Parameter::new(a_data.clone(), vec![3, 3]);
+        let a_id = a.id();
         let b = tensor::Parameter::new(identity, vec![3, 3]);
         let node = tensor::TensorExpr::from(a).matmul(b);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = node.lower_to_graph(&mut graph);
-        
+
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-        
+
         executor.forward(&graph, inputs);
         let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
-        
-        let grad_a = result.grads_by_param.get(&0).unwrap();
+
+        let grad_a = result.grads_by_param.get(&a_id).unwrap();
         
         // dA = dC @ I^T = dC @ I = dC
         assert_eq!(grad_a.len(), 9);
@@ -901,22 +904,24 @@ mod tests {
         
         let a_data = vec![0.1f32; m * k];
         let b_data = vec![0.2f32; k * n];
-        
+
         let a = tensor::Parameter::new(a_data, vec![m, k]);
+        let a_id = a.id();
         let b = tensor::Parameter::new(b_data, vec![k, n]);
+        let b_id = b.id();
         let node = tensor::TensorExpr::from(a).matmul(b);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = node.lower_to_graph(&mut graph);
-        
+
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32; m * n];
-        
+
         executor.forward(&graph, inputs);
         let result = executor.backward(&graph, loss_node, Some(seed_grad));
-        
-        let grad_a = result.grads_by_param.get(&0).unwrap();
-        let grad_b = result.grads_by_param.get(&1).unwrap();
+
+        let grad_a = result.grads_by_param.get(&a_id).unwrap();
+        let grad_b = result.grads_by_param.get(&b_id).unwrap();
         
         assert_eq!(grad_a.len(), m * k, "dA should have shape [5, 100]");
         assert_eq!(grad_b.len(), k * n, "dB should have shape [100, 3]");
@@ -948,25 +953,27 @@ mod tests {
         
         let a_data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // [2, 3]
         let b_data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // [3, 2]
-        
+
         let a = tensor::Parameter::new(a_data.clone(), vec![2, 3]);
+        let a_id = a.id();
         let b = tensor::Parameter::new(b_data.clone(), vec![3, 2]);
+        let b_id = b.id();
         let node = tensor::TensorExpr::from(a).matmul(b);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = node.lower_to_graph(&mut graph);
-        
+
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32, 1.0, 1.0, 1.0]; // [2, 2]
-        
+
         executor.forward(&graph, inputs);
         let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
-        
+
         // Verify we have gradients for both parameters
         assert_eq!(result.grads_by_param.len(), 2);
-        
-        let grad_a = result.grads_by_param.get(&0).unwrap();
-        let grad_b = result.grads_by_param.get(&1).unwrap();
+
+        let grad_a = result.grads_by_param.get(&a_id).unwrap();
+        let grad_b = result.grads_by_param.get(&b_id).unwrap();
         
         assert_eq!(grad_a.len(), 6, "dA should have 6 elements [2,3]");
         assert_eq!(grad_b.len(), 6, "dB should have 6 elements [3,2]");
@@ -995,23 +1002,24 @@ mod tests {
         // z = (A @ B) @ C, verify dA and dB are correct
         
         let a = tensor::Parameter::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
+        let a_id = a.id();
         let b = tensor::Parameter::new(vec![1.0f32, 0.0, 0.0, 1.0], vec![2, 2]); // Identity
         let c = tensor::Parameter::new(vec![2.0f32, 0.0, 0.0, 2.0], vec![2, 2]); // 2*Identity
-        
+
         let ab = tensor::TensorExpr::from(a).matmul(b);
         let z = ab.matmul(c);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = z.lower_to_graph(&mut graph);
-        
+
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32; 4]; // [2, 2]
-        
+
         executor.forward(&graph, inputs);
         let result = executor.backward(&graph, loss_node, Some(seed_grad));
-        
+
         // With B=I and C=2I, z = 2A, so dA should be 2*seed_grad
-        let grad_a = result.grads_by_param.get(&0).unwrap();
+        let grad_a = result.grads_by_param.get(&a_id).unwrap();
         
         assert_eq!(grad_a.len(), 4);
         for &val in grad_a.iter() {
@@ -1116,18 +1124,19 @@ mod tests {
         
         // Create graph for forward pass
         let a = tensor::Parameter::new(a_data.clone(), vec![2, 2]);
+        let a_id = a.id();
         let b = tensor::Parameter::new(b_data.clone(), vec![2, 2]);
         let node = tensor::TensorExpr::from(a).matmul(b);
-        
+
         let mut graph = tensor::graph::TensorGraph::new();
         let loss_node = node.lower_to_graph(&mut graph);
-        
+
         // Forward and backward
         executor.forward(&graph, Default::default());
         let seed_grad = vec![1.0f32; 4];
         let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
-        
-        let grad_a = result.grads_by_param.get(&0).unwrap();
+
+        let grad_a = result.grads_by_param.get(&a_id).unwrap();
         
         // Numerical gradient for each element of A
         for idx in 0..4 {

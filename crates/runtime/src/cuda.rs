@@ -1442,11 +1442,12 @@ mod tests {
         let mut graph = tensor::graph::TensorGraph::new();
 
         // Add parameter node with data = [2.0]
+        let param_id = 0;
         let param_data = Arc::new(Mutex::new(vec![2.0f32]));
         let param_node = graph
             .graph
             .add_node(tensor::graph::TensorGraphNode::Parameter {
-                id: 0,
+                id: param_id,
                 data: param_data.clone(),
             });
         graph.shapes.insert(param_node, vec![1]);
@@ -1482,8 +1483,8 @@ mod tests {
         );
         assert_eq!(cpu_result.grads_by_param.len(), 1);
 
-        let cpu_grad = cpu_result.grads_by_param.get(&0).unwrap();
-        let cuda_grad = cuda_result.grads_by_param.get(&0).unwrap();
+        let cpu_grad = cpu_result.grads_by_param.get(&param_id).unwrap();
+        let cuda_grad = cuda_result.grads_by_param.get(&param_id).unwrap();
 
         // Gradient of x^2 at x=2 should be 2*x = 4
         assert_approx_eq!(*cpu_grad, vec![4.0f32]);
@@ -1533,7 +1534,9 @@ mod tests {
         let b_data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // [3, 2]
 
         let a = Parameter::new(a_data, vec![2, 3]);
+        let a_id = a.id();
         let b = Parameter::new(b_data, vec![3, 2]);
+        let b_id = b.id();
         let node = TensorExpr::from(a).matmul(b);
 
         let mut graph = tensor::graph::TensorGraph::new();
@@ -1559,13 +1562,13 @@ mod tests {
         );
         assert_eq!(cpu_result.grads_by_param.len(), 2);
 
-        let cpu_grad_a = cpu_result.grads_by_param.get(&0).unwrap();
-        let cuda_grad_a = cuda_result.grads_by_param.get(&0).unwrap();
+        let cpu_grad_a = cpu_result.grads_by_param.get(&a_id).unwrap();
+        let cuda_grad_a = cuda_result.grads_by_param.get(&a_id).unwrap();
         assert_eq!(cpu_grad_a.len(), 6); // [2, 3]
         assert_approx_eq!(*cpu_grad_a, *cuda_grad_a);
 
-        let cpu_grad_b = cpu_result.grads_by_param.get(&1).unwrap();
-        let cuda_grad_b = cuda_result.grads_by_param.get(&1).unwrap();
+        let cpu_grad_b = cpu_result.grads_by_param.get(&b_id).unwrap();
+        let cuda_grad_b = cuda_result.grads_by_param.get(&b_id).unwrap();
         assert_eq!(cpu_grad_b.len(), 6); // [3, 2]
         assert_approx_eq!(*cpu_grad_b, *cuda_grad_b);
 
@@ -1587,7 +1590,9 @@ mod tests {
         let w_data = vec![0.01f32; input_dim * hidden_dim];
 
         let x = Parameter::new(x_data, vec![batch_size, input_dim]);
+        let x_id = x.id();
         let w = Parameter::new(w_data, vec![input_dim, hidden_dim]);
+        let w_id = w.id();
         let node = TensorExpr::from(x).matmul(w);
 
         let mut graph = tensor::graph::TensorGraph::new();
@@ -1613,13 +1618,13 @@ mod tests {
         );
         assert_eq!(cpu_result.grads_by_param.len(), 2);
 
-        let cpu_grad_x = cpu_result.grads_by_param.get(&0).unwrap();
-        let cuda_grad_x = cuda_result.grads_by_param.get(&0).unwrap();
+        let cpu_grad_x = cpu_result.grads_by_param.get(&x_id).unwrap();
+        let cuda_grad_x = cuda_result.grads_by_param.get(&x_id).unwrap();
         assert_eq!(cpu_grad_x.len(), batch_size * input_dim); // [128, 784]
         assert_approx_eq!(*cpu_grad_x, *cuda_grad_x);
 
-        let cpu_grad_w = cpu_result.grads_by_param.get(&1).unwrap();
-        let cuda_grad_w = cuda_result.grads_by_param.get(&1).unwrap();
+        let cpu_grad_w = cpu_result.grads_by_param.get(&w_id).unwrap();
+        let cuda_grad_w = cuda_result.grads_by_param.get(&w_id).unwrap();
         assert_eq!(cpu_grad_w.len(), input_dim * hidden_dim); // [784, 128]
         assert_approx_eq!(*cpu_grad_w, *cuda_grad_w);
 
@@ -1640,7 +1645,9 @@ mod tests {
         let b_data = vec![0.1f32; k * n];
 
         let a = Parameter::new(a_data, vec![m, k]);
+        let a_id = a.id();
         let b = Parameter::new(b_data, vec![k, n]);
+        let b_id = b.id();
         let node = TensorExpr::from(a).matmul(b);
 
         let mut graph = tensor::graph::TensorGraph::new();
@@ -1666,13 +1673,13 @@ mod tests {
         );
         assert_eq!(cpu_result.grads_by_param.len(), 2);
 
-        let cpu_grad_a = cpu_result.grads_by_param.get(&0).unwrap();
-        let cuda_grad_a = cuda_result.grads_by_param.get(&0).unwrap();
+        let cpu_grad_a = cpu_result.grads_by_param.get(&a_id).unwrap();
+        let cuda_grad_a = cuda_result.grads_by_param.get(&a_id).unwrap();
         assert_eq!(cpu_grad_a.len(), m * k); // [5, 100]
         assert_approx_eq!(*cpu_grad_a, *cuda_grad_a);
 
-        let cpu_grad_b = cpu_result.grads_by_param.get(&1).unwrap();
-        let cuda_grad_b = cuda_result.grads_by_param.get(&1).unwrap();
+        let cpu_grad_b = cpu_result.grads_by_param.get(&b_id).unwrap();
+        let cuda_grad_b = cuda_result.grads_by_param.get(&b_id).unwrap();
         assert_eq!(cpu_grad_b.len(), k * n); // [100, 3]
         assert_approx_eq!(*cpu_grad_b, *cuda_grad_b);
 

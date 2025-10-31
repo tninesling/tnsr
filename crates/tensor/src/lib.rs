@@ -148,6 +148,10 @@ impl<D: DType> Parameter<D> {
         }
     }
 
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
     pub fn shape(&self) -> &Shape {
         &self.shape
     }

@@ -20,7 +20,6 @@ pub type SliceIter<'a, T> = std::slice::Iter<'a, T>;
 
 #[cfg(feature = "parallel")]
 mod parallel_config {
-
     /// Minimum number of elements for parallel iteration
     pub const ELEMENTWISE_THRESHOLD: usize = 8192;
 

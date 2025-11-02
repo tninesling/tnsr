@@ -26,9 +26,6 @@ mod parallel_config {
 
     /// Minimum matrix dimension for parallel matmul
     pub const MATMUL_THRESHOLD: usize = 128;
-
-    /// Minimum output size for parallel broadcast
-    pub const BROADCAST_THRESHOLD: usize = 8192;
 }
 
 pub struct TracingGuard {
@@ -484,7 +481,7 @@ fn broadcast_forward(
     {
         use rayon::prelude::*;
 
-        if out_size >= parallel_config::BROADCAST_THRESHOLD {
+        if out_size >= parallel_config::ELEMENTWISE_THRESHOLD {
             let mut out = vec![0.0f32; out_size];
             out.par_iter_mut()
                 .enumerate()
@@ -1029,7 +1026,7 @@ mod tests {
         let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
 
         let grad_a = result.grads_by_param.get(&a_id).unwrap();
-        
+
         // dA = dC @ I^T = dC @ I = dC
         assert_eq!(grad_a.len(), 9);
         assert_approx_eq!(grad_a, &seed_grad);
@@ -1074,7 +1071,7 @@ mod tests {
 
         let grad_a = result.grads_by_param.get(&a_id).unwrap();
         let grad_b = result.grads_by_param.get(&b_id).unwrap();
-        
+
         assert_eq!(grad_a.len(), m * k, "dA should have shape [5, 100]");
         assert_eq!(grad_b.len(), k * n, "dB should have shape [100, 3]");
 
@@ -1126,7 +1123,7 @@ mod tests {
 
         let grad_a = result.grads_by_param.get(&a_id).unwrap();
         let grad_b = result.grads_by_param.get(&b_id).unwrap();
-        
+
         assert_eq!(grad_a.len(), 6, "dA should have 6 elements [2,3]");
         assert_eq!(grad_b.len(), 6, "dB should have 6 elements [3,2]");
 
@@ -1172,7 +1169,7 @@ mod tests {
 
         // With B=I and C=2I, z = 2A, so dA should be 2*seed_grad
         let grad_a = result.grads_by_param.get(&a_id).unwrap();
-        
+
         assert_eq!(grad_a.len(), 4);
         for &val in grad_a.iter() {
             assert!(
@@ -1302,7 +1299,7 @@ mod tests {
         let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
 
         let grad_a = result.grads_by_param.get(&a_id).unwrap();
-        
+
         // Numerical gradient for each element of A
         for idx in 0..4 {
             let mut a_plus = a_data.clone();

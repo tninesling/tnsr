@@ -310,7 +310,10 @@ impl Executor<f32> for SimpleExecutor {
             .shapes
             .get(&loss_node)
             .expect("Loss node shape missing");
-        let seed = seed_grad.unwrap_or_else(|| vec![1.0f32; get_iter(loss_shape).product()]);
+
+        // Shapes will always be 2-element vectors, no need to call get_iter()
+        let seed = seed_grad.unwrap_or_else(|| vec![1.0f32; loss_shape.iter().product()]);
+
         self.grads.insert(loss_node, seed);
 
         // Backward pass in reverse topological order

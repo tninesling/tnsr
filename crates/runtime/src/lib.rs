@@ -311,8 +311,7 @@ impl Executor<f32> for SimpleExecutor {
             .get(&loss_node)
             .expect("Loss node shape missing");
 
-        // Shapes will always be 2-element vectors, no need to call get_iter()
-        let seed = seed_grad.unwrap_or_else(|| vec![1.0f32; loss_shape.iter().product()]);
+        let seed = seed_grad.unwrap_or_else(|| vec![1.0f32; get_iter(loss_shape).product()]);
 
         self.grads.insert(loss_node, seed);
 

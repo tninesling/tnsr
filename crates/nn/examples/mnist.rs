@@ -179,10 +179,10 @@ fn main() {
                 inputs.insert("labels".to_string(), y);
 
                 // Forward pass to get loss value
-                let loss_value = exec.forward(&graph, inputs.clone());
+                let loss_value = exec.forward(&graph, inputs.clone()).unwrap();
 
                 // Backward pass to get gradients
-                let backward_result = exec.backward(&graph, loss_idx, None);
+                let backward_result = exec.backward(&graph, loss_idx, None).unwrap();
                 let grads = backward_result.grads_by_param;
 
                 if steps.is_multiple_of(50)
@@ -243,7 +243,7 @@ fn main() {
             inputs.insert("labels".to_string(), dummy_labels);
 
             // Forward pass through the unified graph
-            exec.forward(&graph, inputs);
+            exec.forward(&graph, inputs).unwrap();
 
             // Extract logits using get_value()
             #[cfg(feature = "cuda")]

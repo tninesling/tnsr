@@ -1,4 +1,57 @@
+//! Runtime execution engine for tensor computation graphs.
+//!
+//! This crate provides executors that perform forward and backward passes on computation graphs
+//! lowered from the `tensor` crate. Execution is where errors can occur—resource allocation,
+//! shape validation, and arithmetic operations may fail.
+//!
+//! # Architecture
+//!
+//! - **Executor Trait**: Common interface for forward and backward passes, returning
+//!   `Result<Vec<D>>` and `Result<BackwardResult<D>>` respectively for proper error handling.
+//!
+//! - **SimpleExecutor**: CPU-based executor with optional parallelism (via `parallel` feature).
+//!   Uses naive algorithms suitable for testing and small models.
+//!
+//! - **CudaExecutor** (optional): GPU-accelerated executor using CUDA kernels (via `cuda` feature).
+//!   Automatically manages device memory and kernel launches.
+//!
+//! # Error Handling
+//!
+//! Execution failures return `Result` types with `anyhow::Error` for:
+//! - Missing inputs or forward values
+//! - Shape mismatches
+//! - Memory allocation failures
+//! - Invalid operations (e.g., unsupported dimensions)
+//! - CUDA-specific errors (kernel launch failures, device errors)
+//!
+//! Use `.unwrap()` in tests or the `?` operator in production code to handle errors.
+//!
+//! # Features
+//!
+//! - `cuda`: Enable GPU acceleration via CUDA (requires CUDA toolkit)
+//! - `parallel`: Enable CPU parallelism via Rayon
+//!
+//! # Example
+//!
+//! ```rust
+//! use runtime::{Executor, SimpleExecutor};
+//! use tensor::{TensorExpr, graph::TensorGraph};
+//! use std::collections::HashMap;
+//!
+//! let mut executor = SimpleExecutor::new();
+//! let x = TensorExpr::<f32>::input("x", vec![2, 3]);
+//! let graph: TensorGraph<f32> = x.into();
+//!
+//! let mut inputs = HashMap::new();
+//! inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+//!
+//! let result = executor.forward(&graph, inputs).unwrap();
+//! assert_eq!(result.len(), 6);
+//! ```
+
 use std::collections::HashMap;
+
+use anyhow::{Context, Result};
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
@@ -12,9 +65,17 @@ use tracing::trace_span;
 use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::prelude::*;
 
+/// Iterator type for slice traversal, conditionally parallel based on features.
+///
+/// With the `parallel` feature enabled, uses Rayon for parallel iteration.
+/// Otherwise, uses standard sequential iteration.
 #[cfg(feature = "parallel")]
 pub type SliceIter<'a, T> = rayon::iter::MinLen<rayon::slice::Iter<'a, T>>;
 
+/// Iterator type for slice traversal, conditionally parallel based on features.
+///
+/// With the `parallel` feature enabled, uses Rayon for parallel iteration.
+/// Otherwise, uses standard sequential iteration.
 #[cfg(not(feature = "parallel"))]
 pub type SliceIter<'a, T> = std::slice::Iter<'a, T>;
 
@@ -27,10 +88,28 @@ mod parallel_config {
     pub const MATMUL_THRESHOLD: usize = 128;
 }
 
+/// RAII guard for Chrome tracing session.
+///
+/// Ensures trace data is properly flushed to disk when dropped.
+/// Created by [`init_chrome_tracing`].
 pub struct TracingGuard {
     _guard: tracing_chrome::FlushGuard,
 }
 
+/// Initialize Chrome tracing and write output to the specified file.
+///
+/// Returns a [`TracingGuard`] that must be kept alive for the duration of tracing.
+/// When dropped, all trace data is flushed to the file.
+///
+/// # Example
+///
+/// ```no_run
+/// use runtime::init_chrome_tracing;
+///
+/// let _guard = init_chrome_tracing("trace.json").unwrap();
+/// // ... perform traced operations ...
+/// // Trace is flushed when _guard is dropped
+/// ```
 pub fn init_chrome_tracing(file_path: &str) -> Result<TracingGuard, Box<dyn std::error::Error>> {
     let (chrome_layer, guard) = ChromeLayerBuilder::new().file(file_path).build();
 
@@ -39,23 +118,111 @@ pub fn init_chrome_tracing(file_path: &str) -> Result<TracingGuard, Box<dyn std:
     Ok(TracingGuard { _guard: guard })
 }
 
+/// Result of a backward pass through a computation graph.
+///
+/// Contains gradients computed via reverse-mode automatic differentiation,
+/// organized by both graph nodes and parameter IDs for efficient access.
 pub struct BackwardResult<D> {
+    /// Gradients indexed by graph node position.
+    ///
+    /// Useful for inspecting intermediate gradients during debugging.
     pub grads_by_node: HashMap<petgraph::graph::NodeIndex, Vec<D>>,
+
+    /// Gradients indexed by parameter ID.
+    ///
+    /// Used by optimizers to update trainable parameters. Each parameter's
+    /// gradient is accumulated across all uses in the graph.
     pub grads_by_param: HashMap<usize, Vec<D>>,
+
+    /// The final scalar loss value computed during the forward pass.
+    ///
+    /// Typically a single element `Vec<D>` representing the loss to minimize.
     pub loss_value: Vec<D>,
 }
 
+/// Executes forward and backward passes on computation graphs.
+///
+/// Implementors provide different execution strategies (CPU, GPU, etc.)
+/// while maintaining a common interface for graph evaluation.
 pub trait Executor<D> {
-    fn forward(&mut self, graph: &TensorGraph<D>, inputs: HashMap<String, Vec<D>>) -> Vec<D>;
+    /// Execute a forward pass through the computation graph.
+    ///
+    /// # Arguments
+    ///
+    /// * `graph` - The computation graph to execute
+    /// * `inputs` - Named input tensors as flat vectors
+    ///
+    /// # Returns
+    ///
+    /// The output tensor as a flat vector, or an error if execution fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Required inputs are missing
+    /// - Shapes are incompatible
+    /// - Memory allocation fails
+    /// - Invalid operations are encountered
+    fn forward(
+        &mut self,
+        graph: &TensorGraph<D>,
+        inputs: HashMap<String, Vec<D>>,
+    ) -> Result<Vec<D>>;
 
+    /// Execute a backward pass to compute gradients via automatic differentiation.
+    ///
+    /// Performs reverse-mode autodiff starting from `loss_node` and propagating
+    /// gradients back through the graph to all parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `graph` - The computation graph (must match the last forward pass)
+    /// * `loss_node` - Graph node representing the scalar loss to differentiate
+    /// * `seed_grad` - Optional initial gradient (defaults to `vec![1.0]`)
+    ///
+    /// # Returns
+    ///
+    /// A [`BackwardResult`] containing gradients for all nodes and parameters,
+    /// or an error if backward pass fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Forward pass was not called first
+    /// - Graph structure is invalid
+    /// - Memory allocation fails
     fn backward(
         &mut self,
         graph: &TensorGraph<D>,
         loss_node: petgraph::graph::NodeIndex,
         seed_grad: Option<Vec<D>>,
-    ) -> BackwardResult<D>;
+    ) -> Result<BackwardResult<D>>;
 }
 
+/// CPU-based executor for tensor computation graphs.
+///
+/// Implements the [`Executor`] trait using CPU operations. When the `parallel`
+/// feature is enabled, uses Rayon for parallelism on larger tensors.
+///
+/// Suitable for testing, small models, and platforms without GPU support.
+///
+/// # Example
+///
+/// ```rust
+/// use runtime::{Executor, SimpleExecutor};
+/// use tensor::{TensorExpr, graph::TensorGraph};
+/// use std::collections::HashMap;
+///
+/// let mut executor = SimpleExecutor::new();
+/// let x = TensorExpr::<f32>::input("x", vec![2, 2]);
+/// let graph: TensorGraph<f32> = x.into();
+///
+/// let mut inputs = HashMap::new();
+/// inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0]);
+///
+/// let result = executor.forward(&graph, inputs).unwrap();
+/// assert_eq!(result.len(), 4);
+/// ```
 #[derive(Default)]
 pub struct SimpleExecutor {
     values: HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
@@ -63,10 +230,15 @@ pub struct SimpleExecutor {
 }
 
 impl SimpleExecutor {
+    /// Create a new CPU executor.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Retrieve the computed value for a specific graph node.
+    ///
+    /// Only available after a forward pass has been executed.
+    /// Useful for debugging intermediate values.
     pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<&Vec<f32>> {
         self.values.get(&node_idx)
     }
@@ -187,7 +359,11 @@ impl SimpleExecutor {
 }
 
 impl Executor<f32> for SimpleExecutor {
-    fn forward(&mut self, graph: &TensorGraph<f32>, inputs: HashMap<String, Vec<f32>>) -> Vec<f32> {
+    fn forward(
+        &mut self,
+        graph: &TensorGraph<f32>,
+        inputs: HashMap<String, Vec<f32>>,
+    ) -> Result<Vec<f32>> {
         let order = graph.toposort();
         let _fwd_span = trace_span!("forward", nodes = order.len()).entered();
 
@@ -201,7 +377,10 @@ impl Executor<f32> for SimpleExecutor {
                 TensorGraphNode::Input { name } => {
                     let _span =
                         trace_span!("input", node = node_idx.index(), name = name).entered();
-                    inputs.get::<str>(name).expect("Input not found").clone()
+                    inputs
+                        .get::<str>(name)
+                        .with_context(|| format!("Input '{}' not found", name))?
+                        .clone()
                 }
                 TensorGraphNode::Parameter { data, .. } => {
                     let _span = trace_span!("parameter", node = node_idx.index()).entered();
@@ -209,7 +388,9 @@ impl Executor<f32> for SimpleExecutor {
                 }
                 TensorGraphNode::Unary { op } => {
                     let inputs = graph.inputs(*node_idx);
-                    let x = self.values.get(&inputs[0]).unwrap();
+                    let x = self.values.get(&inputs[0]).with_context(|| {
+                        format!("Value for node {} not computed", inputs[0].index())
+                    })?;
                     match op {
                         tensor::UnaryOp::Neg => self.neg(x),
                         tensor::UnaryOp::Exp => self.exp(x),
@@ -219,9 +400,18 @@ impl Executor<f32> for SimpleExecutor {
                 }
                 TensorGraphNode::Binary { op } => {
                     let ins = graph.inputs(*node_idx);
-                    let a = self.values.get(&ins[0]).unwrap();
-                    let b = self.values.get(&ins[1]).unwrap();
-                    assert_eq!(a.len(), b.len());
+                    let a = self.values.get(&ins[0]).with_context(|| {
+                        format!("Value for node {} not computed", ins[0].index())
+                    })?;
+                    let b = self.values.get(&ins[1]).with_context(|| {
+                        format!("Value for node {} not computed", ins[1].index())
+                    })?;
+                    anyhow::ensure!(
+                        a.len() == b.len(),
+                        "Binary op shape mismatch: {} vs {}",
+                        a.len(),
+                        b.len()
+                    );
                     match op {
                         tensor::BinaryOp::Add => self.add(a, b),
                         tensor::BinaryOp::Sub => self.sub(a, b),
@@ -231,11 +421,11 @@ impl Executor<f32> for SimpleExecutor {
                 }
                 TensorGraphNode::MatMul => {
                     let _span = trace_span!("matmul", node = node_idx.index()).entered();
-                    matmul_forward(graph, &self.values, *node_idx)
+                    matmul_forward(graph, &self.values, *node_idx)?
                 }
                 TensorGraphNode::BroadcastAxis { axis } => {
                     let _span = trace_span!("broadcast_axis", node = node_idx.index()).entered();
-                    broadcast_axis_forward(graph, &self.values, *node_idx, *axis)
+                    broadcast_axis_forward(graph, &self.values, *node_idx, *axis)?
                 }
                 TensorGraphNode::ReduceAxis { op, axis } => {
                     let _span = trace_span!(
@@ -245,14 +435,19 @@ impl Executor<f32> for SimpleExecutor {
                         node = node_idx.index()
                     )
                     .entered();
-                    reduce_axis_forward(graph, &self.values, *node_idx, op, *axis)
+                    reduce_axis_forward(graph, &self.values, *node_idx, op, *axis)?
                 }
             };
             self.values.insert(*node_idx, result);
         }
-        let last_node = order.last().expect("Graph is empty");
-        let out = self.values.get(last_node).expect("Output not found");
-        out.clone()
+        let last_node = order
+            .last()
+            .context("Graph is empty, no nodes to execute")?;
+        let out = self
+            .values
+            .get(last_node)
+            .context("Output value not computed")?;
+        Ok(out.clone())
     }
 
     fn backward(
@@ -260,7 +455,7 @@ impl Executor<f32> for SimpleExecutor {
         graph: &TensorGraph<f32>,
         loss_node: petgraph::graph::NodeIndex,
         seed_grad: Option<Vec<f32>>,
-    ) -> BackwardResult<f32> {
+    ) -> Result<BackwardResult<f32>> {
         let order = graph.toposort();
         let _bwd_span = trace_span!("backward", nodes = order.len()).entered();
 
@@ -270,7 +465,7 @@ impl Executor<f32> for SimpleExecutor {
         let loss_shape = graph
             .shapes
             .get(&loss_node)
-            .expect("Loss node shape missing");
+            .context("Loss node shape missing")?;
 
         let seed = seed_grad.unwrap_or_else(|| vec![1.0f32; get_iter(loss_shape).product()]);
 
@@ -294,15 +489,21 @@ impl Executor<f32> for SimpleExecutor {
                         let dx = match op {
                             tensor::UnaryOp::Neg => self.neg_grad(&dy),
                             tensor::UnaryOp::Exp => {
-                                let y = self.values.get(&node_idx).unwrap();
+                                let y = self.values.get(&node_idx).with_context(|| {
+                                    format!("Forward value for node {} not found", node_idx.index())
+                                })?;
                                 self.exp_grad(&dy, y)
                             }
                             tensor::UnaryOp::Log => {
-                                let x = self.values.get(&x_idx).unwrap();
+                                let x = self.values.get(&x_idx).with_context(|| {
+                                    format!("Forward value for node {} not found", x_idx.index())
+                                })?;
                                 self.log_grad(&dy, x)
                             }
                             tensor::UnaryOp::Relu => {
-                                let x = self.values.get(&x_idx).unwrap();
+                                let x = self.values.get(&x_idx).with_context(|| {
+                                    format!("Forward value for node {} not found", x_idx.index())
+                                })?;
                                 self.relu_grad(&dy, x)
                             }
                         };
@@ -312,8 +513,12 @@ impl Executor<f32> for SimpleExecutor {
                         let ins = graph.inputs(node_idx);
                         let a_idx = ins[0];
                         let b_idx = ins[1];
-                        let a_val = self.values.get(&a_idx).unwrap();
-                        let b_val = self.values.get(&b_idx).unwrap();
+                        let a_val = self.values.get(&a_idx).with_context(|| {
+                            format!("Forward value for node {} not found", a_idx.index())
+                        })?;
+                        let b_val = self.values.get(&b_idx).with_context(|| {
+                            format!("Forward value for node {} not found", b_idx.index())
+                        })?;
 
                         let (da, db) = match op {
                             tensor::BinaryOp::Add => self.add_grad(&dy),
@@ -329,11 +534,24 @@ impl Executor<f32> for SimpleExecutor {
                         let ins = graph.inputs(node_idx);
                         let a_idx = ins[0];
                         let b_idx = ins[1];
-                        let a_val = self.values.get(&a_idx).unwrap();
-                        let b_val = self.values.get(&b_idx).unwrap();
-                        let a_shape = graph.shapes.get(&a_idx).unwrap();
-                        let b_shape = graph.shapes.get(&b_idx).unwrap();
-                        let dy_shape = graph.shapes.get(&node_idx).unwrap();
+                        let a_val = self.values.get(&a_idx).with_context(|| {
+                            format!("Forward value for node {} not found", a_idx.index())
+                        })?;
+                        let b_val = self.values.get(&b_idx).with_context(|| {
+                            format!("Forward value for node {} not found", b_idx.index())
+                        })?;
+                        let a_shape = graph
+                            .shapes
+                            .get(&a_idx)
+                            .context("Shape missing for matmul left operand")?;
+                        let b_shape = graph
+                            .shapes
+                            .get(&b_idx)
+                            .context("Shape missing for matmul right operand")?;
+                        let dy_shape = graph
+                            .shapes
+                            .get(&node_idx)
+                            .context("Shape missing for matmul output")?;
 
                         // dA = dY * B^T
                         let da = matmul_grad_left(&dy, dy_shape, b_val, b_shape);
@@ -346,7 +564,10 @@ impl Executor<f32> for SimpleExecutor {
                         let _span =
                             trace_span!("broadcast_axis", node = node_idx.index()).entered();
                         let x_idx = graph.inputs(node_idx)[0];
-                        let y_shape = graph.shapes.get(&node_idx).unwrap();
+                        let y_shape = graph
+                            .shapes
+                            .get(&node_idx)
+                            .context("Shape missing for broadcast_axis output")?;
                         let dx = broadcast_axis_backward(&dy, y_shape, *axis);
                         accumulate_grad(&mut self.grads, x_idx, dx);
                     }
@@ -359,8 +580,14 @@ impl Executor<f32> for SimpleExecutor {
                         )
                         .entered();
                         let x_idx = graph.inputs(node_idx)[0];
-                        let x_shape = graph.shapes.get(&x_idx).unwrap();
-                        let y_shape = graph.shapes.get(&node_idx).unwrap();
+                        let x_shape = graph
+                            .shapes
+                            .get(&x_idx)
+                            .context("Shape missing for reduce_axis input")?;
+                        let y_shape = graph
+                            .shapes
+                            .get(&node_idx)
+                            .context("Shape missing for reduce_axis output")?;
                         match op {
                             tensor::ReduceOp::Sum => {
                                 let dx = reduce_axis_backward(&dy, y_shape, *axis, x_shape[*axis]);
@@ -388,13 +615,17 @@ impl Executor<f32> for SimpleExecutor {
             }
         }
 
-        let loss_value = self.values.get(&loss_node).unwrap().clone();
+        let loss_value = self
+            .values
+            .get(&loss_node)
+            .context("Loss value not computed")?
+            .clone();
 
-        BackwardResult {
+        Ok(BackwardResult {
             grads_by_node: self.grads.drain().collect(),
             grads_by_param: param_grads,
             loss_value,
-        }
+        })
     }
 }
 
@@ -414,16 +645,34 @@ fn matmul_forward(
     graph: &TensorGraph<f32>,
     values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
     node_idx: petgraph::graph::NodeIndex,
-) -> Vec<f32> {
+) -> Result<Vec<f32>> {
     let inputs_idx = graph.inputs(node_idx);
     let a_idx = inputs_idx[0];
     let b_idx = inputs_idx[1];
-    let a = values.get(&a_idx).unwrap();
-    let b = values.get(&b_idx).unwrap();
-    let a_shape = graph.shapes.get(&a_idx).expect("shape missing for lhs");
-    let b_shape = graph.shapes.get(&b_idx).expect("shape missing for rhs");
-    assert_eq!(a_shape.len(), 2);
-    assert_eq!(b_shape.len(), 2);
+    let a = values
+        .get(&a_idx)
+        .context("Left operand value not computed for matmul")?;
+    let b = values
+        .get(&b_idx)
+        .context("Right operand value not computed for matmul")?;
+    let a_shape = graph
+        .shapes
+        .get(&a_idx)
+        .context("Shape missing for matmul left operand")?;
+    let b_shape = graph
+        .shapes
+        .get(&b_idx)
+        .context("Shape missing for matmul right operand")?;
+    anyhow::ensure!(
+        a_shape.len() == 2,
+        "Matmul left operand must be 2D, got {}D",
+        a_shape.len()
+    );
+    anyhow::ensure!(
+        b_shape.len() == 2,
+        "Matmul right operand must be 2D, got {}D",
+        b_shape.len()
+    );
     let m = a_shape[0];
     let k = a_shape[1];
     let n = b_shape[1];
@@ -443,7 +692,7 @@ fn matmul_forward(
                     row[j] = sum;
                 }
             });
-            return out;
+            return Ok(out);
         }
     }
 
@@ -458,7 +707,7 @@ fn matmul_forward(
             out[i * n + j] = sum;
         }
     }
-    out
+    Ok(out)
 }
 
 fn add_inplace(acc: &mut [f32], src: &[f32]) {
@@ -559,11 +808,19 @@ fn broadcast_axis_forward(
     values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
     node_idx: petgraph::graph::NodeIndex,
     axis: usize,
-) -> Vec<f32> {
+) -> Result<Vec<f32>> {
     let in_idx = graph.inputs(node_idx)[0];
-    let in_val = values.get(&in_idx).unwrap();
-    let in_shape = graph.shapes.get(&in_idx).unwrap();
-    let out_shape = graph.shapes.get(&node_idx).unwrap();
+    let in_val = values
+        .get(&in_idx)
+        .context("Input value not computed for broadcast_axis")?;
+    let in_shape = graph
+        .shapes
+        .get(&in_idx)
+        .context("Input shape missing for broadcast_axis")?;
+    let out_shape = graph
+        .shapes
+        .get(&node_idx)
+        .context("Output shape missing for broadcast_axis")?;
     let out_size: usize = out_shape.iter().product();
     let in_strides = rowmajor_strides(in_shape);
     let out_strides = rowmajor_strides(out_shape);
@@ -580,7 +837,7 @@ fn broadcast_axis_forward(
         }
         *out_elem = in_val[in_linear];
     }
-    out
+    Ok(out)
 }
 
 fn reduce_axis_forward(
@@ -589,11 +846,19 @@ fn reduce_axis_forward(
     node_idx: petgraph::graph::NodeIndex,
     op: &tensor::ReduceOp,
     axis: usize,
-) -> Vec<f32> {
+) -> Result<Vec<f32>> {
     let in_idx = graph.inputs(node_idx)[0];
-    let x = values.get(&in_idx).unwrap();
-    let in_shape = graph.shapes.get(&in_idx).unwrap();
-    let out_shape = graph.shapes.get(&node_idx).unwrap();
+    let x = values
+        .get(&in_idx)
+        .context("Input value not computed for reduce_axis")?;
+    let in_shape = graph
+        .shapes
+        .get(&in_idx)
+        .context("Input shape missing for reduce_axis")?;
+    let out_shape = graph
+        .shapes
+        .get(&node_idx)
+        .context("Output shape missing for reduce_axis")?;
     let out_size: usize = out_shape.iter().product();
     let axis_size = in_shape[axis];
     let in_strides = rowmajor_strides(in_shape);
@@ -626,7 +891,7 @@ fn reduce_axis_forward(
             }
         }
     }
-    out
+    Ok(out)
 }
 
 fn broadcast_axis_backward(dy: &[f32], dy_shape: &[usize], axis: usize) -> Vec<f32> {
@@ -724,6 +989,10 @@ pub(crate) fn expand_to(x: &[f32], x_shape: &[usize], target_shape: &[usize]) ->
     out
 }
 
+/// Get an iterator over a slice, parallel if the `parallel` feature is enabled.
+///
+/// Automatically uses parallel iteration for large slices when compiled with
+/// the `parallel` feature, falling back to sequential iteration otherwise.
 #[cfg(feature = "parallel")]
 pub fn get_iter<T: Sync>(slice: &[T]) -> SliceIter<'_, T> {
     slice
@@ -731,6 +1000,10 @@ pub fn get_iter<T: Sync>(slice: &[T]) -> SliceIter<'_, T> {
         .with_min_len(parallel_config::ELEMENTWISE_THRESHOLD)
 }
 
+/// Get an iterator over a slice, parallel if the `parallel` feature is enabled.
+///
+/// Automatically uses parallel iteration for large slices when compiled with
+/// the `parallel` feature, falling back to sequential iteration otherwise.
 #[cfg(not(feature = "parallel"))]
 pub fn get_iter<T>(slice: &[T]) -> SliceIter<'_, T> {
     slice.iter()
@@ -778,8 +1051,10 @@ mod tests {
         let graph: TensorGraph<f32> = x_sq.into();
 
         // Test backward pass - gradient of x^2 at x=2 should be 2*x = 4
-        executor.forward(&graph, Default::default());
-        let param_grads = executor.backward(&graph, 1.into(), Some(vec![1.0f32]));
+        executor.forward(&graph, Default::default()).unwrap();
+        let param_grads = executor
+            .backward(&graph, 1.into(), Some(vec![1.0f32]))
+            .unwrap();
 
         assert_eq!(param_grads.grads_by_param.len(), 1);
         let grad = param_grads
@@ -813,8 +1088,10 @@ mod tests {
         let graph: TensorGraph<f32> = exp.into();
 
         // Gradient of exp(x) at x=1 should be exp(1) ≈ 2.718
-        executor.forward(&graph, Default::default());
-        let param_grads = executor.backward(&graph, 1.into(), Some(vec![1.0f32]));
+        executor.forward(&graph, Default::default()).unwrap();
+        let param_grads = executor
+            .backward(&graph, 1.into(), Some(vec![1.0f32]))
+            .unwrap();
 
         assert_eq!(param_grads.grads_by_param.len(), 1);
         let grad = param_grads
@@ -905,8 +1182,10 @@ mod tests {
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
 
-        executor.forward(&graph, inputs);
-        let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
+        executor.forward(&graph, inputs).unwrap();
+        let result = executor
+            .backward(&graph, loss_node, Some(seed_grad.clone()))
+            .unwrap();
 
         let grad_a = result.grads_by_param.get(&a_id).unwrap();
 
@@ -949,8 +1228,10 @@ mod tests {
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32; m * n];
 
-        executor.forward(&graph, inputs);
-        let result = executor.backward(&graph, loss_node, Some(seed_grad));
+        executor.forward(&graph, inputs).unwrap();
+        let result = executor
+            .backward(&graph, loss_node, Some(seed_grad))
+            .unwrap();
 
         let grad_a = result.grads_by_param.get(&a_id).unwrap();
         let grad_b = result.grads_by_param.get(&b_id).unwrap();
@@ -998,8 +1279,10 @@ mod tests {
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32, 1.0, 1.0, 1.0]; // [2, 2]
 
-        executor.forward(&graph, inputs);
-        let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
+        executor.forward(&graph, inputs).unwrap();
+        let result = executor
+            .backward(&graph, loss_node, Some(seed_grad.clone()))
+            .unwrap();
 
         // Verify we have gradients for both parameters
         assert_eq!(result.grads_by_param.len(), 2);
@@ -1047,8 +1330,10 @@ mod tests {
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32; 4]; // [2, 2]
 
-        executor.forward(&graph, inputs);
-        let result = executor.backward(&graph, loss_node, Some(seed_grad));
+        executor.forward(&graph, inputs).unwrap();
+        let result = executor
+            .backward(&graph, loss_node, Some(seed_grad))
+            .unwrap();
 
         // With B=I and C=2I, z = 2A, so dA should be 2*seed_grad
         let grad_a = result.grads_by_param.get(&a_id).unwrap();
@@ -1093,8 +1378,10 @@ mod tests {
         let inputs = std::collections::HashMap::new();
         let seed_grad = vec![1.0f32; m * n];
 
-        executor.forward(&graph, inputs);
-        let result = executor.backward(&graph, loss_node, Some(seed_grad));
+        executor.forward(&graph, inputs).unwrap();
+        let result = executor
+            .backward(&graph, loss_node, Some(seed_grad))
+            .unwrap();
 
         // Get all available parameter IDs (sorted)
         let mut param_ids: Vec<_> = result.grads_by_param.keys().copied().collect();
@@ -1177,9 +1464,11 @@ mod tests {
         let loss_node = node.lower_to_graph(&mut graph);
 
         // Forward and backward
-        executor.forward(&graph, Default::default());
+        executor.forward(&graph, Default::default()).unwrap();
         let seed_grad = vec![1.0f32; 4];
-        let result = executor.backward(&graph, loss_node, Some(seed_grad.clone()));
+        let result = executor
+            .backward(&graph, loss_node, Some(seed_grad.clone()))
+            .unwrap();
 
         let grad_a = result.grads_by_param.get(&a_id).unwrap();
 
@@ -1192,7 +1481,7 @@ mod tests {
             let node_plus = tensor::TensorExpr::from(a_param_plus).matmul(b_param);
             let mut graph_plus = tensor::graph::TensorGraph::new();
             let _loss_plus_node = node_plus.lower_to_graph(&mut graph_plus);
-            let out_plus = executor.forward(&graph_plus, Default::default());
+            let out_plus = executor.forward(&graph_plus, Default::default()).unwrap();
 
             let mut a_minus = a_data.clone();
             a_minus[idx] -= epsilon;
@@ -1201,7 +1490,7 @@ mod tests {
             let node_minus = tensor::TensorExpr::from(a_param_minus).matmul(b_param);
             let mut graph_minus = tensor::graph::TensorGraph::new();
             let _loss_minus_node = node_minus.lower_to_graph(&mut graph_minus);
-            let out_minus = executor.forward(&graph_minus, Default::default());
+            let out_minus = executor.forward(&graph_minus, Default::default()).unwrap();
 
             // Compute numerical gradient: (f(x+h) - f(x-h)) / 2h
             let mut numerical_grad = 0.0f32;

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::{Context as _, Result, anyhow};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use tensor::graph::{TensorGraph, TensorGraphNode};
@@ -462,7 +463,11 @@ impl CudaExecutor {
 }
 
 impl Executor<f32> for CudaExecutor {
-    fn forward(&mut self, graph: &TensorGraph<f32>, inputs: HashMap<String, Vec<f32>>) -> Vec<f32> {
+    fn forward(
+        &mut self,
+        graph: &TensorGraph<f32>,
+        inputs: HashMap<String, Vec<f32>>,
+    ) -> Result<Vec<f32>> {
         let order = graph.toposort();
         let _fwd_span = trace_span!("forward", nodes = order.len()).entered();
 
@@ -473,24 +478,36 @@ impl Executor<f32> for CudaExecutor {
                     let _span = trace_span!("constant", node = node_idx.index(), size = data.len())
                         .entered();
                     let stream = self.device.default_stream();
-                    let mut device_data = stream.alloc_zeros::<f32>(data.len()).unwrap();
+                    let mut device_data = stream
+                        .alloc_zeros::<f32>(data.len())
+                        .context("Failed to allocate CUDA memory for constant")?;
                     stream
                         .memcpy_htod(data.as_slice(), &mut device_data)
-                        .unwrap();
+                        .context("Failed to copy constant to CUDA device")?;
                     device_data
                 }
                 TensorGraphNode::Input { name } => {
                     let _span =
                         trace_span!("input", node = node_idx.index(), name = name).entered();
-                    let val = inputs.get::<str>(name).expect("Input not found").clone();
+                    let val = inputs
+                        .get::<str>(name)
+                        .with_context(|| format!("Input '{}' not found", name))?
+                        .clone();
                     let stream = self.device.default_stream();
-                    let mut device_data = stream.alloc_zeros::<f32>(val.len()).unwrap();
-                    stream.memcpy_htod(&val, &mut device_data).unwrap();
+                    let mut device_data = stream
+                        .alloc_zeros::<f32>(val.len())
+                        .context("Failed to allocate CUDA memory for input")?;
+                    stream
+                        .memcpy_htod(&val, &mut device_data)
+                        .context("Failed to copy input to CUDA device")?;
                     device_data
                 }
                 TensorGraphNode::Unary { op } => {
                     let inputs = graph.inputs(*node_idx);
-                    let input = self.values.get(&inputs[0]).unwrap();
+                    let input = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing input value for unary operation")?;
                     match op {
                         tensor::UnaryOp::Neg => self.neg(input),
                         tensor::UnaryOp::Exp => self.exp(input),
@@ -500,8 +517,14 @@ impl Executor<f32> for CudaExecutor {
                 }
                 TensorGraphNode::Binary { op } => {
                     let ins = graph.inputs(*node_idx);
-                    let lhs = self.values.get(&ins[0]).unwrap();
-                    let rhs = self.values.get(&ins[1]).unwrap();
+                    let lhs = self
+                        .values
+                        .get(&ins[0])
+                        .context("Missing left operand for binary operation")?;
+                    let rhs = self
+                        .values
+                        .get(&ins[1])
+                        .context("Missing right operand for binary operation")?;
                     match op {
                         tensor::BinaryOp::Add => self.add(lhs, rhs),
                         tensor::BinaryOp::Sub => self.sub(lhs, rhs),
@@ -511,44 +534,90 @@ impl Executor<f32> for CudaExecutor {
                 }
                 TensorGraphNode::MatMul => {
                     let ins = graph.inputs(*node_idx);
-                    let lhs = self.values.get(&ins[0]).unwrap();
-                    let rhs = self.values.get(&ins[1]).unwrap();
-                    let lhs_shape = graph.shapes.get(&ins[0]).expect("shape missing for lhs");
-                    let rhs_shape = graph.shapes.get(&ins[1]).expect("shape missing for rhs");
-                    assert_eq!(lhs_shape.len(), 2, "MatMul expects 2D lhs");
-                    assert_eq!(rhs_shape.len(), 2, "MatMul expects 2D rhs");
+                    let lhs = self
+                        .values
+                        .get(&ins[0])
+                        .context("Missing left operand for matmul")?;
+                    let rhs = self
+                        .values
+                        .get(&ins[1])
+                        .context("Missing right operand for matmul")?;
+                    let lhs_shape = graph
+                        .shapes
+                        .get(&ins[0])
+                        .context("Missing shape for matmul left operand")?;
+                    let rhs_shape = graph
+                        .shapes
+                        .get(&ins[1])
+                        .context("Missing shape for matmul right operand")?;
+
+                    anyhow::ensure!(
+                        lhs_shape.len() == 2,
+                        "MatMul expects 2D left operand, got {}D",
+                        lhs_shape.len()
+                    );
+                    anyhow::ensure!(
+                        rhs_shape.len() == 2,
+                        "MatMul expects 2D right operand, got {}D",
+                        rhs_shape.len()
+                    );
+
                     let m = lhs_shape[0];
                     let k = lhs_shape[1];
                     let n = rhs_shape[1];
-                    assert_eq!(k, rhs_shape[0], "MatMul inner dim mismatch");
+
+                    anyhow::ensure!(
+                        k == rhs_shape[0],
+                        "MatMul inner dimension mismatch: lhs has k={}, rhs has {}",
+                        k,
+                        rhs_shape[0]
+                    );
 
                     self.matmul(lhs, rhs, m, n, k)
                 }
                 TensorGraphNode::Parameter { data, .. } => {
-                    let v = data.lock().unwrap();
+                    let v = data
+                        .lock()
+                        .map_err(|e| anyhow!("Failed to lock parameter data: {}", e))?;
                     let _span =
                         trace_span!("parameter", node = node_idx.index(), size = v.len()).entered();
                     let stream = self.device.default_stream();
-                    let mut device_data = stream.alloc_zeros::<f32>(v.len()).unwrap();
-                    stream.memcpy_htod(v.as_slice(), &mut device_data).unwrap();
+                    let mut device_data = stream
+                        .alloc_zeros::<f32>(v.len())
+                        .context("Failed to allocate CUDA memory for parameter")?;
+                    stream
+                        .memcpy_htod(v.as_slice(), &mut device_data)
+                        .context("Failed to copy parameter to CUDA device")?;
                     device_data
                 }
                 TensorGraphNode::BroadcastAxis { axis } => {
                     let stream = self.device.default_stream();
                     let in_idx = graph.inputs(*node_idx)[0];
-                    let in_val = self.values.get(&in_idx).unwrap();
-                    let in_shape = graph.shapes.get(&in_idx).unwrap();
-                    let out_shape = graph.shapes.get(node_idx).unwrap();
+                    let in_val = self
+                        .values
+                        .get(&in_idx)
+                        .context("Missing input value for broadcast")?;
+                    let in_shape = graph
+                        .shapes
+                        .get(&in_idx)
+                        .context("Missing input shape for broadcast")?;
+                    let out_shape = graph
+                        .shapes
+                        .get(node_idx)
+                        .context("Missing output shape for broadcast")?;
                     let out_size: usize = out_shape.iter().product();
 
-                    assert_eq!(
+                    anyhow::ensure!(
+                        in_shape.len() == out_shape.len(),
+                        "BroadcastAxis requires matching rank, got input rank {} and output rank {}",
                         in_shape.len(),
-                        out_shape.len(),
-                        "BroadcastAxis requires matching rank"
+                        out_shape.len()
                     );
-                    assert_eq!(
-                        in_shape[*axis], 1,
-                        "BroadcastAxis requires input axis size to be 1"
+                    anyhow::ensure!(
+                        in_shape[*axis] == 1,
+                        "BroadcastAxis requires input axis {} size to be 1, got {}",
+                        axis,
+                        in_shape[*axis]
                     );
 
                     if out_shape.len() == 2 {
@@ -556,10 +625,15 @@ impl Executor<f32> for CudaExecutor {
                         let n = out_shape[1];
                         let m_u64 = m as u64;
                         let n_u64 = n as u64;
-                        let mut out = stream.alloc_zeros::<f32>(out_size).unwrap();
+                        let mut out = stream
+                            .alloc_zeros::<f32>(out_size)
+                            .context("Failed to allocate CUDA memory for broadcast output")?;
 
                         if *axis == 0 {
-                            let f = self.module.load_function("broadcast_row").unwrap();
+                            let f = self
+                                .module
+                                .load_function("broadcast_row")
+                                .context("Failed to load broadcast_row kernel")?;
                             let cfg = LaunchConfig::for_num_elems(n as u32);
                             let mut launcher = stream.launch_builder(&f);
                             launcher.arg(in_val);
@@ -567,9 +641,13 @@ impl Executor<f32> for CudaExecutor {
                             launcher.arg(&mut out);
                             launcher.arg(&m_u64);
                             launcher.arg(&n_u64);
-                            unsafe { launcher.launch(cfg) }.expect("CUDA broadcast_row failed");
+                            unsafe { launcher.launch(cfg) }
+                                .context("CUDA broadcast_row kernel launch failed")?;
                         } else if *axis == 1 {
-                            let f = self.module.load_function("broadcast_col").unwrap();
+                            let f = self
+                                .module
+                                .load_function("broadcast_col")
+                                .context("Failed to load broadcast_col kernel")?;
                             let cfg = LaunchConfig::for_num_elems(m as u32);
                             let mut launcher = stream.launch_builder(&f);
                             launcher.arg(in_val);
@@ -577,24 +655,50 @@ impl Executor<f32> for CudaExecutor {
                             launcher.arg(&mut out);
                             launcher.arg(&m_u64);
                             launcher.arg(&n_u64);
-                            unsafe { launcher.launch(cfg) }.expect("CUDA broadcast_col failed");
+                            unsafe { launcher.launch(cfg) }
+                                .context("CUDA broadcast_col kernel launch failed")?;
                         } else {
-                            panic!("BroadcastAxis axis out of bounds");
+                            anyhow::bail!(
+                                "BroadcastAxis axis {} out of bounds for 2D tensor",
+                                axis
+                            );
                         }
                         out
                     } else {
-                        panic!("BroadcastAxis currently only supports 2D tensors on GPU");
+                        anyhow::bail!(
+                            "BroadcastAxis currently only supports 2D tensors on GPU, got {}D",
+                            out_shape.len()
+                        );
                     }
                 }
                 TensorGraphNode::ReduceAxis { op, axis } => {
                     let in_idx = graph.inputs(*node_idx)[0];
-                    let x_device = self.values.get(&in_idx).unwrap();
-                    let in_shape = graph.shapes.get(&in_idx).unwrap();
-                    let out_shape = graph.shapes.get(node_idx).unwrap();
+                    let x_device = self
+                        .values
+                        .get(&in_idx)
+                        .context("Missing input value for reduce")?;
+                    let in_shape = graph
+                        .shapes
+                        .get(&in_idx)
+                        .context("Missing input shape for reduce")?;
+                    let out_shape = graph
+                        .shapes
+                        .get(node_idx)
+                        .context("Missing output shape for reduce")?;
                     let out_len: usize = out_shape.iter().product();
 
-                    assert_eq!(in_shape.len(), out_shape.len(), "ReduceAxis preserves rank");
-                    assert_eq!(out_shape[*axis], 1, "ReduceAxis output axis must be 1");
+                    anyhow::ensure!(
+                        in_shape.len() == out_shape.len(),
+                        "ReduceAxis preserves rank: input has {}D but output has {}D",
+                        in_shape.len(),
+                        out_shape.len()
+                    );
+                    anyhow::ensure!(
+                        out_shape[*axis] == 1,
+                        "ReduceAxis output axis {} must be 1, got {}",
+                        axis,
+                        out_shape[*axis]
+                    );
 
                     let stream = self.device.default_stream();
 
@@ -604,7 +708,9 @@ impl Executor<f32> for CudaExecutor {
                         let m_u64 = m as u64;
                         let n_u64 = n as u64;
                         let in_len_u64 = x_device.len() as u64;
-                        let mut out_device = stream.alloc_zeros::<f32>(out_len).unwrap();
+                        let mut out_device = stream
+                            .alloc_zeros::<f32>(out_len)
+                            .context("Failed to allocate CUDA memory for reduce output")?;
 
                         if *axis == 1 {
                             let kernel_name = match op {
@@ -612,7 +718,9 @@ impl Executor<f32> for CudaExecutor {
                                 tensor::ReduceOp::Max => "reduce_max_rows",
                                 tensor::ReduceOp::Mean => "reduce_mean_rows",
                             };
-                            let f = self.module.load_function(kernel_name).unwrap();
+                            let f = self.module.load_function(kernel_name).with_context(|| {
+                                format!("Failed to load {} kernel", kernel_name)
+                            })?;
                             let cfg = LaunchConfig::for_num_elems(m as u32);
                             let out_len_u64 = m_u64;
                             let mut launcher = stream.launch_builder(&f);
@@ -621,14 +729,18 @@ impl Executor<f32> for CudaExecutor {
                             launcher.arg(&mut out_device);
                             launcher.arg(&out_len_u64);
                             launcher.arg(&n_u64);
-                            unsafe { launcher.launch(cfg) }.expect("CUDA reduce rows failed");
+                            unsafe { launcher.launch(cfg) }.with_context(|| {
+                                format!("CUDA {} kernel launch failed", kernel_name)
+                            })?;
                         } else if *axis == 0 {
                             let kernel_name = match op {
                                 tensor::ReduceOp::Sum => "reduce_sum_cols",
                                 tensor::ReduceOp::Max => "reduce_max_cols",
                                 tensor::ReduceOp::Mean => "reduce_mean_cols",
                             };
-                            let f = self.module.load_function(kernel_name).unwrap();
+                            let f = self.module.load_function(kernel_name).with_context(|| {
+                                format!("Failed to load {} kernel", kernel_name)
+                            })?;
                             let cfg = LaunchConfig::for_num_elems(n as u32);
                             let out_len_u64 = n_u64;
                             let mut launcher = stream.launch_builder(&f);
@@ -637,28 +749,36 @@ impl Executor<f32> for CudaExecutor {
                             launcher.arg(&mut out_device);
                             launcher.arg(&m_u64);
                             launcher.arg(&out_len_u64);
-                            unsafe { launcher.launch(cfg) }.expect("CUDA reduce cols failed");
+                            unsafe { launcher.launch(cfg) }.with_context(|| {
+                                format!("CUDA {} kernel launch failed", kernel_name)
+                            })?;
                         } else {
-                            panic!("ReduceAxis axis out of bounds");
+                            anyhow::bail!("ReduceAxis axis {} out of bounds for 2D tensor", axis);
                         }
 
                         out_device
                     } else {
-                        panic!("ReduceAxis currently only supports 2D tensors on GPU");
+                        anyhow::bail!(
+                            "ReduceAxis currently only supports 2D tensors on GPU, got {}D",
+                            in_shape.len()
+                        );
                     }
                 }
             };
             self.values.insert(*node_idx, result);
         }
 
-        let last_node_idx = order.last().expect("Graph is empty");
-        let out_device = self.values.get(last_node_idx).expect("Output not found");
+        let last_node_idx = order.last().context("Graph is empty")?;
+        let out_device = self
+            .values
+            .get(last_node_idx)
+            .context("Output value not found after forward pass")?;
         let mut out_host = vec![0.0f32; out_device.len()];
         self.device
             .default_stream()
             .memcpy_dtoh(out_device, &mut out_host)
-            .unwrap();
-        out_host
+            .context("Failed to copy output from CUDA device to host")?;
+        Ok(out_host)
     }
 
     fn backward(
@@ -666,7 +786,7 @@ impl Executor<f32> for CudaExecutor {
         graph: &TensorGraph<f32>,
         loss_node: petgraph::graph::NodeIndex,
         seed_grad: Option<Vec<f32>>,
-    ) -> BackwardResult<f32> {
+    ) -> Result<BackwardResult<f32>> {
         let order = graph.toposort();
         let _bwd_span = trace_span!("backward", nodes = order.len()).entered();
 
@@ -677,11 +797,15 @@ impl Executor<f32> for CudaExecutor {
         let loss_shape = graph
             .shapes
             .get(&loss_node)
-            .expect("Loss node shape missing");
+            .context("Loss node shape missing")?;
         let seed = seed_grad.unwrap_or_else(|| vec![1.0f32; loss_shape.iter().product()]);
         let stream = self.device.default_stream();
-        let mut seed_gpu = stream.alloc_zeros::<f32>(seed.len()).unwrap();
-        stream.memcpy_htod(&seed, &mut seed_gpu).unwrap();
+        let mut seed_gpu = stream
+            .alloc_zeros::<f32>(seed.len())
+            .context("Failed to allocate CUDA memory for seed gradient")?;
+        stream
+            .memcpy_htod(&seed, &mut seed_gpu)
+            .context("Failed to copy seed gradient to CUDA device")?;
         self.grads.insert(loss_node, seed_gpu);
 
         // Backward pass in reverse topological order
@@ -702,7 +826,7 @@ impl Executor<f32> for CudaExecutor {
                     self.device
                         .default_stream()
                         .memcpy_dtoh(dy, &mut grad_host)
-                        .unwrap();
+                        .context("Failed to copy parameter gradient from CUDA device")?;
                     param_grads
                         .entry(*id)
                         .and_modify(|g| {
@@ -717,15 +841,24 @@ impl Executor<f32> for CudaExecutor {
                     let dx = match op {
                         tensor::UnaryOp::Neg => self.neg_grad(dy),
                         tensor::UnaryOp::Exp => {
-                            let y = self.values.get(&node_idx).unwrap();
+                            let y = self
+                                .values
+                                .get(&node_idx)
+                                .context("Missing forward value for exp gradient")?;
                             self.exp_grad(dy, y)
                         }
                         tensor::UnaryOp::Log => {
-                            let x = self.values.get(&x_idx).unwrap();
+                            let x = self
+                                .values
+                                .get(&x_idx)
+                                .context("Missing forward value for log gradient")?;
                             self.log_grad(dy, x)
                         }
                         tensor::UnaryOp::Relu => {
-                            let x = self.values.get(&x_idx).unwrap();
+                            let x = self
+                                .values
+                                .get(&x_idx)
+                                .context("Missing forward value for relu gradient")?;
                             self.relu_grad(dy, x)
                         }
                     };
@@ -736,20 +869,29 @@ impl Executor<f32> for CudaExecutor {
                     let a_idx = ins[0];
                     let b_idx = ins[1];
 
-                    let (da, db) = match op {
-                        tensor::BinaryOp::Add => self.add_grad(dy),
-                        tensor::BinaryOp::Sub => self.sub_grad(dy),
-                        tensor::BinaryOp::Mul => {
-                            let a_val = self.values.get(&a_idx).unwrap();
-                            let b_val = self.values.get(&b_idx).unwrap();
-                            self.mul_grad(dy, a_val, b_val)
-                        }
-                        tensor::BinaryOp::Div => {
-                            let a_val = self.values.get(&a_idx).unwrap();
-                            let b_val = self.values.get(&b_idx).unwrap();
-                            self.div_grad(dy, a_val, b_val)
-                        }
-                    };
+                    let (da, db) =
+                        match op {
+                            tensor::BinaryOp::Add => self.add_grad(dy),
+                            tensor::BinaryOp::Sub => self.sub_grad(dy),
+                            tensor::BinaryOp::Mul => {
+                                let a_val = self.values.get(&a_idx).context(
+                                    "Missing left operand forward value for mul gradient",
+                                )?;
+                                let b_val = self.values.get(&b_idx).context(
+                                    "Missing right operand forward value for mul gradient",
+                                )?;
+                                self.mul_grad(dy, a_val, b_val)
+                            }
+                            tensor::BinaryOp::Div => {
+                                let a_val = self.values.get(&a_idx).context(
+                                    "Missing left operand forward value for div gradient",
+                                )?;
+                                let b_val = self.values.get(&b_idx).context(
+                                    "Missing right operand forward value for div gradient",
+                                )?;
+                                self.div_grad(dy, a_val, b_val)
+                            }
+                        };
 
                     self.accumulate_grad_gpu(a_idx, da);
                     self.accumulate_grad_gpu(b_idx, db);
@@ -759,10 +901,22 @@ impl Executor<f32> for CudaExecutor {
                     let ins = graph.inputs(node_idx);
                     let a_idx = ins[0];
                     let b_idx = ins[1];
-                    let a_val = self.values.get(&a_idx).unwrap();
-                    let b_val = self.values.get(&b_idx).unwrap();
-                    let a_shape = graph.shapes.get(&a_idx).unwrap();
-                    let b_shape = graph.shapes.get(&b_idx).unwrap();
+                    let a_val = self
+                        .values
+                        .get(&a_idx)
+                        .context("Missing left operand forward value for matmul gradient")?;
+                    let b_val = self
+                        .values
+                        .get(&b_idx)
+                        .context("Missing right operand forward value for matmul gradient")?;
+                    let a_shape = graph
+                        .shapes
+                        .get(&a_idx)
+                        .context("Missing left operand shape for matmul gradient")?;
+                    let b_shape = graph
+                        .shapes
+                        .get(&b_idx)
+                        .context("Missing right operand shape for matmul gradient")?;
 
                     let m = a_shape[0];
                     let n = b_shape[1];
@@ -775,8 +929,14 @@ impl Executor<f32> for CudaExecutor {
                 }
                 TensorGraphNode::BroadcastAxis { axis } => {
                     let x_idx = graph.inputs(node_idx)[0];
-                    let x_shape = graph.shapes.get(&x_idx).unwrap();
-                    let y_shape = graph.shapes.get(&node_idx).unwrap();
+                    let x_shape = graph
+                        .shapes
+                        .get(&x_idx)
+                        .context("Missing input shape for broadcast backward")?;
+                    let y_shape = graph
+                        .shapes
+                        .get(&node_idx)
+                        .context("Missing output shape for broadcast backward")?;
 
                     if x_shape.len() == 2 {
                         let m = y_shape[0];
@@ -787,10 +947,15 @@ impl Executor<f32> for CudaExecutor {
 
                         let stream = self.device.default_stream();
                         let out_len = x_shape.iter().product();
-                        let mut dx = stream.alloc_zeros::<f32>(out_len).unwrap();
+                        let mut dx = stream
+                            .alloc_zeros::<f32>(out_len)
+                            .context("Failed to allocate CUDA memory for broadcast backward")?;
 
                         if *axis == 1 {
-                            let f = self.module.load_function("reduce_sum_rows").unwrap();
+                            let f = self
+                                .module
+                                .load_function("reduce_sum_rows")
+                                .context("Failed to load reduce_sum_rows kernel")?;
                             let cfg = LaunchConfig::for_num_elems(m as u32);
                             let out_len_u64 = m_u64;
                             let mut launcher = stream.launch_builder(&f);
@@ -799,9 +964,14 @@ impl Executor<f32> for CudaExecutor {
                             launcher.arg(&mut dx);
                             launcher.arg(&out_len_u64);
                             launcher.arg(&n_u64);
-                            unsafe { launcher.launch(cfg) }.expect("CUDA reduce rows failed");
+                            unsafe { launcher.launch(cfg) }.context(
+                                "CUDA reduce_sum_rows kernel launch failed in broadcast backward",
+                            )?;
                         } else if *axis == 0 {
-                            let f = self.module.load_function("reduce_sum_cols").unwrap();
+                            let f = self
+                                .module
+                                .load_function("reduce_sum_cols")
+                                .context("Failed to load reduce_sum_cols kernel")?;
                             let cfg = LaunchConfig::for_num_elems(n as u32);
                             let out_len_u64 = n_u64;
                             let mut launcher = stream.launch_builder(&f);
@@ -810,19 +980,30 @@ impl Executor<f32> for CudaExecutor {
                             launcher.arg(&mut dx);
                             launcher.arg(&m_u64);
                             launcher.arg(&out_len_u64);
-                            unsafe { launcher.launch(cfg) }.expect("CUDA reduce cols failed");
+                            unsafe { launcher.launch(cfg) }.context(
+                                "CUDA reduce_sum_cols kernel launch failed in broadcast backward",
+                            )?;
                         } else {
-                            panic!("BroadcastAxis backward: axis out of bounds");
+                            anyhow::bail!(
+                                "BroadcastAxis backward: axis {} out of bounds for 2D tensor",
+                                axis
+                            );
                         }
 
                         self.accumulate_grad_gpu(x_idx, dx);
                     } else {
-                        panic!("BroadcastAxis backward currently only supports 2D tensors on GPU");
+                        anyhow::bail!(
+                            "BroadcastAxis backward currently only supports 2D tensors on GPU, got {}D",
+                            x_shape.len()
+                        );
                     }
                 }
                 TensorGraphNode::ReduceAxis { op, axis } => {
                     let x_idx = graph.inputs(node_idx)[0];
-                    let x_shape = graph.shapes.get(&x_idx).unwrap();
+                    let x_shape = graph
+                        .shapes
+                        .get(&x_idx)
+                        .context("Missing input shape for reduce backward")?;
 
                     match op {
                         tensor::ReduceOp::Sum => {
@@ -833,10 +1014,15 @@ impl Executor<f32> for CudaExecutor {
                                 let n_u64 = n as u64;
                                 let stream = self.device.default_stream();
                                 let out_size = x_shape.iter().product();
-                                let mut dx = stream.alloc_zeros::<f32>(out_size).unwrap();
+                                let mut dx = stream.alloc_zeros::<f32>(out_size).context(
+                                    "Failed to allocate CUDA memory for reduce sum backward",
+                                )?;
 
                                 if *axis == 0 {
-                                    let f = self.module.load_function("broadcast_row").unwrap();
+                                    let f = self
+                                        .module
+                                        .load_function("broadcast_row")
+                                        .context("Failed to load broadcast_row kernel")?;
                                     let cfg = LaunchConfig::for_num_elems(n as u32);
                                     let mut launcher = stream.launch_builder(&f);
                                     launcher.arg(dy);
@@ -845,9 +1031,12 @@ impl Executor<f32> for CudaExecutor {
                                     launcher.arg(&m_u64);
                                     launcher.arg(&n_u64);
                                     unsafe { launcher.launch(cfg) }
-                                        .expect("CUDA broadcast_row failed");
+                                        .context("CUDA broadcast_row kernel launch failed in reduce sum backward")?;
                                 } else if *axis == 1 {
-                                    let f = self.module.load_function("broadcast_col").unwrap();
+                                    let f = self
+                                        .module
+                                        .load_function("broadcast_col")
+                                        .context("Failed to load broadcast_col kernel")?;
                                     let cfg = LaunchConfig::for_num_elems(m as u32);
                                     let mut launcher = stream.launch_builder(&f);
                                     launcher.arg(dy);
@@ -856,15 +1045,19 @@ impl Executor<f32> for CudaExecutor {
                                     launcher.arg(&m_u64);
                                     launcher.arg(&n_u64);
                                     unsafe { launcher.launch(cfg) }
-                                        .expect("CUDA broadcast_col failed");
+                                        .context("CUDA broadcast_col kernel launch failed in reduce sum backward")?;
                                 } else {
-                                    panic!("ReduceAxis backward: axis out of bounds");
+                                    anyhow::bail!(
+                                        "ReduceAxis backward: axis {} out of bounds for 2D tensor",
+                                        axis
+                                    );
                                 }
 
                                 self.accumulate_grad_gpu(x_idx, dx);
                             } else {
-                                panic!(
-                                    "ReduceAxis backward currently only supports 2D tensors on GPU"
+                                anyhow::bail!(
+                                    "ReduceAxis backward currently only supports 2D tensors on GPU, got {}D",
+                                    x_shape.len()
                                 );
                             }
                         }
@@ -873,7 +1066,7 @@ impl Executor<f32> for CudaExecutor {
                             self.device
                                 .default_stream()
                                 .memcpy_dtoh(dy, &mut dy_host)
-                                .unwrap();
+                                .context("Failed to copy gradient from CUDA device for reduce mean backward")?;
                             let mut y_aligned_shape = x_shape.clone();
                             y_aligned_shape[*axis] = 1;
                             let mut dx_host = crate::expand_to(&dy_host, &y_aligned_shape, x_shape);
@@ -882,15 +1075,23 @@ impl Executor<f32> for CudaExecutor {
                                 *v /= axis_size as f32;
                             }
                             let stream = self.device.default_stream();
-                            let mut dx = stream.alloc_zeros::<f32>(dx_host.len()).unwrap();
-                            stream.memcpy_htod(&dx_host, &mut dx).unwrap();
+                            let mut dx = stream.alloc_zeros::<f32>(dx_host.len()).context(
+                                "Failed to allocate CUDA memory for reduce mean backward",
+                            )?;
+                            stream.memcpy_htod(&dx_host, &mut dx).context(
+                                "Failed to copy gradient to CUDA device for reduce mean backward",
+                            )?;
                             self.accumulate_grad_gpu(x_idx, dx);
                         }
                         tensor::ReduceOp::Max => {
                             let zeros = vec![0.0f32; x_shape.iter().product()];
                             let stream = self.device.default_stream();
-                            let mut dx = stream.alloc_zeros::<f32>(zeros.len()).unwrap();
-                            stream.memcpy_htod(&zeros, &mut dx).unwrap();
+                            let mut dx = stream.alloc_zeros::<f32>(zeros.len()).context(
+                                "Failed to allocate CUDA memory for reduce max backward",
+                            )?;
+                            stream.memcpy_htod(&zeros, &mut dx).context(
+                                "Failed to copy zeros to CUDA device for reduce max backward",
+                            )?;
                             self.accumulate_grad_gpu(x_idx, dx);
                         }
                     }
@@ -899,12 +1100,15 @@ impl Executor<f32> for CudaExecutor {
         }
 
         // Get final loss value from GPU
-        let loss_gpu = self.values.get(&loss_node).unwrap();
+        let loss_gpu = self
+            .values
+            .get(&loss_node)
+            .context("Loss value not found after backward pass")?;
         let mut loss_value = vec![0.0f32; loss_gpu.len()];
         self.device
             .default_stream()
             .memcpy_dtoh(loss_gpu, &mut loss_value)
-            .unwrap();
+            .context("Failed to copy loss value from CUDA device")?;
 
         // Convert GPU gradients to host
         let mut grads_by_node = HashMap::new();
@@ -913,15 +1117,15 @@ impl Executor<f32> for CudaExecutor {
             self.device
                 .default_stream()
                 .memcpy_dtoh(&grad_gpu, &mut grad_host)
-                .unwrap();
+                .context("Failed to copy gradient from CUDA device")?;
             grads_by_node.insert(node_idx, grad_host);
         }
 
-        BackwardResult {
+        Ok(BackwardResult {
             grads_by_node,
             grads_by_param: param_grads,
             loss_value,
-        }
+        })
     }
 }
 
@@ -940,9 +1144,9 @@ mod tests {
 
     macro_rules! assert_approx_eq {
         ($a:expr, $b:expr) => {
-            if $a
+            if (&$a)
                 .iter()
-                .zip($b.iter())
+                .zip((&$b).iter())
                 .any(|(a, b)| (a - b).abs() > EPSILON)
             {
                 panic!(
@@ -1000,7 +1204,7 @@ mod tests {
         node.lower_to_graph(&mut graph);
 
         let mut exec = CudaExecutor::new();
-        let result = exec.forward(&graph, Default::default());
+        let result = exec.forward(&graph, Default::default()).unwrap();
 
         assert_approx_eq!(result, expected);
     }
@@ -1058,7 +1262,7 @@ mod tests {
         node.lower_to_graph(&mut graph);
 
         let mut exec = CudaExecutor::new();
-        let result = exec.forward(&graph, Default::default());
+        let result = exec.forward(&graph, Default::default()).unwrap();
 
         assert_approx_eq!(result, expected);
     }
@@ -1073,10 +1277,10 @@ mod tests {
         node.lower_to_graph(&mut graph);
 
         let mut cpu = SimpleExecutor::new();
-        let expected = cpu.forward(&graph, Default::default());
+        let expected = cpu.forward(&graph, Default::default()).unwrap();
 
         let mut cuda = CudaExecutor::new();
-        let result = cuda.forward(&graph, Default::default());
+        let result = cuda.forward(&graph, Default::default()).unwrap();
 
         assert_approx_eq!(result, expected);
     }
@@ -1090,10 +1294,10 @@ mod tests {
         node.lower_to_graph(&mut graph);
 
         let mut cpu = SimpleExecutor::new();
-        let expected = cpu.forward(&graph, Default::default());
+        let expected = cpu.forward(&graph, Default::default()).unwrap();
 
         let mut cuda = CudaExecutor::new();
-        let result = cuda.forward(&graph, Default::default());
+        let result = cuda.forward(&graph, Default::default()).unwrap();
 
         assert_approx_eq!(result, expected);
     }
@@ -1107,10 +1311,10 @@ mod tests {
         node.lower_to_graph(&mut graph);
 
         let mut cpu = SimpleExecutor::new();
-        let expected = cpu.forward(&graph, Default::default());
+        let expected = cpu.forward(&graph, Default::default()).unwrap();
 
         let mut cuda = CudaExecutor::new();
-        let result = cuda.forward(&graph, Default::default());
+        let result = cuda.forward(&graph, Default::default()).unwrap();
 
         assert_approx_eq!(result, expected);
     }
@@ -1124,10 +1328,10 @@ mod tests {
         node.lower_to_graph(&mut graph);
 
         let mut cpu = SimpleExecutor::new();
-        let expected = cpu.forward(&graph, Default::default());
+        let expected = cpu.forward(&graph, Default::default()).unwrap();
 
         let mut cuda = CudaExecutor::new();
-        let result = cuda.forward(&graph, Default::default());
+        let result = cuda.forward(&graph, Default::default()).unwrap();
 
         assert_approx_eq!(result, expected);
     }
@@ -1141,17 +1345,17 @@ mod tests {
         let mut g1 = TensorGraph::new();
         node_max_r.lower_to_graph(&mut g1);
         let mut cpu = SimpleExecutor::new();
-        let exp1 = cpu.forward(&g1, Default::default());
+        let exp1 = cpu.forward(&g1, Default::default()).unwrap();
         let mut cuda = CudaExecutor::new();
-        let res1 = cuda.forward(&g1, Default::default());
+        let res1 = cuda.forward(&g1, Default::default()).unwrap();
         assert_approx_eq!(res1, exp1);
 
         // max axis 0
         let node_max_c = TensorExpr::from(a.clone()).reduce_max(0);
         let mut g2 = TensorGraph::new();
         node_max_c.lower_to_graph(&mut g2);
-        let exp2 = cpu.forward(&g2, Default::default());
-        let res2 = cuda.forward(&g2, Default::default());
+        let exp2 = cpu.forward(&g2, Default::default()).unwrap();
+        let res2 = cuda.forward(&g2, Default::default()).unwrap();
         assert_approx_eq!(res2, exp2);
 
         // mean axis 1
@@ -1159,8 +1363,8 @@ mod tests {
         let node_mean_r = TensorExpr::from(a3.clone()).reduce_mean(1);
         let mut g3 = TensorGraph::new();
         node_mean_r.lower_to_graph(&mut g3);
-        let exp3 = cpu.forward(&g3, Default::default());
-        let res3 = cuda.forward(&g3, Default::default());
+        let exp3 = cpu.forward(&g3, Default::default()).unwrap();
+        let res3 = cuda.forward(&g3, Default::default()).unwrap();
         assert_approx_eq!(res3, exp3);
 
         // mean all via mean_all()
@@ -1168,8 +1372,8 @@ mod tests {
         let node_mean_all = TensorExpr::from(a4).mean_all();
         let mut g4 = TensorGraph::new();
         node_mean_all.lower_to_graph(&mut g4);
-        let exp4 = cpu.forward(&g4, Default::default());
-        let res4 = cuda.forward(&g4, Default::default());
+        let exp4 = cpu.forward(&g4, Default::default()).unwrap();
+        let res4 = cuda.forward(&g4, Default::default()).unwrap();
         assert_approx_eq!(res4, exp4);
     }
 
@@ -1180,10 +1384,10 @@ mod tests {
         p.lower_to_graph(&mut g);
 
         let mut cpu = SimpleExecutor::new();
-        let exp = cpu.forward(&g, Default::default());
+        let exp = cpu.forward(&g, Default::default()).unwrap();
 
         let mut cuda = CudaExecutor::new();
-        let res = cuda.forward(&g, Default::default());
+        let res = cuda.forward(&g, Default::default()).unwrap();
 
         assert_approx_eq!(res, exp);
     }
@@ -1197,10 +1401,10 @@ mod tests {
         node.lower_to_graph(&mut g);
 
         let mut cpu = SimpleExecutor::new();
-        let exp = cpu.forward(&g, Default::default());
+        let exp = cpu.forward(&g, Default::default()).unwrap();
 
         let mut cuda = CudaExecutor::new();
-        let res = cuda.forward(&g, Default::default());
+        let res = cuda.forward(&g, Default::default()).unwrap();
 
         assert_approx_eq!(res, exp);
     }
@@ -1214,10 +1418,10 @@ mod tests {
         node.lower_to_graph(&mut g);
 
         let mut cpu = SimpleExecutor::new();
-        let exp = cpu.forward(&g, Default::default());
+        let exp = cpu.forward(&g, Default::default()).unwrap();
 
         let mut cuda = CudaExecutor::new();
-        let res = cuda.forward(&g, Default::default());
+        let res = cuda.forward(&g, Default::default()).unwrap();
 
         assert_approx_eq!(res, exp);
     }
@@ -1231,10 +1435,10 @@ mod tests {
         node.lower_to_graph(&mut g);
 
         let mut cpu = SimpleExecutor::new();
-        let exp = cpu.forward(&g, Default::default());
+        let exp = cpu.forward(&g, Default::default()).unwrap();
 
         let mut cuda = CudaExecutor::new();
-        let res = cuda.forward(&g, Default::default());
+        let res = cuda.forward(&g, Default::default()).unwrap();
 
         assert_approx_eq!(res, exp);
     }
@@ -1273,13 +1477,13 @@ mod tests {
 
         // Test with CPU first
         let mut cpu = SimpleExecutor::new();
-        cpu.forward(&graph, inputs.clone());
-        let cpu_result = cpu.backward(&graph, mul_node, Some(vec![1.0f32]));
+        cpu.forward(&graph, inputs.clone()).unwrap();
+        let cpu_result = cpu.backward(&graph, mul_node, Some(vec![1.0f32])).unwrap();
 
         // Test with CUDA
         let mut cuda = CudaExecutor::new();
-        cuda.forward(&graph, inputs.clone());
-        let cuda_result = cuda.backward(&graph, mul_node, Some(vec![1.0f32]));
+        cuda.forward(&graph, inputs.clone()).unwrap();
+        let cuda_result = cuda.backward(&graph, mul_node, Some(vec![1.0f32])).unwrap();
 
         // Check that gradients match
         assert_eq!(
@@ -1292,8 +1496,8 @@ mod tests {
         let cuda_grad = cuda_result.grads_by_param.get(&param_id).unwrap();
 
         // Gradient of x^2 at x=2 should be 2*x = 4
-        assert_approx_eq!(*cpu_grad, vec![4.0f32]);
-        assert_approx_eq!(*cuda_grad, vec![4.0f32]);
+        assert_approx_eq!(*cpu_grad, &[4.0f32]);
+        assert_approx_eq!(*cuda_grad, &[4.0f32]);
 
         // Check loss values match
         assert_approx_eq!(cpu_result.loss_value, cuda_result.loss_value);
@@ -1313,13 +1517,17 @@ mod tests {
 
         // Test with CPU first
         let mut cpu = SimpleExecutor::new();
-        cpu.forward(&graph, Default::default());
-        let cpu_result = cpu.backward(&graph, loss_node, Some(vec![1.0f32, 1.0]));
+        cpu.forward(&graph, Default::default()).unwrap();
+        let cpu_result = cpu
+            .backward(&graph, loss_node, Some(vec![1.0f32, 1.0]))
+            .unwrap();
 
         // Test with CUDA
         let mut cuda = CudaExecutor::new();
-        cuda.forward(&graph, Default::default());
-        let cuda_result = cuda.backward(&graph, loss_node, Some(vec![1.0f32, 1.0]));
+        cuda.forward(&graph, Default::default()).unwrap();
+        let cuda_result = cuda
+            .backward(&graph, loss_node, Some(vec![1.0f32, 1.0]))
+            .unwrap();
 
         // Check that results match
         assert_approx_eq!(cpu_result.loss_value, cuda_result.loss_value);
@@ -1352,13 +1560,15 @@ mod tests {
 
         // Test with CPU first
         let mut cpu = SimpleExecutor::new();
-        cpu.forward(&graph, inputs.clone());
-        let cpu_result = cpu.backward(&graph, loss_node, Some(seed_grad.clone()));
+        cpu.forward(&graph, inputs.clone()).unwrap();
+        let cpu_result = cpu
+            .backward(&graph, loss_node, Some(seed_grad.clone()))
+            .unwrap();
 
         // Test with CUDA
         let mut cuda = CudaExecutor::new();
-        cuda.forward(&graph, inputs.clone());
-        let cuda_result = cuda.backward(&graph, loss_node, Some(seed_grad));
+        cuda.forward(&graph, inputs.clone()).unwrap();
+        let cuda_result = cuda.backward(&graph, loss_node, Some(seed_grad)).unwrap();
 
         // Check that gradients match
         assert_eq!(
@@ -1408,13 +1618,15 @@ mod tests {
 
         // Test with CPU first
         let mut cpu = SimpleExecutor::new();
-        cpu.forward(&graph, inputs.clone());
-        let cpu_result = cpu.backward(&graph, loss_node, Some(seed_grad.clone()));
+        cpu.forward(&graph, inputs.clone()).unwrap();
+        let cpu_result = cpu
+            .backward(&graph, loss_node, Some(seed_grad.clone()))
+            .unwrap();
 
         // Test with CUDA
         let mut cuda = CudaExecutor::new();
-        cuda.forward(&graph, inputs.clone());
-        let cuda_result = cuda.backward(&graph, loss_node, Some(seed_grad));
+        cuda.forward(&graph, inputs.clone()).unwrap();
+        let cuda_result = cuda.backward(&graph, loss_node, Some(seed_grad)).unwrap();
 
         // Check that gradients match
         assert_eq!(
@@ -1463,13 +1675,15 @@ mod tests {
 
         // Test with CPU first
         let mut cpu = SimpleExecutor::new();
-        cpu.forward(&graph, inputs.clone());
-        let cpu_result = cpu.backward(&graph, loss_node, Some(seed_grad.clone()));
+        cpu.forward(&graph, inputs.clone()).unwrap();
+        let cpu_result = cpu
+            .backward(&graph, loss_node, Some(seed_grad.clone()))
+            .unwrap();
 
         // Test with CUDA
         let mut cuda = CudaExecutor::new();
-        cuda.forward(&graph, inputs.clone());
-        let cuda_result = cuda.backward(&graph, loss_node, Some(seed_grad));
+        cuda.forward(&graph, inputs.clone()).unwrap();
+        let cuda_result = cuda.backward(&graph, loss_node, Some(seed_grad)).unwrap();
 
         // Check that gradients match
         assert_eq!(

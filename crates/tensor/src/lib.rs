@@ -1,3 +1,47 @@
+//! Tensor expression library providing lazy evaluation and automatic differentiation.
+//!
+//! This crate implements a **lazy evaluation** system for tensor computations. Graph construction
+//! is infallible by design—errors are deferred until execution time when graphs are lowered
+//! and executed.
+//!
+//! # Architecture
+//!
+//! The crate is organized into three main components:
+//!
+//! - **Expression Layer** (`TensorExpr`, `Input`, `Parameter`, `Constant`): High-level API for
+//!   building computation graphs. Operations like `+`, `*`, `matmul()`, and `broadcast()` construct
+//!   expression trees without performing any computation.
+//!
+//! - **Graph Layer** (`graph` module): Intermediate representation as a directed acyclic graph (DAG)
+//!   of operations. Expression trees are lowered to this representation for optimization and execution.
+//!
+//! - **Compilation Layer** (`ptx` module): PTX (CUDA assembly) code generation for GPU execution.
+//!
+//! # Design Principles
+//!
+//! - **Lazy Evaluation**: Expressions are built as immutable trees; no computation happens until
+//!   graphs are lowered and executed by a runtime executor.
+//!
+//! - **Deferred Validation**: Graph construction never fails. Shape mismatches, invalid operations,
+//!   and resource allocation errors are detected during lowering or execution.
+//!
+//! - **Explicit Broadcasting**: Users must call `.broadcast()` to adjust tensor shapes for operations
+//!   requiring matching dimensions (when `implicit_broadcast` feature is disabled).
+//!
+//! # Example
+//!
+//! ```rust
+//! use tensor::{TensorExpr, Parameter};
+//!
+//! // Build expression graph (infallible)
+//! let x = TensorExpr::<f32>::input("x", vec![64, 10]);
+//! let w = Parameter::new(vec![0.1; 100], vec![10, 10]);
+//! let y = x.matmul(w).relu();
+//!
+//! // Lowering and execution may fail (handled by runtime)
+//! // let result = executor.forward(&y, inputs)?;
+//! ```
+
 pub mod graph;
 pub mod ptx;
 pub mod tile;
@@ -16,13 +60,47 @@ use petgraph::graph::NodeIndex;
 
 static PARAM_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// Marker trait for supported data types in tensor operations.
+///
+/// Currently implemented for `f32`, `f64`, and `i32`.
 pub trait DType: Clone {}
 impl DType for f32 {}
 impl DType for f64 {}
 impl DType for i32 {}
 
+/// Type alias for tensor shapes represented as dimension vectors.
+///
+/// For example, `vec![2, 3, 4]` represents a 3D tensor with shape 2×3×4.
 pub type Shape = Vec<usize>;
 
+/// Compute the output shape when broadcasting two tensors.
+///
+/// Follows NumPy-style broadcasting rules: dimensions are compared from right to left,
+/// and are compatible if they are equal or one of them is 1.
+///
+/// # Arguments
+///
+/// * `a` - Shape of the first tensor
+/// * `b` - Shape of the second tensor
+///
+/// # Returns
+///
+/// The broadcasted output shape
+///
+/// # Panics
+///
+/// Panics if shapes are incompatible for broadcasting
+///
+/// # Example
+///
+/// ```
+/// use tensor::broadcast_output_shape;
+///
+/// let shape_a = vec![3, 1, 5];
+/// let shape_b = vec![1, 4, 5];
+/// let result = broadcast_output_shape(&shape_a, &shape_b);
+/// assert_eq!(result, vec![3, 4, 5]);
+/// ```
 pub fn broadcast_output_shape(a: &Shape, b: &Shape) -> Shape {
     let max_len = a.len().max(b.len());
     let mut out = Vec::with_capacity(max_len);
@@ -53,6 +131,18 @@ pub fn broadcast_output_shape(a: &Shape, b: &Shape) -> Shape {
     out
 }
 
+/// A constant tensor with fixed data known at graph construction time.
+///
+/// Constants are embedded directly into the computation graph and their values
+/// cannot change during training. Useful for non-trainable values like bias initializations.
+///
+/// # Example
+///
+/// ```
+/// use tensor::Constant;
+///
+/// let bias = Constant::new(vec![0.1, 0.2, 0.3], vec![3]);
+/// ```
 #[derive(Clone)]
 pub struct Constant<D: DType> {
     data: Arc<Vec<D>>,
@@ -80,6 +170,18 @@ impl<D: DType, R: Into<TensorExpr<D>>> Add<R> for Constant<D> {
     }
 }
 
+/// An input tensor whose data is provided at execution time.
+///
+/// Inputs represent external data fed into the computation graph (e.g., training batches,
+/// inference inputs). Values are supplied via the `inputs` parameter to [`Executor::forward`](crate::Executor::forward).
+///
+/// # Example
+///
+/// ```
+/// use tensor::{TensorExpr, Input};
+///
+/// let x = TensorExpr::<f32>::input("batch", vec![32, 784]);
+/// ```
 #[derive(Clone, Debug)]
 pub struct Input<D: DType> {
     name: &'static str,
@@ -101,29 +203,56 @@ impl<D: DType> Input<D> {
     }
 }
 
+/// Element-wise unary operations on tensors.
 #[derive(Clone, Debug)]
 pub enum UnaryOp {
+    /// Negation: `-x`
     Neg,
+    /// Exponential: `e^x`
     Exp,
+    /// Natural logarithm: `ln(x)`
     Log,
+    /// Rectified Linear Unit: `max(0, x)`
     Relu,
 }
 
+/// Element-wise binary operations on tensors.
 #[derive(Clone, Debug)]
 pub enum BinaryOp {
+    /// Addition: `a + b`
     Add,
+    /// Subtraction: `a - b`
     Sub,
+    /// Multiplication: `a * b`
     Mul,
+    /// Division: `a / b`
     Div,
 }
 
+/// Reduction operations along a tensor axis.
 #[derive(Clone, Debug)]
 pub enum ReduceOp {
+    /// Sum all elements along an axis
     Sum,
+    /// Maximum element along an axis
     Max,
+    /// Mean (average) of elements along an axis
     Mean,
 }
 
+/// A trainable parameter with mutable data updated during optimization.
+///
+/// Parameters are updated by optimizers based on computed gradients. Each parameter
+/// has a unique ID used to track gradients across the computation graph.
+///
+/// # Example
+///
+/// ```
+/// use tensor::Parameter;
+///
+/// let weights = Parameter::new(vec![0.1; 100], vec![10, 10]);
+/// let id = weights.id(); // Unique parameter ID
+/// ```
 #[derive(Clone)]
 pub struct Parameter<D: DType> {
     id: usize,
@@ -371,7 +500,7 @@ impl<D: DType> TensorExpr<D> {
             let mut padded_shape = vec![1; rank_diff];
             padded_shape.extend_from_slice(&current_shape);
             current_shape = padded_shape;
-            
+
             // Update the expression's shape to match the new rank
             result = Self(Arc::new(ExprNode {
                 shape: current_shape.clone(),

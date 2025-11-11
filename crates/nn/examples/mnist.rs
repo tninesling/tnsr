@@ -47,7 +47,11 @@ fn build_mlp_graph(
     b1: &Parameter<f32>,
     w2: &Parameter<f32>,
     b2: &Parameter<f32>,
-) -> (TensorGraph<f32>, tensor::graph::NodeIndex, tensor::graph::NodeIndex) {
+) -> (
+    TensorGraph<f32>,
+    tensor::graph::NodeIndex,
+    tensor::graph::NodeIndex,
+) {
     // Inputs
     let images = Input::<f32>::new("images", vec![batch, 784]);
     let labels = Input::<f32>::new("labels", vec![batch, 10]);
@@ -101,9 +105,9 @@ fn main() {
 
     // Parameters
     let w1 = Parameter::new(xavier_init(&mut rng, 784, 128), vec![784, 128]);
-    let b1 = Parameter::new(vec![0.0f32; 128], vec![128]);
+    let b1 = Parameter::new(vec![0.0f32; 128], vec![1, 128]);
     let w2 = Parameter::new(xavier_init(&mut rng, 128, 10), vec![128, 10]);
-    let b2 = Parameter::new(vec![0.0f32; 10], vec![10]);
+    let b2 = Parameter::new(vec![0.0f32; 10], vec![1, 10]);
 
     // Graph
     println!("Building computation graph...");
@@ -237,16 +241,16 @@ fn main() {
             let mut inputs = std::collections::HashMap::new();
             inputs.insert("images".to_string(), x);
             inputs.insert("labels".to_string(), dummy_labels);
-            
+
             // Forward pass through the unified graph
             exec.forward(&graph, inputs);
-            
+
             // Extract logits using get_value()
             #[cfg(feature = "cuda")]
             let logits = exec.get_value(logits_idx).unwrap();
             #[cfg(not(feature = "cuda"))]
             let logits = exec.get_value(logits_idx).unwrap().clone();
-            
+
             for i in 0..bs {
                 let row = &logits[i * 10..(i + 1) * 10];
                 let pred = row

@@ -16,7 +16,7 @@ use petgraph::graph::NodeIndex;
 
 static PARAM_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-pub trait DType {}
+pub trait DType: Clone {}
 impl DType for f32 {}
 impl DType for f64 {}
 impl DType for i32 {}
@@ -231,10 +231,11 @@ enum ExprKind<D: DType> {
         a: TensorExpr<D>,
         b: TensorExpr<D>,
     },
-    Broadcast {
+    BroadcastAxis {
         x: TensorExpr<D>,
-    }, // shape stored in node
-    Reduce {
+        axis: usize,
+    },
+    ReduceAxis {
         op: ReduceOp,
         x: TensorExpr<D>,
         axis: usize,
@@ -344,10 +345,10 @@ impl<D: DType> TensorExpr<D> {
 
     pub fn broadcast(self, to: Shape) -> Self
     where
-        D: 'static,
+        D: 'static + Clone,
     {
         // Validate broadcasting compatibility
-        let in_shape = self.shape();
+        let in_shape = self.shape().to_vec(); // Clone the shape to avoid borrowing issues
         if in_shape.len() > to.len() {
             panic!("Cannot broadcast to smaller rank");
         }
@@ -357,9 +358,106 @@ impl<D: DType> TensorExpr<D> {
                 panic!("Cannot broadcast dim {dim} -> {target_dim}");
             }
         }
+
+        // Decompose generic broadcast into per-axis broadcasts
+        // This allows us to use optimized CUDA kernels instead of reduce_like fallback
+        let mut result = self;
+        let mut current_shape = in_shape.clone();
+
+        // First, handle rank difference by prepending 1s (implicit dimensions)
+        if current_shape.len() < to.len() {
+            // Pad with 1s on the left to match target rank
+            let rank_diff = to.len() - current_shape.len();
+            let mut padded_shape = vec![1; rank_diff];
+            padded_shape.extend_from_slice(&current_shape);
+            current_shape = padded_shape;
+            
+            // Update the expression's shape to match the new rank
+            result = Self(Arc::new(ExprNode {
+                shape: current_shape.clone(),
+                kind: result.0.kind.clone(),
+            }));
+        }
+
+        // Broadcast each axis that differs
+        for axis in 0..to.len() {
+            if current_shape[axis] != to[axis] {
+                if current_shape[axis] != 1 {
+                    panic!(
+                        "Cannot broadcast axis {}: {} -> {}",
+                        axis, current_shape[axis], to[axis]
+                    );
+                }
+                result = result.broadcast_axis(axis, to[axis]);
+                current_shape[axis] = to[axis];
+            }
+        }
+
+        result
+    }
+
+    pub fn broadcast_axis(self, axis: usize, target_size: usize) -> Self
+    where
+        D: 'static,
+    {
+        let rank = self.shape().len();
+        assert!(axis < rank, "broadcast axis out of bounds");
+        assert_eq!(
+            self.shape()[axis],
+            1,
+            "can only broadcast axis of size 1, got {}",
+            self.shape()[axis]
+        );
+        let mut out_shape = self.shape().clone();
+        out_shape[axis] = target_size;
         Self(Arc::new(ExprNode {
-            shape: to,
-            kind: ExprKind::Broadcast { x: self },
+            shape: out_shape,
+            kind: ExprKind::BroadcastAxis { x: self, axis },
+        }))
+    }
+
+    pub fn reduce_axis_sum(self, axis: usize) -> Self {
+        let rank = self.shape().len();
+        assert!(axis < rank, "reduce axis out of bounds");
+        let mut out_shape = self.shape().clone();
+        out_shape[axis] = 1;
+        Self(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::ReduceAxis {
+                op: ReduceOp::Sum,
+                x: self,
+                axis,
+            },
+        }))
+    }
+
+    pub fn reduce_axis_mean(self, axis: usize) -> Self {
+        let rank = self.shape().len();
+        assert!(axis < rank, "reduce axis out of bounds");
+        let mut out_shape = self.shape().clone();
+        out_shape[axis] = 1;
+        Self(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::ReduceAxis {
+                op: ReduceOp::Mean,
+                x: self,
+                axis,
+            },
+        }))
+    }
+
+    pub fn reduce_axis_max(self, axis: usize) -> Self {
+        let rank = self.shape().len();
+        assert!(axis < rank, "reduce axis out of bounds");
+        let mut out_shape = self.shape().clone();
+        out_shape[axis] = 1;
+        Self(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::ReduceAxis {
+                op: ReduceOp::Max,
+                x: self,
+                axis,
+            },
         }))
     }
 
@@ -367,10 +465,10 @@ impl<D: DType> TensorExpr<D> {
         let rank = self.shape().len();
         assert!(axis < rank, "reduce axis out of bounds");
         let mut out_shape = self.shape().clone();
-        out_shape.remove(axis);
+        out_shape[axis] = 1;
         Self(Arc::new(ExprNode {
             shape: out_shape,
-            kind: ExprKind::Reduce {
+            kind: ExprKind::ReduceAxis {
                 op: ReduceOp::Sum,
                 x: self,
                 axis,
@@ -382,10 +480,10 @@ impl<D: DType> TensorExpr<D> {
         let rank = self.shape().len();
         assert!(axis < rank, "reduce axis out of bounds");
         let mut out_shape = self.shape().clone();
-        out_shape.remove(axis);
+        out_shape[axis] = 1;
         Self(Arc::new(ExprNode {
             shape: out_shape,
-            kind: ExprKind::Reduce {
+            kind: ExprKind::ReduceAxis {
                 op: ReduceOp::Mean,
                 x: self,
                 axis,
@@ -397,10 +495,10 @@ impl<D: DType> TensorExpr<D> {
         let rank = self.shape().len();
         assert!(axis < rank, "reduce axis out of bounds");
         let mut out_shape = self.shape().clone();
-        out_shape.remove(axis);
+        out_shape[axis] = 1;
         Self(Arc::new(ExprNode {
             shape: out_shape,
-            kind: ExprKind::Reduce {
+            kind: ExprKind::ReduceAxis {
                 op: ReduceOp::Max,
                 x: self,
                 axis,
@@ -410,8 +508,7 @@ impl<D: DType> TensorExpr<D> {
 
     pub fn mean_all(self) -> Self {
         let mut expr = self;
-        while !expr.shape().is_empty() {
-            let axis = expr.shape().len() - 1;
+        for axis in (0..expr.shape().len()).rev() {
             expr = expr.reduce_mean(axis);
         }
         expr
@@ -576,29 +673,20 @@ impl<D: DType> TensorExpr<D> {
                 ExprKind::Binary { op, a, b } => {
                     let a_idx = lower_rec(a, g);
                     let b_idx = lower_rec(b, g);
-                    // If implicit broadcasting is enabled and input shapes differ from out, insert broadcast nodes
+                    // Implicit broadcasting is not supported with the new axis-based broadcast system.
+                    // Users must explicitly broadcast operands to matching shapes before binary ops.
                     #[cfg(feature = "implicit_broadcast")]
-                    let a_idx = {
-                        if a.shape() != expr.shape() {
-                            let bnode = g.graph.add_node(TensorGraphNode::Broadcast);
-                            g.shapes.insert(bnode, expr.shape().clone());
-                            g.graph.add_edge(a_idx, bnode, 0);
-                            bnode
-                        } else {
-                            a_idx
+                    {
+                        if a.shape() != expr.shape() || b.shape() != expr.shape() {
+                            panic!(
+                                "Binary op requires matching shapes. Use .broadcast() explicitly.\n\
+                                 Left shape: {:?}, Right shape: {:?}, Output shape: {:?}",
+                                a.shape(),
+                                b.shape(),
+                                expr.shape()
+                            );
                         }
-                    };
-                    #[cfg(feature = "implicit_broadcast")]
-                    let b_idx = {
-                        if b.shape() != expr.shape() {
-                            let bnode = g.graph.add_node(TensorGraphNode::Broadcast);
-                            g.shapes.insert(bnode, expr.shape().clone());
-                            g.graph.add_edge(b_idx, bnode, 0);
-                            bnode
-                        } else {
-                            b_idx
-                        }
-                    };
+                    }
                     let node_idx = g.graph.add_node(op.clone().into());
                     g.shapes.insert(node_idx, expr.shape().clone());
                     g.graph.add_edge(a_idx, node_idx, 0);
@@ -614,16 +702,18 @@ impl<D: DType> TensorExpr<D> {
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
                 }
-                ExprKind::Broadcast { x } => {
+                ExprKind::BroadcastAxis { x, axis } => {
                     let x_idx = lower_rec(x, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::Broadcast);
+                    let node_idx = g
+                        .graph
+                        .add_node(TensorGraphNode::BroadcastAxis { axis: *axis });
                     g.shapes.insert(node_idx, expr.shape().clone());
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
-                ExprKind::Reduce { op, x, axis } => {
+                ExprKind::ReduceAxis { op, x, axis } => {
                     let x_idx = lower_rec(x, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::Reduce {
+                    let node_idx = g.graph.add_node(TensorGraphNode::ReduceAxis {
                         op: op.clone(),
                         axis: *axis,
                     });

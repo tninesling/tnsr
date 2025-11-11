@@ -56,6 +56,7 @@ pub trait Executor<D> {
     ) -> BackwardResult<D>;
 }
 
+#[derive(Default)]
 pub struct SimpleExecutor {
     values: HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
     grads: HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
@@ -63,10 +64,7 @@ pub struct SimpleExecutor {
 
 impl SimpleExecutor {
     pub fn new() -> Self {
-        SimpleExecutor {
-            values: HashMap::new(),
-            grads: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<&Vec<f32>> {
@@ -141,69 +139,34 @@ impl SimpleExecutor {
             .collect()
     }
 
-    fn add_grad(
-        &self,
-        dy: &[f32],
-        output_shape: &[usize],
-        a_shape: &[usize],
-        b_shape: &[usize],
-    ) -> (Vec<f32>, Vec<f32>) {
+    fn add_grad(&self, dy: &[f32]) -> (Vec<f32>, Vec<f32>) {
         let _span = trace_span!("add").entered();
-        let da = reduce_like(dy, output_shape, a_shape);
-        let db = reduce_like(dy, output_shape, b_shape);
-        (da, db)
+        (dy.to_vec(), dy.to_vec())
     }
 
-    fn sub_grad(
-        &self,
-        dy: &[f32],
-        output_shape: &[usize],
-        a_shape: &[usize],
-        b_shape: &[usize],
-    ) -> (Vec<f32>, Vec<f32>) {
+    fn sub_grad(&self, dy: &[f32]) -> (Vec<f32>, Vec<f32>) {
         let _span = trace_span!("sub").entered();
-        let da = reduce_like(dy, output_shape, a_shape);
-        let mut db = reduce_like(dy, output_shape, b_shape);
-        for v in db.iter_mut() {
-            *v = -*v;
-        }
+        let da = dy.to_vec();
+        let db = dy.iter().map(|v| -v).collect();
         (da, db)
     }
 
-    fn mul_grad(
-        &self,
-        dy: &[f32],
-        output_shape: &[usize],
-        a_shape: &[usize],
-        b_shape: &[usize],
-        a_val: &[f32],
-        b_val: &[f32],
-    ) -> (Vec<f32>, Vec<f32>) {
+    fn mul_grad(&self, dy: &[f32], a_val: &[f32], b_val: &[f32]) -> (Vec<f32>, Vec<f32>) {
         let _span = trace_span!("mul").entered();
-        let tmp_a: Vec<f32> = get_iter(dy)
+        let da: Vec<f32> = get_iter(dy)
             .zip(get_iter(b_val))
             .map(|(g, b)| g * b)
             .collect();
-        let tmp_b: Vec<f32> = get_iter(dy)
+        let db: Vec<f32> = get_iter(dy)
             .zip(get_iter(a_val))
             .map(|(g, a)| g * a)
             .collect();
-        let da = reduce_like(&tmp_a, output_shape, a_shape);
-        let db = reduce_like(&tmp_b, output_shape, b_shape);
         (da, db)
     }
 
-    fn div_grad(
-        &self,
-        dy: &[f32],
-        output_shape: &[usize],
-        a_shape: &[usize],
-        b_shape: &[usize],
-        a_val: &[f32],
-        b_val: &[f32],
-    ) -> (Vec<f32>, Vec<f32>) {
+    fn div_grad(&self, dy: &[f32], a_val: &[f32], b_val: &[f32]) -> (Vec<f32>, Vec<f32>) {
         let _span = trace_span!("div").entered();
-        let tmp_a: Vec<f32> = get_iter(dy)
+        let da: Vec<f32> = get_iter(dy)
             .zip(get_iter(b_val))
             .map(|(g, b)| g / b)
             .collect();
@@ -215,12 +178,10 @@ impl SimpleExecutor {
         for v in b_sq.iter_mut() {
             *v = *v * *v;
         }
-        let tmp_b: Vec<f32> = get_iter(&tmp_b)
+        let db: Vec<f32> = get_iter(&tmp_b)
             .zip(get_iter(&b_sq))
             .map(|(t, bsq)| t / bsq)
             .collect();
-        let da = reduce_like(&tmp_a, output_shape, a_shape);
-        let db = reduce_like(&tmp_b, output_shape, b_shape);
         (da, db)
     }
 }
@@ -272,19 +233,19 @@ impl Executor<f32> for SimpleExecutor {
                     let _span = trace_span!("matmul", node = node_idx.index()).entered();
                     matmul_forward(graph, &self.values, *node_idx)
                 }
-                TensorGraphNode::Broadcast => {
-                    let _span = trace_span!("broadcast", node = node_idx.index()).entered();
-                    broadcast_forward(graph, &self.values, *node_idx)
+                TensorGraphNode::BroadcastAxis { axis } => {
+                    let _span = trace_span!("broadcast_axis", node = node_idx.index()).entered();
+                    broadcast_axis_forward(graph, &self.values, *node_idx, *axis)
                 }
-                TensorGraphNode::Reduce { op, axis } => {
+                TensorGraphNode::ReduceAxis { op, axis } => {
                     let _span = trace_span!(
-                        "reduce",
+                        "reduce_axis",
                         op = node.name(),
                         axis = *axis,
                         node = node_idx.index()
                     )
                     .entered();
-                    reduce_forward(graph, &self.values, *node_idx, op, *axis)
+                    reduce_axis_forward(graph, &self.values, *node_idx, op, *axis)
                 }
             };
             self.values.insert(*node_idx, result);
@@ -351,25 +312,14 @@ impl Executor<f32> for SimpleExecutor {
                         let ins = graph.inputs(node_idx);
                         let a_idx = ins[0];
                         let b_idx = ins[1];
-                        let a_shape = graph.shapes.get(&a_idx).unwrap();
-                        let b_shape = graph.shapes.get(&b_idx).unwrap();
                         let a_val = self.values.get(&a_idx).unwrap();
                         let b_val = self.values.get(&b_idx).unwrap();
-                        let output_shape = graph.shapes.get(&node_idx).unwrap();
 
                         let (da, db) = match op {
-                            tensor::BinaryOp::Add => {
-                                self.add_grad(&dy, output_shape, a_shape, b_shape)
-                            }
-                            tensor::BinaryOp::Sub => {
-                                self.sub_grad(&dy, output_shape, a_shape, b_shape)
-                            }
-                            tensor::BinaryOp::Mul => {
-                                self.mul_grad(&dy, output_shape, a_shape, b_shape, a_val, b_val)
-                            }
-                            tensor::BinaryOp::Div => {
-                                self.div_grad(&dy, output_shape, a_shape, b_shape, a_val, b_val)
-                            }
+                            tensor::BinaryOp::Add => self.add_grad(&dy),
+                            tensor::BinaryOp::Sub => self.sub_grad(&dy),
+                            tensor::BinaryOp::Mul => self.mul_grad(&dy, a_val, b_val),
+                            tensor::BinaryOp::Div => self.div_grad(&dy, a_val, b_val),
                         };
                         accumulate_grad(&mut self.grads, a_idx, da);
                         accumulate_grad(&mut self.grads, b_idx, db);
@@ -392,17 +342,17 @@ impl Executor<f32> for SimpleExecutor {
                         accumulate_grad(&mut self.grads, a_idx, da);
                         accumulate_grad(&mut self.grads, b_idx, db);
                     }
-                    TensorGraphNode::Broadcast => {
-                        let _span = trace_span!("broadcast", node = node_idx.index()).entered();
+                    TensorGraphNode::BroadcastAxis { axis } => {
+                        let _span =
+                            trace_span!("broadcast_axis", node = node_idx.index()).entered();
                         let x_idx = graph.inputs(node_idx)[0];
-                        let x_shape = graph.shapes.get(&x_idx).unwrap();
                         let y_shape = graph.shapes.get(&node_idx).unwrap();
-                        let dx = reduce_like(&dy, y_shape, x_shape);
+                        let dx = broadcast_axis_backward(&dy, y_shape, *axis);
                         accumulate_grad(&mut self.grads, x_idx, dx);
                     }
-                    TensorGraphNode::Reduce { op, axis } => {
+                    TensorGraphNode::ReduceAxis { op, axis } => {
                         let _span = trace_span!(
-                            "reduce",
+                            "reduce_axis",
                             op = node.name(),
                             axis = *axis,
                             node = node_idx.index()
@@ -410,17 +360,15 @@ impl Executor<f32> for SimpleExecutor {
                         .entered();
                         let x_idx = graph.inputs(node_idx)[0];
                         let x_shape = graph.shapes.get(&x_idx).unwrap();
+                        let y_shape = graph.shapes.get(&node_idx).unwrap();
                         match op {
                             tensor::ReduceOp::Sum => {
-                                let mut y_aligned_shape = x_shape.clone();
-                                y_aligned_shape[*axis] = 1;
-                                let dx = expand_to(&dy, &y_aligned_shape, x_shape);
+                                let dx = reduce_axis_backward(&dy, y_shape, *axis, x_shape[*axis]);
                                 accumulate_grad(&mut self.grads, x_idx, dx);
                             }
                             tensor::ReduceOp::Mean => {
-                                let mut y_aligned_shape = x_shape.clone();
-                                y_aligned_shape[*axis] = 1;
-                                let mut dx = expand_to(&dy, &y_aligned_shape, x_shape);
+                                let mut dx =
+                                    reduce_axis_backward(&dy, y_shape, *axis, x_shape[*axis]);
                                 let axis_size = x_shape[*axis];
                                 for v in dx.iter_mut() {
                                     *v /= axis_size as f32;
@@ -428,7 +376,6 @@ impl Executor<f32> for SimpleExecutor {
                                 accumulate_grad(&mut self.grads, x_idx, dx);
                             }
                             tensor::ReduceOp::Max => {
-                                // For max, gradient goes to the element that was the maximum
                                 accumulate_grad(
                                     &mut self.grads,
                                     x_idx,
@@ -461,154 +408,6 @@ fn rowmajor_strides(shape: &[usize]) -> Vec<usize> {
         s[i] = s[i + 1] * shape[i + 1];
     }
     s
-}
-
-fn broadcast_forward(
-    graph: &TensorGraph<f32>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
-    node_idx: petgraph::graph::NodeIndex,
-) -> Vec<f32> {
-    let in_idx = graph.inputs(node_idx)[0];
-    let in_val = values.get(&in_idx).unwrap();
-    let in_shape = graph.shapes.get(&in_idx).unwrap();
-    let out_shape = graph.shapes.get(&node_idx).unwrap();
-    let out_size: usize = out_shape.iter().product();
-    let in_rank = in_shape.len();
-    let out_rank = out_shape.len();
-    let out_strides = rowmajor_strides(out_shape);
-    let in_strides = rowmajor_strides(in_shape);
-
-    #[cfg(feature = "parallel")]
-    {
-        use rayon::prelude::*;
-
-        if out_size >= parallel_config::ELEMENTWISE_THRESHOLD {
-            let mut out = vec![0.0f32; out_size];
-            out.par_iter_mut()
-                .enumerate()
-                .for_each(|(out_idx, out_elem)| {
-                    let mut rem = out_idx;
-                    let mut in_linear = 0usize;
-                    for (dim, stride) in out_strides.iter().enumerate().take(out_rank) {
-                        let coord = if out_rank == 0 { 0 } else { rem / *stride };
-                        if out_rank > 0 {
-                            rem %= *stride;
-                        }
-                        let in_dim_opt = if dim + in_rank >= out_rank {
-                            Some(dim + in_rank - out_rank)
-                        } else {
-                            None
-                        };
-                        if let Some(in_dim) = in_dim_opt {
-                            let in_dim_size = in_shape[in_dim];
-                            let idx_in_dim = if in_dim_size == 1 { 0 } else { coord };
-                            let stride = if in_strides.is_empty() {
-                                0
-                            } else {
-                                in_strides[in_dim]
-                            };
-                            in_linear += idx_in_dim * stride;
-                        }
-                    }
-                    *out_elem = in_val[in_linear];
-                });
-            return out;
-        }
-    }
-
-    // Sequential fallback
-    let mut out = vec![0.0f32; out_size];
-    for (out_idx, out_elem) in out.iter_mut().enumerate() {
-        let mut rem = out_idx;
-        let mut in_linear = 0usize;
-        for (dim, stride) in out_strides.iter().enumerate().take(out_rank) {
-            let coord = if out_rank == 0 { 0 } else { rem / *stride };
-            if out_rank > 0 {
-                rem %= *stride;
-            }
-            let in_dim_opt = if dim + in_rank >= out_rank {
-                Some(dim + in_rank - out_rank)
-            } else {
-                None
-            };
-            if let Some(in_dim) = in_dim_opt {
-                let in_dim_size = in_shape[in_dim];
-                let idx_in_dim = if in_dim_size == 1 { 0 } else { coord };
-                let stride = if in_strides.is_empty() {
-                    0
-                } else {
-                    in_strides[in_dim]
-                };
-                in_linear += idx_in_dim * stride;
-            }
-        }
-        *out_elem = in_val[in_linear];
-    }
-    out
-}
-
-fn reduce_forward(
-    graph: &TensorGraph<f32>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
-    node_idx: petgraph::graph::NodeIndex,
-    op: &tensor::ReduceOp,
-    axis: usize,
-) -> Vec<f32> {
-    let in_idx = graph.inputs(node_idx)[0];
-    let x = values.get(&in_idx).unwrap();
-    let in_shape = graph.shapes.get(&in_idx).unwrap();
-    let out_shape = graph.shapes.get(&node_idx).unwrap();
-    let rank = in_shape.len();
-    let strides = rowmajor_strides(in_shape);
-    let out_size: usize = out_shape.iter().product();
-    let mut out = match op {
-        tensor::ReduceOp::Max => vec![f32::NEG_INFINITY; out_size],
-        _ => vec![0.0f32; out_size],
-    };
-    let axis_size = in_shape[axis];
-    let out_rank = out_shape.len();
-    let out_strides = if out_rank == 0 {
-        vec![]
-    } else {
-        rowmajor_strides(out_shape)
-    };
-    let mut coords = vec![0usize; rank];
-    let total: usize = in_shape.iter().product();
-    for (idx, _) in x.iter().enumerate().take(total) {
-        let mut rem = idx;
-        for (d, stride) in strides.iter().enumerate().take(rank) {
-            coords[d] = if rank == 0 { 0 } else { rem / *stride };
-            if rank > 0 {
-                rem %= *stride;
-            }
-        }
-        let out_lin = if out_rank == 0 {
-            0
-        } else {
-            let mut out_lin = 0usize;
-            let mut out_dim = 0usize;
-            for (d, _) in coords.iter().enumerate().take(rank) {
-                if d == axis {
-                    continue;
-                }
-                out_lin += coords[d] * out_strides[out_dim];
-                out_dim += 1;
-            }
-            out_lin
-        };
-        match op {
-            tensor::ReduceOp::Sum => {
-                out[out_lin] += x[idx];
-            }
-            tensor::ReduceOp::Mean => {
-                out[out_lin] += x[idx] / axis_size as f32;
-            }
-            tensor::ReduceOp::Max => {
-                out[out_lin] = out[out_lin].max(x[idx]);
-            }
-        }
-    }
-    out
 }
 
 fn matmul_forward(
@@ -755,51 +554,134 @@ fn matmul_grad_right(a: &[f32], a_shape: &[usize], dy: &[f32], dy_shape: &[usize
     db
 }
 
-fn reduce_like(grad: &[f32], grad_shape: &[usize], target_shape: &[usize]) -> Vec<f32> {
-    if grad_shape == target_shape {
-        return grad.to_vec();
-    }
+fn broadcast_axis_forward(
+    graph: &TensorGraph<f32>,
+    values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+    node_idx: petgraph::graph::NodeIndex,
+    axis: usize,
+) -> Vec<f32> {
+    let in_idx = graph.inputs(node_idx)[0];
+    let in_val = values.get(&in_idx).unwrap();
+    let in_shape = graph.shapes.get(&in_idx).unwrap();
+    let out_shape = graph.shapes.get(&node_idx).unwrap();
+    let out_size: usize = out_shape.iter().product();
+    let in_strides = rowmajor_strides(in_shape);
+    let out_strides = rowmajor_strides(out_shape);
 
-    let gr = grad_shape.len();
-    let tr = target_shape.len();
-    let mut out = vec![0.0f32; target_shape.iter().product()];
-    let g_strides = rowmajor_strides(grad_shape);
-    let t_strides = rowmajor_strides(target_shape);
-    let total_g: usize = grad_shape.iter().product();
-
-    let mut g_coords = vec![0usize; gr.max(1)];
-    for (g_idx, _) in grad.iter().enumerate().take(total_g) {
-        let mut rem = g_idx;
-        for (d, stride) in g_strides.iter().enumerate().take(gr) {
-            g_coords[d] = if gr == 0 { 0 } else { rem / *stride };
-            if gr > 0 {
-                rem %= *stride;
-            }
+    let mut out = vec![0.0f32; out_size];
+    for (out_idx, out_elem) in out.iter_mut().enumerate() {
+        let mut in_linear = 0usize;
+        let mut rem = out_idx;
+        for (dim, &stride) in out_strides.iter().enumerate() {
+            let coord = rem / stride;
+            rem %= stride;
+            let in_coord = if dim == axis { 0 } else { coord };
+            in_linear += in_coord * in_strides[dim];
         }
-
-        let mut t_lin = 0usize;
-        if tr > 0 {
-            let mut t_dim = tr as isize - 1;
-            let mut g_dim = gr as isize - 1;
-            while t_dim >= 0 {
-                let t_size = target_shape[t_dim as usize];
-                let coord = if g_dim >= 0 {
-                    g_coords[g_dim as usize]
-                } else {
-                    0
-                };
-                let t_coord = if t_size == 1 { 0 } else { coord };
-                t_lin += t_coord * t_strides[t_dim as usize];
-                t_dim -= 1;
-                g_dim -= 1;
-            }
-        }
-        out[t_lin] += grad[g_idx];
+        *out_elem = in_val[in_linear];
     }
     out
 }
 
-fn expand_to(x: &[f32], x_shape: &[usize], target_shape: &[usize]) -> Vec<f32> {
+fn reduce_axis_forward(
+    graph: &TensorGraph<f32>,
+    values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+    node_idx: petgraph::graph::NodeIndex,
+    op: &tensor::ReduceOp,
+    axis: usize,
+) -> Vec<f32> {
+    let in_idx = graph.inputs(node_idx)[0];
+    let x = values.get(&in_idx).unwrap();
+    let in_shape = graph.shapes.get(&in_idx).unwrap();
+    let out_shape = graph.shapes.get(&node_idx).unwrap();
+    let out_size: usize = out_shape.iter().product();
+    let axis_size = in_shape[axis];
+    let in_strides = rowmajor_strides(in_shape);
+    let out_strides = rowmajor_strides(out_shape);
+
+    let mut out = match op {
+        tensor::ReduceOp::Max => vec![f32::NEG_INFINITY; out_size],
+        _ => vec![0.0f32; out_size],
+    };
+
+    let total: usize = in_shape.iter().product();
+    for (idx, &val) in x.iter().enumerate().take(total) {
+        let mut rem = idx;
+        let mut out_linear = 0usize;
+        for (dim, &stride) in in_strides.iter().enumerate() {
+            let coord = rem / stride;
+            rem %= stride;
+            let out_coord = if dim == axis { 0 } else { coord };
+            out_linear += out_coord * out_strides[dim];
+        }
+        match op {
+            tensor::ReduceOp::Sum => {
+                out[out_linear] += val;
+            }
+            tensor::ReduceOp::Mean => {
+                out[out_linear] += val / axis_size as f32;
+            }
+            tensor::ReduceOp::Max => {
+                out[out_linear] = out[out_linear].max(val);
+            }
+        }
+    }
+    out
+}
+
+fn broadcast_axis_backward(dy: &[f32], dy_shape: &[usize], axis: usize) -> Vec<f32> {
+    let mut dx_shape = dy_shape.to_vec();
+    dx_shape[axis] = 1;
+    let dx_size: usize = dx_shape.iter().product();
+    let mut dx = vec![0.0f32; dx_size];
+
+    let dy_strides = rowmajor_strides(dy_shape);
+    let dx_strides = rowmajor_strides(&dx_shape);
+
+    for (dy_idx, &grad_val) in dy.iter().enumerate() {
+        let mut rem = dy_idx;
+        let mut dx_linear = 0usize;
+        for (dim, &stride) in dy_strides.iter().enumerate() {
+            let coord = rem / stride;
+            rem %= stride;
+            let dx_coord = if dim == axis { 0 } else { coord };
+            dx_linear += dx_coord * dx_strides[dim];
+        }
+        dx[dx_linear] += grad_val;
+    }
+    dx
+}
+
+fn reduce_axis_backward(
+    dy: &[f32],
+    dy_shape: &[usize],
+    axis: usize,
+    target_size: usize,
+) -> Vec<f32> {
+    let mut dx_shape = dy_shape.to_vec();
+    dx_shape[axis] = target_size;
+    let dx_size: usize = dx_shape.iter().product();
+    let mut dx = vec![0.0f32; dx_size];
+
+    let dx_strides = rowmajor_strides(&dx_shape);
+    let dy_strides = rowmajor_strides(dy_shape);
+
+    for (dx_idx, dx_elem) in dx.iter_mut().enumerate() {
+        let mut rem = dx_idx;
+        let mut dy_linear = 0usize;
+        for (dim, &stride) in dx_strides.iter().enumerate() {
+            let coord = rem / stride;
+            rem %= stride;
+            let dy_coord = if dim == axis { 0 } else { coord };
+            dy_linear += dy_coord * dy_strides[dim];
+        }
+        *dx_elem = dy[dy_linear];
+    }
+    dx
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn expand_to(x: &[f32], x_shape: &[usize], target_shape: &[usize]) -> Vec<f32> {
     if x_shape == target_shape {
         return x.to_vec();
     }

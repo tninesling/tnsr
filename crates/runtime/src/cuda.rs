@@ -377,8 +377,7 @@ impl CudaExecutor {
     ) -> CudaSlice<f32> {
         let _span = trace_span!("matmul_grad_left").entered();
         let b_t = self.transpose(b, k, n);
-        let grad = self.matmul(dc, &b_t, m, k, n);
-        grad
+        self.matmul(dc, &b_t, m, k, n)
     }
 
     /// For mamtul A x B = C, where A is [m, k], B is [k, n], C is [m, n],
@@ -395,8 +394,7 @@ impl CudaExecutor {
     ) -> CudaSlice<f32> {
         let _span = trace_span!("matmul_grad_right").entered();
         let a_t = self.transpose(a, m, k);
-        let grad = self.matmul(&a_t, dc, k, n, m);
-        grad
+        self.matmul(&a_t, dc, k, n, m)
     }
 
     fn transpose(&self, input: &CudaSlice<f32>, rows: usize, cols: usize) -> CudaSlice<f32> {
@@ -460,172 +458,6 @@ impl CudaExecutor {
         } else {
             self.grads.insert(node_idx, new_grad);
         }
-    }
-
-    /// Reduce a gradient array to match a smaller shape (for broadcast backward)
-    /// TODO: This needs a proper CUDA kernel implementation
-    fn reduce_like_cuda(
-        &self,
-        grad: &CudaSlice<f32>,
-        grad_shape: &[usize],
-        target_shape: &[usize],
-    ) -> CudaSlice<f32> {
-        let _span = trace_span!(
-            "reduce_like_cuda",
-            grad_shape = ?grad_shape,
-            target_shape = ?target_shape
-        )
-        .entered();
-
-        // Handle common cases with existing GPU kernels
-        if grad_shape == target_shape {
-            // No reduction needed, return copy
-            return grad.clone();
-        }
-
-        let stream = self.device.default_stream();
-
-        // Optimize common broadcasting patterns in neural networks
-        if grad_shape.len() == 2 && target_shape.len() == 2 {
-            let (grad_rows, grad_cols) = (grad_shape[0], grad_shape[1]);
-            let (target_rows, target_cols) = (target_shape[0], target_shape[1]);
-
-            // Case 1: (batch_size, features) -> (1, features) - bias gradient
-            if grad_rows > 1 && target_rows == 1 && grad_cols == target_cols {
-                // Reduce along axis 0 (sum rows)
-                let mut result = stream.alloc_zeros::<f32>(target_cols).unwrap();
-
-                let f = self.module.load_function("reduce_sum_cols").unwrap();
-                let cfg = LaunchConfig::for_num_elems(target_cols as u32);
-                let grad_rows_u64 = grad_rows as u64;
-                let grad_cols_u64 = grad_cols as u64;
-                let mut launcher = stream.launch_builder(&f);
-                launcher.arg(grad);
-                launcher.arg(&mut result);
-                launcher.arg(&grad_rows_u64);
-                launcher.arg(&grad_cols_u64);
-                unsafe { launcher.launch(cfg) }.expect("CUDA reduce_sum_cols failed");
-                return result;
-            }
-
-            // Case 2: (batch_size, features) -> (batch_size, 1) - feature-wise sum
-            if grad_rows == target_rows && grad_cols > 1 && target_cols == 1 {
-                // Reduce along axis 1 (sum columns)
-                let mut result = stream.alloc_zeros::<f32>(target_rows).unwrap();
-
-                let f = self.module.load_function("reduce_sum_rows").unwrap();
-                let cfg = LaunchConfig::for_num_elems(target_rows as u32);
-                let grad_rows_u64 = grad_rows as u64;
-                let grad_cols_u64 = grad_cols as u64;
-                let mut launcher = stream.launch_builder(&f);
-                launcher.arg(grad);
-                launcher.arg(&mut result);
-                launcher.arg(&grad_rows_u64);
-                launcher.arg(&grad_cols_u64);
-                unsafe { launcher.launch(cfg) }.expect("CUDA reduce_sum_rows failed");
-                return result;
-            }
-        }
-
-        // Case 3: Scalar reduction (any shape -> scalar)
-        if target_shape.iter().all(|&x| x == 1) || target_shape.is_empty() {
-            let mut result = stream.alloc_zeros::<f32>(1).unwrap();
-
-            // Treat as [1, n] matrix and reduce along rows
-            let f = self.module.load_function("reduce_sum_rows").unwrap();
-            let n = grad.len();
-            let out_len = 1u32;
-            let row_len = n as u32;
-            let in_len = n as u64;
-            let mut launcher = stream.launch_builder(&f);
-            launcher.arg(grad);
-            launcher.arg(&in_len);
-            launcher.arg(&mut result);
-            launcher.arg(&out_len);
-            launcher.arg(&row_len);
-            let cfg = LaunchConfig {
-                grid_dim: (1, 1, 1),
-                block_dim: (256.min(row_len), 1, 1),
-                shared_mem_bytes: 0,
-            };
-            unsafe { launcher.launch(cfg) }.expect("CUDA reduce_sum_rows failed");
-            return result;
-        }
-
-        // For complex cases, fall back to CPU
-        let _span = trace_span!("reduce_like_fallback", grad_shape = ?grad_shape, target_shape = ?target_shape).entered();
-        let mut grad_host = vec![0.0f32; grad.len()];
-        self.device
-            .default_stream()
-            .memcpy_dtoh(grad, &mut grad_host)
-            .unwrap();
-        let reduced_host = crate::reduce_like(&grad_host, grad_shape, target_shape);
-        let stream = self.device.default_stream();
-        let mut reduced_gpu = stream.alloc_zeros::<f32>(reduced_host.len()).unwrap();
-        stream.memcpy_htod(&reduced_host, &mut reduced_gpu).unwrap();
-        reduced_gpu
-    }
-
-    /// Expand a gradient to match a larger shape (for reduce backward)
-    /// Implements the backward pass of reduce operations by broadcasting the gradient
-    fn expand_to_gpu(
-        &self,
-        grad: &CudaSlice<f32>,
-        target_shape: &[usize],
-        reduced_axis: usize,
-    ) -> CudaSlice<f32> {
-        let target_size: usize = target_shape.iter().product();
-        let stream = self.device.default_stream();
-        let mut result = stream.alloc_zeros::<f32>(target_size).unwrap();
-
-        // Handle common cases with existing broadcast kernels
-        if target_shape.len() == 2 {
-            let (rows, cols) = (target_shape[0], target_shape[1]);
-
-            let rows_u64 = rows as u64;
-            let cols_u64 = cols as u64;
-
-            if reduced_axis == 0 {
-                // Reduced along rows, broadcast to (rows, cols) from (1, cols)
-                // Use broadcast_row_vector kernel
-                let f = self.module.load_function("broadcast_row").unwrap();
-                let cfg = LaunchConfig::for_num_elems(cols as u32);
-                let grad_len_u64 = grad.len() as u64;
-                let mut launcher = stream.launch_builder(&f);
-                launcher.arg(grad);
-                launcher.arg(&grad_len_u64);
-                launcher.arg(&mut result);
-                launcher.arg(&rows_u64);
-                launcher.arg(&cols_u64);
-                unsafe { launcher.launch(cfg) }.expect("CUDA broadcast_row failed");
-            } else {
-                // Reduced along cols, broadcast to (rows, cols) from (rows, 1)
-                // Use broadcast_col_vector kernel
-                let f = self.module.load_function("broadcast_col").unwrap();
-                let cfg = LaunchConfig::for_num_elems(rows as u32);
-                let grad_len_u64 = grad.len() as u64;
-                let mut launcher = stream.launch_builder(&f);
-                launcher.arg(grad);
-                launcher.arg(&grad_len_u64);
-                launcher.arg(&mut result);
-                launcher.arg(&rows_u64);
-                launcher.arg(&cols_u64);
-                unsafe { launcher.launch(cfg) }.expect("CUDA broadcast_col failed");
-            }
-        } else {
-            // For other cases, fall back to CPU implementation
-            // TODO: Implement general expand_to kernel for arbitrary dimensions
-            let mut grad_host = vec![0.0f32; grad.len()];
-            stream.memcpy_dtoh(grad, &mut grad_host).unwrap();
-
-            let mut grad_shape = target_shape.to_vec();
-            grad_shape[reduced_axis] = 1;
-            let expanded_host = crate::expand_to(&grad_host, &grad_shape, target_shape);
-
-            stream.memcpy_htod(&expanded_host, &mut result).unwrap();
-        }
-
-        result
     }
 }
 
@@ -692,116 +524,6 @@ impl Executor<f32> for CudaExecutor {
 
                     self.matmul(lhs, rhs, m, n, k)
                 }
-                TensorGraphNode::Reduce { op, axis } => {
-                    let in_idx = graph.inputs(*node_idx)[0];
-                    let x_device = self.values.get(&in_idx).unwrap();
-                    let in_shape = graph.shapes.get(&in_idx).unwrap();
-                    let out_shape = graph.shapes.get(node_idx).unwrap();
-                    let in_len = x_device.len();
-                    let out_len: usize = out_shape.iter().product();
-                    let _span = trace_span!(
-                        "reduce",
-                        op = ?op,
-                        axis = *axis,
-                        node = node_idx.index(),
-                        in_len = in_len,
-                        out_len = out_len
-                    )
-                    .entered();
-
-                    let stream = self.device.default_stream();
-
-                    if out_shape.is_empty() {
-                        // Scalar reduction: treat input as [1, n] and reduce along rows
-                        let out_len = 1u64;
-                        let row_len = in_len as u64;
-                        let mut out_device = stream.alloc_zeros::<f32>(1).unwrap();
-
-                        let kernel_name = match op {
-                            tensor::ReduceOp::Sum => "reduce_sum_rows",
-                            tensor::ReduceOp::Max => "reduce_max_rows",
-                            tensor::ReduceOp::Mean => "reduce_mean_rows",
-                        };
-
-                        let f = self.module.load_function(kernel_name).unwrap();
-                        let cfg = LaunchConfig::for_num_elems(1); // 1 output element
-                        let in_len_u64 = in_len as u64;
-
-                        let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(x_device); // input
-                        launcher.arg(&in_len_u64); // input_len
-                        launcher.arg(&mut out_device); // output
-                        launcher.arg(&out_len); // out_len = 1
-                        launcher.arg(&row_len); // row_len = n (all elements)
-
-                        unsafe { launcher.launch(cfg) }.expect("CUDA scalar reduce failed");
-
-                        out_device
-                    } else {
-                        assert_eq!(
-                            in_shape.len(),
-                            2,
-                            "Axis reduction currently supports only 2D tensors"
-                        );
-                        let m = in_shape[0];
-                        let n = in_shape[1];
-                        let mut out_device = stream.alloc_zeros::<f32>(out_len).unwrap();
-                        let in_len_u64 = in_len as u64;
-                        let m_u64 = m as u64;
-                        let n_u64 = n as u64;
-                        match axis {
-                            // reduce across columns -> one per row
-                            1 => {
-                                let f = match op {
-                                    tensor::ReduceOp::Sum => {
-                                        self.module.load_function("reduce_sum_rows").unwrap()
-                                    }
-                                    tensor::ReduceOp::Max => {
-                                        self.module.load_function("reduce_max_rows").unwrap()
-                                    }
-                                    tensor::ReduceOp::Mean => {
-                                        self.module.load_function("reduce_mean_rows").unwrap()
-                                    }
-                                };
-                                let cfg = LaunchConfig::for_num_elems(m as u32);
-                                let out_len_u64 = m_u64;
-                                let mut launcher = stream.launch_builder(&f);
-                                launcher.arg(x_device);
-                                launcher.arg(&in_len_u64);
-                                launcher.arg(&mut out_device);
-                                launcher.arg(&out_len_u64);
-                                launcher.arg(&n_u64); // row_len
-                                unsafe { launcher.launch(cfg) }.expect("CUDA reduce rows failed");
-                            }
-                            // reduce across rows -> one per column
-                            0 => {
-                                let f = match op {
-                                    tensor::ReduceOp::Sum => {
-                                        self.module.load_function("reduce_sum_cols").unwrap()
-                                    }
-                                    tensor::ReduceOp::Max => {
-                                        self.module.load_function("reduce_max_cols").unwrap()
-                                    }
-                                    tensor::ReduceOp::Mean => {
-                                        self.module.load_function("reduce_mean_cols").unwrap()
-                                    }
-                                };
-                                let cfg = LaunchConfig::for_num_elems(n as u32);
-                                let out_len_u64 = n_u64;
-                                let mut launcher = stream.launch_builder(&f);
-                                launcher.arg(x_device);
-                                launcher.arg(&in_len_u64);
-                                launcher.arg(&mut out_device);
-                                launcher.arg(&m_u64); // rows
-                                launcher.arg(&out_len_u64); // cols == out_len
-                                unsafe { launcher.launch(cfg) }.expect("CUDA reduce cols failed");
-                            }
-                            _ => panic!("reduce axis out of bounds"),
-                        }
-
-                        out_device
-                    }
-                }
                 TensorGraphNode::Parameter { data, .. } => {
                     let v = data.lock().unwrap();
                     let _span =
@@ -811,95 +533,119 @@ impl Executor<f32> for CudaExecutor {
                     stream.memcpy_htod(v.as_slice(), &mut device_data).unwrap();
                     device_data
                 }
-                TensorGraphNode::Broadcast => {
+                TensorGraphNode::BroadcastAxis { axis } => {
                     let stream = self.device.default_stream();
                     let in_idx = graph.inputs(*node_idx)[0];
                     let in_val = self.values.get(&in_idx).unwrap();
                     let in_shape = graph.shapes.get(&in_idx).unwrap();
                     let out_shape = graph.shapes.get(node_idx).unwrap();
                     let out_size: usize = out_shape.iter().product();
-                    let mut out = stream.alloc_zeros::<f32>(out_size).unwrap();
 
-                    let m = out_shape[0];
-                    let n = out_shape[1];
+                    assert_eq!(
+                        in_shape.len(),
+                        out_shape.len(),
+                        "BroadcastAxis requires matching rank"
+                    );
+                    assert_eq!(
+                        in_shape[*axis], 1,
+                        "BroadcastAxis requires input axis size to be 1"
+                    );
 
-                    // Scalar broadcast
-                    if in_shape.is_empty() || *in_shape == vec![1] {
-                        let _span = trace_span!(
-                            "broadcast",
-                            kind = "scalar",
-                            node = node_idx.index(),
-                            out_size = out_size
-                        )
-                        .entered();
-
-                        // Copy scalar value from device to host to pass as parameter
-                        let mut scalar_host = vec![0.0f32; 1];
-                        stream.memcpy_dtoh(in_val, &mut scalar_host).unwrap();
-                        let scalar_val = scalar_host[0];
-
-                        let f = self.module.load_function("broadcast_scalar").unwrap();
-                        let cfg = LaunchConfig::for_num_elems(out.len() as u32);
-                        let out_len_u64 = out.len() as u64;
-                        let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(&mut out);
-                        launcher.arg(&scalar_val);
-                        launcher.arg(&out_len_u64);
-                        unsafe { launcher.launch(cfg) }.expect("CUDA broadcast scalar failed");
-                    }
-                    // Column broadcast: [m] or [m, 1] -> [m, n]
-                    else if *in_shape == vec![m] || *in_shape == vec![m, 1] {
-                        let _span = trace_span!(
-                            "broadcast",
-                            kind = "col",
-                            node = node_idx.index(),
-                            m = m,
-                            n = n
-                        )
-                        .entered();
+                    if out_shape.len() == 2 {
+                        let m = out_shape[0];
+                        let n = out_shape[1];
                         let m_u64 = m as u64;
                         let n_u64 = n as u64;
+                        let mut out = stream.alloc_zeros::<f32>(out_size).unwrap();
 
-                        let f = self.module.load_function("broadcast_col").unwrap();
-                        let cfg = LaunchConfig::for_num_elems(m as u32);
-                        let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(in_val);
-                        launcher.arg(&m_u64);
-                        launcher.arg(&mut out);
-                        launcher.arg(&m_u64);
-                        launcher.arg(&n_u64);
-                        unsafe { launcher.launch(cfg) }.expect("CUDA broadcast col failed");
-                    }
-                    // Row broadcast: [n] or [1, n] -> [m, n]
-                    else if *in_shape == vec![n] || *in_shape == vec![1, n] {
-                        let _span = trace_span!(
-                            "broadcast",
-                            kind = "row",
-                            node = node_idx.index(),
-                            m = m,
-                            n = n
-                        )
-                        .entered();
-                        let m_u64 = m as u64;
-                        let n_u64 = n as u64;
-
-                        let f = self.module.load_function("broadcast_row").unwrap();
-                        let cfg = LaunchConfig::for_num_elems(n as u32);
-                        let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(in_val);
-                        launcher.arg(&n_u64);
-                        launcher.arg(&mut out);
-                        launcher.arg(&m_u64);
-                        launcher.arg(&n_u64);
-                        unsafe { launcher.launch(cfg) }.expect("CUDA broadcast row failed");
+                        if *axis == 0 {
+                            let f = self.module.load_function("broadcast_row").unwrap();
+                            let cfg = LaunchConfig::for_num_elems(n as u32);
+                            let mut launcher = stream.launch_builder(&f);
+                            launcher.arg(in_val);
+                            launcher.arg(&n_u64);
+                            launcher.arg(&mut out);
+                            launcher.arg(&m_u64);
+                            launcher.arg(&n_u64);
+                            unsafe { launcher.launch(cfg) }.expect("CUDA broadcast_row failed");
+                        } else if *axis == 1 {
+                            let f = self.module.load_function("broadcast_col").unwrap();
+                            let cfg = LaunchConfig::for_num_elems(m as u32);
+                            let mut launcher = stream.launch_builder(&f);
+                            launcher.arg(in_val);
+                            launcher.arg(&m_u64);
+                            launcher.arg(&mut out);
+                            launcher.arg(&m_u64);
+                            launcher.arg(&n_u64);
+                            unsafe { launcher.launch(cfg) }.expect("CUDA broadcast_col failed");
+                        } else {
+                            panic!("BroadcastAxis axis out of bounds");
+                        }
+                        out
                     } else {
-                        panic!(
-                            "Unsupported broadcast from shape {:?} to {:?}",
-                            in_shape, out_shape
-                        );
+                        panic!("BroadcastAxis currently only supports 2D tensors on GPU");
                     }
+                }
+                TensorGraphNode::ReduceAxis { op, axis } => {
+                    let in_idx = graph.inputs(*node_idx)[0];
+                    let x_device = self.values.get(&in_idx).unwrap();
+                    let in_shape = graph.shapes.get(&in_idx).unwrap();
+                    let out_shape = graph.shapes.get(node_idx).unwrap();
+                    let out_len: usize = out_shape.iter().product();
 
-                    out
+                    assert_eq!(in_shape.len(), out_shape.len(), "ReduceAxis preserves rank");
+                    assert_eq!(out_shape[*axis], 1, "ReduceAxis output axis must be 1");
+
+                    let stream = self.device.default_stream();
+
+                    if in_shape.len() == 2 {
+                        let m = in_shape[0];
+                        let n = in_shape[1];
+                        let m_u64 = m as u64;
+                        let n_u64 = n as u64;
+                        let in_len_u64 = x_device.len() as u64;
+                        let mut out_device = stream.alloc_zeros::<f32>(out_len).unwrap();
+
+                        if *axis == 1 {
+                            let kernel_name = match op {
+                                tensor::ReduceOp::Sum => "reduce_sum_rows",
+                                tensor::ReduceOp::Max => "reduce_max_rows",
+                                tensor::ReduceOp::Mean => "reduce_mean_rows",
+                            };
+                            let f = self.module.load_function(kernel_name).unwrap();
+                            let cfg = LaunchConfig::for_num_elems(m as u32);
+                            let out_len_u64 = m_u64;
+                            let mut launcher = stream.launch_builder(&f);
+                            launcher.arg(x_device);
+                            launcher.arg(&in_len_u64);
+                            launcher.arg(&mut out_device);
+                            launcher.arg(&out_len_u64);
+                            launcher.arg(&n_u64);
+                            unsafe { launcher.launch(cfg) }.expect("CUDA reduce rows failed");
+                        } else if *axis == 0 {
+                            let kernel_name = match op {
+                                tensor::ReduceOp::Sum => "reduce_sum_cols",
+                                tensor::ReduceOp::Max => "reduce_max_cols",
+                                tensor::ReduceOp::Mean => "reduce_mean_cols",
+                            };
+                            let f = self.module.load_function(kernel_name).unwrap();
+                            let cfg = LaunchConfig::for_num_elems(n as u32);
+                            let out_len_u64 = n_u64;
+                            let mut launcher = stream.launch_builder(&f);
+                            launcher.arg(x_device);
+                            launcher.arg(&in_len_u64);
+                            launcher.arg(&mut out_device);
+                            launcher.arg(&m_u64);
+                            launcher.arg(&out_len_u64);
+                            unsafe { launcher.launch(cfg) }.expect("CUDA reduce cols failed");
+                        } else {
+                            panic!("ReduceAxis axis out of bounds");
+                        }
+
+                        out_device
+                    } else {
+                        panic!("ReduceAxis currently only supports 2D tensors on GPU");
+                    }
                 }
             };
             self.values.insert(*node_idx, result);
@@ -989,11 +735,8 @@ impl Executor<f32> for CudaExecutor {
                     let ins = graph.inputs(node_idx);
                     let a_idx = ins[0];
                     let b_idx = ins[1];
-                    let a_shape = graph.shapes.get(&a_idx).unwrap();
-                    let b_shape = graph.shapes.get(&b_idx).unwrap();
-                    let output_shape = graph.shapes.get(&node_idx).unwrap();
 
-                    let (da_raw, db_raw) = match op {
+                    let (da, db) = match op {
                         tensor::BinaryOp::Add => self.add_grad(dy),
                         tensor::BinaryOp::Sub => self.sub_grad(dy),
                         tensor::BinaryOp::Mul => {
@@ -1008,8 +751,6 @@ impl Executor<f32> for CudaExecutor {
                         }
                     };
 
-                    let da = self.reduce_like_cuda(&da_raw, output_shape, a_shape);
-                    let db = self.reduce_like_cuda(&db_raw, output_shape, b_shape);
                     self.accumulate_grad_gpu(a_idx, da);
                     self.accumulate_grad_gpu(b_idx, db);
                 }
@@ -1032,36 +773,102 @@ impl Executor<f32> for CudaExecutor {
                     self.accumulate_grad_gpu(a_idx, da);
                     self.accumulate_grad_gpu(b_idx, db);
                 }
-                TensorGraphNode::Broadcast => {
-                    let _span = trace_span!("broadcast", node = node_idx.index(), size = dy.len())
-                        .entered();
+                TensorGraphNode::BroadcastAxis { axis } => {
                     let x_idx = graph.inputs(node_idx)[0];
                     let x_shape = graph.shapes.get(&x_idx).unwrap();
                     let y_shape = graph.shapes.get(&node_idx).unwrap();
-                    let dx = self.reduce_like_cuda(dy, y_shape, x_shape);
-                    self.accumulate_grad_gpu(x_idx, dx);
+
+                    if x_shape.len() == 2 {
+                        let m = y_shape[0];
+                        let n = y_shape[1];
+                        let m_u64 = m as u64;
+                        let n_u64 = n as u64;
+                        let in_len_u64 = dy.len() as u64;
+
+                        let stream = self.device.default_stream();
+                        let out_len = x_shape.iter().product();
+                        let mut dx = stream.alloc_zeros::<f32>(out_len).unwrap();
+
+                        if *axis == 1 {
+                            let f = self.module.load_function("reduce_sum_rows").unwrap();
+                            let cfg = LaunchConfig::for_num_elems(m as u32);
+                            let out_len_u64 = m_u64;
+                            let mut launcher = stream.launch_builder(&f);
+                            launcher.arg(dy);
+                            launcher.arg(&in_len_u64);
+                            launcher.arg(&mut dx);
+                            launcher.arg(&out_len_u64);
+                            launcher.arg(&n_u64);
+                            unsafe { launcher.launch(cfg) }.expect("CUDA reduce rows failed");
+                        } else if *axis == 0 {
+                            let f = self.module.load_function("reduce_sum_cols").unwrap();
+                            let cfg = LaunchConfig::for_num_elems(n as u32);
+                            let out_len_u64 = n_u64;
+                            let mut launcher = stream.launch_builder(&f);
+                            launcher.arg(dy);
+                            launcher.arg(&in_len_u64);
+                            launcher.arg(&mut dx);
+                            launcher.arg(&m_u64);
+                            launcher.arg(&out_len_u64);
+                            unsafe { launcher.launch(cfg) }.expect("CUDA reduce cols failed");
+                        } else {
+                            panic!("BroadcastAxis backward: axis out of bounds");
+                        }
+
+                        self.accumulate_grad_gpu(x_idx, dx);
+                    } else {
+                        panic!("BroadcastAxis backward currently only supports 2D tensors on GPU");
+                    }
                 }
-                TensorGraphNode::Reduce { op, axis } => {
-                    let _span = trace_span!(
-                        "reduce_op",
-                        op = node.name(),
-                        axis = *axis,
-                        node = node_idx.index(),
-                        size = dy.len()
-                    )
-                    .entered();
+                TensorGraphNode::ReduceAxis { op, axis } => {
                     let x_idx = graph.inputs(node_idx)[0];
                     let x_shape = graph.shapes.get(&x_idx).unwrap();
+
                     match op {
                         tensor::ReduceOp::Sum => {
-                            // Sum reduction gradient: expand dy to match original input shape
-                            // For sum, gradient flows back unchanged to all positions
-                            let dx = self.expand_to_gpu(dy, x_shape, *axis);
-                            self.accumulate_grad_gpu(x_idx, dx);
+                            if x_shape.len() == 2 {
+                                let m = x_shape[0];
+                                let n = x_shape[1];
+                                let m_u64 = m as u64;
+                                let n_u64 = n as u64;
+                                let stream = self.device.default_stream();
+                                let out_size = x_shape.iter().product();
+                                let mut dx = stream.alloc_zeros::<f32>(out_size).unwrap();
+
+                                if *axis == 0 {
+                                    let f = self.module.load_function("broadcast_row").unwrap();
+                                    let cfg = LaunchConfig::for_num_elems(n as u32);
+                                    let mut launcher = stream.launch_builder(&f);
+                                    launcher.arg(dy);
+                                    launcher.arg(&n_u64);
+                                    launcher.arg(&mut dx);
+                                    launcher.arg(&m_u64);
+                                    launcher.arg(&n_u64);
+                                    unsafe { launcher.launch(cfg) }
+                                        .expect("CUDA broadcast_row failed");
+                                } else if *axis == 1 {
+                                    let f = self.module.load_function("broadcast_col").unwrap();
+                                    let cfg = LaunchConfig::for_num_elems(m as u32);
+                                    let mut launcher = stream.launch_builder(&f);
+                                    launcher.arg(dy);
+                                    launcher.arg(&m_u64);
+                                    launcher.arg(&mut dx);
+                                    launcher.arg(&m_u64);
+                                    launcher.arg(&n_u64);
+                                    unsafe { launcher.launch(cfg) }
+                                        .expect("CUDA broadcast_col failed");
+                                } else {
+                                    panic!("ReduceAxis backward: axis out of bounds");
+                                }
+
+                                self.accumulate_grad_gpu(x_idx, dx);
+                            } else {
+                                panic!(
+                                    "ReduceAxis backward currently only supports 2D tensors on GPU"
+                                );
+                            }
                         }
                         tensor::ReduceOp::Mean => {
-                            // TODO: Need expand_to and scalar division kernels
-                            // For now, fall back to CPU
                             let mut dy_host = vec![0.0f32; dy.len()];
                             self.device
                                 .default_stream()
@@ -1080,8 +887,6 @@ impl Executor<f32> for CudaExecutor {
                             self.accumulate_grad_gpu(x_idx, dx);
                         }
                         tensor::ReduceOp::Max => {
-                            // TODO: Need argmax-based gradient computation kernel
-                            // For now, zero gradient (correct but suboptimal)
                             let zeros = vec![0.0f32; x_shape.iter().product()];
                             let stream = self.device.default_stream();
                             let mut dx = stream.alloc_zeros::<f32>(zeros.len()).unwrap();

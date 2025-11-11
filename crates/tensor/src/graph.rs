@@ -20,8 +20,8 @@ pub enum TensorGraphNode<D> {
     Unary { op: UnaryOp },
     Binary { op: BinaryOp },
     MatMul,
-    Broadcast,
-    Reduce { op: ReduceOp, axis: usize },
+    BroadcastAxis { axis: usize },
+    ReduceAxis { op: ReduceOp, axis: usize },
 }
 
 impl<D> TensorGraphNode<D> {
@@ -43,11 +43,11 @@ impl<D> TensorGraphNode<D> {
                 BinaryOp::Div => "Div",
             },
             TensorGraphNode::MatMul => "MatMul",
-            TensorGraphNode::Broadcast => "Broadcast",
-            TensorGraphNode::Reduce { op, .. } => match op {
-                ReduceOp::Sum => "ReduceSum",
-                ReduceOp::Max => "ReduceMax",
-                ReduceOp::Mean => "ReduceMean",
+            TensorGraphNode::BroadcastAxis { .. } => "BroadcastAxis",
+            TensorGraphNode::ReduceAxis { op, .. } => match op {
+                ReduceOp::Sum => "ReduceAxisSum",
+                ReduceOp::Max => "ReduceAxisMax",
+                ReduceOp::Mean => "ReduceAxisMean",
             },
         }
     }

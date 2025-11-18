@@ -36,6 +36,7 @@ pub enum TensorGraphNode<D> {
     Unary { op: UnaryOp },
     Binary { op: BinaryOp },
     MatMul,
+    Transpose,
     BroadcastAxis { axis: usize },
     ReduceAxis { op: ReduceOp, axis: usize },
 }
@@ -59,6 +60,7 @@ impl<D> TensorGraphNode<D> {
                 BinaryOp::Div => "Div",
             },
             TensorGraphNode::MatMul => "MatMul",
+            TensorGraphNode::Transpose => "Transpose",
             TensorGraphNode::BroadcastAxis { .. } => "BroadcastAxis",
             TensorGraphNode::ReduceAxis { op, .. } => match op {
                 ReduceOp::Sum => "ReduceAxisSum",
@@ -432,12 +434,61 @@ impl TensorGraph<f32, NoGrad> {
                     if inputs.len() != 2 {
                         panic!("MatMul should have 2 inputs");
                     }
-                    let _input_a = inputs[0];
-                    let _input_b = inputs[1];
+                    let input_a = inputs[0];
+                    let input_b = inputs[1];
 
-                    // TODO: Implement matrix transpose operation
-                    // For MVP, skip MatMul gradient generation
-                    // This requires adding a Transpose node type
+                    // Create B^T
+                    let b_t = self.graph.add_node(TensorGraphNode::Transpose);
+                    self.graph.add_edge(input_b, b_t, 0);
+                    // Transpose swaps last two dimensions: [m, n] -> [n, m]
+                    let b_shape = self.shapes.get(&input_b).unwrap();
+                    let mut b_t_shape = b_shape.clone();
+                    if b_t_shape.len() >= 2 {
+                        let len = b_t_shape.len();
+                        b_t_shape.swap(len - 2, len - 1);
+                    }
+                    self.shapes.insert(b_t, b_t_shape.clone());
+                    gradient_nodes.insert(b_t);
+
+                    // grad_a = grad_output @ B^T
+                    let grad_a = self.graph.add_node(TensorGraphNode::MatMul);
+                    self.graph.add_edge(grad_output, grad_a, 0);
+                    self.graph.add_edge(b_t, grad_a, 1);
+                    let a_shape = self.shapes.get(&input_a).unwrap().clone();
+                    self.shapes.insert(grad_a, a_shape);
+                    gradient_nodes.insert(grad_a);
+
+                    // Create A^T
+                    let a_t = self.graph.add_node(TensorGraphNode::Transpose);
+                    self.graph.add_edge(input_a, a_t, 0);
+                    let mut a_t_shape = self.shapes.get(&input_a).unwrap().clone();
+                    if a_t_shape.len() >= 2 {
+                        let len = a_t_shape.len();
+                        a_t_shape.swap(len - 2, len - 1);
+                    }
+                    self.shapes.insert(a_t, a_t_shape);
+                    gradient_nodes.insert(a_t);
+
+                    // grad_b = A^T @ grad_output
+                    let grad_b = self.graph.add_node(TensorGraphNode::MatMul);
+                    self.graph.add_edge(a_t, grad_b, 0);
+                    self.graph.add_edge(grad_output, grad_b, 1);
+                    let b_shape = self.shapes.get(&input_b).unwrap().clone();
+                    self.shapes.insert(grad_b, b_shape);
+                    gradient_nodes.insert(grad_b);
+
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_a,
+                        grad_a,
+                    );
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_b,
+                        grad_b,
+                    );
                 }
                 TensorGraphNode::Parameter { id, .. } => {
                     // Store the gradient node for this parameter
@@ -446,9 +497,62 @@ impl TensorGraph<f32, NoGrad> {
                 TensorGraphNode::Constant { .. } | TensorGraphNode::Input { .. } => {
                     // Constants and inputs don't need gradients
                 }
-                TensorGraphNode::BroadcastAxis { .. } | TensorGraphNode::ReduceAxis { .. } => {
-                    // TODO: Implement broadcast/reduce gradients
-                    // For MVP, skip these
+                TensorGraphNode::Transpose => {
+                    // d(A^T)/dA = (grad_output)^T
+                    // Transpose gradient is just transpose of incoming gradient
+                    if inputs.len() != 1 {
+                        panic!("Transpose should have 1 input");
+                    }
+                    let input_a = inputs[0];
+
+                    let grad_a = self.graph.add_node(TensorGraphNode::Transpose);
+                    self.graph.add_edge(grad_output, grad_a, 0);
+                    let input_shape = self.shapes.get(&input_a).unwrap().clone();
+                    self.shapes.insert(grad_a, input_shape);
+                    gradient_nodes.insert(grad_a);
+
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_a,
+                        grad_a,
+                    );
+                }
+                TensorGraphNode::ReduceAxis { op, axis } => {
+                    // For ReduceAxisSum: gradient is broadcast back to original shape
+                    // If Y = sum(X, axis), then dX = broadcast(dY, axis)
+                    match op {
+                        ReduceOp::Sum => {
+                            if inputs.len() != 1 {
+                                panic!("ReduceAxis should have 1 input");
+                            }
+                            let input_x = inputs[0];
+                            let input_shape = self.shapes.get(&input_x).unwrap();
+                            
+                            // Create broadcast node to expand gradient back to input shape
+                            let grad_x = self.graph.add_node(TensorGraphNode::BroadcastAxis {
+                                axis: *axis,
+                            });
+                            self.graph.add_edge(grad_output, grad_x, 0);
+                            self.shapes.insert(grad_x, input_shape.clone());
+                            gradient_nodes.insert(grad_x);
+
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_x,
+                                grad_x,
+                            );
+                        }
+                        ReduceOp::Mean | ReduceOp::Max => {
+                            // TODO: Implement gradients for Mean and Max
+                            // For MVP, skip these
+                        }
+                    }
+                }
+                TensorGraphNode::BroadcastAxis { .. } => {
+                    // TODO: Implement broadcast gradients
+                    // For MVP, skip this
                 }
             }
         }
@@ -705,6 +809,62 @@ mod tests {
 
         // Should panic because output is not scalar
         let _grad_graph = graph.with_gradients(NodeIndex::from(1));
+    }
+
+    #[test]
+    fn test_gradient_node_generation_matmul() {
+        // Test: C = A @ B, should generate grad_A = grad_C @ B^T, grad_B = A^T @ grad_C
+        let a = Parameter::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
+        let a_id = a.id();
+        let b = Parameter::new(vec![5.0f32, 6.0, 7.0, 8.0], vec![2, 2]);
+        let b_id = b.id();
+        
+        // C = A @ B, then reduce to scalar for loss
+        let a_expr: TensorExpr<f32> = a.into();
+        let b_expr: TensorExpr<f32> = b.into();
+        let c = a_expr.matmul(b_expr);
+        // Reduce axis 1 first [2,2] -> [2,1], then reduce axis 0 [2,1] -> [1,1]
+        let loss = c.reduce_sum(1).reduce_sum(0);
+        
+        let graph: TensorGraph<f32, NoGrad> = loss.into();
+        let initial_node_count = graph.len();
+        
+        // Find the loss node (should be the last node in topo order)
+        let topo = graph.toposort();
+        let loss_node = *topo.last().unwrap();
+        
+        let grad_graph = graph.with_gradients(loss_node);
+
+        // Should have created gradient nodes for MatMul
+        assert!(
+            grad_graph.len() > initial_node_count,
+            "Expected new gradient nodes for MatMul"
+        );
+
+        let metadata = grad_graph.gradient_metadata();
+        
+        // Both parameters should have gradients
+        assert!(
+            metadata.param_to_grad.contains_key(&a_id),
+            "Parameter A should have gradient"
+        );
+        assert!(
+            metadata.param_to_grad.contains_key(&b_id),
+            "Parameter B should have gradient"
+        );
+        
+        // Should have created transpose nodes for MatMul gradients
+        let transpose_count = grad_graph
+            .graph
+            .node_indices()
+            .filter(|&idx| matches!(grad_graph[idx], TensorGraphNode::Transpose))
+            .count();
+        
+        assert!(
+            transpose_count >= 2,
+            "Expected at least 2 Transpose nodes for MatMul gradient (A^T and B^T), got {}",
+            transpose_count
+        );
     }
 
     #[test]

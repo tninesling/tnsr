@@ -423,6 +423,10 @@ impl Executor<f32> for SimpleExecutor {
                     let _span = trace_span!("matmul", node = node_idx.index()).entered();
                     matmul_forward(graph, &self.values, *node_idx)?
                 }
+                TensorGraphNode::Transpose => {
+                    let _span = trace_span!("transpose", node = node_idx.index()).entered();
+                    transpose_forward(graph, &self.values, *node_idx)?
+                }
                 TensorGraphNode::BroadcastAxis { axis } => {
                     let _span = trace_span!("broadcast_axis", node = node_idx.index()).entered();
                     broadcast_axis_forward(graph, &self.values, *node_idx, *axis)?
@@ -559,6 +563,19 @@ impl Executor<f32> for SimpleExecutor {
                         let db = matmul_grad_right(a_val, a_shape, &dy, dy_shape);
                         accumulate_grad(&mut self.grads, a_idx, da);
                         accumulate_grad(&mut self.grads, b_idx, db);
+                    }
+                    TensorGraphNode::Transpose => {
+                        let _span = trace_span!("transpose", node = node_idx.index()).entered();
+                        let x_idx = graph.inputs(node_idx)[0];
+                        let dy_shape = graph
+                            .shapes
+                            .get(&node_idx)
+                            .context("Shape missing for transpose output")?;
+                        
+                        // Gradient of transpose is transpose of gradient
+                        // If Y = X^T, then dX = (dY)^T
+                        let dx = transpose_2d(&dy, dy_shape);
+                        accumulate_grad(&mut self.grads, x_idx, dx);
                     }
                     TensorGraphNode::BroadcastAxis { axis } => {
                         let _span =
@@ -710,10 +727,55 @@ fn matmul_forward(
     Ok(out)
 }
 
+fn transpose_forward(
+    graph: &TensorGraph<f32>,
+    values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+    node_idx: petgraph::graph::NodeIndex,
+) -> Result<Vec<f32>> {
+    let inputs_idx = graph.inputs(node_idx);
+    let a_idx = inputs_idx[0];
+    let a = values
+        .get(&a_idx)
+        .context("Input value not computed for transpose")?;
+    let a_shape = graph
+        .shapes
+        .get(&a_idx)
+        .context("Shape missing for transpose input")?;
+    
+    anyhow::ensure!(
+        a_shape.len() == 2,
+        "Transpose currently only supports 2D matrices, got {}D",
+        a_shape.len()
+    );
+    
+    let (m, n) = (a_shape[0], a_shape[1]);
+    let mut out = vec![0.0f32; m * n];
+    
+    for i in 0..m {
+        for j in 0..n {
+            out[j * m + i] = a[i * n + j];
+        }
+    }
+    
+    Ok(out)
+}
+
 fn add_inplace(acc: &mut [f32], src: &[f32]) {
     for (a, s) in acc.iter_mut().zip(src.iter()) {
         *a += *s;
     }
+}
+
+fn transpose_2d(a: &[f32], a_shape: &[usize]) -> Vec<f32> {
+    assert_eq!(a_shape.len(), 2, "transpose_2d requires 2D shape");
+    let (m, n) = (a_shape[0], a_shape[1]);
+    let mut out = vec![0.0f32; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            out[j * m + i] = a[i * n + j];
+        }
+    }
+    out
 }
 
 fn accumulate_grad(

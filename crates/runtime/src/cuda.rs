@@ -764,6 +764,27 @@ impl Executor<f32> for CudaExecutor {
                         );
                     }
                 }
+                TensorGraphNode::Transpose => {
+                    let in_idx = graph.inputs(*node_idx)[0];
+                    let input = self
+                        .values
+                        .get(&in_idx)
+                        .context("Missing input value for transpose")?;
+                    let in_shape = graph
+                        .shapes
+                        .get(&in_idx)
+                        .context("Missing input shape for transpose")?;
+
+                    anyhow::ensure!(
+                        in_shape.len() == 2,
+                        "Transpose currently only supports 2D tensors on GPU, got {}D",
+                        in_shape.len()
+                    );
+
+                    let rows = in_shape[0];
+                    let cols = in_shape[1];
+                    self.transpose(input, rows, cols)
+                }
             };
             self.values.insert(*node_idx, result);
         }
@@ -1095,6 +1116,24 @@ impl Executor<f32> for CudaExecutor {
                             self.accumulate_grad_gpu(x_idx, dx);
                         }
                     }
+                }
+                TensorGraphNode::Transpose => {
+                    let x_idx = graph.inputs(node_idx)[0];
+                    let x_shape = graph
+                        .shapes
+                        .get(&x_idx)
+                        .context("Missing input shape for transpose backward")?;
+
+                    anyhow::ensure!(
+                        x_shape.len() == 2,
+                        "Transpose backward currently only supports 2D tensors on GPU, got {}D",
+                        x_shape.len()
+                    );
+
+                    let rows = x_shape[0];
+                    let cols = x_shape[1];
+                    let dx = self.transpose(dy, cols, rows);
+                    self.accumulate_grad_gpu(x_idx, dx);
                 }
             }
         }

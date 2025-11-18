@@ -75,6 +75,7 @@ impl From<TensorGraph<f32>> for TileGraph {
                 TensorGraphNode::Unary { .. } => todo!(),
                 TensorGraphNode::Binary { .. } => todo!(),
                 TensorGraphNode::MatMul => todo!(),
+                TensorGraphNode::Transpose => todo!(),
                 TensorGraphNode::BroadcastAxis { .. } => todo!(),
                 TensorGraphNode::ReduceAxis { .. } => todo!(),
             },

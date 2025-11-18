@@ -528,11 +528,11 @@ impl TensorGraph<f32, NoGrad> {
                             }
                             let input_x = inputs[0];
                             let input_shape = self.shapes.get(&input_x).unwrap();
-                            
+
                             // Create broadcast node to expand gradient back to input shape
-                            let grad_x = self.graph.add_node(TensorGraphNode::BroadcastAxis {
-                                axis: *axis,
-                            });
+                            let grad_x = self
+                                .graph
+                                .add_node(TensorGraphNode::BroadcastAxis { axis: *axis });
                             self.graph.add_edge(grad_output, grad_x, 0);
                             self.shapes.insert(grad_x, input_shape.clone());
                             gradient_nodes.insert(grad_x);
@@ -544,15 +544,75 @@ impl TensorGraph<f32, NoGrad> {
                                 grad_x,
                             );
                         }
-                        ReduceOp::Mean | ReduceOp::Max => {
-                            // TODO: Implement gradients for Mean and Max
-                            // For MVP, skip these
+                        ReduceOp::Mean => {
+                            if inputs.len() != 1 {
+                                panic!("ReduceAxis should have 1 input");
+                            }
+                            let input_x = inputs[0];
+                            let input_shape = self.shapes.get(&input_x).unwrap().clone();
+                            let axis_size = input_shape[*axis];
+
+                            // Broadcast gradient back to input shape
+                            let grad_broadcast = self
+                                .graph
+                                .add_node(TensorGraphNode::BroadcastAxis { axis: *axis });
+                            self.graph.add_edge(grad_output, grad_broadcast, 0);
+                            self.shapes.insert(grad_broadcast, input_shape.clone());
+                            gradient_nodes.insert(grad_broadcast);
+
+                            // Divide by axis_size (multiply by 1/axis_size)
+                            let scale = 1.0 / axis_size as f32;
+                            let num_elements: usize = input_shape.iter().product();
+                            let scale_const = self.graph.add_node(TensorGraphNode::Constant {
+                                data: Arc::new(vec![scale; num_elements]),
+                            });
+                            self.shapes.insert(scale_const, input_shape.clone());
+
+                            let grad_x = self
+                                .graph
+                                .add_node(TensorGraphNode::Binary { op: BinaryOp::Mul });
+                            self.graph.add_edge(grad_broadcast, grad_x, 0);
+                            self.graph.add_edge(scale_const, grad_x, 1);
+                            self.shapes.insert(grad_x, input_shape.clone());
+                            gradient_nodes.insert(grad_x);
+
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_x,
+                                grad_x,
+                            );
+                        }
+                        ReduceOp::Max => {
+                            // TODO: Implement gradients for Max
+                            // Requires tracking argmax indices, deferred for now
                         }
                     }
                 }
-                TensorGraphNode::BroadcastAxis { .. } => {
-                    // TODO: Implement broadcast gradients
-                    // For MVP, skip this
+                TensorGraphNode::BroadcastAxis { axis } => {
+                    // For BroadcastAxis: gradient is reduced back to original shape
+                    // If Y = broadcast(X, axis), then dX = reduce_sum(dY, axis)
+                    if inputs.len() != 1 {
+                        panic!("BroadcastAxis should have 1 input");
+                    }
+                    let input_x = inputs[0];
+                    let input_shape = self.shapes.get(&input_x).unwrap();
+
+                    // Create reduce node to collapse gradient back to input shape
+                    let grad_x = self.graph.add_node(TensorGraphNode::ReduceAxis {
+                        op: ReduceOp::Sum,
+                        axis: *axis,
+                    });
+                    self.graph.add_edge(grad_output, grad_x, 0);
+                    self.shapes.insert(grad_x, input_shape.clone());
+                    gradient_nodes.insert(grad_x);
+
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_x,
+                        grad_x,
+                    );
                 }
             }
         }
@@ -818,21 +878,21 @@ mod tests {
         let a_id = a.id();
         let b = Parameter::new(vec![5.0f32, 6.0, 7.0, 8.0], vec![2, 2]);
         let b_id = b.id();
-        
+
         // C = A @ B, then reduce to scalar for loss
         let a_expr: TensorExpr<f32> = a.into();
         let b_expr: TensorExpr<f32> = b.into();
         let c = a_expr.matmul(b_expr);
         // Reduce axis 1 first [2,2] -> [2,1], then reduce axis 0 [2,1] -> [1,1]
         let loss = c.reduce_sum(1).reduce_sum(0);
-        
+
         let graph: TensorGraph<f32, NoGrad> = loss.into();
         let initial_node_count = graph.len();
-        
+
         // Find the loss node (should be the last node in topo order)
         let topo = graph.toposort();
         let loss_node = *topo.last().unwrap();
-        
+
         let grad_graph = graph.with_gradients(loss_node);
 
         // Should have created gradient nodes for MatMul
@@ -842,7 +902,7 @@ mod tests {
         );
 
         let metadata = grad_graph.gradient_metadata();
-        
+
         // Both parameters should have gradients
         assert!(
             metadata.param_to_grad.contains_key(&a_id),
@@ -852,18 +912,202 @@ mod tests {
             metadata.param_to_grad.contains_key(&b_id),
             "Parameter B should have gradient"
         );
-        
+
         // Should have created transpose nodes for MatMul gradients
         let transpose_count = grad_graph
             .graph
             .node_indices()
             .filter(|&idx| matches!(grad_graph[idx], TensorGraphNode::Transpose))
             .count();
-        
+
         assert!(
             transpose_count >= 2,
             "Expected at least 2 Transpose nodes for MatMul gradient (A^T and B^T), got {}",
             transpose_count
+        );
+    }
+
+    #[test]
+    fn test_gradient_broadcast_axis() {
+        // Test: y = broadcast(x, axis), should generate grad_x = reduce_sum(grad_y, axis)
+        let x = Parameter::new(vec![1.0f32, 2.0], vec![2, 1]);
+        let x_id = x.id();
+
+        let x_expr: TensorExpr<f32> = x.into();
+        let broadcasted = x_expr.broadcast_axis(1, 3); // [2, 1] -> [2, 3]
+        // Reduce to scalar for loss
+        let loss = broadcasted.reduce_sum(0).reduce_sum(1); // [2, 3] -> [1, 3] -> [1, 1]
+
+        let graph: TensorGraph<f32, NoGrad> = loss.into();
+        let initial_node_count = graph.len();
+
+        // Find the loss node (should be the last node)
+        let topo = graph.toposort();
+        let loss_node = *topo.last().unwrap();
+
+        let grad_graph = graph.with_gradients(loss_node);
+
+        // Should have created gradient nodes including ReduceAxis backward (which creates BroadcastAxis)
+        // and BroadcastAxis backward (which creates ReduceAxis)
+        assert!(
+            grad_graph.len() > initial_node_count,
+            "Expected new gradient nodes for BroadcastAxis"
+        );
+
+        let metadata = grad_graph.gradient_metadata();
+
+        // Parameter should have a gradient
+        assert!(
+            metadata.param_to_grad.contains_key(&x_id),
+            "Parameter should have gradient"
+        );
+
+        // Should have created a ReduceAxis node for the BroadcastAxis gradient
+        let reduce_count = grad_graph
+            .graph
+            .node_indices()
+            .filter(|&idx| {
+                matches!(
+                    grad_graph[idx],
+                    TensorGraphNode::ReduceAxis {
+                        op: ReduceOp::Sum,
+                        ..
+                    }
+                )
+            })
+            .count();
+
+        assert!(
+            reduce_count >= 1,
+            "Expected at least 1 ReduceAxis node for BroadcastAxis gradient, got {}",
+            reduce_count
+        );
+    }
+
+    #[test]
+    fn test_gradient_reduce_mean() {
+        // Test: y = mean(x, axis), should generate grad_x = broadcast(grad_y, axis) / axis_size
+        let x = Parameter::new(vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+        let x_id = x.id();
+
+        let x_expr: TensorExpr<f32> = x.into();
+        let reduced = x_expr.reduce_mean(1); // [2, 3] -> [2, 1]
+        // Reduce to scalar for loss
+        let loss = reduced.reduce_sum(0).reduce_sum(1); // [2, 1] -> [1, 1] -> [1, 1]
+
+        let graph: TensorGraph<f32, NoGrad> = loss.into();
+        let initial_node_count = graph.len();
+
+        // Find the loss node (should be the last node)
+        let topo = graph.toposort();
+        let loss_node = *topo.last().unwrap();
+
+        let grad_graph = graph.with_gradients(loss_node);
+
+        // Should have created gradient nodes: seed + BroadcastAxis + Constant + Mul
+        assert!(
+            grad_graph.len() > initial_node_count,
+            "Expected new gradient nodes for ReduceAxis Mean"
+        );
+
+        let metadata = grad_graph.gradient_metadata();
+
+        // Parameter should have a gradient
+        assert!(
+            metadata.param_to_grad.contains_key(&x_id),
+            "Parameter should have gradient"
+        );
+
+        // Should have created a BroadcastAxis node for the gradient
+        let broadcast_count = grad_graph
+            .graph
+            .node_indices()
+            .filter(|&idx| matches!(grad_graph[idx], TensorGraphNode::BroadcastAxis { .. }))
+            .count();
+
+        assert!(
+            broadcast_count >= 1,
+            "Expected at least 1 BroadcastAxis node for ReduceAxis Mean gradient, got {}",
+            broadcast_count
+        );
+
+        // Should have created a Binary Mul node for scaling
+        let mul_count = grad_graph
+            .graph
+            .node_indices()
+            .filter(|&idx| {
+                matches!(
+                    grad_graph[idx],
+                    TensorGraphNode::Binary { op: BinaryOp::Mul }
+                )
+            })
+            .count();
+
+        assert!(
+            mul_count >= 1,
+            "Expected at least 1 Binary Mul node for scaling gradient, got {}",
+            mul_count
+        );
+
+        // Should have created a Constant node with the scale factor (1/3)
+        let constant_count = grad_graph
+            .graph
+            .node_indices()
+            .filter(|&idx| matches!(grad_graph[idx], TensorGraphNode::Constant { .. }))
+            .count();
+
+        assert!(
+            constant_count >= 1,
+            "Expected at least 1 Constant node for scale factor, got {}",
+            constant_count
+        );
+    }
+
+    #[test]
+    fn test_gradient_reduce_sum() {
+        // Test: y = sum(x, axis), should generate grad_x = broadcast(grad_y, axis)
+        let x = Parameter::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
+        let x_id = x.id();
+
+        let x_expr: TensorExpr<f32> = x.into();
+        let reduced = x_expr.reduce_sum(0); // [2, 2] -> [1, 2]
+        // Reduce to scalar for loss
+        let loss = reduced.reduce_sum(1); // [1, 2] -> [1, 1]
+
+        let graph: TensorGraph<f32, NoGrad> = loss.into();
+        let initial_node_count = graph.len();
+
+        // Find the loss node (should be the last node)
+        let topo = graph.toposort();
+        let loss_node = *topo.last().unwrap();
+
+        let grad_graph = graph.with_gradients(loss_node);
+
+        // Should have created gradient nodes: seed + BroadcastAxis
+        assert!(
+            grad_graph.len() > initial_node_count,
+            "Expected new gradient nodes for ReduceAxis Sum"
+        );
+
+        let metadata = grad_graph.gradient_metadata();
+
+        // Parameter should have a gradient
+        assert!(
+            metadata.param_to_grad.contains_key(&x_id),
+            "Parameter should have gradient"
+        );
+
+        // Should have created a BroadcastAxis node for the gradient
+        let broadcast_count = grad_graph
+            .graph
+            .node_indices()
+            .filter(|&idx| matches!(grad_graph[idx], TensorGraphNode::BroadcastAxis { .. }))
+            .count();
+
+        assert!(
+            broadcast_count >= 1,
+            "Expected at least 1 BroadcastAxis node for ReduceAxis Sum gradient, got {}",
+            broadcast_count
         );
     }
 

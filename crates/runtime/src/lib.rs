@@ -571,7 +571,7 @@ impl Executor<f32> for SimpleExecutor {
                             .shapes
                             .get(&node_idx)
                             .context("Shape missing for transpose output")?;
-                        
+
                         // Gradient of transpose is transpose of gradient
                         // If Y = X^T, then dX = (dY)^T
                         let dx = transpose_2d(&dy, dy_shape);
@@ -741,22 +741,22 @@ fn transpose_forward(
         .shapes
         .get(&a_idx)
         .context("Shape missing for transpose input")?;
-    
+
     anyhow::ensure!(
         a_shape.len() == 2,
         "Transpose currently only supports 2D matrices, got {}D",
         a_shape.len()
     );
-    
+
     let (m, n) = (a_shape[0], a_shape[1]);
     let mut out = vec![0.0f32; m * n];
-    
+
     for i in 0..m {
         for j in 0..n {
             out[j * m + i] = a[i * n + j];
         }
     }
-    
+
     Ok(out)
 }
 

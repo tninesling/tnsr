@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ops::Index;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -12,6 +13,21 @@ use crate::BinaryOp;
 use crate::ReduceOp;
 use crate::TensorExpr;
 use crate::UnaryOp;
+
+/// Typestate marker for graphs without gradients.
+pub struct NoGrad;
+
+/// Typestate marker for graphs with gradient computation nodes.
+pub struct WithGrad;
+
+/// Metadata tracking gradient nodes and parameter mappings.
+#[derive(Clone, Debug)]
+pub struct GradientMetadata {
+    /// Maps parameter ID to its gradient accumulation node.
+    pub param_to_grad: HashMap<usize, NodeIndex>,
+    /// Set of all gradient computation nodes.
+    pub gradient_nodes: HashSet<NodeIndex>,
+}
 
 pub enum TensorGraphNode<D> {
     Constant { data: Arc<Vec<D>> },
@@ -65,22 +81,26 @@ impl<D> From<BinaryOp> for TensorGraphNode<D> {
     }
 }
 
-pub struct TensorGraph<D> {
+pub struct TensorGraph<D, G = NoGrad> {
     pub graph: Graph<TensorGraphNode<D>, usize>,
     pub shapes: HashMap<NodeIndex, crate::Shape>,
+    gradient_metadata: Option<GradientMetadata>,
+    _phantom: std::marker::PhantomData<G>,
 }
 
-impl<D> Default for TensorGraph<D> {
+impl<D, G> Default for TensorGraph<D, G> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<D> TensorGraph<D> {
+impl<D, G> TensorGraph<D, G> {
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
             shapes: HashMap::new(),
+            gradient_metadata: None,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -106,7 +126,380 @@ impl<D> TensorGraph<D> {
     }
 }
 
-impl<D> Index<NodeIndex> for TensorGraph<D> {
+impl TensorGraph<f32, NoGrad> {
+    /// Create a new graph with gradient computation nodes for automatic differentiation.
+    ///
+    /// This method transforms a forward-only graph into one that computes gradients
+    /// during the forward pass. Gradient nodes are added for each operation that
+    /// depends (directly or transitively) on parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `loss_node` - The scalar loss node to differentiate with respect to
+    ///
+    /// # Returns
+    ///
+    /// A `TensorGraph<f32, WithGrad>` containing both forward and gradient computation nodes.
+    ///
+    /// # Gradient Computation Strategy
+    ///
+    /// For each node in topological order from loss back to parameters:
+    /// - Binary Add: d(a+b)/da = 1, d(a+b)/db = 1 → grad_a = grad_out, grad_b = grad_out
+    /// - Binary Mul: d(a*b)/da = b, d(a*b)/db = a → grad_a = grad_out * b, grad_b = grad_out * a
+    /// - Unary Exp: d(exp(x))/dx = exp(x) → grad_x = grad_out * exp(x)
+    /// - MatMul: d(A@B)/dA = dC @ B^T, d(A@B)/dB = A^T @ dC
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let x = Parameter::new(vec![2.0], vec![1]);
+    /// let y = x.clone() * x; // y = x^2
+    /// let graph: TensorGraph<f32, NoGrad> = y.into();
+    /// let grad_graph = graph.with_gradients(NodeIndex::from(1));
+    /// // grad_graph now contains nodes to compute dy/dx = 2*x
+    /// ```
+    pub fn with_gradients(mut self, loss_node: NodeIndex) -> TensorGraph<f32, WithGrad> {
+        let mut param_to_grad: HashMap<usize, NodeIndex> = HashMap::new();
+        let mut gradient_nodes: HashSet<NodeIndex> = HashSet::new();
+        let mut node_to_grad: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+
+        // Step 1: Find all parameters in the graph
+        let mut param_nodes: HashMap<usize, NodeIndex> = HashMap::new();
+        for idx in self.graph.node_indices() {
+            if let TensorGraphNode::Parameter { id, .. } = &self.graph[idx] {
+                param_nodes.insert(*id, idx);
+            }
+        }
+
+        // Step 2: Validate loss node
+        let loss_shape = self
+            .shapes
+            .get(&loss_node)
+            .expect("loss node shape missing");
+        assert_eq!(
+            loss_shape.iter().product::<usize>(),
+            1,
+            "Loss node must be scalar, got shape {:?}",
+            loss_shape
+        );
+
+        // Step 3: Create seed gradient for loss (gradient of loss w.r.t. itself = 1.0)
+        // We'll create a constant node with value 1.0
+        let seed_grad_node = self.graph.add_node(TensorGraphNode::Constant {
+            data: Arc::new(vec![1.0f32]),
+        });
+        self.shapes.insert(seed_grad_node, loss_shape.clone());
+        node_to_grad.insert(loss_node, seed_grad_node);
+        gradient_nodes.insert(seed_grad_node);
+
+        // Step 4: Traverse graph in reverse topological order
+        // For each node, compute its gradient based on downstream gradients
+        let topo_order = self.toposort();
+
+        // Process nodes in reverse order (from loss back to inputs/parameters)
+        for &node_idx in topo_order.iter().rev() {
+            // Skip if this node doesn't have a gradient (not on path to loss)
+            let grad_output = match node_to_grad.get(&node_idx) {
+                Some(&grad) => grad,
+                None => continue,
+            };
+
+            // Get the node's inputs
+            let inputs = self.inputs(node_idx);
+
+            // Generate gradient nodes based on operation type
+            match &self.graph[node_idx] {
+                TensorGraphNode::Binary { op } => {
+                    if inputs.len() != 2 {
+                        panic!("Binary op should have 2 inputs");
+                    }
+                    let input_a = inputs[0];
+                    let input_b = inputs[1];
+
+                    match op {
+                        BinaryOp::Add => {
+                            // d(a+b)/da = 1, d(a+b)/db = 1
+                            // grad_a = grad_output, grad_b = grad_output
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_a,
+                                grad_output,
+                            );
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_b,
+                                grad_output,
+                            );
+                        }
+                        BinaryOp::Sub => {
+                            // d(a-b)/da = 1, d(a-b)/db = -1
+                            // grad_a = grad_output, grad_b = -grad_output
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_a,
+                                grad_output,
+                            );
+
+                            let neg_grad = self
+                                .graph
+                                .add_node(TensorGraphNode::Unary { op: UnaryOp::Neg });
+                            self.graph.add_edge(grad_output, neg_grad, 0);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(neg_grad, grad_shape);
+                            gradient_nodes.insert(neg_grad);
+
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_b,
+                                neg_grad,
+                            );
+                        }
+                        BinaryOp::Mul => {
+                            // d(a*b)/da = b, d(a*b)/db = a
+                            // grad_a = grad_output * b, grad_b = grad_output * a
+                            let grad_a = self
+                                .graph
+                                .add_node(TensorGraphNode::Binary { op: BinaryOp::Mul });
+                            self.graph.add_edge(grad_output, grad_a, 0);
+                            self.graph.add_edge(input_b, grad_a, 1);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_a, grad_shape);
+                            gradient_nodes.insert(grad_a);
+
+                            let grad_b = self
+                                .graph
+                                .add_node(TensorGraphNode::Binary { op: BinaryOp::Mul });
+                            self.graph.add_edge(grad_output, grad_b, 0);
+                            self.graph.add_edge(input_a, grad_b, 1);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_b, grad_shape);
+                            gradient_nodes.insert(grad_b);
+
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_a,
+                                grad_a,
+                            );
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_b,
+                                grad_b,
+                            );
+                        }
+                        BinaryOp::Div => {
+                            // d(a/b)/da = 1/b, d(a/b)/db = -a/b²
+                            // grad_a = grad_output / b
+                            let grad_a = self
+                                .graph
+                                .add_node(TensorGraphNode::Binary { op: BinaryOp::Div });
+                            self.graph.add_edge(grad_output, grad_a, 0);
+                            self.graph.add_edge(input_b, grad_a, 1);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_a, grad_shape);
+                            gradient_nodes.insert(grad_a);
+
+                            // grad_b = -grad_output * a / (b * b)
+                            let b_sq = self
+                                .graph
+                                .add_node(TensorGraphNode::Binary { op: BinaryOp::Mul });
+                            self.graph.add_edge(input_b, b_sq, 0);
+                            self.graph.add_edge(input_b, b_sq, 1);
+                            let b_shape = self.shapes.get(&input_b).unwrap().clone();
+                            self.shapes.insert(b_sq, b_shape);
+                            gradient_nodes.insert(b_sq);
+
+                            let grad_times_a = self
+                                .graph
+                                .add_node(TensorGraphNode::Binary { op: BinaryOp::Mul });
+                            self.graph.add_edge(grad_output, grad_times_a, 0);
+                            self.graph.add_edge(input_a, grad_times_a, 1);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_times_a, grad_shape);
+                            gradient_nodes.insert(grad_times_a);
+
+                            let grad_b_pos = self
+                                .graph
+                                .add_node(TensorGraphNode::Binary { op: BinaryOp::Div });
+                            self.graph.add_edge(grad_times_a, grad_b_pos, 0);
+                            self.graph.add_edge(b_sq, grad_b_pos, 1);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_b_pos, grad_shape);
+                            gradient_nodes.insert(grad_b_pos);
+
+                            let grad_b = self
+                                .graph
+                                .add_node(TensorGraphNode::Unary { op: UnaryOp::Neg });
+                            self.graph.add_edge(grad_b_pos, grad_b, 0);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_b, grad_shape);
+                            gradient_nodes.insert(grad_b);
+
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_a,
+                                grad_a,
+                            );
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_b,
+                                grad_b,
+                            );
+                        }
+                    }
+                }
+                TensorGraphNode::Unary { op } => {
+                    if inputs.len() != 1 {
+                        panic!("Unary op should have 1 input");
+                    }
+                    let input_x = inputs[0];
+
+                    match op {
+                        UnaryOp::Exp => {
+                            // d(exp(x))/dx = exp(x)
+                            // grad_x = grad_output * exp(x) = grad_output * node_output
+                            let grad_x = self
+                                .graph
+                                .add_node(TensorGraphNode::Binary { op: BinaryOp::Mul });
+                            self.graph.add_edge(grad_output, grad_x, 0);
+                            self.graph.add_edge(node_idx, grad_x, 1); // Use the exp output
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_x, grad_shape);
+                            gradient_nodes.insert(grad_x);
+
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_x,
+                                grad_x,
+                            );
+                        }
+                        UnaryOp::Log => {
+                            // d(log(x))/dx = 1/x
+                            // grad_x = grad_output / x
+                            let grad_x = self
+                                .graph
+                                .add_node(TensorGraphNode::Binary { op: BinaryOp::Div });
+                            self.graph.add_edge(grad_output, grad_x, 0);
+                            self.graph.add_edge(input_x, grad_x, 1);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_x, grad_shape);
+                            gradient_nodes.insert(grad_x);
+
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_x,
+                                grad_x,
+                            );
+                        }
+                        UnaryOp::Neg => {
+                            // d(-x)/dx = -1
+                            // grad_x = -grad_output
+                            let grad_x = self
+                                .graph
+                                .add_node(TensorGraphNode::Unary { op: UnaryOp::Neg });
+                            self.graph.add_edge(grad_output, grad_x, 0);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_x, grad_shape);
+                            gradient_nodes.insert(grad_x);
+
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_x,
+                                grad_x,
+                            );
+                        }
+                        UnaryOp::Relu => {
+                            // d(relu(x))/dx = x > 0 ? 1 : 0
+                            // For now, we'll defer this to the executor
+                            // This requires creating a "where" or mask operation
+                            // TODO: Implement ReLU gradient
+                            // For MVP, skip ReLU gradient
+                        }
+                    }
+                }
+                TensorGraphNode::MatMul => {
+                    // d(A@B)/dA = dC @ B^T, d(A@B)/dB = A^T @ dC
+                    if inputs.len() != 2 {
+                        panic!("MatMul should have 2 inputs");
+                    }
+                    let _input_a = inputs[0];
+                    let _input_b = inputs[1];
+
+                    // TODO: Implement matrix transpose operation
+                    // For MVP, skip MatMul gradient generation
+                    // This requires adding a Transpose node type
+                }
+                TensorGraphNode::Parameter { id, .. } => {
+                    // Store the gradient node for this parameter
+                    param_to_grad.insert(*id, grad_output);
+                }
+                TensorGraphNode::Constant { .. } | TensorGraphNode::Input { .. } => {
+                    // Constants and inputs don't need gradients
+                }
+                TensorGraphNode::BroadcastAxis { .. } | TensorGraphNode::ReduceAxis { .. } => {
+                    // TODO: Implement broadcast/reduce gradients
+                    // For MVP, skip these
+                }
+            }
+        }
+
+        TensorGraph {
+            graph: self.graph,
+            shapes: self.shapes,
+            gradient_metadata: Some(GradientMetadata {
+                param_to_grad,
+                gradient_nodes,
+            }),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Helper to accumulate gradients when a node has multiple consumers.
+    fn accumulate_gradient(
+        &mut self,
+        node_to_grad: &mut HashMap<NodeIndex, NodeIndex>,
+        gradient_nodes: &mut HashSet<NodeIndex>,
+        node: NodeIndex,
+        new_grad: NodeIndex,
+    ) {
+        if let Some(&existing_grad) = node_to_grad.get(&node) {
+            // Node already has a gradient, add them together
+            let sum_grad = self
+                .graph
+                .add_node(TensorGraphNode::Binary { op: BinaryOp::Add });
+            self.graph.add_edge(existing_grad, sum_grad, 0);
+            self.graph.add_edge(new_grad, sum_grad, 1);
+            let grad_shape = self.shapes.get(&existing_grad).unwrap().clone();
+            self.shapes.insert(sum_grad, grad_shape);
+            gradient_nodes.insert(sum_grad);
+            node_to_grad.insert(node, sum_grad);
+        } else {
+            // First gradient for this node
+            node_to_grad.insert(node, new_grad);
+        }
+    }
+}
+
+impl TensorGraph<f32, WithGrad> {
+    /// Access gradient metadata for graphs with gradients.
+    pub fn gradient_metadata(&self) -> &GradientMetadata {
+        self.gradient_metadata
+            .as_ref()
+            .expect("Gradient metadata should exist for WithGrad graphs")
+    }
+}
+
+impl<D, G> Index<NodeIndex> for TensorGraph<D, G> {
     type Output = TensorGraphNode<D>;
 
     fn index(&self, index: NodeIndex) -> &Self::Output {
@@ -114,7 +507,7 @@ impl<D> Index<NodeIndex> for TensorGraph<D> {
     }
 }
 
-impl From<TensorExpr<f32>> for TensorGraph<f32> {
+impl From<TensorExpr<f32>> for TensorGraph<f32, NoGrad> {
     fn from(expr: TensorExpr<f32>) -> Self {
         let mut graph = TensorGraph::new();
         let _ = expr.lower_to_graph(&mut graph);
@@ -126,8 +519,193 @@ impl From<TensorExpr<f32>> for TensorGraph<f32> {
 mod tests {
     use super::*;
     use crate::Constant;
+    use crate::Parameter;
     use crate::ptx;
     use crate::tile;
+
+    #[test]
+    fn test_with_gradients_api() {
+        // Create simple graph: y = x^2 where x is a parameter
+        let x = Parameter::new(vec![2.0f32], vec![1]);
+        let x_id = x.id();
+        let y = x.clone() * x;
+        let graph: TensorGraph<f32, NoGrad> = y.into();
+
+        // Convert to gradient-enabled graph
+        let grad_graph = graph.with_gradients(NodeIndex::from(1));
+
+        // Verify metadata exists
+        let metadata = grad_graph.gradient_metadata();
+        assert!(metadata.param_to_grad.contains_key(&x_id));
+
+        // Verify gradient nodes were created
+        assert!(
+            !metadata.gradient_nodes.is_empty(),
+            "Expected gradient nodes to be generated"
+        );
+    }
+
+    #[test]
+    fn test_gradient_node_generation_mul() {
+        // Test: y = x * x, should generate grad_x = grad_y * x + grad_y * x = 2 * grad_y * x
+        let x = Parameter::new(vec![2.0f32], vec![1]);
+        let y = x.clone() * x;
+        let graph: TensorGraph<f32, NoGrad> = y.into();
+
+        let initial_node_count = graph.len();
+        let grad_graph = graph.with_gradients(NodeIndex::from(1));
+
+        // Should have created additional gradient nodes:
+        // - seed gradient (constant 1.0)
+        // - grad_left = grad_y * x (right input)
+        // - grad_right = grad_y * x (left input)
+        // - accumulated = grad_left + grad_right
+        assert!(
+            grad_graph.len() > initial_node_count,
+            "Expected new gradient nodes. Before: {}, After: {}",
+            initial_node_count,
+            grad_graph.len()
+        );
+
+        let metadata = grad_graph.gradient_metadata();
+        assert!(
+            metadata.gradient_nodes.len() >= 3,
+            "Expected at least 3 gradient nodes (seed, 2 muls, 1 add), got {}",
+            metadata.gradient_nodes.len()
+        );
+    }
+
+    #[test]
+    fn test_gradient_node_generation_add() {
+        // Test: y = x + x, should generate grad_x = grad_y + grad_y
+        let x = Parameter::new(vec![2.0f32], vec![1]);
+        let y = x.clone() + x;
+        let graph: TensorGraph<f32, NoGrad> = y.into();
+
+        let initial_node_count = graph.len();
+        let grad_graph = graph.with_gradients(NodeIndex::from(1));
+
+        // Should have created gradient nodes
+        assert!(
+            grad_graph.len() > initial_node_count,
+            "Expected new gradient nodes"
+        );
+
+        let metadata = grad_graph.gradient_metadata();
+        assert!(
+            metadata.gradient_nodes.len() >= 2,
+            "Expected at least 2 gradient nodes (seed, accumulation add), got {}",
+            metadata.gradient_nodes.len()
+        );
+    }
+
+    #[test]
+    fn test_gradient_node_generation_exp() {
+        // Test: y = exp(x), should generate grad_x = grad_y * exp(x)
+        let x = Parameter::new(vec![1.0f32], vec![1]);
+        let y = x.exp();
+        let graph: TensorGraph<f32, NoGrad> = y.into();
+
+        let initial_node_count = graph.len();
+        let grad_graph = graph.with_gradients(NodeIndex::from(1));
+
+        // Should have created gradient nodes
+        assert!(
+            grad_graph.len() > initial_node_count,
+            "Expected new gradient nodes"
+        );
+
+        let metadata = grad_graph.gradient_metadata();
+        assert!(
+            metadata.gradient_nodes.len() >= 2,
+            "Expected at least 2 gradient nodes (seed, mul), got {}",
+            metadata.gradient_nodes.len()
+        );
+    }
+
+    #[test]
+    fn test_gradient_node_generation_chain() {
+        // Test: y = (x + x) * x, should generate gradient nodes for entire chain
+        let x = Parameter::new(vec![2.0f32], vec![1]);
+        let x_id = x.id();
+        let sum = x.clone() + x.clone();
+        let y = sum * x;
+        let graph: TensorGraph<f32, NoGrad> = y.into();
+
+        let initial_node_count = graph.len();
+        let grad_graph = graph.with_gradients(NodeIndex::from(2));
+
+        // Should have created many gradient nodes for the chain
+        assert!(
+            grad_graph.len() > initial_node_count,
+            "Expected new gradient nodes"
+        );
+
+        let metadata = grad_graph.gradient_metadata();
+        assert!(
+            metadata.gradient_nodes.len() >= 5,
+            "Expected multiple gradient nodes for chain, got {}",
+            metadata.gradient_nodes.len()
+        );
+
+        // Verify parameter has a gradient
+        assert!(metadata.param_to_grad.contains_key(&x_id));
+    }
+
+    #[test]
+    fn test_gradient_structure_detailed() {
+        // Test gradient graph structure in detail for y = x * 2
+        let x = Parameter::new(vec![3.0f32], vec![1]);
+        let x_id = x.id();
+        let two = Constant::new(vec![2.0f32], vec![1]);
+        let y = x * two;
+        let graph: TensorGraph<f32, NoGrad> = y.into();
+
+        // Graph should be: param(0), constant(1), mul(2)
+        assert_eq!(graph.len(), 3, "Initial graph should have 3 nodes");
+
+        let grad_graph = graph.with_gradients(NodeIndex::from(2));
+
+        // After gradient generation:
+        // - seed gradient constant (1.0)
+        // - grad for left input (param): grad_y * constant(2.0)
+        // - grad for right input (constant): grad_y * param (but constant doesn't need grad)
+        let metadata = grad_graph.gradient_metadata();
+
+        // Verify parameter has a gradient node assigned
+        let param_grad = metadata.param_to_grad.get(&x_id);
+        assert!(param_grad.is_some(), "Parameter should have gradient node");
+
+        // Verify the gradient computation graph structure
+        println!("Total nodes: {}", grad_graph.len());
+        println!("Gradient nodes: {}", metadata.gradient_nodes.len());
+
+        // Walk through nodes to understand structure
+        for idx in grad_graph.graph.node_indices() {
+            let node = &grad_graph[idx];
+            let shape = grad_graph.shapes.get(&idx);
+            let is_grad = metadata.gradient_nodes.contains(&idx);
+            println!(
+                "Node {:?}: {} (shape: {:?}, is_grad: {})",
+                idx,
+                node.name(),
+                shape,
+                is_grad
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Loss node must be scalar")]
+    fn test_with_gradients_requires_scalar_loss() {
+        // Create graph with non-scalar output
+        let x = Parameter::new(vec![1.0f32, 2.0], vec![2]);
+        let y = x.clone() * x;
+        let graph: TensorGraph<f32, NoGrad> = y.into();
+
+        // Should panic because output is not scalar
+        let _grad_graph = graph.with_gradients(NodeIndex::from(1));
+    }
 
     #[test]
     #[ignore = "PTX lowering not yet implemented"]

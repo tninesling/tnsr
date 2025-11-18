@@ -734,8 +734,11 @@ impl<D: DType, R: Into<TensorExpr<D>>> Div<R> for TensorExpr<D> {
 }
 
 impl<D: DType> TensorExpr<D> {
-    pub fn lower_to_graph(&self, graph: &mut graph::TensorGraph<D>) -> NodeIndex {
-        fn lower_rec<D: DType>(expr: &TensorExpr<D>, g: &mut graph::TensorGraph<D>) -> NodeIndex {
+    pub fn lower_to_graph<G>(&self, graph: &mut graph::TensorGraph<D, G>) -> NodeIndex {
+        fn lower_rec<D: DType, G>(
+            expr: &TensorExpr<D>,
+            g: &mut graph::TensorGraph<D, G>,
+        ) -> NodeIndex {
             match &expr.0.kind {
                 ExprKind::Constant { data } => {
                     let idx = g

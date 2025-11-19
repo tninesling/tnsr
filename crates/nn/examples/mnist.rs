@@ -2,17 +2,12 @@ use std::time::Instant;
 
 use candle_datasets::vision::mnist;
 use clap::Parser;
+use nn::Model;
 use rand::prelude::*;
-use runtime::Executor;
 use runtime::optimizer::SGD;
+use runtime::{Executor, Runtime};
 use tensor::Input;
 use tensor::Parameter;
-use tensor::graph::TensorGraph;
-
-#[cfg(not(feature = "cuda"))]
-use runtime::SimpleExecutor;
-#[cfg(feature = "cuda")]
-use runtime::cuda::CudaExecutor;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -41,17 +36,13 @@ fn xavier_init(rng: &mut StdRng, fan_in: usize, fan_out: usize) -> Vec<f32> {
         .collect()
 }
 
-fn build_mlp_graph(
+fn build_mlp_model(
     batch: usize,
     w1: &Parameter<f32>,
     b1: &Parameter<f32>,
     w2: &Parameter<f32>,
     b2: &Parameter<f32>,
-) -> (
-    TensorGraph<f32>,
-    tensor::graph::NodeIndex,
-    tensor::graph::NodeIndex,
-) {
+) -> Model<f32> {
     // Inputs
     let images = Input::<f32>::new("images", vec![batch, 784]);
     let labels = Input::<f32>::new("labels", vec![batch, 10]);
@@ -59,14 +50,15 @@ fn build_mlp_graph(
     // Forward: h = relu(images @ w1 + b1), logits = h @ w2 + b2
     let h = nn::relu(nn::linear(images.clone(), w1.clone(), Some(b1.clone())));
     let logits = nn::linear(h, w2.clone(), Some(b2.clone()));
-    let mut graph = TensorGraph::new();
+    let loss = nn::cross_entropy_one_hot_logits(logits.clone(), labels, 1);
 
-    // Always build both logits and loss nodes
-    let logits_idx = logits.clone().lower_to_graph(&mut graph);
-    let loss = nn::cross_entropy_one_hot_logits(logits, labels, 1);
-    let loss_idx = loss.lower_to_graph(&mut graph);
+    // Build model with named outputs
+    let mut model = Model::new();
+    model.add_output("logits", logits);
+    model.add_output("loss", loss.clone());
+    model.set_loss(loss);
 
-    (graph, logits_idx, loss_idx)
+    model
 }
 
 fn main() {
@@ -109,19 +101,21 @@ fn main() {
     let w2 = Parameter::new(xavier_init(&mut rng, 128, 10), vec![128, 10]);
     let b2 = Parameter::new(vec![0.0f32; 10], vec![1, 10]);
 
-    // Graph
+    // Model
     println!("Building computation graph...");
-    let (graph, logits_idx, loss_idx) = build_mlp_graph(args.batch_size, &w1, &b1, &w2, &b2);
+    let model = build_mlp_model(args.batch_size, &w1, &b1, &w2, &b2);
+
+    // Get output indices
+    let logits_idx = model.get_output("logits").expect("logits output");
+    let loss_idx = model.loss().expect("loss node");
 
     // Augment graph with gradient computation nodes (consumes graph, so we clone)
-    let grad_graph = graph.clone().with_gradients(loss_idx);
+    let grad_graph = model.graph().clone().with_gradients(loss_idx);
 
     let opt = SGD::new(args.lr);
 
-    #[cfg(feature = "cuda")]
-    let mut exec = CudaExecutor::new();
-    #[cfg(not(feature = "cuda"))]
-    let mut exec = SimpleExecutor::new();
+    let mut runtime = Runtime::new();
+    println!("Using backend: {:?}", runtime.backend());
 
     // Training loop
     println!("Starting training for {} epochs...", args.epochs);
@@ -182,10 +176,10 @@ fn main() {
                 inputs.insert("labels".to_string(), y);
 
                 // Forward pass computes both loss and gradients
-                let loss_value = exec.forward(&grad_graph, inputs.clone()).unwrap();
+                let loss_value = runtime.execute(&grad_graph, inputs.clone()).unwrap();
 
                 // Extract gradients from executor
-                let grads = exec.get_gradients(&grad_graph);
+                let grads = runtime.get_gradients(&grad_graph);
 
                 if steps.is_multiple_of(50)
                     && let Some(&lv) = loss_value.first()
@@ -245,13 +239,10 @@ fn main() {
             inputs.insert("labels".to_string(), dummy_labels);
 
             // Forward pass through the unified graph
-            exec.forward(&graph, inputs).unwrap();
+            runtime.execute(model.graph(), inputs).unwrap();
 
             // Extract logits using get_value()
-            #[cfg(feature = "cuda")]
-            let logits = exec.get_value(logits_idx).unwrap();
-            #[cfg(not(feature = "cuda"))]
-            let logits = exec.get_value(logits_idx).unwrap().clone();
+            let logits = runtime.get_value(logits_idx).unwrap();
 
             for i in 0..bs {
                 let row = &logits[i * 10..(i + 1) * 10];

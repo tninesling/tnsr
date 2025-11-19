@@ -15,7 +15,6 @@ pub struct CudaExecutor {
     device: Arc<CudaContext>,
     module: Arc<CudaModule>,
     values: HashMap<petgraph::graph::NodeIndex, CudaSlice<f32>>,
-    grads: HashMap<petgraph::graph::NodeIndex, CudaSlice<f32>>,
 }
 
 impl Default for CudaExecutor {
@@ -25,17 +24,27 @@ impl Default for CudaExecutor {
 }
 
 impl CudaExecutor {
+    /// Create a new CUDA executor, panicking if CUDA initialization fails.
+    ///
+    /// For fallible initialization, use [`CudaExecutor::try_new`].
     pub fn new() -> Self {
-        let device = CudaContext::new(0).expect("Failed to initialize CUDA device 0");
+        Self::try_new().expect("Failed to initialize CUDA executor")
+    }
+
+    /// Try to create a new CUDA executor, returning an error if initialization fails.
+    ///
+    /// This is useful for runtime backend detection where you want to fall back
+    /// to CPU if CUDA is not available.
+    pub fn try_new() -> Result<Self> {
+        let device = CudaContext::new(0).context("Failed to initialize CUDA device 0")?;
         let module = device
             .load_module(Ptx::from_src(PTX))
-            .expect("Failed to load PTX module with cudarc");
-        CudaExecutor {
+            .context("Failed to load PTX module with cudarc")?;
+        Ok(CudaExecutor {
             device,
             module,
             values: HashMap::new(),
-            grads: HashMap::new(),
-        }
+        })
     }
 
     fn neg(&self, input: &CudaSlice<f32>) -> CudaSlice<f32> {
@@ -289,7 +298,7 @@ impl CudaExecutor {
         out
     }
 
-    /// Get the value of a specific node from the executor's cache after a forward pass
+    /// Get the value of a specific node from the executor's cache after execution
     pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<Vec<f32>> {
         self.values.get(&node_idx).map(|cuda_slice| {
             let mut host_vec = vec![0.0f32; cuda_slice.len()];
@@ -690,7 +699,7 @@ impl Executor<f32> for CudaExecutor {
         let out_device = self
             .values
             .get(last_node_idx)
-            .context("Output value not found after forward pass")?;
+            .context("Output value not found after execution")?;
         let mut out_host = vec![0.0f32; out_device.len()];
         self.device
             .default_stream()

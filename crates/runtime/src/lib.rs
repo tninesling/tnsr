@@ -1,12 +1,15 @@
 //! Runtime execution engine for tensor computation graphs.
 //!
-//! This crate provides executors that perform forward passes on computation graphs
-//! lowered from the `tensor` crate. Gradients are computed during the forward pass
+//! This crate provides executors that execute computation graphs
+//! lowered from the `tensor` crate. Gradients are computed during execution
 //! when using graphs with gradient metadata (`TensorGraph<D, WithGrad>`).
 //!
 //! # Architecture
 //!
-//! - **Executor Trait**: Common interface for forward passes and gradient retrieval,
+//! - **Runtime**: Unified interface with automatic backend selection. Recommended for most users.
+//!   Automatically chooses between CPU and GPU at runtime based on availability.
+//!
+//! - **Executor Trait**: Common interface for graph execution and gradient retrieval,
 //!   returning `Result<Vec<D>>` for proper error handling.
 //!
 //! - **SimpleExecutor**: CPU-based executor with optional parallelism (via `parallel` feature).
@@ -15,16 +18,36 @@
 //! - **CudaExecutor** (optional): GPU-accelerated executor using CUDA kernels (via `cuda` feature).
 //!   Automatically manages device memory and kernel launches.
 //!
+//! # Getting Started
+//!
+//! Most users should use [`Runtime`] which automatically selects the best available backend:
+//!
+//! ```rust
+//! use runtime::Runtime;
+//! use tensor::{TensorExpr, graph::TensorGraph};
+//! use std::collections::HashMap;
+//!
+//! let mut runtime = Runtime::new();
+//! let x = TensorExpr::<f32>::input("x", vec![2, 3]);
+//! let graph: TensorGraph<f32> = x.into();
+//!
+//! let mut inputs = HashMap::new();
+//! inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+//!
+//! let result = runtime.execute(&graph, inputs).unwrap();
+//! assert_eq!(result.len(), 6);
+//! ```
+//!
 //! # Gradient Computation
 //!
-//! Gradients are computed during the forward pass using graphs created with
-//! `TensorGraph::with_gradients()`. After executing the forward pass, use
+//! Gradients are computed during execution using graphs created with
+//! `TensorGraph::with_gradients()`. After executing the graph, use
 //! `get_gradients()` to retrieve parameter gradients for optimization.
 //!
 //! # Error Handling
 //!
 //! Execution failures return `Result` types with `anyhow::Error` for:
-//! - Missing inputs or forward values
+//! - Missing inputs or computed values
 //! - Shape mismatches
 //! - Memory allocation failures
 //! - Invalid operations (e.g., unsupported dimensions)
@@ -37,7 +60,10 @@
 //! - `cuda`: Enable GPU acceleration via CUDA (requires CUDA toolkit)
 //! - `parallel`: Enable CPU parallelism via Rayon
 //!
-//! # Example
+//! # Advanced: Direct Executor Usage
+//!
+//! For direct control over the backend, you can use [`SimpleExecutor`] or
+//! [`CudaExecutor`] directly:
 //!
 //! ```rust
 //! use runtime::{Executor, SimpleExecutor};
@@ -62,6 +88,9 @@ use anyhow::{Context, Result};
 #[cfg(feature = "cuda")]
 pub mod cuda;
 pub mod optimizer;
+mod runtime;
+
+pub use runtime::{Backend, Runtime};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -125,12 +154,12 @@ pub fn init_chrome_tracing(file_path: &str) -> Result<TracingGuard, Box<dyn std:
     Ok(TracingGuard { _guard: guard })
 }
 
-/// Executes forward passes on computation graphs and provides gradient access.
+/// Executes computation graphs and provides gradient access.
 ///
 /// Implementors provide different execution strategies (CPU, GPU, etc.)
 /// while maintaining a common interface for graph evaluation.
 pub trait Executor<D> {
-    /// Execute a forward pass through the computation graph.
+    /// Execute a computation graph.
     ///
     /// # Arguments
     ///
@@ -148,7 +177,7 @@ pub trait Executor<D> {
     /// - Shapes are incompatible
     /// - Memory allocation fails
     /// - Invalid operations are encountered
-    fn forward<G>(
+    fn execute<G>(
         &mut self,
         graph: &TensorGraph<D, G>,
         inputs: HashMap<String, Vec<D>>,
@@ -181,19 +210,19 @@ pub trait Executor<D> {
 /// # Example
 ///
 /// ```rust
-/// use runtime::{Executor, SimpleExecutor};
+/// use runtime::Runtime;
 /// use tensor::{TensorExpr, graph::TensorGraph};
 /// use std::collections::HashMap;
 ///
-/// let mut executor = SimpleExecutor::new();
-/// let x = TensorExpr::<f32>::input("x", vec![2, 2]);
+/// let mut runtime = Runtime::new();
+/// let x = TensorExpr::<f32>::input("x", vec![2, 3]);
 /// let graph: TensorGraph<f32> = x.into();
 ///
 /// let mut inputs = HashMap::new();
-/// inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0]);
+/// inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ///
-/// let result = executor.forward(&graph, inputs).unwrap();
-/// assert_eq!(result.len(), 4);
+/// let result = runtime.execute(&graph, inputs).unwrap();
+/// assert_eq!(result.len(), 6);
 /// ```
 #[derive(Default)]
 pub struct SimpleExecutor {
@@ -208,7 +237,7 @@ impl SimpleExecutor {
 
     /// Retrieve the computed value for a specific graph node.
     ///
-    /// Only available after a forward pass has been executed.
+    /// Only available after execution has completed.
     /// Useful for debugging intermediate values.
     pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<&Vec<f32>> {
         self.values.get(&node_idx)
@@ -283,7 +312,7 @@ impl SimpleExecutor {
 }
 
 impl Executor<f32> for SimpleExecutor {
-    fn forward<G>(
+    fn execute<G>(
         &mut self,
         graph: &TensorGraph<f32, G>,
         inputs: HashMap<String, Vec<f32>>,
@@ -641,50 +670,6 @@ fn reduce_axis_forward<G>(
         }
     }
     Ok(out)
-}
-
-#[cfg(feature = "cuda")]
-pub(crate) fn expand_to(x: &[f32], x_shape: &[usize], target_shape: &[usize]) -> Vec<f32> {
-    if x_shape == target_shape {
-        return x.to_vec();
-    }
-
-    let in_shape = x_shape;
-    let out_shape = target_shape;
-    let out_size: usize = out_shape.iter().product();
-    let mut out = vec![0.0f32; out_size];
-    let in_rank = in_shape.len();
-    let out_rank = out_shape.len();
-    let out_strides = rowmajor_strides(out_shape);
-    let in_strides = rowmajor_strides(in_shape);
-
-    for (out_idx, out_elem) in out.iter_mut().enumerate().take(out_size) {
-        let mut rem = out_idx;
-        let mut in_linear = 0usize;
-        for (dim, stride) in out_strides.iter().enumerate().take(out_rank) {
-            let coord = if out_rank == 0 { 0 } else { rem / *stride };
-            if out_rank > 0 {
-                rem %= *stride;
-            }
-            let in_dim_opt = if dim + in_rank >= out_rank {
-                Some(dim + in_rank - out_rank)
-            } else {
-                None
-            };
-            if let Some(in_dim) = in_dim_opt {
-                let in_dim_size = in_shape[in_dim];
-                let idx_in_dim = if in_dim_size == 1 { 0 } else { coord };
-                let stride = if in_strides.is_empty() {
-                    0
-                } else {
-                    in_strides[in_dim]
-                };
-                in_linear += idx_in_dim * stride;
-            }
-        }
-        *out_elem = x[in_linear];
-    }
-    out
 }
 
 /// Get an iterator over a slice, parallel if the `parallel` feature is enabled.

@@ -5,13 +5,18 @@ use criterion::Criterion;
 use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
-use runtime::Executor;
-use runtime::SimpleExecutor;
+use runtime::{Executor, SimpleExecutor};
 use tensor::Constant;
 use tensor::TensorExpr;
 
 pub fn benches(c: &mut Criterion) {
     let sizes: [usize; 2] = [32, 256];
+
+    // NOTE: These benchmarks use SimpleExecutor directly to measure CPU-only performance.
+    // For application code, prefer using Runtime::new() or Runtime::with_backend(Backend::Cpu).
+    // Example:
+    //   let mut runtime = Runtime::with_backend(Backend::Cpu).unwrap();
+    //   runtime.execute(&graph, inputs).unwrap();
 
     // Unary: neg
     {
@@ -35,7 +40,7 @@ pub fn benches(c: &mut Criterion) {
                 move |b, &_| {
                     b.iter(|| {
                         let _ =
-                            std::hint::black_box(exec.forward(&*graph_simple, Default::default()));
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -65,7 +70,7 @@ pub fn benches(c: &mut Criterion) {
                 move |b, &_| {
                     b.iter(|| {
                         let _ =
-                            std::hint::black_box(exec.forward(&*graph_simple, Default::default()));
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -95,7 +100,7 @@ pub fn benches(c: &mut Criterion) {
                 move |b, &_| {
                     b.iter(|| {
                         let _ =
-                            std::hint::black_box(exec.forward(&*graph_simple, Default::default()));
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -125,7 +130,7 @@ pub fn benches(c: &mut Criterion) {
                 move |b, &_| {
                     b.iter(|| {
                         let _ =
-                            std::hint::black_box(exec.forward(&*graph_simple, Default::default()));
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -156,7 +161,7 @@ pub fn benches(c: &mut Criterion) {
                 move |bch, &_| {
                     bch.iter(|| {
                         let _ =
-                            std::hint::black_box(exec.forward(&*graph_simple, Default::default()));
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -187,7 +192,7 @@ pub fn benches(c: &mut Criterion) {
                 move |bch, &_| {
                     bch.iter(|| {
                         let _ =
-                            std::hint::black_box(exec.forward(&*graph_simple, Default::default()));
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -218,7 +223,7 @@ pub fn benches(c: &mut Criterion) {
                 move |bch, &_| {
                     bch.iter(|| {
                         let _ =
-                            std::hint::black_box(exec.forward(&*graph_simple, Default::default()));
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );
@@ -249,7 +254,7 @@ pub fn benches(c: &mut Criterion) {
                 move |bch, &_| {
                     bch.iter(|| {
                         let _ =
-                            std::hint::black_box(exec.forward(&*graph_simple, Default::default()));
+                            std::hint::black_box(exec.execute(&*graph_simple, Default::default()));
                     });
                 },
             );

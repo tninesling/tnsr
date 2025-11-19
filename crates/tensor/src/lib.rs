@@ -347,6 +347,10 @@ enum ExprKind<D: DType> {
         id: usize,
         data: Arc<Mutex<Vec<D>>>,
     },
+    /// Reference to an existing node in a graph (used for gradients)
+    NodeRef {
+        idx: NodeIndex,
+    },
     Unary {
         op: UnaryOp,
         x: TensorExpr<D>,
@@ -423,6 +427,37 @@ impl<D: DType> TensorExpr<D> {
                 id,
                 data: Arc::new(Mutex::new(data)),
             },
+        }))
+    }
+
+    /// Create a reference to an existing node in a graph.
+    ///
+    /// This is used during gradient construction to build tensor expressions
+    /// that reference already-lowered graph nodes, enabling fluent operator
+    /// syntax for creating gradient computation nodes.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - The NodeIndex of the existing graph node to reference
+    /// * `shape` - The shape of the tensor at this node
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Instead of manually adding nodes and edges:
+    /// let grad_a = graph.add_node(TensorGraphNode::Binary { op: BinaryOp::Mul });
+    /// graph.add_edge(grad_output, grad_a, 0);
+    /// graph.add_edge(input_b, grad_a, 1);
+    ///
+    /// // Use fluent syntax:
+    /// let grad_output_expr = TensorExpr::node_ref(grad_output, shape);
+    /// let input_b_expr = TensorExpr::node_ref(input_b, shape);
+    /// let grad_a_expr = grad_output_expr * input_b_expr;
+    /// ```
+    pub fn node_ref(idx: NodeIndex, shape: Shape) -> Self {
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::NodeRef { idx },
         }))
     }
 
@@ -809,6 +844,11 @@ impl<D: DType> TensorExpr<D> {
             g: &mut graph::TensorGraph<D, G>,
         ) -> NodeIndex {
             match &expr.0.kind {
+                ExprKind::NodeRef { idx } => {
+                    // NodeRef just returns the existing node index
+                    // No new node is created - this allows referencing nodes during gradient construction
+                    *idx
+                }
                 ExprKind::Constant { data } => {
                     let idx = g
                         .graph

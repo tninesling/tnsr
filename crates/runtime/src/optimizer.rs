@@ -19,7 +19,7 @@ use tensor::graph::{TensorGraph, TensorGraphNode};
 /// use std::collections::HashMap;
 ///
 /// let optimizer = SGD::new(0.01); // learning rate = 0.01
-/// // After executing forward pass and retrieving gradients:
+/// // After executing the graph and retrieving gradients:
 /// // optimizer.step(&graph, &grads);
 /// ```
 pub struct SGD {

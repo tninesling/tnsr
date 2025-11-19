@@ -12,6 +12,7 @@
 //!   - `mse_loss()` - mean squared error for regression
 //!   - `cross_entropy_one_hot_logits()` - cross-entropy for classification with one-hot labels
 //! - **Utilities**: `reduce_logsumexp_simple()` - numerically stable log-sum-exp reduction
+//! - **Model Builder**: `Model` - structured API for building and managing computation graphs
 //!
 //! # Design
 //!
@@ -38,10 +39,14 @@
 //! // let result = executor.forward(&h.into(), inputs)?;
 //! ```
 
+use std::collections::HashMap;
+
 use tensor::Constant;
 use tensor::DType;
 use tensor::Shape;
 use tensor::TensorExpr;
+use tensor::graph::NodeIndex;
+use tensor::graph::TensorGraph;
 
 /// Fully connected (linear) layer: `y = x @ w + b`.
 ///
@@ -256,6 +261,108 @@ pub fn cross_entropy_one_hot_logits(
     nll.mean_all()
 }
 
+/// A model structure for organizing computation graphs with multiple outputs.
+///
+/// `Model` provides a structured API for constructing computation graphs with named outputs
+/// (like "logits", "loss", etc.) instead of returning messy tuples of `(TensorGraph, NodeIndex, ...)`.
+///
+/// # Example
+///
+/// ```ignore
+/// use nn::Model;
+/// use tensor::{Input, Parameter};
+///
+/// let batch_size = 32;
+/// let w1 = Parameter::new(vec![0.1; 784 * 128], vec![784, 128]);
+/// let b1 = Parameter::new(vec![0.0; 128], vec![1, 128]);
+/// let w2 = Parameter::new(vec![0.1; 128 * 10], vec![128, 10]);
+/// let b2 = Parameter::new(vec![0.0; 10], vec![1, 10]);
+///
+/// // Build model graph
+/// let images = Input::<f32>::new("images", vec![batch_size, 784]);
+/// let labels = Input::<f32>::new("labels", vec![batch_size, 10]);
+///
+/// let h = nn::relu(nn::linear(images, &w1, Some(&b1)));
+/// let logits = nn::linear(h, &w2, Some(&b2));
+/// let loss = nn::cross_entropy_one_hot_logits(logits.clone(), labels, 1);
+///
+/// // Create model
+/// let mut model = Model::new();
+/// model.add_output("logits", logits);
+/// model.add_output("loss", loss.clone());
+/// model.set_loss(loss);
+///
+/// // Access outputs
+/// let logits_idx = model.get_output("logits").unwrap();
+/// let loss_idx = model.loss().unwrap();
+/// let graph = model.graph();
+/// ```
+#[derive(Clone)]
+pub struct Model<D: DType> {
+    /// The underlying computation graph
+    graph: TensorGraph<D>,
+
+    /// Named outputs (e.g., "logits", "predictions")
+    outputs: HashMap<String, NodeIndex>,
+
+    /// Optional loss node for training
+    loss_fn: Option<NodeIndex>,
+}
+
+impl<D: DType> Model<D> {
+    /// Create a new empty model.
+    pub fn new() -> Self {
+        Self {
+            graph: TensorGraph::new(),
+            outputs: HashMap::new(),
+            loss_fn: None,
+        }
+    }
+
+    /// Add a named output by lowering an expression to the graph.
+    pub fn add_output(&mut self, name: impl Into<String>, expr: impl Into<TensorExpr<D>>) {
+        let node_idx = expr.into().lower_to_graph(&mut self.graph);
+        self.outputs.insert(name.into(), node_idx);
+    }
+
+    /// Set the loss function by lowering an expression to the graph.
+    pub fn set_loss(&mut self, expr: impl Into<TensorExpr<D>>) {
+        let node_idx = expr.into().lower_to_graph(&mut self.graph);
+        self.loss_fn = Some(node_idx);
+    }
+
+    /// Get a named output node index.
+    pub fn get_output(&self, name: &str) -> Option<NodeIndex> {
+        self.outputs.get(name).copied()
+    }
+
+    /// Get the loss node index if one was specified.
+    pub fn loss(&self) -> Option<NodeIndex> {
+        self.loss_fn
+    }
+
+    /// Get a reference to the underlying computation graph.
+    pub fn graph(&self) -> &TensorGraph<D> {
+        &self.graph
+    }
+
+    /// Get a mutable reference to the underlying computation graph.
+    pub fn graph_mut(&mut self) -> &mut TensorGraph<D> {
+        &mut self.graph
+    }
+
+    /// Consume the model and return the underlying graph.
+    pub fn into_graph(self) -> TensorGraph<D> {
+        self.graph
+    }
+}
+
+impl<D: DType> Default for Model<D> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use runtime::Executor;
@@ -293,7 +400,7 @@ mod tests {
         node.lower_to_graph(&mut graph);
 
         let mut exec = SimpleExecutor::new();
-        let out = exec.forward(&graph, Default::default()).unwrap();
+        let out = exec.execute(&graph, Default::default()).unwrap();
 
         let expected = {
             let a = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -327,7 +434,7 @@ mod tests {
         node.lower_to_graph(&mut graph);
 
         let mut exec = SimpleExecutor::new();
-        let out = exec.forward(&graph, Default::default()).unwrap();
+        let out = exec.execute(&graph, Default::default()).unwrap();
 
         let a = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
         let bmat = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -357,7 +464,7 @@ mod tests {
         let mut g = TensorGraph::new();
         loss.lower_to_graph(&mut g);
         let mut exec = SimpleExecutor::new();
-        let out = exec.forward(&g, Default::default()).unwrap();
+        let out = exec.execute(&g, Default::default()).unwrap();
         assert_eq!(out.len(), 1);
         let expected = (3.0f32).ln();
         assert!((out[0] - expected).abs() < 1e-6);

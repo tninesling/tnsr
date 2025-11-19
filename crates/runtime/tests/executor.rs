@@ -1,19 +1,13 @@
 //! Integration tests for graph execution.
 //!
-//! Tests forward passes and gradient computation on computation graphs using both CPU and GPU executors.
-//! The same test logic runs on both executors to ensure consistency across platforms.
+//! Tests graph execution and gradient computation using the unified Runtime.
+//! The Runtime automatically selects the best available backend (CUDA or CPU).
 
 use std::collections::HashMap;
 
-use runtime::Executor;
+use runtime::{Executor, Runtime};
 use tensor::graph::TensorGraph;
 use tensor::{Constant, Parameter, TensorExpr};
-
-#[cfg(feature = "cuda")]
-use runtime::cuda::CudaExecutor;
-
-#[cfg(not(feature = "cuda"))]
-use runtime::SimpleExecutor;
 
 const EPSILON: f32 = 1e-5;
 
@@ -33,29 +27,20 @@ macro_rules! assert_approx_eq {
     };
 }
 
-/// Creates an executor based on the current feature flags.
+/// Creates a Runtime with automatic backend selection.
 ///
-/// Returns a CudaExecutor if the cuda feature is enabled, otherwise returns SimpleExecutor.
-#[cfg(feature = "cuda")]
-fn create_executor() -> impl Executor<f32> {
-    CudaExecutor::new()
-}
-
-/// Creates an executor based on the current feature flags.
-///
-/// Returns a CudaExecutor if the cuda feature is enabled, otherwise returns SimpleExecutor.
-#[cfg(not(feature = "cuda"))]
-fn create_executor() -> impl Executor<f32> {
-    SimpleExecutor::new()
+/// The Runtime will prefer CUDA if available, otherwise falls back to CPU.
+fn create_runtime() -> Runtime {
+    Runtime::new()
 }
 
 // ============================================================================
-// Forward Pass Tests
+// Execution Tests
 // ============================================================================
 
 #[test]
 fn forward_matmul_simple() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // A[2,3] @ B[3,2] = C[2,2]
     let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
@@ -63,7 +48,7 @@ fn forward_matmul_simple() {
     let node = TensorExpr::from(a).matmul(b);
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor.forward(&graph, HashMap::new()).unwrap();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
 
     // Expected: [[1*7+2*9+3*11, 1*8+2*10+3*12], [4*7+5*9+6*11, 4*8+5*10+6*12]]
     //         = [[58, 64], [139, 154]]
@@ -73,14 +58,14 @@ fn forward_matmul_simple() {
 
 #[test]
 fn forward_broadcast_then_reduce() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // Broadcast [2,1] to [2,3], then reduce_sum along axis 1
     let a = Constant::new(vec![1.0, 2.0], vec![2, 1]);
     let node = TensorExpr::from(a).broadcast(vec![2, 3]).reduce_sum(1);
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor.forward(&graph, HashMap::new()).unwrap();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
 
     // Expected: [[1,1,1],[2,2,2]] summed along axis 1 = [3, 6]
     let expected = vec![3.0, 6.0];
@@ -89,13 +74,13 @@ fn forward_broadcast_then_reduce() {
 
 #[test]
 fn forward_reduce_max() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     let a = Constant::new(vec![1.0, -2.0, 3.5, 0.5, 10.0, -1.0], vec![2, 3]);
     let node = TensorExpr::from(a).reduce_max(1);
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor.forward(&graph, HashMap::new()).unwrap();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
 
     // Expected: max of each row = [3.5, 10.0]
     let expected = vec![3.5, 10.0];
@@ -104,13 +89,13 @@ fn forward_reduce_max() {
 
 #[test]
 fn forward_reduce_mean() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
     let node = TensorExpr::from(a).reduce_mean(1);
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor.forward(&graph, HashMap::new()).unwrap();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
 
     // Expected: mean of each row = [2.0, 5.0]
     let expected = vec![2.0, 5.0];
@@ -119,7 +104,7 @@ fn forward_reduce_mean() {
 
 #[test]
 fn forward_chained_operations() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // Complex chain: (a * 2) + (b - 1)
     let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
@@ -131,7 +116,7 @@ fn forward_chained_operations() {
         + (TensorExpr::from(b) - TensorExpr::from(one));
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor.forward(&graph, HashMap::new()).unwrap();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
 
     // Expected: [2,4,6,8] + [4,5,6,7] = [6,9,12,15]
     let expected = vec![6.0, 9.0, 12.0, 15.0];
@@ -144,7 +129,7 @@ fn forward_chained_operations() {
 
 #[test]
 fn gradient_simple_square() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // f(x) = x^2 where x = [2.0]
     // df/dx = 2x = 4.0
@@ -156,8 +141,8 @@ fn gradient_simple_square() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, HashMap::new()).unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
 
     let grad = grads.get(&x_id).expect("Parameter gradient missing");
     assert_eq!(grad.len(), 1);
@@ -170,7 +155,7 @@ fn gradient_simple_square() {
 
 #[test]
 fn gradient_exp_function() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // f(x) = exp(x) where x = [1.0]
     // df/dx = exp(x) = e ≈ 2.718
@@ -182,8 +167,8 @@ fn gradient_exp_function() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, HashMap::new()).unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
 
     let grad = grads.get(&x_id).expect("Parameter gradient missing");
     assert_eq!(grad.len(), 1);
@@ -198,7 +183,7 @@ fn gradient_exp_function() {
 
 #[test]
 fn gradient_matmul_rectangular() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // Test with rectangular matrices: A[2,3] @ B[3,2]
     let a = Parameter::new(vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
@@ -212,8 +197,8 @@ fn gradient_matmul_rectangular() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, HashMap::new()).unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
 
     // Verify we have gradients for both parameters
     assert_eq!(grads.len(), 2);
@@ -232,7 +217,7 @@ fn gradient_matmul_rectangular() {
 
 #[test]
 fn gradient_matmul_chain_rule() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // z = (A @ B) @ C where B=I and C=2I
     // Result: z = 2A, so dz/dA should be 2*ones
@@ -248,8 +233,8 @@ fn gradient_matmul_chain_rule() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, HashMap::new()).unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
 
     let grad_a = grads.get(&a_id).expect("Parameter gradient missing");
     assert_eq!(grad_a.len(), 4);
@@ -266,7 +251,7 @@ fn gradient_matmul_chain_rule() {
 
 #[test]
 fn gradient_broadcast_and_reduce() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // Parameter [2,1] broadcast to [2,3], then reduce_sum to scalar
     let x = Parameter::new(vec![1.0, 2.0], vec![2, 1]);
@@ -280,8 +265,8 @@ fn gradient_broadcast_and_reduce() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, HashMap::new()).unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
 
     let grad = grads.get(&x_id).expect("Parameter gradient missing");
     assert_eq!(grad.len(), 2);
@@ -298,7 +283,7 @@ fn gradient_broadcast_and_reduce() {
 
 #[test]
 fn gradient_relu_activation() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // f(x) = relu(x) where x = [-1, 2, -3, 4]
     // df/dx = [0, 1, 0, 1]
@@ -310,8 +295,8 @@ fn gradient_relu_activation() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, HashMap::new()).unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
 
     let grad = grads.get(&x_id).expect("Parameter gradient missing");
     assert_eq!(grad.len(), 4);
@@ -322,7 +307,7 @@ fn gradient_relu_activation() {
 
 #[test]
 fn gradient_log_function() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // f(x) = log(x) where x = [1, 2, 3, 4]
     // df/dx = 1/x = [1, 0.5, 0.333..., 0.25]
@@ -335,8 +320,8 @@ fn gradient_log_function() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, HashMap::new()).unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
 
     let grad = grads.get(&x_id).expect("Parameter gradient missing");
     assert_eq!(grad.len(), 4);
@@ -347,7 +332,7 @@ fn gradient_log_function() {
 
 #[test]
 fn gradient_division_operation() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // f(a, b) = sum(a / b) where a = [4, 6], b = [2, 3]
     // df/da = 1/b = [0.5, 0.333...]
@@ -363,8 +348,8 @@ fn gradient_division_operation() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, HashMap::new()).unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
 
     let grad_a = grads.get(&a_id).expect("dA missing");
     let grad_b = grads.get(&b_id).expect("dB missing");
@@ -378,7 +363,7 @@ fn gradient_division_operation() {
 
 #[test]
 fn gradient_transpose_operation() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // f(x) = sum(transpose(x))
     // Gradient should flow back through transpose
@@ -390,8 +375,8 @@ fn gradient_transpose_operation() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, HashMap::new()).unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
 
     let grad = grads.get(&x_id).expect("Parameter gradient missing");
     assert_eq!(grad.len(), 6);
@@ -408,7 +393,7 @@ fn gradient_transpose_operation() {
 
 #[test]
 fn forward_gt_operation() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // Test: x > 0 where x = [-2.0, -1.0, 0.0, 1.0, 2.0]
     // Expected: [0.0, 0.0, 0.0, 1.0, 1.0]
@@ -417,8 +402,8 @@ fn forward_gt_operation() {
     let node = TensorExpr::from(x).gt(TensorExpr::from(zero));
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor
-        .forward(&graph, std::collections::HashMap::new())
+    let result = runtime
+        .execute(&graph, std::collections::HashMap::new())
         .unwrap();
 
     let expected = [0.0, 0.0, 0.0, 1.0, 1.0];
@@ -436,7 +421,7 @@ fn forward_gt_operation() {
 
 #[test]
 fn forward_mask_operation() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // Test: mask([10, 20, 30, 40], [0, 1, 0, 1])
     // Expected: [0, 20, 0, 40]
@@ -445,8 +430,8 @@ fn forward_mask_operation() {
     let node = TensorExpr::from(values).mask(TensorExpr::from(condition));
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor
-        .forward(&graph, std::collections::HashMap::new())
+    let result = runtime
+        .execute(&graph, std::collections::HashMap::new())
         .unwrap();
     eprintln!("Result: {:?}", result);
 
@@ -465,15 +450,15 @@ fn forward_mask_operation() {
 
 #[test]
 fn forward_relu_detailed() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // Test ReLU with various values including negatives, zero, and positives
     let x = Constant::new(vec![-5.0, -2.0, -0.5, 0.0, 0.5, 2.0, 5.0], vec![7]);
     let node = TensorExpr::from(x).relu();
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor
-        .forward(&graph, std::collections::HashMap::new())
+    let result = runtime
+        .execute(&graph, std::collections::HashMap::new())
         .unwrap();
 
     let expected = [0.0, 0.0, 0.0, 0.0, 0.5, 2.0, 5.0];
@@ -491,7 +476,7 @@ fn forward_relu_detailed() {
 
 #[test]
 fn gradient_relu_detailed() {
-    let mut executor = create_executor();
+    let mut runtime = create_runtime();
 
     // Test ReLU gradient with various values
     // f(x) = sum(relu(x)) where x = [-5, -2, -0.5, 0, 0.5, 2, 5]
@@ -505,10 +490,10 @@ fn gradient_relu_detailed() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor
-        .forward(&grad_graph, std::collections::HashMap::new())
+    runtime
+        .execute(&grad_graph, std::collections::HashMap::new())
         .unwrap();
-    let grads = executor.get_gradients(&grad_graph);
+    let grads = runtime.get_gradients(&grad_graph);
 
     let grad = grads.get(&x_id).expect("Parameter gradient missing");
     assert_eq!(grad.len(), 7);

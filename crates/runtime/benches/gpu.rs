@@ -11,6 +11,12 @@ use tensor::TensorExpr;
 pub fn benches(c: &mut Criterion) {
     let sizes: [usize; 2] = [32, 256];
 
+    // NOTE: These benchmarks use CudaExecutor directly to measure GPU-only performance.
+    // For application code, prefer using Runtime::new() or Runtime::with_backend(Backend::Cuda).
+    // Example:
+    //   let mut runtime = Runtime::with_backend(Backend::Cuda).unwrap();
+    //   runtime.execute(&graph, inputs).unwrap();
+
     // Unary: neg
     {
         let mut group = c.benchmark_group("neg");

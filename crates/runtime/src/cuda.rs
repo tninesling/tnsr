@@ -460,83 +460,79 @@ impl Executor<f32> for CudaExecutor {
                         in_shape[*axis]
                     );
 
-                    if out_shape.len() == 1 {
-                        // For 1D BroadcastAxis, we're broadcasting [1] to [n]
-                        // This is just filling the output with the single input value
-                        anyhow::ensure!(
-                            *axis == 0,
-                            "BroadcastAxis axis {} out of bounds for 1D tensor",
-                            axis
-                        );
-                        
-                        let n = out_shape[0];
-                        let mut out = stream
-                            .alloc_zeros::<f32>(out_size)
-                            .context("Failed to allocate CUDA memory for broadcast output")?;
-                        
-                        // Copy the single value from device to host, then broadcast to all positions
-                        let mut single_value = vec![0.0f32; 1];
-                        stream
-                            .memcpy_dtoh(in_val, &mut single_value)
-                            .context("Failed to copy single value from device")?;
-                        
-                        // Fill output with the single value
-                        let host_out = vec![single_value[0]; n];
-                        stream
-                            .memcpy_htod(&host_out, &mut out)
-                            .context("Failed to copy broadcast result to device")?;
-                        
-                        out
-                    } else if out_shape.len() == 2 {
-                        let m = out_shape[0];
-                        let n = out_shape[1];
-                        let m_u64 = m as u64;
-                        let n_u64 = n as u64;
-                        let mut out = stream
-                            .alloc_zeros::<f32>(out_size)
-                            .context("Failed to allocate CUDA memory for broadcast output")?;
-
-                        if *axis == 0 {
-                            let f = self
-                                .module
-                                .load_function("broadcast_row")
-                                .context("Failed to load broadcast_row kernel")?;
-                            let cfg = LaunchConfig::for_num_elems(n as u32);
-                            let mut launcher = stream.launch_builder(&f);
-                            launcher.arg(in_val);
-                            launcher.arg(&n_u64);
-                            launcher.arg(&mut out);
-                            launcher.arg(&m_u64);
-                            launcher.arg(&n_u64);
-                            unsafe { launcher.launch(cfg) }
-                                .context("CUDA broadcast_row kernel launch failed")?;
-                        } else if *axis == 1 {
-                            let f = self
-                                .module
-                                .load_function("broadcast_col")
-                                .context("Failed to load broadcast_col kernel")?;
-                            let cfg = LaunchConfig::for_num_elems(m as u32);
-                            let mut launcher = stream.launch_builder(&f);
-                            launcher.arg(in_val);
-                            launcher.arg(&m_u64);
-                            launcher.arg(&mut out);
-                            launcher.arg(&m_u64);
-                            launcher.arg(&n_u64);
-                            unsafe { launcher.launch(cfg) }
-                                .context("CUDA broadcast_col kernel launch failed")?;
-                        } else {
-                            anyhow::bail!(
-                                "BroadcastAxis axis {} out of bounds for 2D tensor",
-                                axis
-                            );
-                        }
-                        out
-                    } else {
-                        anyhow::bail!(
-                            "BroadcastAxis currently only supports 1D and 2D tensors on GPU, got {}D",
-                            out_shape.len()
-                        );
+                    // Compute output strides for row-major layout
+                    let mut out_strides = vec![1usize; out_shape.len()];
+                    for i in (0..out_shape.len().saturating_sub(1)).rev() {
+                        out_strides[i] = out_strides[i + 1] * out_shape[i + 1];
                     }
+
+                    // Compute input strides (size 1 dimensions have stride 0)
+                    let mut in_strides = vec![1usize; in_shape.len()];
+                    for i in (0..in_shape.len().saturating_sub(1)).rev() {
+                        in_strides[i] = if in_shape[i + 1] == 1 {
+                            in_strides[i + 1]
+                        } else {
+                            in_strides[i + 1] * in_shape[i + 1]
+                        };
+                    }
+                    // Set stride to 0 for broadcast dimensions
+                    for i in 0..in_shape.len() {
+                        if in_shape[i] == 1 {
+                            in_strides[i] = 0;
+                        }
+                    }
+
+                    let mut out = stream
+                        .alloc_zeros::<f32>(out_size)
+                        .context("Failed to allocate CUDA memory for broadcast output")?;
+
+                    // Upload shape and strides to device
+                    let mut out_shape_device = stream
+                        .alloc_zeros::<usize>(out_shape.len())
+                        .context("Failed to allocate CUDA memory for output shape")?;
+                    stream
+                        .memcpy_htod(out_shape, &mut out_shape_device)
+                        .context("Failed to copy output shape to device")?;
+
+                    let mut out_strides_device = stream
+                        .alloc_zeros::<usize>(out_strides.len())
+                        .context("Failed to allocate CUDA memory for output strides")?;
+                    stream
+                        .memcpy_htod(&out_strides, &mut out_strides_device)
+                        .context("Failed to copy output strides to device")?;
+
+                    let mut in_strides_device = stream
+                        .alloc_zeros::<usize>(in_strides.len())
+                        .context("Failed to allocate CUDA memory for input strides")?;
+                    stream
+                        .memcpy_htod(&in_strides, &mut in_strides_device)
+                        .context("Failed to copy input strides to device")?;
+
+                    let f = self
+                        .module
+                        .load_function("broadcast_axis")
+                        .context("Failed to load broadcast_axis kernel")?;
+                    let cfg = LaunchConfig::for_num_elems(out_size as u32);
+                    let axis_u64 = *axis as u64;
+                    let out_size_u64 = out_size as u64;
+                    let in_len_u64 = in_val.len() as u64;
+                    let shape_len_u64 = out_shape.len() as u64;
+                    let mut launcher = stream.launch_builder(&f);
+                    launcher.arg(in_val);
+                    launcher.arg(&in_len_u64);
+                    launcher.arg(&mut out);
+                    launcher.arg(&axis_u64);
+                    launcher.arg(&out_shape_device);
+                    launcher.arg(&shape_len_u64);
+                    launcher.arg(&out_strides_device);
+                    launcher.arg(&shape_len_u64);
+                    launcher.arg(&in_strides_device);
+                    launcher.arg(&shape_len_u64);
+                    launcher.arg(&out_size_u64);
+                    unsafe { launcher.launch(cfg) }
+                        .context("CUDA broadcast_axis kernel launch failed")?;
+
+                    out
                 }
                 TensorGraphNode::ReduceAxis { op, axis } => {
                     let in_idx = graph.inputs(*node_idx)[0];
@@ -569,102 +565,77 @@ impl Executor<f32> for CudaExecutor {
 
                     let stream = self.device.default_stream();
 
-                    if in_shape.len() == 1 {
-                        // For 1D ReduceAxis, we're reducing [n] to [1]
-                        anyhow::ensure!(
-                            *axis == 0,
-                            "ReduceAxis axis {} out of bounds for 1D tensor",
-                            axis
-                        );
-                        
-                        let n = in_shape[0];
-                        
-                        // Copy data from device to host for reduction
-                        let mut host_data = vec![0.0f32; n];
-                        stream
-                            .memcpy_dtoh(x_device, &mut host_data)
-                            .context("Failed to copy data from device for reduce")?;
-                        
-                        // Perform reduction on CPU
-                        let result = match op {
-                            tensor::ReduceOp::Sum => host_data.iter().sum::<f32>(),
-                            tensor::ReduceOp::Max => host_data.iter().copied().fold(f32::NEG_INFINITY, f32::max),
-                            tensor::ReduceOp::Mean => {
-                                let sum: f32 = host_data.iter().sum();
-                                sum / n as f32
-                            }
-                        };
-                        
-                        // Copy result back to device
-                        let mut out_device = stream
-                            .alloc_zeros::<f32>(1)
-                            .context("Failed to allocate CUDA memory for reduce output")?;
-                        stream
-                            .memcpy_htod(&[result], &mut out_device)
-                            .context("Failed to copy reduce result to device")?;
-                        
-                        out_device
-                    } else if in_shape.len() == 2 {
-                        let m = in_shape[0];
-                        let n = in_shape[1];
-                        let m_u64 = m as u64;
-                        let n_u64 = n as u64;
-                        let in_len_u64 = x_device.len() as u64;
-                        let mut out_device = stream
-                            .alloc_zeros::<f32>(out_len)
-                            .context("Failed to allocate CUDA memory for reduce output")?;
-
-                        if *axis == 1 {
-                            let kernel_name = match op {
-                                tensor::ReduceOp::Sum => "reduce_sum_rows",
-                                tensor::ReduceOp::Max => "reduce_max_rows",
-                                tensor::ReduceOp::Mean => "reduce_mean_rows",
-                            };
-                            let f = self.module.load_function(kernel_name).with_context(|| {
-                                format!("Failed to load {} kernel", kernel_name)
-                            })?;
-                            let cfg = LaunchConfig::for_num_elems(m as u32);
-                            let out_len_u64 = m_u64;
-                            let mut launcher = stream.launch_builder(&f);
-                            launcher.arg(x_device);
-                            launcher.arg(&in_len_u64);
-                            launcher.arg(&mut out_device);
-                            launcher.arg(&out_len_u64);
-                            launcher.arg(&n_u64);
-                            unsafe { launcher.launch(cfg) }.with_context(|| {
-                                format!("CUDA {} kernel launch failed", kernel_name)
-                            })?;
-                        } else if *axis == 0 {
-                            let kernel_name = match op {
-                                tensor::ReduceOp::Sum => "reduce_sum_cols",
-                                tensor::ReduceOp::Max => "reduce_max_cols",
-                                tensor::ReduceOp::Mean => "reduce_mean_cols",
-                            };
-                            let f = self.module.load_function(kernel_name).with_context(|| {
-                                format!("Failed to load {} kernel", kernel_name)
-                            })?;
-                            let cfg = LaunchConfig::for_num_elems(n as u32);
-                            let out_len_u64 = n_u64;
-                            let mut launcher = stream.launch_builder(&f);
-                            launcher.arg(x_device);
-                            launcher.arg(&in_len_u64);
-                            launcher.arg(&mut out_device);
-                            launcher.arg(&m_u64);
-                            launcher.arg(&out_len_u64);
-                            unsafe { launcher.launch(cfg) }.with_context(|| {
-                                format!("CUDA {} kernel launch failed", kernel_name)
-                            })?;
-                        } else {
-                            anyhow::bail!("ReduceAxis axis {} out of bounds for 2D tensor", axis);
-                        }
-
-                        out_device
-                    } else {
-                        anyhow::bail!(
-                            "ReduceAxis currently only supports 1D and 2D tensors on GPU, got {}D",
-                            in_shape.len()
-                        );
+                    // Compute strides for row-major layout
+                    let mut in_strides = vec![1usize; in_shape.len()];
+                    for i in (0..in_shape.len().saturating_sub(1)).rev() {
+                        in_strides[i] = in_strides[i + 1] * in_shape[i + 1];
                     }
+
+                    let mut out_strides = vec![1usize; out_shape.len()];
+                    for i in (0..out_shape.len().saturating_sub(1)).rev() {
+                        out_strides[i] = out_strides[i + 1] * out_shape[i + 1];
+                    }
+
+                    let mut out_device = stream
+                        .alloc_zeros::<f32>(out_len)
+                        .context("Failed to allocate CUDA memory for reduce output")?;
+
+                    // Upload shapes and strides to device
+                    let mut in_shape_device = stream
+                        .alloc_zeros::<usize>(in_shape.len())
+                        .context("Failed to allocate CUDA memory for input shape")?;
+                    stream
+                        .memcpy_htod(in_shape, &mut in_shape_device)
+                        .context("Failed to copy input shape to device")?;
+
+                    let mut in_strides_device = stream
+                        .alloc_zeros::<usize>(in_strides.len())
+                        .context("Failed to allocate CUDA memory for input strides")?;
+                    stream
+                        .memcpy_htod(&in_strides, &mut in_strides_device)
+                        .context("Failed to copy input strides to device")?;
+
+                    let mut out_strides_device = stream
+                        .alloc_zeros::<usize>(out_strides.len())
+                        .context("Failed to allocate CUDA memory for output strides")?;
+                    stream
+                        .memcpy_htod(&out_strides, &mut out_strides_device)
+                        .context("Failed to copy output strides to device")?;
+
+                    let kernel_name = match op {
+                        tensor::ReduceOp::Sum => "reduce_sum_axis",
+                        tensor::ReduceOp::Max => "reduce_max_axis",
+                        tensor::ReduceOp::Mean => "reduce_mean_axis",
+                    };
+                    let f = self
+                        .module
+                        .load_function(kernel_name)
+                        .with_context(|| format!("Failed to load {} kernel", kernel_name))?;
+                    let cfg = LaunchConfig::for_num_elems(out_len as u32);
+                    let axis_u64 = *axis as u64;
+                    let in_len_u64 = x_device.len() as u64;
+                    let in_shape_len_u64 = in_shape.len() as u64;
+                    let in_strides_len_u64 = in_strides.len() as u64;
+                    let out_strides_len_u64 = out_strides.len() as u64;
+                    let out_len_u64 = out_len as u64;
+                    let axis_len_u64 = in_shape[*axis] as u64;
+                    let mut launcher = stream.launch_builder(&f);
+                    launcher.arg(x_device);
+                    launcher.arg(&in_len_u64);
+                    launcher.arg(&mut out_device);
+                    launcher.arg(&axis_u64);
+                    launcher.arg(&in_shape_device);
+                    launcher.arg(&in_shape_len_u64);
+                    launcher.arg(&in_strides_device);
+                    launcher.arg(&in_strides_len_u64);
+                    launcher.arg(&out_strides_device);
+                    launcher.arg(&out_strides_len_u64);
+                    launcher.arg(&out_len_u64);
+                    launcher.arg(&axis_len_u64);
+                    unsafe { launcher.launch(cfg) }
+                        .with_context(|| format!("CUDA {} kernel launch failed", kernel_name))?;
+
+                    out_device
                 }
                 TensorGraphNode::Transpose => {
                     let in_idx = graph.inputs(*node_idx)[0];

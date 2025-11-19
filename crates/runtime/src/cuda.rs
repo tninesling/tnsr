@@ -281,6 +281,7 @@ impl CudaExecutor {
         let mut launcher = stream.launch_builder(&f);
         launcher.arg(input);
         launcher.arg(&len_u64);
+        launcher.arg(&len_u64);
         launcher.arg(&mut out);
         launcher.arg(&rows_u64);
         launcher.arg(&cols_u64);
@@ -459,7 +460,34 @@ impl Executor<f32> for CudaExecutor {
                         in_shape[*axis]
                     );
 
-                    if out_shape.len() == 2 {
+                    if out_shape.len() == 1 {
+                        // For 1D BroadcastAxis, we're broadcasting [1] to [n]
+                        // This is just filling the output with the single input value
+                        anyhow::ensure!(
+                            *axis == 0,
+                            "BroadcastAxis axis {} out of bounds for 1D tensor",
+                            axis
+                        );
+                        
+                        let n = out_shape[0];
+                        let mut out = stream
+                            .alloc_zeros::<f32>(out_size)
+                            .context("Failed to allocate CUDA memory for broadcast output")?;
+                        
+                        // Copy the single value from device to host, then broadcast to all positions
+                        let mut single_value = vec![0.0f32; 1];
+                        stream
+                            .memcpy_dtoh(in_val, &mut single_value)
+                            .context("Failed to copy single value from device")?;
+                        
+                        // Fill output with the single value
+                        let host_out = vec![single_value[0]; n];
+                        stream
+                            .memcpy_htod(&host_out, &mut out)
+                            .context("Failed to copy broadcast result to device")?;
+                        
+                        out
+                    } else if out_shape.len() == 2 {
                         let m = out_shape[0];
                         let n = out_shape[1];
                         let m_u64 = m as u64;
@@ -505,7 +533,7 @@ impl Executor<f32> for CudaExecutor {
                         out
                     } else {
                         anyhow::bail!(
-                            "BroadcastAxis currently only supports 2D tensors on GPU, got {}D",
+                            "BroadcastAxis currently only supports 1D and 2D tensors on GPU, got {}D",
                             out_shape.len()
                         );
                     }
@@ -541,7 +569,42 @@ impl Executor<f32> for CudaExecutor {
 
                     let stream = self.device.default_stream();
 
-                    if in_shape.len() == 2 {
+                    if in_shape.len() == 1 {
+                        // For 1D ReduceAxis, we're reducing [n] to [1]
+                        anyhow::ensure!(
+                            *axis == 0,
+                            "ReduceAxis axis {} out of bounds for 1D tensor",
+                            axis
+                        );
+                        
+                        let n = in_shape[0];
+                        
+                        // Copy data from device to host for reduction
+                        let mut host_data = vec![0.0f32; n];
+                        stream
+                            .memcpy_dtoh(x_device, &mut host_data)
+                            .context("Failed to copy data from device for reduce")?;
+                        
+                        // Perform reduction on CPU
+                        let result = match op {
+                            tensor::ReduceOp::Sum => host_data.iter().sum::<f32>(),
+                            tensor::ReduceOp::Max => host_data.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+                            tensor::ReduceOp::Mean => {
+                                let sum: f32 = host_data.iter().sum();
+                                sum / n as f32
+                            }
+                        };
+                        
+                        // Copy result back to device
+                        let mut out_device = stream
+                            .alloc_zeros::<f32>(1)
+                            .context("Failed to allocate CUDA memory for reduce output")?;
+                        stream
+                            .memcpy_htod(&[result], &mut out_device)
+                            .context("Failed to copy reduce result to device")?;
+                        
+                        out_device
+                    } else if in_shape.len() == 2 {
                         let m = in_shape[0];
                         let n = in_shape[1];
                         let m_u64 = m as u64;
@@ -598,7 +661,7 @@ impl Executor<f32> for CudaExecutor {
                         out_device
                     } else {
                         anyhow::bail!(
-                            "ReduceAxis currently only supports 2D tensors on GPU, got {}D",
+                            "ReduceAxis currently only supports 1D and 2D tensors on GPU, got {}D",
                             in_shape.len()
                         );
                     }
@@ -623,6 +686,30 @@ impl Executor<f32> for CudaExecutor {
                     let rows = in_shape[0];
                     let cols = in_shape[1];
                     self.transpose(input, rows, cols)
+                }
+                TensorGraphNode::Gt => {
+                    let ins = graph.inputs(*node_idx);
+                    let lhs = self
+                        .values
+                        .get(&ins[0])
+                        .context("Missing left operand for Gt")?;
+                    let rhs = self
+                        .values
+                        .get(&ins[1])
+                        .context("Missing right operand for Gt")?;
+                    self.gt(lhs, rhs)
+                }
+                TensorGraphNode::Mask => {
+                    let ins = graph.inputs(*node_idx);
+                    let values = self
+                        .values
+                        .get(&ins[0])
+                        .context("Missing values for Mask")?;
+                    let condition = self
+                        .values
+                        .get(&ins[1])
+                        .context("Missing condition for Mask")?;
+                    self.mask(values, condition)
                 }
             };
             self.values.insert(*node_idx, result);

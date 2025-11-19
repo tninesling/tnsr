@@ -44,6 +44,10 @@ pub enum TensorGraphNode<D> {
     Transpose,
     BroadcastAxis { axis: usize },
     ReduceAxis { op: ReduceOp, axis: usize },
+    /// Greater than comparison: returns 1.0 where lhs > rhs, 0.0 otherwise
+    Gt,
+    /// Mask operation: returns values where condition != 0.0, 0.0 otherwise
+    Mask,
 }
 
 impl<D> TensorGraphNode<D> {
@@ -72,6 +76,8 @@ impl<D> TensorGraphNode<D> {
                 ReduceOp::Max => "ReduceAxisMax",
                 ReduceOp::Mean => "ReduceAxisMean",
             },
+            TensorGraphNode::Gt => "Gt",
+            TensorGraphNode::Mask => "Mask",
         }
     }
 }
@@ -424,11 +430,38 @@ impl TensorGraph<f32, NoGrad> {
                             );
                         }
                         UnaryOp::Relu => {
-                            // d(relu(x))/dx = x > 0 ? 1 : 0
-                            // For now, we'll defer this to the executor
-                            // This requires creating a "where" or mask operation
-                            // TODO: Implement ReLU gradient
-                            // For MVP, skip ReLU gradient
+                            // d(relu(x))/dx = grad_output * (x > 0)
+                            // We need to create: condition = (x > 0), then mask(grad_output, condition)
+                            
+                            // Create a constant zero tensor with same shape as input
+                            let input_shape = self.shapes.get(&input_x).unwrap().clone();
+                            let num_elements: usize = input_shape.iter().product();
+                            let zero_const = self.graph.add_node(TensorGraphNode::Constant {
+                                data: Arc::new(vec![0.0f32; num_elements]),
+                            });
+                            self.shapes.insert(zero_const, input_shape.clone());
+
+                            // Create Gt node: condition = (x > 0)
+                            let condition = self.graph.add_node(TensorGraphNode::Gt);
+                            self.graph.add_edge(input_x, condition, 0);
+                            self.graph.add_edge(zero_const, condition, 1);
+                            self.shapes.insert(condition, input_shape.clone());
+                            gradient_nodes.insert(condition);
+
+                            // Create Mask node: grad_x = mask(grad_output, condition)
+                            let grad_x = self.graph.add_node(TensorGraphNode::Mask);
+                            self.graph.add_edge(grad_output, grad_x, 0);
+                            self.graph.add_edge(condition, grad_x, 1);
+                            let grad_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            self.shapes.insert(grad_x, grad_shape);
+                            gradient_nodes.insert(grad_x);
+
+                            self.accumulate_gradient(
+                                &mut node_to_grad,
+                                &mut gradient_nodes,
+                                input_x,
+                                grad_x,
+                            );
                         }
                     }
                 }
@@ -616,6 +649,11 @@ impl TensorGraph<f32, NoGrad> {
                         input_x,
                         grad_x,
                     );
+                }
+                TensorGraphNode::Gt | TensorGraphNode::Mask => {
+                    // Gt and Mask are only used in gradient computation itself
+                    // They don't need gradients (they're non-differentiable operations)
+                    // Skip gradient computation for these nodes
                 }
             }
         }

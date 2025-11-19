@@ -274,6 +274,25 @@ impl SimpleExecutor {
         let _span = trace_span!("div").entered();
         get_iter(a).zip(get_iter(b)).map(|(x, y)| x / y).collect()
     }
+
+    fn gt(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("gt").entered();
+        get_iter(a)
+            .zip(get_iter(b))
+            .map(|(x, y)| if x > y { 1.0 } else { 0.0 })
+            .collect()
+    }
+
+     fn mask(&self, values: &[f32], condition: &[f32]) -> Vec<f32> {
+        let _span = trace_span!("mask").entered();
+        eprintln!("mask function: values={:?}, condition={:?}", values, condition);
+        let result: Vec<f32> = get_iter(values)
+            .zip(get_iter(condition))
+            .map(|(v, c)| if *c != 0.0 { *v } else { 0.0 })
+            .collect();
+        eprintln!("mask result: {:?}", result);
+        result
+    }
 }
 
 impl Executor<f32> for SimpleExecutor {
@@ -287,6 +306,7 @@ impl Executor<f32> for SimpleExecutor {
 
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
+            println!("DEBUG: Executing node {}: {}", node_idx.index(), node.name());
             let result = match node {
                 TensorGraphNode::Constant { data } => {
                     let _span = trace_span!("constant", node = node_idx.index()).entered();
@@ -358,6 +378,46 @@ impl Executor<f32> for SimpleExecutor {
                     )
                     .entered();
                     reduce_axis_forward(graph, &self.values, *node_idx, op, *axis)?
+                }
+                TensorGraphNode::Gt => {
+                    let _span = trace_span!("gt", node = node_idx.index()).entered();
+                    let ins = graph.inputs(*node_idx);
+                    let a = self.values.get(&ins[0]).with_context(|| {
+                        format!("Value for node {} not computed", ins[0].index())
+                    })?;
+                    let b = self.values.get(&ins[1]).with_context(|| {
+                        format!("Value for node {} not computed", ins[1].index())
+                    })?;
+                    anyhow::ensure!(
+                        a.len() == b.len(),
+                        "Gt op shape mismatch: {} vs {}",
+                        a.len(),
+                        b.len()
+                    );
+                    self.gt(a, b)
+                }
+                TensorGraphNode::Mask => {
+                    let _span = trace_span!("mask", node = node_idx.index()).entered();
+                    eprintln!("TensorGraphNode::Mask handler");
+                    let ins = graph.inputs(*node_idx);
+                    eprintln!("ins[0]={}, ins[1]={}", ins[0].index(), ins[1].index());
+                    let values = self.values.get(&ins[0]).with_context(|| {
+                        format!("Value for node {} not computed", ins[0].index())
+                    })?;
+                    eprintln!("values={:?}", values);
+                    let condition = self.values.get(&ins[1]).with_context(|| {
+                        format!("Condition for node {} not computed", ins[1].index())
+                    })?;
+                    eprintln!("condition={:?}", condition);
+                    anyhow::ensure!(
+                        values.len() == condition.len(),
+                        "Mask op shape mismatch: {} vs {}",
+                        values.len(),
+                        condition.len()
+                    );
+                    let result = self.mask(values, condition);
+                    eprintln!("Mask node result={:?}", result);
+                    result
                 }
             };
             self.values.insert(*node_idx, result);

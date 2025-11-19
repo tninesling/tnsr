@@ -78,6 +78,8 @@ impl From<TensorGraph<f32>> for TileGraph {
                 TensorGraphNode::Transpose => todo!(),
                 TensorGraphNode::BroadcastAxis { .. } => todo!(),
                 TensorGraphNode::ReduceAxis { .. } => todo!(),
+                TensorGraphNode::Gt => todo!(),
+                TensorGraphNode::Mask => todo!(),
             },
             |_idx, e| e,
         );

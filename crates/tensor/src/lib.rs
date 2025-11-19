@@ -372,6 +372,16 @@ enum ExprKind<D: DType> {
     Transpose {
         x: TensorExpr<D>,
     },
+    /// Greater than comparison
+    Gt {
+        a: TensorExpr<D>,
+        b: TensorExpr<D>,
+    },
+    /// Mask operation
+    Mask {
+        values: TensorExpr<D>,
+        condition: TensorExpr<D>,
+    },
 }
 
 impl<D: DType> TensorExpr<D> {
@@ -756,6 +766,46 @@ impl<D: DType, R: Into<TensorExpr<D>>> Div<R> for TensorExpr<D> {
 }
 
 impl<D: DType> TensorExpr<D> {
+    /// Greater than comparison: returns 1.0 where `self > other`, 0.0 elsewhere.
+    pub fn gt<R: Into<TensorExpr<D>>>(self, other: R) -> Self
+    where
+        D: 'static,
+    {
+        let other = other.into();
+        #[cfg(feature = "implicit_broadcast")]
+        let out_shape = broadcast_output_shape(self.shape(), other.shape());
+        #[cfg(not(feature = "implicit_broadcast"))]
+        let out_shape = self.shape().clone();
+        TensorExpr(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Gt {
+                a: self,
+                b: other,
+            },
+        }))
+    }
+
+    /// Mask operation: returns `self` where `condition != 0`, else 0.
+    pub fn mask<R: Into<TensorExpr<D>>>(self, condition: R) -> Self
+    where
+        D: 'static,
+    {
+        let condition = condition.into();
+        #[cfg(feature = "implicit_broadcast")]
+        let out_shape = broadcast_output_shape(self.shape(), condition.shape());
+        #[cfg(not(feature = "implicit_broadcast"))]
+        let out_shape = self.shape().clone();
+        TensorExpr(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Mask {
+                values: self,
+                condition,
+            },
+        }))
+    }
+}
+
+impl<D: DType> TensorExpr<D> {
     pub fn lower_to_graph<G>(&self, graph: &mut graph::TensorGraph<D, G>) -> NodeIndex {
         fn lower_rec<D: DType, G>(
             expr: &TensorExpr<D>,
@@ -880,6 +930,24 @@ impl<D: DType> TensorExpr<D> {
                     let node_idx = g.graph.add_node(TensorGraphNode::Transpose);
                     g.shapes.insert(node_idx, expr.shape().clone());
                     g.graph.add_edge(x_idx, node_idx, 0);
+                    node_idx
+                }
+                ExprKind::Gt { a, b } => {
+                    let a_idx = lower_rec(a, g);
+                    let b_idx = lower_rec(b, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Gt);
+                    g.shapes.insert(node_idx, expr.shape().clone());
+                    g.graph.add_edge(a_idx, node_idx, 0);
+                    g.graph.add_edge(b_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::Mask { values, condition } => {
+                    let values_idx = lower_rec(values, g);
+                    let condition_idx = lower_rec(condition, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Mask);
+                    g.shapes.insert(node_idx, expr.shape().clone());
+                    g.graph.add_edge(values_idx, node_idx, 0);
+                    g.graph.add_edge(condition_idx, node_idx, 1);
                     node_idx
                 }
             }

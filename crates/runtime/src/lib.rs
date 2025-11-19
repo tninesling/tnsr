@@ -318,8 +318,6 @@ impl Executor<f32> for SimpleExecutor {
         inputs: HashMap<String, Vec<f32>>,
     ) -> Result<Vec<f32>> {
         let order = graph.toposort();
-        let _fwd_span = trace_span!("forward", nodes = order.len()).entered();
-
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
             println!(

@@ -191,54 +191,6 @@ impl Runtime {
         }
     }
 
-    /// Execute a computation graph and return the output.
-    ///
-    /// This is a convenience method that delegates to the [`Executor::forward`] trait method.
-    /// Use this method for a more intuitive API when working with `Runtime` directly.
-    ///
-    /// # Arguments
-    ///
-    /// * `graph` - The computation graph to execute
-    /// * `inputs` - Named input tensors as flat vectors
-    ///
-    /// # Returns
-    ///
-    /// The output tensor as a flat vector, or an error if execution fails.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Required inputs are missing
-    /// - Shapes are incompatible
-    /// - Memory allocation fails
-    /// - Invalid operations are encountered
-    /// - CUDA-specific errors (kernel launch failures, device errors)
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use runtime::Runtime;
-    /// use tensor::{TensorExpr, graph::TensorGraph};
-    /// use std::collections::HashMap;
-    ///
-    /// let mut runtime = Runtime::new();
-    /// let x = TensorExpr::<f32>::input("x", vec![2, 2]);
-    /// let graph: TensorGraph<f32> = x.into();
-    ///
-    /// let mut inputs = HashMap::new();
-    /// inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0]);
-    ///
-    /// let result = runtime.execute(&graph, inputs).unwrap();
-    /// assert_eq!(result.len(), 4);
-    /// ```
-    pub fn execute<G>(
-        &mut self,
-        graph: &TensorGraph<f32, G>,
-        inputs: HashMap<String, Vec<f32>>,
-    ) -> Result<Vec<f32>> {
-        self.execute(graph, inputs)
-    }
-
     /// Get the computed value for a specific node in the graph.
     ///
     /// This method allows retrieving intermediate values after execution.
@@ -294,7 +246,7 @@ impl Executor<f32> for Runtime {
         match self {
             Runtime::Cpu(executor) => executor.execute(graph, inputs),
             #[cfg(feature = "cuda")]
-            Runtime::Cuda(executor) => executor.forward(graph, inputs),
+            Runtime::Cuda(executor) => executor.execute(graph, inputs),
         }
     }
 

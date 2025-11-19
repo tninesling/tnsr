@@ -877,8 +877,6 @@ mod tests {
     use super::*;
     use crate::Constant;
     use crate::Parameter;
-    use crate::ptx;
-    use crate::tile;
 
     #[test]
     fn test_with_gradients_api() {
@@ -1302,21 +1300,5 @@ mod tests {
             "Expected at least 1 BroadcastAxis node for ReduceAxis Sum gradient, got {}",
             broadcast_count
         );
-    }
-
-    #[test]
-    #[ignore = "PTX lowering not yet implemented"]
-    fn lowers_add_to_ptx() {
-        let a = Constant::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![4]);
-        let b = Constant::new(vec![10.0f32, 20.0, 30.0, 40.0], vec![4]);
-        let c = a + b;
-        println!("Expr: {c:?}");
-
-        let tensor_graph: TensorGraph<f32> = c.into();
-        let tile_graph: tile::TileGraph = tensor_graph.into();
-        let ptx_graph: ptx::PtxGraph = tile_graph.into();
-        let ptx_module: ptx::Module = ptx_graph.into();
-
-        insta::assert_snapshot!(ptx_module);
     }
 }

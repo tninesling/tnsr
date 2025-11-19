@@ -369,6 +369,9 @@ enum ExprKind<D: DType> {
         x: TensorExpr<D>,
         axis: usize,
     },
+    Transpose {
+        x: TensorExpr<D>,
+    },
 }
 
 impl<D: DType> TensorExpr<D> {
@@ -642,6 +645,25 @@ impl<D: DType> TensorExpr<D> {
         }
         expr
     }
+
+    pub fn transpose(self) -> Self
+    where
+        D: 'static,
+    {
+        let shape = self.shape().clone();
+        assert!(
+            shape.len() >= 2,
+            "Transpose requires at least 2D tensor, got {}D",
+            shape.len()
+        );
+        let mut out_shape = shape.clone();
+        let len = out_shape.len();
+        out_shape.swap(len - 2, len - 1);
+        Self(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Transpose { x: self },
+        }))
+    }
 }
 
 impl<D: DType> std::ops::Neg for TensorExpr<D> {
@@ -849,6 +871,13 @@ impl<D: DType> TensorExpr<D> {
                         op: op.clone(),
                         axis: *axis,
                     });
+                    g.shapes.insert(node_idx, expr.shape().clone());
+                    g.graph.add_edge(x_idx, node_idx, 0);
+                    node_idx
+                }
+                ExprKind::Transpose { x } => {
+                    let x_idx = lower_rec(x, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Transpose);
                     g.shapes.insert(node_idx, expr.shape().clone());
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx

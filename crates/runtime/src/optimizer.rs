@@ -1,7 +1,7 @@
 //! Optimization algorithms for updating model parameters.
 //!
 //! Provides gradient descent optimizers that update trainable parameters
-//! based on computed gradients from backward passes.
+//! based on computed gradients retrieved from the executor.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,8 +19,8 @@ use tensor::graph::{TensorGraph, TensorGraphNode};
 /// use std::collections::HashMap;
 ///
 /// let optimizer = SGD::new(0.01); // learning rate = 0.01
-/// // After computing gradients via backward pass:
-/// // optimizer.step(&graph, &grads_by_param);
+/// // After executing forward pass and retrieving gradients:
+/// // optimizer.step(&graph, &grads);
 /// ```
 pub struct SGD {
     lr: f32,
@@ -44,7 +44,7 @@ impl SGD {
     /// # Arguments
     ///
     /// * `graph` - The computation graph containing parameters to update
-    /// * `grads` - Gradients indexed by parameter ID (from [`BackwardResult::grads_by_param`](crate::BackwardResult::grads_by_param))
+    /// * `grads` - Gradients indexed by parameter ID (from [`Executor::get_gradients`](crate::Executor::get_gradients))
     ///
     /// # Panics
     ///

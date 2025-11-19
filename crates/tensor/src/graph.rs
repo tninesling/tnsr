@@ -19,14 +19,10 @@ use crate::UnaryOp;
 pub struct NoGrad;
 
 /// Typestate marker for graphs with gradient computation nodes.
-#[derive(Clone)]
-pub struct WithGrad {
-    data: GradientMetadata,
-}
-
-/// Metadata tracking gradient nodes and parameter mappings.
+///
+/// Tracks gradient nodes and parameter mappings for automatic differentiation.
 #[derive(Clone, Debug)]
-pub struct GradientMetadata {
+pub struct WithGrad {
     /// Maps parameter ID to its gradient accumulation node.
     pub param_to_grad: HashMap<usize, NodeIndex>,
     /// Set of all gradient computation nodes.
@@ -35,15 +31,31 @@ pub struct GradientMetadata {
 
 #[derive(Clone)]
 pub enum TensorGraphNode<D> {
-    Constant { data: Arc<Vec<D>> },
-    Input { name: &'static str },
-    Parameter { id: usize, data: Arc<Mutex<Vec<D>>> },
-    Unary { op: UnaryOp },
-    Binary { op: BinaryOp },
+    Constant {
+        data: Arc<Vec<D>>,
+    },
+    Input {
+        name: &'static str,
+    },
+    Parameter {
+        id: usize,
+        data: Arc<Mutex<Vec<D>>>,
+    },
+    Unary {
+        op: UnaryOp,
+    },
+    Binary {
+        op: BinaryOp,
+    },
     MatMul,
     Transpose,
-    BroadcastAxis { axis: usize },
-    ReduceAxis { op: ReduceOp, axis: usize },
+    BroadcastAxis {
+        axis: usize,
+    },
+    ReduceAxis {
+        op: ReduceOp,
+        axis: usize,
+    },
     /// Greater than comparison: returns 1.0 where lhs > rhs, 0.0 otherwise
     Gt,
     /// Mask operation: returns values where condition != 0.0, 0.0 otherwise
@@ -100,6 +112,12 @@ pub struct TensorGraph<D, G = NoGrad> {
     pub shapes: HashMap<NodeIndex, crate::Shape>,
     gradients: G,
     _phantom: std::marker::PhantomData<G>,
+}
+
+impl<D> Default for TensorGraph<D, NoGrad> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<D> TensorGraph<D, NoGrad> {
@@ -432,7 +450,7 @@ impl TensorGraph<f32, NoGrad> {
                         UnaryOp::Relu => {
                             // d(relu(x))/dx = grad_output * (x > 0)
                             // We need to create: condition = (x > 0), then mask(grad_output, condition)
-                            
+
                             // Create a constant zero tensor with same shape as input
                             let input_shape = self.shapes.get(&input_x).unwrap().clone();
                             let num_elements: usize = input_shape.iter().product();
@@ -662,10 +680,8 @@ impl TensorGraph<f32, NoGrad> {
             graph: self.graph,
             shapes: self.shapes,
             gradients: WithGrad {
-                data: GradientMetadata {
-                    param_to_grad,
-                    gradient_nodes,
-                },
+                param_to_grad,
+                gradient_nodes,
             },
             _phantom: std::marker::PhantomData,
         }
@@ -699,8 +715,8 @@ impl TensorGraph<f32, NoGrad> {
 
 impl TensorGraph<f32, WithGrad> {
     /// Access gradient metadata for graphs with gradients.
-    pub fn gradient_metadata(&self) -> &GradientMetadata {
-        &self.gradients.data
+    pub fn gradient_metadata(&self) -> &WithGrad {
+        &self.gradients
     }
 }
 
@@ -988,8 +1004,8 @@ mod tests {
 
         let grad_graph = graph.with_gradients(loss_node);
 
-        // Should have created gradient nodes including ReduceAxis backward (which creates BroadcastAxis)
-        // and BroadcastAxis backward (which creates ReduceAxis)
+        // Should have created gradient nodes including ReduceAxis gradient (which creates BroadcastAxis)
+        // and BroadcastAxis gradient (which creates ReduceAxis)
         assert!(
             grad_graph.len() > initial_node_count,
             "Expected new gradient nodes for BroadcastAxis"

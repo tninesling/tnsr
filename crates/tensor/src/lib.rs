@@ -173,7 +173,7 @@ impl<D: DType, R: Into<TensorExpr<D>>> Add<R> for Constant<D> {
 /// An input tensor whose data is provided at execution time.
 ///
 /// Inputs represent external data fed into the computation graph (e.g., training batches,
-/// inference inputs). Values are supplied via the `inputs` parameter to [`Executor::forward`](crate::Executor::forward).
+/// inference inputs). Values are supplied via the `inputs` parameter to the Executor.
 ///
 /// # Example
 ///
@@ -778,10 +778,7 @@ impl<D: DType> TensorExpr<D> {
         let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
-            kind: ExprKind::Gt {
-                a: self,
-                b: other,
-            },
+            kind: ExprKind::Gt { a: self, b: other },
         }))
     }
 

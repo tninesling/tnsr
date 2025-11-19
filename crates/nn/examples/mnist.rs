@@ -112,7 +112,7 @@ fn main() {
     // Graph
     println!("Building computation graph...");
     let (graph, logits_idx, loss_idx) = build_mlp_graph(args.batch_size, &w1, &b1, &w2, &b2);
-    
+
     // Augment graph with gradient computation nodes (consumes graph, so we clone)
     let grad_graph = graph.clone().with_gradients(loss_idx);
 

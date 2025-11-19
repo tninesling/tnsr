@@ -1,19 +1,25 @@
 //! Runtime execution engine for tensor computation graphs.
 //!
-//! This crate provides executors that perform forward and backward passes on computation graphs
-//! lowered from the `tensor` crate. Execution is where errors can occur—resource allocation,
-//! shape validation, and arithmetic operations may fail.
+//! This crate provides executors that perform forward passes on computation graphs
+//! lowered from the `tensor` crate. Gradients are computed during the forward pass
+//! when using graphs with gradient metadata (`TensorGraph<D, WithGrad>`).
 //!
 //! # Architecture
 //!
-//! - **Executor Trait**: Common interface for forward and backward passes, returning
-//!   `Result<Vec<D>>` and `Result<BackwardResult<D>>` respectively for proper error handling.
+//! - **Executor Trait**: Common interface for forward passes and gradient retrieval,
+//!   returning `Result<Vec<D>>` for proper error handling.
 //!
 //! - **SimpleExecutor**: CPU-based executor with optional parallelism (via `parallel` feature).
 //!   Uses naive algorithms suitable for testing and small models.
 //!
 //! - **CudaExecutor** (optional): GPU-accelerated executor using CUDA kernels (via `cuda` feature).
 //!   Automatically manages device memory and kernel launches.
+//!
+//! # Gradient Computation
+//!
+//! Gradients are computed during the forward pass using graphs created with
+//! `TensorGraph::with_gradients()`. After executing the forward pass, use
+//! `get_gradients()` to retrieve parameter gradients for optimization.
 //!
 //! # Error Handling
 //!
@@ -119,29 +125,7 @@ pub fn init_chrome_tracing(file_path: &str) -> Result<TracingGuard, Box<dyn std:
     Ok(TracingGuard { _guard: guard })
 }
 
-/// Result of a backward pass through a computation graph.
-///
-/// Contains gradients computed via reverse-mode automatic differentiation,
-/// organized by both graph nodes and parameter IDs for efficient access.
-pub struct BackwardResult<D> {
-    /// Gradients indexed by graph node position.
-    ///
-    /// Useful for inspecting intermediate gradients during debugging.
-    pub grads_by_node: HashMap<petgraph::graph::NodeIndex, Vec<D>>,
-
-    /// Gradients indexed by parameter ID.
-    ///
-    /// Used by optimizers to update trainable parameters. Each parameter's
-    /// gradient is accumulated across all uses in the graph.
-    pub grads_by_param: HashMap<usize, Vec<D>>,
-
-    /// The final scalar loss value computed during the forward pass.
-    ///
-    /// Typically a single element `Vec<D>` representing the loss to minimize.
-    pub loss_value: Vec<D>,
-}
-
-/// Executes forward and backward passes on computation graphs.
+/// Executes forward passes on computation graphs and provides gradient access.
 ///
 /// Implementors provide different execution strategies (CPU, GPU, etc.)
 /// while maintaining a common interface for graph evaluation.
@@ -283,9 +267,12 @@ impl SimpleExecutor {
             .collect()
     }
 
-     fn mask(&self, values: &[f32], condition: &[f32]) -> Vec<f32> {
+    fn mask(&self, values: &[f32], condition: &[f32]) -> Vec<f32> {
         let _span = trace_span!("mask").entered();
-        eprintln!("mask function: values={:?}, condition={:?}", values, condition);
+        eprintln!(
+            "mask function: values={:?}, condition={:?}",
+            values, condition
+        );
         let result: Vec<f32> = get_iter(values)
             .zip(get_iter(condition))
             .map(|(v, c)| if *c != 0.0 { *v } else { 0.0 })
@@ -306,7 +293,11 @@ impl Executor<f32> for SimpleExecutor {
 
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
-            println!("DEBUG: Executing node {}: {}", node_idx.index(), node.name());
+            println!(
+                "DEBUG: Executing node {}: {}",
+                node_idx.index(),
+                node.name()
+            );
             let result = match node {
                 TensorGraphNode::Constant { data } => {
                     let _span = trace_span!("constant", node = node_idx.index()).entered();
@@ -715,5 +706,3 @@ pub fn get_iter<T: Sync>(slice: &[T]) -> SliceIter<'_, T> {
 pub fn get_iter<T>(slice: &[T]) -> SliceIter<'_, T> {
     slice.iter()
 }
-
-

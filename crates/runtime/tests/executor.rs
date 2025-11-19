@@ -1,16 +1,19 @@
 //! Integration tests for graph execution.
 //!
-//! Tests forward and backward passes on computation graphs using both CPU and GPU executors.
+//! Tests forward passes and gradient computation on computation graphs using both CPU and GPU executors.
 //! The same test logic runs on both executors to ensure consistency across platforms.
 
 use std::collections::HashMap;
 
-use runtime::{Executor, SimpleExecutor};
+use runtime::Executor;
 use tensor::graph::TensorGraph;
 use tensor::{Constant, Parameter, TensorExpr};
 
 #[cfg(feature = "cuda")]
 use runtime::cuda::CudaExecutor;
+
+#[cfg(not(feature = "cuda"))]
+use runtime::SimpleExecutor;
 
 const EPSILON: f32 = 1e-5;
 
@@ -381,10 +384,7 @@ fn gradient_transpose_operation() {
     // Gradient should flow back through transpose
     let x = Parameter::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
     let x_id = x.id();
-    let node = TensorExpr::from(x)
-        .transpose()
-        .reduce_sum(1)
-        .reduce_sum(0);
+    let node = TensorExpr::from(x).transpose().reduce_sum(1).reduce_sum(0);
 
     let graph: TensorGraph<f32> = node.into();
     let loss_node = *graph.toposort().last().unwrap();
@@ -417,9 +417,11 @@ fn forward_gt_operation() {
     let node = TensorExpr::from(x).gt(TensorExpr::from(zero));
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor.forward(&graph, std::collections::HashMap::new()).unwrap();
+    let result = executor
+        .forward(&graph, std::collections::HashMap::new())
+        .unwrap();
 
-    let expected = vec![0.0, 0.0, 0.0, 1.0, 1.0];
+    let expected = [0.0, 0.0, 0.0, 1.0, 1.0];
     assert_eq!(result.len(), 5);
     for (i, (&actual, &exp)) in result.iter().zip(expected.iter()).enumerate() {
         assert!(
@@ -443,10 +445,12 @@ fn forward_mask_operation() {
     let node = TensorExpr::from(values).mask(TensorExpr::from(condition));
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor.forward(&graph, std::collections::HashMap::new()).unwrap();
+    let result = executor
+        .forward(&graph, std::collections::HashMap::new())
+        .unwrap();
     eprintln!("Result: {:?}", result);
 
-    let expected = vec![0.0, 20.0, 0.0, 40.0];
+    let expected = [0.0, 20.0, 0.0, 40.0];
     assert_eq!(result.len(), 4);
     for (i, (&actual, &exp)) in result.iter().zip(expected.iter()).enumerate() {
         assert!(
@@ -464,16 +468,15 @@ fn forward_relu_detailed() {
     let mut executor = create_executor();
 
     // Test ReLU with various values including negatives, zero, and positives
-    let x = Constant::new(
-        vec![-5.0, -2.0, -0.5, 0.0, 0.5, 2.0, 5.0],
-        vec![7],
-    );
+    let x = Constant::new(vec![-5.0, -2.0, -0.5, 0.0, 0.5, 2.0, 5.0], vec![7]);
     let node = TensorExpr::from(x).relu();
 
     let graph: TensorGraph<f32> = node.into();
-    let result = executor.forward(&graph, std::collections::HashMap::new()).unwrap();
+    let result = executor
+        .forward(&graph, std::collections::HashMap::new())
+        .unwrap();
 
-    let expected = vec![0.0, 0.0, 0.0, 0.0, 0.5, 2.0, 5.0];
+    let expected = [0.0, 0.0, 0.0, 0.0, 0.5, 2.0, 5.0];
     assert_eq!(result.len(), 7);
     for (i, (&actual, &exp)) in result.iter().zip(expected.iter()).enumerate() {
         assert!(
@@ -494,10 +497,7 @@ fn gradient_relu_detailed() {
     // f(x) = sum(relu(x)) where x = [-5, -2, -0.5, 0, 0.5, 2, 5]
     // relu(x) = [0, 0, 0, 0, 0.5, 2, 5]
     // df/dx = [0, 0, 0, 0, 1, 1, 1] (gradient is 1 where x > 0, 0 elsewhere)
-    let x = Parameter::new(
-        vec![-5.0, -2.0, -0.5, 0.0, 0.5, 2.0, 5.0],
-        vec![7],
-    );
+    let x = Parameter::new(vec![-5.0, -2.0, -0.5, 0.0, 0.5, 2.0, 5.0], vec![7]);
     let x_id = x.id();
     let node = TensorExpr::from(x).relu().reduce_sum(0);
 
@@ -505,13 +505,15 @@ fn gradient_relu_detailed() {
     let loss_node = *graph.toposort().last().unwrap();
     let grad_graph = graph.with_gradients(loss_node);
 
-    executor.forward(&grad_graph, std::collections::HashMap::new()).unwrap();
+    executor
+        .forward(&grad_graph, std::collections::HashMap::new())
+        .unwrap();
     let grads = executor.get_gradients(&grad_graph);
 
     let grad = grads.get(&x_id).expect("Parameter gradient missing");
     assert_eq!(grad.len(), 7);
 
-    let expected = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let expected = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
     for (i, (&actual, &exp)) in grad.iter().zip(expected.iter()).enumerate() {
         assert!(
             (actual - exp).abs() < EPSILON,

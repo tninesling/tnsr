@@ -260,9 +260,8 @@ pub fn cross_entropy_one_hot_logits(
 mod tests {
     use runtime::Executor;
     use runtime::SimpleExecutor;
-    use tensor::Input;
+
     use tensor::graph::TensorGraph;
-    use tensor::graph::TensorGraphNode;
 
     use super::*; // bring trait methods like lower_to_graph into scope
 
@@ -281,18 +280,6 @@ mod tests {
                 panic!("mismatch at {i}: {x} vs {y}");
             }
         }
-    }
-
-    use tensor::graph::NodeIndex;
-    fn find_input<G>(graph: &TensorGraph<f32, G>, name: &'static str) -> NodeIndex {
-        for idx in graph.graph.node_indices() {
-            if let TensorGraphNode::Input { name: n } = &graph[idx]
-                && *n == name
-            {
-                return idx;
-            }
-        }
-        panic!("input {name} not found");
     }
 
     #[test]

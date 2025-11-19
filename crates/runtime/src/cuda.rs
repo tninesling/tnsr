@@ -721,4 +721,3 @@ impl Executor<f32> for CudaExecutor {
         grads
     }
 }
-

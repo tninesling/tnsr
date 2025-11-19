@@ -112,6 +112,9 @@ fn main() {
     // Graph
     println!("Building computation graph...");
     let (graph, logits_idx, loss_idx) = build_mlp_graph(args.batch_size, &w1, &b1, &w2, &b2);
+    
+    // Augment graph with gradient computation nodes (consumes graph, so we clone)
+    let grad_graph = graph.clone().with_gradients(loss_idx);
 
     let opt = SGD::new(args.lr);
 
@@ -178,12 +181,11 @@ fn main() {
                 inputs.insert("images".to_string(), x);
                 inputs.insert("labels".to_string(), y);
 
-                // Forward pass to get loss value
-                let loss_value = exec.forward(&graph, inputs.clone()).unwrap();
+                // Forward pass computes both loss and gradients
+                let loss_value = exec.forward(&grad_graph, inputs.clone()).unwrap();
 
-                // Backward pass to get gradients
-                let backward_result = exec.backward(&graph, loss_idx, None).unwrap();
-                let grads = backward_result.grads_by_param;
+                // Extract gradients from executor
+                let grads = exec.get_gradients(&grad_graph);
 
                 if steps.is_multiple_of(50)
                     && let Some(&lv) = loss_value.first()
@@ -192,7 +194,7 @@ fn main() {
                 }
                 let opt_span = tracing::span!(tracing::Level::TRACE, "optimizer_step");
                 let _og = opt_span.enter();
-                opt.step(&graph, &grads);
+                opt.step(&grad_graph, &grads);
                 drop(_og);
                 steps += 1;
             }

@@ -15,10 +15,14 @@ use crate::TensorExpr;
 use crate::UnaryOp;
 
 /// Typestate marker for graphs without gradients.
+#[derive(Clone)]
 pub struct NoGrad;
 
 /// Typestate marker for graphs with gradient computation nodes.
-pub struct WithGrad;
+#[derive(Clone)]
+pub struct WithGrad {
+    data: GradientMetadata,
+}
 
 /// Metadata tracking gradient nodes and parameter mappings.
 #[derive(Clone, Debug)]
@@ -29,6 +33,7 @@ pub struct GradientMetadata {
     pub gradient_nodes: HashSet<NodeIndex>,
 }
 
+#[derive(Clone)]
 pub enum TensorGraphNode<D> {
     Constant { data: Arc<Vec<D>> },
     Input { name: &'static str },
@@ -83,29 +88,27 @@ impl<D> From<BinaryOp> for TensorGraphNode<D> {
     }
 }
 
+#[derive(Clone)]
 pub struct TensorGraph<D, G = NoGrad> {
     pub graph: Graph<TensorGraphNode<D>, usize>,
     pub shapes: HashMap<NodeIndex, crate::Shape>,
-    gradient_metadata: Option<GradientMetadata>,
+    gradients: G,
     _phantom: std::marker::PhantomData<G>,
 }
 
-impl<D, G> Default for TensorGraph<D, G> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<D, G> TensorGraph<D, G> {
+impl<D> TensorGraph<D, NoGrad> {
+    /// Create a new empty TensorGraph without gradients.
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
             shapes: HashMap::new(),
-            gradient_metadata: None,
+            gradients: NoGrad,
             _phantom: std::marker::PhantomData,
         }
     }
+}
 
+impl<D, G> TensorGraph<D, G> {
     pub fn len(&self) -> usize {
         self.graph.node_count()
     }
@@ -620,10 +623,12 @@ impl TensorGraph<f32, NoGrad> {
         TensorGraph {
             graph: self.graph,
             shapes: self.shapes,
-            gradient_metadata: Some(GradientMetadata {
-                param_to_grad,
-                gradient_nodes,
-            }),
+            gradients: WithGrad {
+                data: GradientMetadata {
+                    param_to_grad,
+                    gradient_nodes,
+                },
+            },
             _phantom: std::marker::PhantomData,
         }
     }
@@ -657,9 +662,7 @@ impl TensorGraph<f32, NoGrad> {
 impl TensorGraph<f32, WithGrad> {
     /// Access gradient metadata for graphs with gradients.
     pub fn gradient_metadata(&self) -> &GradientMetadata {
-        self.gradient_metadata
-            .as_ref()
-            .expect("Gradient metadata should exist for WithGrad graphs")
+        &self.gradients.data
     }
 }
 

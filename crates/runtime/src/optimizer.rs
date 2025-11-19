@@ -5,8 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use tensor::graph::TensorGraph;
-use tensor::graph::TensorGraphNode;
+use tensor::graph::{TensorGraph, TensorGraphNode};
 
 /// Stochastic Gradient Descent (SGD) optimizer.
 ///
@@ -50,7 +49,7 @@ impl SGD {
     /// # Panics
     ///
     /// Panics if gradient size does not match parameter size.
-    pub fn step(&self, graph: &TensorGraph<f32>, grads: &HashMap<usize, Vec<f32>>) {
+    pub fn step<G>(&self, graph: &TensorGraph<f32, G>, grads: &HashMap<usize, Vec<f32>>) {
         let mut updated: HashSet<usize> = HashSet::new();
         for node in graph.graph.node_weights() {
             if let TensorGraphNode::Parameter { id, data, .. } = node {

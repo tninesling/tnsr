@@ -1,12 +1,11 @@
 //! Optimization algorithms for updating model parameters.
 //!
 //! Provides gradient descent optimizers that update trainable parameters
-//! based on computed gradients from backward passes.
+//! based on computed gradients retrieved from the executor.
 
 use std::collections::{HashMap, HashSet};
 
-use tensor::graph::TensorGraph;
-use tensor::graph::TensorGraphNode;
+use tensor::graph::{TensorGraph, TensorGraphNode};
 
 /// Stochastic Gradient Descent (SGD) optimizer.
 ///
@@ -20,8 +19,8 @@ use tensor::graph::TensorGraphNode;
 /// use std::collections::HashMap;
 ///
 /// let optimizer = SGD::new(0.01); // learning rate = 0.01
-/// // After computing gradients via backward pass:
-/// // optimizer.step(&graph, &grads_by_param);
+/// // After executing forward pass and retrieving gradients:
+/// // optimizer.step(&graph, &grads);
 /// ```
 pub struct SGD {
     lr: f32,
@@ -45,12 +44,12 @@ impl SGD {
     /// # Arguments
     ///
     /// * `graph` - The computation graph containing parameters to update
-    /// * `grads` - Gradients indexed by parameter ID (from [`BackwardResult::grads_by_param`](crate::BackwardResult::grads_by_param))
+    /// * `grads` - Gradients indexed by parameter ID (from [`Executor::get_gradients`](crate::Executor::get_gradients))
     ///
     /// # Panics
     ///
     /// Panics if gradient size does not match parameter size.
-    pub fn step(&self, graph: &TensorGraph<f32>, grads: &HashMap<usize, Vec<f32>>) {
+    pub fn step<G>(&self, graph: &TensorGraph<f32, G>, grads: &HashMap<usize, Vec<f32>>) {
         let mut updated: HashSet<usize> = HashSet::new();
         for node in graph.graph.node_weights() {
             if let TensorGraphNode::Parameter { id, data, .. } = node {

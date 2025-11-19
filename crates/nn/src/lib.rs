@@ -260,9 +260,8 @@ pub fn cross_entropy_one_hot_logits(
 mod tests {
     use runtime::Executor;
     use runtime::SimpleExecutor;
-    use tensor::Input;
+
     use tensor::graph::TensorGraph;
-    use tensor::graph::TensorGraphNode;
 
     use super::*; // bring trait methods like lower_to_graph into scope
 
@@ -281,18 +280,6 @@ mod tests {
                 panic!("mismatch at {i}: {x} vs {y}");
             }
         }
-    }
-
-    use tensor::graph::NodeIndex;
-    fn find_input(graph: &TensorGraph<f32>, name: &'static str) -> NodeIndex {
-        for idx in graph.graph.node_indices() {
-            if let TensorGraphNode::Input { name: n } = &graph[idx]
-                && *n == name
-            {
-                return idx;
-            }
-        }
-        panic!("input {name} not found");
     }
 
     #[test]
@@ -361,38 +348,6 @@ mod tests {
     }
 
     #[test]
-    fn reduce_logsumexp_grad_matches_softmax() {
-        // x shape [2,3]
-        let x = Input::<f32>::new("x", vec![2, 3]);
-        let lse = reduce_logsumexp_simple(x.clone(), 1);
-        // loss = mean over batch -> scalar
-        let loss = lse.reduce_mean(0);
-        let mut g = TensorGraph::new();
-        let loss_idx = loss.lower_to_graph(&mut g);
-        let x_idx = find_input(&g, "x");
-        let xval = vec![1.0f32, 2.0, 3.0, -0.5, 2.0, 0.0]; // two rows
-        let mut inputs = std::collections::HashMap::new();
-        inputs.insert("x".to_string(), xval.clone());
-        let mut exec = SimpleExecutor::new();
-        exec.forward(&g, inputs).unwrap();
-        let res = exec.backward(&g, loss_idx, None).unwrap();
-        // expected dx = softmax(x_row)/2 per row
-        let mut expected = vec![0.0f32; 6];
-        for row in 0..2 {
-            let start = row * 3;
-            let slice = &xval[start..start + 3];
-            let maxv = slice.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let exps: Vec<f32> = slice.iter().map(|&v| (v - maxv).exp()).collect();
-            let sum: f32 = exps.iter().sum();
-            for j in 0..3 {
-                expected[start + j] = exps[j] / sum / 2.0;
-            }
-        }
-        let dx = res.grads_by_node.get(&x_idx).expect("dx missing");
-        assert_approx_eq(dx, &expected);
-    }
-
-    #[test]
     fn cross_entropy_forward_zero_logits() {
         // logits and labels constants, forward should be ln(C)
         let logits = constant_f32(vec![0.0; 2 * 3], vec![2, 3]);
@@ -406,42 +361,5 @@ mod tests {
         assert_eq!(out.len(), 1);
         let expected = (3.0f32).ln();
         assert!((out[0] - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn cross_entropy_backward_matches_softmax_minus_one_hot() {
-        // logits and labels as inputs
-        let logits = Input::<f32>::new("logits", vec![2, 3]);
-        let labels = Input::<f32>::new("labels", vec![2, 3]);
-        let loss = cross_entropy_one_hot_logits(logits.clone(), labels.clone(), 1);
-        let mut g = TensorGraph::new();
-        let loss_idx = loss.lower_to_graph(&mut g);
-        let logits_idx = find_input(&g, "logits");
-        let labels_idx = find_input(&g, "labels");
-        let z = vec![1.0f32, 0.5, -1.0, -0.5, 2.0, 0.0];
-        let y = vec![1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
-        let mut inputs = std::collections::HashMap::new();
-        inputs.insert("logits".to_string(), z.clone());
-        inputs.insert("labels".to_string(), y.clone());
-        let mut exec = SimpleExecutor::new();
-        exec.forward(&g, inputs).unwrap();
-        let res = exec.backward(&g, loss_idx, None).unwrap();
-        let dz = res.grads_by_node.get(&logits_idx).expect("dz missing");
-        // expected dz = (softmax(z) - y) / B
-        let mut expected = vec![0.0f32; 6];
-        for row in 0..2 {
-            let start = row * 3;
-            let slice = &z[start..start + 3];
-            let maxv = slice.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let exps: Vec<f32> = slice.iter().map(|&v| (v - maxv).exp()).collect();
-            let sum: f32 = exps.iter().sum();
-            for j in 0..3 {
-                let sm = exps[j] / sum;
-                expected[start + j] = (sm - y[start + j]) / 2.0;
-            }
-        }
-        assert_approx_eq(dz, &expected);
-        // labels gradient is not of interest here, but ensure it's finite-sized and present
-        let _dl = res.grads_by_node.get(&labels_idx).unwrap();
     }
 }

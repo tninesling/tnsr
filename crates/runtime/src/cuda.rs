@@ -268,136 +268,6 @@ impl CudaExecutor {
         out
     }
 
-    fn neg_grad(&self, dy: &CudaSlice<f32>) -> CudaSlice<f32> {
-        let _span = trace_span!("neg_grad").entered();
-        self.neg(dy)
-    }
-
-    fn exp_grad(&self, dy: &CudaSlice<f32>, y: &CudaSlice<f32>) -> CudaSlice<f32> {
-        let _span = trace_span!("exp_grad").entered();
-        self.mul(dy, y)
-    }
-
-    fn log_grad(&self, dy: &CudaSlice<f32>, x: &CudaSlice<f32>) -> CudaSlice<f32> {
-        let _span = trace_span!("log_grad").entered();
-        self.div(dy, x)
-    }
-
-    fn relu_grad(&self, dy: &CudaSlice<f32>, x: &CudaSlice<f32>) -> CudaSlice<f32> {
-        let _span = trace_span!("relu_grad").entered();
-        let len = dy.len();
-        let stream = self.device.default_stream();
-
-        // Create a zeros buffer for comparison: x > 0
-        let zeros = stream.alloc_zeros::<f32>(len).unwrap();
-
-        // Compute condition: x > 0 (returns 1.0 where true, 0.0 where false)
-        let condition = self.gt(x, &zeros);
-
-        // Apply mask: dy where x > 0, else 0
-        // Note: mask kernel has swapped semantics - first arg is checked for zero, second is returned
-        // TODO: Update mask kernel with flipped arg order
-        self.mask(&condition, dy)
-    }
-
-    fn add_grad(&self, dy: &CudaSlice<f32>) -> (CudaSlice<f32>, CudaSlice<f32>) {
-        let _span = trace_span!("add_grad").entered();
-        (dy.clone(), dy.clone())
-    }
-
-    fn sub_grad(&self, dy: &CudaSlice<f32>) -> (CudaSlice<f32>, CudaSlice<f32>) {
-        let _span = trace_span!("sub_grad").entered();
-        let db = self.neg(dy);
-        (dy.clone(), db)
-    }
-
-    fn mul_grad(
-        &self,
-        dy: &CudaSlice<f32>,
-        a: &CudaSlice<f32>,
-        b: &CudaSlice<f32>,
-    ) -> (CudaSlice<f32>, CudaSlice<f32>) {
-        let _span = trace_span!("mul_grad").entered();
-        let da = self.mul(dy, b);
-        let db = self.mul(dy, a);
-        (da, db)
-    }
-
-    fn div_grad(
-        &self,
-        dy: &CudaSlice<f32>,
-        a: &CudaSlice<f32>,
-        b: &CudaSlice<f32>,
-    ) -> (CudaSlice<f32>, CudaSlice<f32>) {
-        let _span = trace_span!("div_grad").entered();
-        let len = dy.len();
-        let stream = self.device.default_stream();
-
-        let mut dy_host = vec![0.0f32; len];
-        let mut a_host = vec![0.0f32; len];
-        let mut b_host = vec![0.0f32; len];
-        stream.memcpy_dtoh(dy, &mut dy_host).unwrap();
-        stream.memcpy_dtoh(a, &mut a_host).unwrap();
-        stream.memcpy_dtoh(b, &mut b_host).unwrap();
-
-        let tmp_a_host: Vec<f32> = dy_host
-            .iter()
-            .zip(b_host.iter())
-            .map(|(g, b)| g / b)
-            .collect();
-        let tmp_b_host: Vec<f32> = dy_host
-            .iter()
-            .zip(a_host.iter())
-            .map(|(g, a)| -g * a)
-            .collect();
-        let b_sq_host: Vec<f32> = b_host.iter().map(|b| b * b).collect();
-        let tmp_b_final: Vec<f32> = tmp_b_host
-            .iter()
-            .zip(b_sq_host.iter())
-            .map(|(t, bsq)| t / bsq)
-            .collect();
-
-        let mut da = stream.alloc_zeros::<f32>(len).unwrap();
-        let mut db = stream.alloc_zeros::<f32>(len).unwrap();
-        stream.memcpy_htod(&tmp_a_host, &mut da).unwrap();
-        stream.memcpy_htod(&tmp_b_final, &mut db).unwrap();
-        (da, db)
-    }
-
-    /// For mamtul A x B = C, where A is [m, k], B is [k, n], C is [m, n],
-    /// we have gradient dC of C, which is shape [m, n], along with B.
-    ///
-    /// The gradient w.r.t. A is: dA = dC x B^T
-    fn matmul_grad_left(
-        &self,
-        dc: &CudaSlice<f32>,
-        b: &CudaSlice<f32>,
-        m: usize,
-        n: usize,
-        k: usize,
-    ) -> CudaSlice<f32> {
-        let _span = trace_span!("matmul_grad_left").entered();
-        let b_t = self.transpose(b, k, n);
-        self.matmul(dc, &b_t, m, k, n)
-    }
-
-    /// For mamtul A x B = C, where A is [m, k], B is [k, n], C is [m, n],
-    /// we have gradient dC of C, which is shape [m, n], along with A.
-    ///
-    /// The gradient w.r.t. A is: dA = dC x B^T
-    fn matmul_grad_right(
-        &self,
-        a: &CudaSlice<f32>,
-        dc: &CudaSlice<f32>,
-        m: usize,
-        n: usize,
-        k: usize,
-    ) -> CudaSlice<f32> {
-        let _span = trace_span!("matmul_grad_right").entered();
-        let a_t = self.transpose(a, m, k);
-        self.matmul(&a_t, dc, k, n, m)
-    }
-
     fn transpose(&self, input: &CudaSlice<f32>, rows: usize, cols: usize) -> CudaSlice<f32> {
         let _span = trace_span!("transpose").entered();
         let len = input.len();
@@ -428,37 +298,6 @@ impl CudaExecutor {
                 .unwrap();
             host_vec
         })
-    }
-
-    /// Accumulate gradient on GPU
-    fn accumulate_grad_gpu(
-        &mut self,
-        node_idx: petgraph::graph::NodeIndex,
-        new_grad: CudaSlice<f32>,
-    ) {
-        let _span = trace_span!("accumulate_grad_gpu", node = node_idx.index()).entered();
-        if let Some(existing_grad) = self.grads.get(&node_idx) {
-            // Add the new gradient to the existing one
-            let len = existing_grad.len();
-            let len_u64 = len as u64;
-            let stream = self.device.default_stream();
-            let mut accumulated = stream.alloc_zeros::<f32>(len).unwrap();
-
-            let f = self.module.load_function("add").unwrap();
-            let cfg = LaunchConfig::for_num_elems(len as u32);
-            let mut launcher = stream.launch_builder(&f);
-            launcher.arg(existing_grad);
-            launcher.arg(&len_u64);
-            launcher.arg(&new_grad);
-            launcher.arg(&len_u64);
-            launcher.arg(&mut accumulated);
-            launcher.arg(&len_u64);
-            unsafe { launcher.launch(cfg) }.expect("CUDA grad accumulation failed");
-
-            self.grads.insert(node_idx, accumulated);
-        } else {
-            self.grads.insert(node_idx, new_grad);
-        }
     }
 }
 
@@ -828,9 +667,7 @@ impl Executor<f32> for CudaExecutor {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
-    use std::sync::{Arc, Mutex};
     use tensor::Constant;
-    use tensor::Parameter;
     use tensor::TensorExpr;
 
     use super::*;

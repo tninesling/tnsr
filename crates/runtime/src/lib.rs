@@ -214,7 +214,6 @@ pub trait Executor<D> {
 #[derive(Default)]
 pub struct SimpleExecutor {
     values: HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
-    grads: HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
 }
 
 impl SimpleExecutor {

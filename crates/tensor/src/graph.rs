@@ -1,3 +1,69 @@
+//! Lowered computation graph representation with gradient support.
+//!
+//! This module provides the lowered DAG representation of tensor computations
+//! that executors use to perform actual computation. It includes automatic
+//! differentiation support through a typestate pattern.
+//!
+//! # Key Types
+//!
+//! - [`TensorGraph`] - The main computation graph structure
+//! - [`TensorGraphNode`] - Individual operations in the graph (constants, parameters, ops)
+//! - [`NoGrad`] - Typestate marker for forward-only graphs
+//! - [`WithGrad`] - Typestate marker for graphs with gradient computation
+//!
+//! # Gradient Computation
+//!
+//! Convert a forward-only graph to one with gradients using [`TensorGraph::with_gradients`]:
+//!
+//! ```ignore
+//! let forward_graph: TensorGraph<f32, NoGrad> = expr.into();
+//! let grad_graph = forward_graph.with_gradients(loss_node);
+//! // grad_graph now contains both forward and gradient computation nodes
+//! ```
+//!
+//! Gradients are added to the graph by constructing the derivative computations directly from
+//! graph nodes in reverse topological order, starting from the loss node. This means an execution
+//! of the graph will compute both forward values and gradients in a single pass. So, there is no
+//! separate backward pass as you might find in other frameworks. Here is how the graph might look
+//! after adding gradients for the graph computing `D = (A * B).log()`.
+//!
+//! Forward only:
+//! ```text
+//!     ┌───┐
+//!     │ A │
+//!     └─┬─┘
+//!       │      ┌─────┐    ┌───┐     ┌─────┐    ┌───┐
+//!       ├─────►│ MUL ├───►│ C ├────►│ LOG ├───►│ D │
+//!       │      └─────┘    └───┘     └─────┘    └───┘
+//!     ┌─┴─┐
+//!     │ B │
+//!     └───┘
+//! ```
+//!
+//! Forward and backward:
+//! ```text
+//!     ┌───┐
+//! ┌───┤ A │
+//! │   └─┬─┘
+//! │     │      ┌─────┐    ┌───┐     ┌─────┐    ┌───┐
+//! │     ├─────►│ MUL ├───►│ C ├────►│ LOG ├───►│ D │
+//! │     │      └─────┘    └─┬─┘     └─────┘    └───┘
+//! │   ┌─┴─┐                 └──────────────┐
+//! │   │ B ├───────────────────┐            │
+//! │   └───┘                   │            ▼
+//! │                           │        ┌───────┐
+//! │                           │        │ RECIP │
+//! │   ┌───────┐     ┌─────┐   │        └───┬───┘
+//! │   │ dC/dA │◄────┤ MUL │◄──┴───┐        │
+//! │   └───────┘     └─────┘       │        │
+//! │                             ┌─┴─────┐  │
+//! └────────────────────┬────────┤ dD/dC │◄─┘
+//!                      ▼        └───────┘
+//!     ┌───────┐     ┌─────┐
+//!     │ dC/dB │◄────┤ MUL │
+//!     └───────┘     └─────┘
+//! ```
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ops::Index;
@@ -106,6 +172,59 @@ impl<D> From<BinaryOp> for TensorGraphNode<D> {
     }
 }
 
+/// Directed acyclic graph (DAG) representation of tensor computations.
+///
+/// `TensorGraph` is the lowered representation of [`TensorExpr`] that's used by executors
+/// to perform actual computation. It uses a typestate pattern with generic parameter `G`
+/// to track whether gradient computation nodes have been added.
+///
+/// # Type States
+///
+/// - `TensorGraph<D, NoGrad>` - Forward-only graph without gradient computation
+/// - `TensorGraph<D, WithGrad>` - Graph with gradient nodes for automatic differentiation
+///
+/// # Structure
+///
+/// Each node in the graph represents an operation (constant, input, parameter, unary, binary,
+/// matmul, etc.), and edges represent data flow between operations. The graph maintains:
+/// - Node operations and their relationships
+/// - Shape information for each node
+/// - Gradient metadata (when `G = WithGrad`)
+///
+/// # Usage
+///
+/// Create a graph by converting from a [`TensorExpr`]:
+///
+/// ```rust
+/// use tensor::{TensorExpr, graph::TensorGraph};
+///
+/// let x = TensorExpr::<f32>::input("x", vec![2, 3]);
+/// let y = x.relu();
+/// let graph: TensorGraph<f32> = y.into();
+/// ```
+///
+/// For training with gradients, use [`with_gradients`](TensorGraph::with_gradients):
+///
+/// ```ignore
+/// use tensor::{Parameter, graph::TensorGraph};
+///
+/// let w = Parameter::new(vec![1.0, 2.0], vec![2, 1]);
+/// let x = TensorExpr::<f32>::input("x", vec![2, 1]);
+/// let y = w * x;  // Forward computation
+/// let loss = y.reduce_sum(0);  // Scalar loss
+///
+/// let graph: TensorGraph<f32> = loss.into();
+/// let grad_graph = graph.with_gradients(loss_node);
+/// // grad_graph now contains both forward and gradient computation nodes
+/// ```
+///
+/// # Execution
+///
+/// Graphs are executed by implementors of the `Executor` trait from the `runtime` crate:
+/// - `SimpleExecutor` for CPU execution
+/// - `CudaExecutor` for GPU execution (with `cuda` feature)
+///
+/// See the `runtime` crate documentation for execution details.
 #[derive(Clone)]
 pub struct TensorGraph<D, G = NoGrad> {
     pub graph: Graph<TensorGraphNode<D>, usize>,

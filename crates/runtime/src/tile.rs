@@ -71,8 +71,13 @@ pub enum Stmt {
         layout: MatMulLayout, // NN, NT, TN, TT
     },
 
-    /// Element-wise operations
+    /// Element-wise binary operations
     Add {
+        dest: TileVar,
+        a: TileVar,
+        b: TileVar,
+    },
+    Sub {
         dest: TileVar,
         a: TileVar,
         b: TileVar,
@@ -81,6 +86,64 @@ pub enum Stmt {
         dest: TileVar,
         a: TileVar,
         b: TileVar,
+    },
+    Div {
+        dest: TileVar,
+        a: TileVar,
+        b: TileVar,
+    },
+
+    /// Element-wise unary operations
+    Neg {
+        dest: TileVar,
+        src: TileVar,
+    },
+    Exp {
+        dest: TileVar,
+        src: TileVar,
+    },
+    Log {
+        dest: TileVar,
+        src: TileVar,
+    },
+    Relu {
+        dest: TileVar,
+        src: TileVar,
+    },
+
+    /// Transpose operation
+    Transpose {
+        dest: TileVar,
+        src: TileVar,
+    },
+
+    /// Broadcast along axis
+    BroadcastAxis {
+        dest: TileVar,
+        src: TileVar,
+        axis: usize,
+    },
+
+    /// Reduce along axis
+    ReduceAxis {
+        dest: TileVar,
+        src: TileVar,
+        op: ReduceOp,
+        axis: usize,
+    },
+
+    /// Greater than comparison
+    Gt {
+        dest: TileVar,
+        a: TileVar,
+        b: TileVar,
+    },
+
+    /// Mask operation (select values based on condition)
+    Mask {
+        dest: TileVar,
+        values: TileVar,
+        condition: TileVar,
     },
 
     /// Synchronization barrier
@@ -132,6 +195,14 @@ pub enum MatMulLayout {
     NT, // A @ B^T
     TN, // A^T @ B
     TT, // A^T @ B^T
+}
+
+/// Reduction operations
+#[derive(Debug, Clone, Copy)]
+pub enum ReduceOp {
+    Sum,
+    Max,
+    Mean,
 }
 
 /// Simple expressions for indices and loop bounds
@@ -267,6 +338,71 @@ impl TileIRBuilder {
         self.stmts.push(Stmt::LoadSharedToReg { dest, src });
     }
 
+    pub fn store(&mut self, dest_param: &str, src: TileVar, row_offset: Expr, col_offset: Expr) {
+        self.stmts.push(Stmt::Store {
+            dest_param: dest_param.to_string(),
+            src,
+            row_offset,
+            col_offset,
+        });
+    }
+
+    pub fn add(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
+        self.stmts.push(Stmt::Add { dest, a, b });
+    }
+
+    pub fn sub(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
+        self.stmts.push(Stmt::Sub { dest, a, b });
+    }
+
+    pub fn mul(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
+        self.stmts.push(Stmt::Mul { dest, a, b });
+    }
+
+    pub fn div(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
+        self.stmts.push(Stmt::Div { dest, a, b });
+    }
+
+    pub fn neg(&mut self, dest: TileVar, src: TileVar) {
+        self.stmts.push(Stmt::Neg { dest, src });
+    }
+
+    pub fn exp(&mut self, dest: TileVar, src: TileVar) {
+        self.stmts.push(Stmt::Exp { dest, src });
+    }
+
+    pub fn log(&mut self, dest: TileVar, src: TileVar) {
+        self.stmts.push(Stmt::Log { dest, src });
+    }
+
+    pub fn relu(&mut self, dest: TileVar, src: TileVar) {
+        self.stmts.push(Stmt::Relu { dest, src });
+    }
+
+    pub fn transpose(&mut self, dest: TileVar, src: TileVar) {
+        self.stmts.push(Stmt::Transpose { dest, src });
+    }
+
+    pub fn broadcast_axis(&mut self, dest: TileVar, src: TileVar, axis: usize) {
+        self.stmts.push(Stmt::BroadcastAxis { dest, src, axis });
+    }
+
+    pub fn reduce_axis(&mut self, dest: TileVar, src: TileVar, op: ReduceOp, axis: usize) {
+        self.stmts.push(Stmt::ReduceAxis { dest, src, op, axis });
+    }
+
+    pub fn gt(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
+        self.stmts.push(Stmt::Gt { dest, a, b });
+    }
+
+    pub fn mask(&mut self, dest: TileVar, values: TileVar, condition: TileVar) {
+        self.stmts.push(Stmt::Mask {
+            dest,
+            values,
+            condition,
+        });
+    }
+
     pub fn for_loop<F>(&mut self, var_name: &str, start: i64, end: i64, body_fn: F)
     where
         F: FnOnce(&mut Self, String),
@@ -324,17 +460,17 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
 impl TileGraph {
     fn lower_node(node: TensorGraphNode<f32>, shape: &[usize]) -> TileIR {
         match node {
-            TensorGraphNode::Constant { data } => todo!(),
-            TensorGraphNode::Input { name } => todo!(),
-            TensorGraphNode::Parameter { id, data } => todo!(),
-            TensorGraphNode::Unary { op } => todo!(),
-            TensorGraphNode::Binary { op } => todo!(),
+            TensorGraphNode::Constant { data } => Self::lower_constant(data, shape),
+            TensorGraphNode::Input { name } => Self::lower_input(name, shape),
+            TensorGraphNode::Parameter { id, data } => Self::lower_parameter(id, data, shape),
+            TensorGraphNode::Unary { op } => Self::lower_unary(op, shape),
+            TensorGraphNode::Binary { op } => Self::lower_binary(op, shape),
             TensorGraphNode::MatMul => Self::lower_matmul(&node, shape, false, false),
-            TensorGraphNode::Transpose => todo!(),
-            TensorGraphNode::BroadcastAxis { axis } => todo!(),
-            TensorGraphNode::ReduceAxis { op, axis } => todo!(),
-            TensorGraphNode::Gt => todo!(),
-            TensorGraphNode::Mask => todo!(),
+            TensorGraphNode::Transpose => Self::lower_transpose(shape),
+            TensorGraphNode::BroadcastAxis { axis } => Self::lower_broadcast_axis(axis, shape),
+            TensorGraphNode::ReduceAxis { op, axis } => Self::lower_reduce_axis(op, axis, shape),
+            TensorGraphNode::Gt => Self::lower_gt(shape),
+            TensorGraphNode::Mask => Self::lower_mask(shape),
         }
     }
 
@@ -407,6 +543,218 @@ impl TileGraph {
 
             builder.barrier();
         });
+
+        builder.finish()
+    }
+
+    fn lower_constant(_data: std::sync::Arc<Vec<f32>>, shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("constant");
+        builder.add_param("constant_data", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_const = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_const, "constant_data", Expr::Const(0), Expr::Const(0));
+        builder.add(tile_out, tile_const, tile_const);
+        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+
+        builder.finish()
+    }
+
+    fn lower_input(name: &'static str, shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel(&format!("input_{}", name));
+        builder.add_param(name, DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_in, name, Expr::Const(0), Expr::Const(0));
+        builder.store("output", tile_in, Expr::Const(0), Expr::Const(0));
+
+        builder.finish()
+    }
+
+    fn lower_parameter(
+        _id: usize,
+        _data: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
+        shape: &[usize],
+    ) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("parameter");
+        builder.add_param("param", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_param = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_param, "param", Expr::Const(0), Expr::Const(0));
+        builder.store("output", tile_param, Expr::Const(0), Expr::Const(0));
+
+        builder.finish()
+    }
+
+    fn lower_unary(op: tensor::UnaryOp, shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        let kernel_name = match op {
+            tensor::UnaryOp::Neg => "neg",
+            tensor::UnaryOp::Exp => "exp",
+            tensor::UnaryOp::Log => "log",
+            tensor::UnaryOp::Relu => "relu",
+        };
+        builder.start_kernel(kernel_name);
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_in, "input", Expr::Const(0), Expr::Const(0));
+
+        match op {
+            tensor::UnaryOp::Neg => builder.neg(tile_out, tile_in),
+            tensor::UnaryOp::Exp => builder.exp(tile_out, tile_in),
+            tensor::UnaryOp::Log => builder.log(tile_out, tile_in),
+            tensor::UnaryOp::Relu => builder.relu(tile_out, tile_in),
+        }
+
+        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+
+        builder.finish()
+    }
+
+    fn lower_binary(op: tensor::BinaryOp, shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        let kernel_name = match op {
+            tensor::BinaryOp::Add => "add",
+            tensor::BinaryOp::Sub => "sub",
+            tensor::BinaryOp::Mul => "mul",
+            tensor::BinaryOp::Div => "div",
+        };
+        builder.start_kernel(kernel_name);
+        builder.add_param("a", DType::F32, true);
+        builder.add_param("b", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_a = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_b = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_a, "a", Expr::Const(0), Expr::Const(0));
+        builder.load_global_to_shared(tile_b, "b", Expr::Const(0), Expr::Const(0));
+
+        match op {
+            tensor::BinaryOp::Add => builder.add(tile_out, tile_a, tile_b),
+            tensor::BinaryOp::Sub => builder.sub(tile_out, tile_a, tile_b),
+            tensor::BinaryOp::Mul => builder.mul(tile_out, tile_a, tile_b),
+            tensor::BinaryOp::Div => builder.div(tile_out, tile_a, tile_b),
+        }
+
+        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+
+        builder.finish()
+    }
+
+    fn lower_transpose(shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("transpose");
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_in, "input", Expr::Const(0), Expr::Const(0));
+        builder.transpose(tile_out, tile_in);
+        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+
+        builder.finish()
+    }
+
+    fn lower_broadcast_axis(axis: usize, shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("broadcast_axis");
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_in, "input", Expr::Const(0), Expr::Const(0));
+        builder.broadcast_axis(tile_out, tile_in, axis);
+        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+
+        builder.finish()
+    }
+
+    fn lower_reduce_axis(op: tensor::ReduceOp, axis: usize, shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("reduce_axis");
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_in, "input", Expr::Const(0), Expr::Const(0));
+
+        let tile_op = match op {
+            tensor::ReduceOp::Sum => ReduceOp::Sum,
+            tensor::ReduceOp::Max => ReduceOp::Max,
+            tensor::ReduceOp::Mean => ReduceOp::Mean,
+        };
+        builder.reduce_axis(tile_out, tile_in, tile_op, axis);
+
+        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+
+        builder.finish()
+    }
+
+    fn lower_gt(shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("gt");
+        builder.add_param("a", DType::F32, true);
+        builder.add_param("b", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_a = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_b = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_a, "a", Expr::Const(0), Expr::Const(0));
+        builder.load_global_to_shared(tile_b, "b", Expr::Const(0), Expr::Const(0));
+        builder.gt(tile_out, tile_a, tile_b);
+        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+
+        builder.finish()
+    }
+
+    fn lower_mask(shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("mask");
+        builder.add_param("values", DType::F32, true);
+        builder.add_param("condition", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_values = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_cond = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+
+        builder.load_global_to_shared(tile_values, "values", Expr::Const(0), Expr::Const(0));
+        builder.load_global_to_shared(tile_cond, "condition", Expr::Const(0), Expr::Const(0));
+        builder.mask(tile_out, tile_values, tile_cond);
+        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
 
         builder.finish()
     }

@@ -89,6 +89,7 @@ use anyhow::{Context, Result};
 pub mod cuda;
 pub mod optimizer;
 mod runtime;
+mod tile;
 
 pub use runtime::{Backend, Runtime};
 
@@ -416,26 +417,20 @@ impl Executor<f32> for SimpleExecutor {
                 }
                 TensorGraphNode::Mask => {
                     let _span = trace_span!("mask", node = node_idx.index()).entered();
-                    eprintln!("TensorGraphNode::Mask handler");
                     let ins = graph.inputs(*node_idx);
-                    eprintln!("ins[0]={}, ins[1]={}", ins[0].index(), ins[1].index());
                     let values = self.values.get(&ins[0]).with_context(|| {
                         format!("Value for node {} not computed", ins[0].index())
                     })?;
-                    eprintln!("values={:?}", values);
                     let condition = self.values.get(&ins[1]).with_context(|| {
                         format!("Condition for node {} not computed", ins[1].index())
                     })?;
-                    eprintln!("condition={:?}", condition);
                     anyhow::ensure!(
                         values.len() == condition.len(),
                         "Mask op shape mismatch: {} vs {}",
                         values.len(),
                         condition.len()
                     );
-                    let result = self.mask(values, condition);
-                    eprintln!("Mask node result={:?}", result);
-                    result
+                    self.mask(values, condition)
                 }
             };
             self.values.insert(*node_idx, result);

@@ -274,6 +274,7 @@ impl<T: PtxType> fmt::Display for Operand<T> {
             Operand::ImmU64(value) => write!(f, "{value}"),
             Operand::ImmF32(value) => write!(f, "0f{:08X}", value.to_bits()),
             Operand::Addr(name) => write!(f, "[{name}]"),
+            Operand::Symbol(name) => write!(f, "{name}"),
         }
     }
 }

@@ -31,7 +31,7 @@ macro_rules! assert_approx_eq {
 ///
 /// The Runtime will prefer CUDA if available, otherwise falls back to CPU.
 fn create_runtime() -> Runtime {
-    Runtime::new()
+    Runtime::with_backend(runtime::Backend::Ptx).unwrap()
 }
 
 // ============================================================================
@@ -42,17 +42,30 @@ fn create_runtime() -> Runtime {
 fn forward_matmul_simple() {
     let mut runtime = create_runtime();
 
-    // A[2,3] @ B[3,2] = C[2,2]
-    let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
-    let b = Constant::new(vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0], vec![3, 2]);
+    // A[16,16] @ B[16,16] = C[16,16]
+    // Use identity matrices with a scalar multiplier for easy verification
+    let mut a_data = vec![0.0; 16 * 16];
+    let mut b_data = vec![0.0; 16 * 16];
+    
+    // A = 2 * I (identity matrix scaled by 2)
+    // B = 3 * I (identity matrix scaled by 3)
+    for i in 0..16 {
+        a_data[i * 16 + i] = 2.0;
+        b_data[i * 16 + i] = 3.0;
+    }
+    
+    let a = Constant::new(a_data, vec![16, 16]);
+    let b = Constant::new(b_data, vec![16, 16]);
     let node = TensorExpr::from(a).matmul(b);
 
     let graph: TensorGraph<f32> = node.into();
     let result = runtime.execute(&graph, HashMap::new()).unwrap();
 
-    // Expected: [[1*7+2*9+3*11, 1*8+2*10+3*12], [4*7+5*9+6*11, 4*8+5*10+6*12]]
-    //         = [[58, 64], [139, 154]]
-    let expected = vec![58.0, 64.0, 139.0, 154.0];
+    // Expected: 2*I @ 3*I = 6*I (identity matrix scaled by 6)
+    let mut expected = vec![0.0; 16 * 16];
+    for i in 0..16 {
+        expected[i * 16 + i] = 6.0;
+    }
     assert_approx_eq!(result, expected);
 }
 

@@ -47,7 +47,8 @@ pub enum Operand<T: PtxType> {
     ImmI32(i32),
     ImmU64(u64),
     ImmF32(f32),
-    Addr(String),
+    Addr(String),      // Parameter address (formatted with brackets [name])
+    Symbol(String),    // Symbol reference (formatted without brackets)
 }
 
 impl<T: PtxType> Operand<T> {
@@ -69,6 +70,10 @@ impl<T: PtxType> Operand<T> {
 
     pub fn addr(name: impl Into<String>) -> Self {
         Operand::Addr(name.into())
+    }
+
+    pub fn symbol(name: impl Into<String>) -> Self {
+        Operand::Symbol(name.into())
     }
 
     pub fn pred(name: impl Into<String>) -> Self {

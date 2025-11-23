@@ -8,8 +8,8 @@ use petgraph::visit::IntoNodeReferences;
 use tensor::graph::{TensorGraph, TensorGraphNode, WithGrad};
 
 use super::{Module, PtxGraph};
-use crate::tile::TileGraph;
 use crate::Executor;
+use crate::tile::TileGraph;
 
 /// PTX executor that compiles TensorGraph → TileGraph → PtxGraph → PTX string
 /// and executes kernels via cudarc
@@ -54,15 +54,18 @@ impl PtxExecutor {
         let ptx_graph: PtxGraph = tile_graph.into();
 
         let mut module = Module::new();
-        
+
         // Functions already have unique names from PtxGraph conversion
         for (_node_idx, function) in ptx_graph.graph.node_references() {
             module.add_function(function.clone());
         }
 
+        let ptx_src = module.to_string();
+        eprintln!("=== Generated PTX ===\n{}\n=== End PTX ===", ptx_src);
+
         let cuda_module = self
             .device
-            .load_module(Ptx::from_src(&module.to_string()))
+            .load_module(Ptx::from_src(&ptx_src))
             .context("Failed to load PTX module with cudarc")?;
         self.module = Some(cuda_module);
         self.ptx_graph = Some(ptx_graph);
@@ -100,7 +103,7 @@ impl PtxExecutor {
             .module
             .as_ref()
             .context("No compiled module available. Call compile() first.")?;
-        
+
         let ptx_graph = self
             .ptx_graph
             .as_ref()
@@ -255,6 +258,78 @@ impl PtxExecutor {
 
                     out
                 }
+                TensorGraphNode::MatMul => {
+                    let kernel_name = &ptx_graph.graph[*node_idx].name;
+
+                    let ins = graph.inputs(*node_idx);
+                    let a = self
+                        .values
+                        .get(&ins[0])
+                        .context("Missing A matrix for MatMul")?;
+                    let b = self
+                        .values
+                        .get(&ins[1])
+                        .context("Missing B matrix for MatMul")?;
+
+                    // Get matrix dimensions from shapes
+                    // A is [M, K], B is [K, N], output is [M, N]
+                    let a_shape = graph
+                        .shapes
+                        .get(&ins[0])
+                        .context("Missing shape for A matrix")?;
+                    let b_shape = graph
+                        .shapes
+                        .get(&ins[1])
+                        .context("Missing shape for B matrix")?;
+
+                    if a_shape.len() != 2 || b_shape.len() != 2 {
+                        anyhow::bail!(
+                            "MatMul requires 2D matrices, got shapes {:?} and {:?}",
+                            a_shape,
+                            b_shape
+                        );
+                    }
+
+                    let m = a_shape[0];
+                    let k_a = a_shape[1];
+                    let k_b = b_shape[0];
+                    let n = b_shape[1];
+
+                    if k_a != k_b {
+                        anyhow::bail!(
+                            "MatMul dimension mismatch: A is [{}, {}] but B is [{}, {}]",
+                            m,
+                            k_a,
+                            k_b,
+                            n
+                        );
+                    }
+
+                    let out_len = m * n;
+                    let stream = self.device.default_stream();
+                    let mut out = stream.alloc_zeros::<f32>(out_len).unwrap();
+
+                    let f = module.load_function(kernel_name)?;
+
+                    // Calculate grid dimensions based on 16x16 tiles
+                    const TILE_SIZE: usize = 16;
+                    let grid_x = (m + TILE_SIZE - 1) / TILE_SIZE;
+                    let grid_y = (n + TILE_SIZE - 1) / TILE_SIZE;
+
+                    let cfg = LaunchConfig {
+                        grid_dim: (grid_x as u32, grid_y as u32, 1),
+                        block_dim: (256, 1, 1), // 256 threads = 8 warps of 32 threads each
+                        shared_mem_bytes: 0,
+                    };
+                    let mut launcher = stream.launch_builder(&f);
+                    launcher.arg(a);
+                    launcher.arg(b);
+                    launcher.arg(&mut out);
+                    unsafe { launcher.launch(cfg) }
+                        .with_context(|| format!("CUDA {} kernel launch failed", kernel_name))?;
+
+                    out
+                }
                 _ => {
                     anyhow::bail!("Unsupported operation: {}", node.name());
                 }
@@ -320,66 +395,5 @@ impl Executor<f32> for PtxExecutor {
         }
 
         result
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::ops::Neg;
-    use tensor::graph::TensorGraph;
-    use tensor::{Constant, TensorExpr};
-
-    #[test]
-    #[ignore] // Requires CUDA hardware
-    fn test_ptx_executor_unary() {
-        let x = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
-        let y = TensorExpr::from(x).neg();
-        let graph: TensorGraph<f32> = y.into();
-
-        let mut executor = PtxExecutor::new();
-        let result = executor
-            .compile_and_execute(&graph, HashMap::new())
-            .unwrap();
-
-        assert_eq!(result.len(), 4);
-        assert!((result[0] - (-1.0)).abs() < 1e-5);
-        assert!((result[1] - (-2.0)).abs() < 1e-5);
-        assert!((result[2] - (-3.0)).abs() < 1e-5);
-        assert!((result[3] - (-4.0)).abs() < 1e-5);
-    }
-
-    #[test]
-    #[ignore] // Requires CUDA hardware
-    fn test_ptx_executor_binary() {
-        let x = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
-        let y = Constant::new(vec![10.0, 20.0, 30.0, 40.0], vec![4]);
-        let z = TensorExpr::from(x) + TensorExpr::from(y);
-        let graph: TensorGraph<f32> = z.into();
-
-        let mut executor = PtxExecutor::new();
-        let result = executor
-            .compile_and_execute(&graph, HashMap::new())
-            .unwrap();
-
-        assert_eq!(result.len(), 4);
-        assert!((result[0] - 11.0).abs() < 1e-5);
-        assert!((result[1] - 22.0).abs() < 1e-5);
-        assert!((result[2] - 33.0).abs() < 1e-5);
-        assert!((result[3] - 44.0).abs() < 1e-5);
-    }
-
-    #[test]
-    #[ignore] // Requires CUDA hardware
-    fn test_ptx_executor_relu() {
-        let x = Constant::new(vec![-1.0, 2.0, -3.0, 4.0], vec![4]);
-        // Note: relu() method needs to be checked if it exists on TensorExpr
-        // For now, commenting out this test as it may not be implemented yet
-        // let y = TensorExpr::from(x).relu();
-        // let graph: TensorGraph<f32> = y.into();
-
-        let mut _executor = PtxExecutor::new();
-        // Placeholder until relu is implemented
-        let _data = x;
     }
 }

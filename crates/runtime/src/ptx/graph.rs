@@ -31,19 +31,20 @@ impl From<TileIR> for Function {
     fn from(tile_ir: TileIR) -> Self {
         let mut func = Function::new(&tile_ir.kernel_name);
 
-        // Add parameters
+        // Create lowering context to track tile variable mappings
+        let mut ctx = LoweringContext::new();
+
+        // Add parameters as u64 pointers and store their loaded addresses
         for param in &tile_ir.params {
-            let ptx_type = dtype_to_ptx_type(param.dtype);
-            func.params.push((param.name.clone(), ptx_type));
+            // All parameters are pointers, so they're u64 in PTX
+            let ptr = func.add_global_ptr_param(&param.name);
+            ctx.param_ptrs.insert(param.name.clone(), ptr);
         }
 
         // Allocate shared memory if needed
         if tile_ir.shared_mem_bytes > 0 {
             func.add_shared_memory("shared", tile_ir.shared_mem_bytes);
         }
-
-        // Create lowering context to track tile variable mappings
-        let mut ctx = LoweringContext::new();
 
         // Convert body statements to PTX instructions
         lower_block(&mut func, &mut ctx, &tile_ir.body);
@@ -60,6 +61,12 @@ struct LoweringContext {
     tile_to_reg: HashMap<TileVar, Operand<F32>>,
     /// Tracks allocated shared memory base pointers
     shared_mem_ptrs: HashMap<TileVar, Operand<U64>>,
+    /// Tracks loaded parameter pointers (global addresses)
+    param_ptrs: HashMap<String, Operand<U64>>,
+    /// Maps loop variable names to their i32 register operands
+    loop_vars: HashMap<String, Operand<I32>>,
+    /// Current offset into shared memory for allocation
+    shared_mem_offset: usize,
 }
 
 impl LoweringContext {
@@ -67,6 +74,9 @@ impl LoweringContext {
         Self {
             tile_to_reg: HashMap::new(),
             shared_mem_ptrs: HashMap::new(),
+            param_ptrs: HashMap::new(),
+            loop_vars: HashMap::new(),
+            shared_mem_offset: 0,
         }
     }
 
@@ -102,9 +112,9 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
         Stmt::AllocTile {
             var,
             space,
-            dtype: _,
-            rows: _,
-            cols: _,
+            dtype,
+            rows,
+            cols,
         } => {
             use crate::tile::MemorySpace;
             match space {
@@ -113,10 +123,27 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                     ctx.get_or_alloc_reg(func, *var);
                 }
                 MemorySpace::Shared => {
-                    // Track shared memory allocation
-                    // In a real implementation, we'd track offsets into the shared memory buffer
-                    let ptr = func.add_u64_register();
-                    ctx.shared_mem_ptrs.insert(*var, ptr);
+                    // Calculate size in bytes for this tile
+                    let tile_size_bytes = rows * cols * dtype.size_bytes();
+                    
+                    // Get base address of shared memory array
+                    let base_ptr = func.add_u64_register();
+                    func.add_inst(Inst::MovU64 {
+                        dst: base_ptr.clone(),
+                        src: Operand::symbol("shared"),
+                    });
+                    
+                    // Add current offset to get this tile's pointer
+                    let tile_ptr = func.add_u64_register();
+                    func.add_inst(Inst::AddU64(super::instructions::AddInst::new(
+                        tile_ptr.clone(),
+                        base_ptr,
+                        Operand::imm_u64(ctx.shared_mem_offset as u64),
+                    )));
+                    
+                    // Store the pointer and update offset
+                    ctx.shared_mem_ptrs.insert(*var, tile_ptr);
+                    ctx.shared_mem_offset += tile_size_bytes;
                 }
                 MemorySpace::Global => {
                     // Global memory is parameter-based, not allocated
@@ -129,15 +156,16 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             row_offset,
             col_offset: _,
         } => {
-            // Load from global memory to register/shared
-            // Simplified: load a single f32 value
-            let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-
-            // Get parameter pointer
-            let param_ptr = func.add_global_ptr_param(src_param);
+            // Load from global memory to register or shared memory
+            // Get parameter pointer from cache (already loaded during initialization)
+            let param_ptr = ctx
+                .param_ptrs
+                .get(src_param)
+                .expect("Parameter not found in context")
+                .clone();
 
             // Calculate offset from row/col
-            let offset_reg = lower_expr(func, row_offset);
+            let offset_reg = lower_expr(func, ctx, row_offset);
 
             // Add offset to base pointer
             let addr = func.add_u64_register();
@@ -147,8 +175,21 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 offset_reg,
             )));
 
-            // Load from global memory
-            func.add_inst(Inst::load_global_scalar_f32(dest_reg, addr));
+            // Check if destination is shared memory or register
+            if let Some(shared_ptr) = ctx.shared_mem_ptrs.get(dest).cloned() {
+                // Destination is shared memory: load to temp register, then store to shared
+                let temp_reg = func.add_f32_register();
+                func.add_inst(Inst::load_global_scalar_f32(temp_reg.clone(), addr));
+                func.add_inst(Inst::StSharedF32 {
+                    addr: shared_ptr,
+                    src: vec![temp_reg],
+                    vec: super::instructions::VecWidth::Scalar,
+                });
+            } else {
+                // Destination is register: load directly
+                let dest_reg = ctx.get_or_alloc_reg(func, *dest);
+                func.add_inst(Inst::load_global_scalar_f32(dest_reg, addr));
+            }
         }
         Stmt::Store {
             dest_param,
@@ -159,11 +200,15 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             // Store from register/shared to global memory
             let src_reg = ctx.get_or_alloc_reg(func, *src);
 
-            // Get parameter pointer (would need to be pre-loaded)
-            let param_ptr = func.add_global_ptr_param(dest_param);
+            // Get parameter pointer from cache (already loaded during initialization)
+            let param_ptr = ctx
+                .param_ptrs
+                .get(dest_param)
+                .expect("Parameter not found in context")
+                .clone();
 
             // Calculate offset
-            let offset_reg = lower_expr(func, row_offset);
+            let offset_reg = lower_expr(func, ctx, row_offset);
 
             // Add offset to base pointer
             let addr = func.add_u64_register();
@@ -333,11 +378,10 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             body,
         } => {
             // Implement for loop with labels and branches
-            // TODO: Need proper loop variable tracking in context
             let loop_counter = func.add_i32_register();
 
             // Initialize loop counter
-            let start_val = lower_expr_i32(func, start);
+            let start_val = lower_expr_i32(func, ctx, start);
             // Using add with 0 as a workaround for mov
             let temp = func.add_i32_register();
             func.add_inst(Inst::add_i32(temp.clone(), start_val, Operand::imm_i32(0)));
@@ -346,6 +390,9 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 temp,
                 Operand::imm_i32(0),
             ));
+
+            // Track the loop variable in context
+            ctx.loop_vars.insert(loop_var.clone(), loop_counter.clone());
 
             // Create labels
             let loop_start_label = format!("loop_start_{}", loop_var);
@@ -356,7 +403,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             func.add_inst(Inst::Label(loop_start_label.clone()));
 
             // Check loop condition: if counter < end, continue to body
-            let end_val = lower_expr_i32(func, end);
+            let end_val = lower_expr_i32(func, ctx, end);
             let pred = func.add_predicate_register();
             func.add_inst(Inst::setp_lt_i32(
                 pred.clone(),
@@ -402,17 +449,31 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
 
             // Loop end label
             func.add_inst(Inst::Label(loop_end_label));
+
+            // Remove loop variable from context
+            ctx.loop_vars.remove(loop_var);
         }
     }
 }
 
 /// Lower an expression to a U64 operand (for address calculations)
-fn lower_expr(func: &mut Function, expr: &Expr) -> Operand<U64> {
+fn lower_expr(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operand<U64> {
     match expr {
         Expr::Const(val) => Operand::imm_u64(*val as u64),
         Expr::Var(name) => {
-            // Variable reference - would need to be tracked in context
-            Operand::reg(&format!("%{}", name))
+            // Check if it's a loop variable
+            if let Some(loop_var_i32) = ctx.loop_vars.get(name) {
+                // Convert from i32 to u64
+                let result = func.add_u64_register();
+                func.add_inst(Inst::ConvertU64I32(super::instructions::ConvertInst::new(
+                    result.clone(),
+                    loop_var_i32.clone(),
+                )));
+                result
+            } else {
+                // Variable reference - would need to be tracked in context
+                Operand::reg(&format!("%{}", name))
+            }
         }
         Expr::BlockIdx(dim) => {
             use crate::tile::Dim;
@@ -439,15 +500,15 @@ fn lower_expr(func: &mut Function, expr: &Expr) -> Operand<U64> {
             result
         }
         Expr::Mul(a, b) => {
-            let a_val = lower_expr(func, a);
-            let b_val = lower_expr(func, b);
+            let a_val = lower_expr(func, ctx, a);
+            let b_val = lower_expr(func, ctx, b);
             let result = func.add_u64_register();
             func.add_inst(Inst::mul_u64(result.clone(), a_val, b_val));
             result
         }
         Expr::Add(a, b) => {
-            let a_val = lower_expr(func, a);
-            let b_val = lower_expr(func, b);
+            let a_val = lower_expr(func, ctx, a);
+            let b_val = lower_expr(func, ctx, b);
             let result = func.add_u64_register();
             func.add_inst(Inst::add_u64(result.clone(), a_val, b_val));
             result
@@ -456,13 +517,20 @@ fn lower_expr(func: &mut Function, expr: &Expr) -> Operand<U64> {
 }
 
 /// Lower an expression to an I32 operand (for loop counters)
-fn lower_expr_i32(func: &mut Function, expr: &Expr) -> Operand<I32> {
+fn lower_expr_i32(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operand<I32> {
     match expr {
         Expr::Const(val) => Operand::imm_i32(*val as i32),
-        Expr::Var(name) => Operand::reg(&format!("%{}", name)),
+        Expr::Var(name) => {
+            // Check if it's a loop variable
+            if let Some(loop_var) = ctx.loop_vars.get(name) {
+                loop_var.clone()
+            } else {
+                Operand::reg(&format!("%{}", name))
+            }
+        }
         _ => {
             // For complex expressions, compute as u64 then convert
-            let u64_val = lower_expr(func, expr);
+            let u64_val = lower_expr(func, ctx, expr);
             let result = func.add_i32_register();
             func.add_inst(Inst::convert_i32_u64(result.clone(), u64_val));
             result

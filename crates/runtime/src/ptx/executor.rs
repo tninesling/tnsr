@@ -365,30 +365,27 @@ impl PtxExecutor {
                     // Extract the unpadded result from the padded output
                     let out_len = m * n;
                     
-                    // Copy padded output to host
-                    let mut out_padded_host = vec![0.0f32; out_padded.len()];
-                    stream.memcpy_dtoh(&out_padded, &mut out_padded_host).unwrap();
+                    // IMPORTANT: Drop input padded buffers BEFORE allocating output
+                    // This prevents CUDA's allocator from reusing their memory
+                    drop(a_padded);
+                    drop(b_padded);
                     stream.synchronize().unwrap();
                     
-                    // Extract unpadded data on host
-                    let mut out_host = vec![0.0f32; out_len];
+                    // Allocate final output buffer
+                    let mut out = stream.alloc_zeros::<f32>(out_len).unwrap();
+                    
+                    // Copy unpadded rows from out_padded to out (device-to-device)
                     for i in 0..m {
                         let src_offset = i * n_padded;
                         let dst_offset = i * n;
-                        out_host[dst_offset..(dst_offset + n)]
-                            .copy_from_slice(&out_padded_host[src_offset..(src_offset + n)]);
+                        stream.memcpy_dtod(
+                            &out_padded.slice(src_offset..(src_offset + n)),
+                            &mut out.slice_mut(dst_offset..(dst_offset + n))
+                        ).unwrap();
                     }
                     
-                    // IMPORTANT: Explicitly drop padded buffers BEFORE allocating final output
-                    // This ensures CUDA doesn't reuse their memory for the output buffer
-                    drop(a_padded);
-                    drop(b_padded);
+                    // Drop output padded buffer after copying
                     drop(out_padded);
-                    stream.synchronize().unwrap(); // Wait for async frees to complete
-                    
-                    // Allocate final output buffer and copy unpadded data
-                    let mut out = stream.alloc_zeros::<f32>(out_len).unwrap();
-                    stream.memcpy_htod(&out_host, &mut out).unwrap();
                     stream.synchronize().unwrap();
 
                     out

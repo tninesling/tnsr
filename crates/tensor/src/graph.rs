@@ -888,10 +888,118 @@ impl TensorGraph<f32, NoGrad> {
                     // Skip gradient computation for these nodes
                 }
                 #[cfg(feature = "fusion")]
-                TensorGraphNode::FusedUnary { .. } => {
-                    // TODO: Implement gradient computation for fused unary operations
-                    // For now, FusedUnary should only be used in inference graphs without gradients
-                    panic!("Gradient computation for FusedUnary not yet implemented");
+                TensorGraphNode::FusedUnary { ops } => {
+                    // Gradient computation for fused unary operations using chain rule
+                    // For y = f_n(...f_2(f_1(x))), we need:
+                    // dy/dx = dy/dy * f_n'(...) * ... * f_2'(f_1(x)) * f_1'(x)
+                    //
+                    // Strategy: Apply chain rule from right to left, computing intermediate
+                    // values as needed for gradient computation.
+
+                    if inputs.len() != 1 {
+                        panic!("FusedUnary should have 1 input");
+                    }
+                    let input_x = inputs[0];
+                    let input_x_shape = self.shapes.get(&input_x).unwrap().clone();
+
+                    // Clone ops to avoid borrow checker issues
+                    let ops_cloned = ops.clone();
+
+                    // Start with grad_output
+                    let mut current_grad = grad_output;
+
+                    // We need to compute intermediate values for the forward pass
+                    // to use in gradient computation (e.g., for Exp, Log, Relu)
+                    //
+                    // Build up intermediate forward values: x, f_1(x), f_2(f_1(x)), ...
+                    let mut forward_intermediates = vec![input_x];
+                    let mut current_forward =
+                        crate::TensorExpr::node_ref(input_x, input_x_shape.clone());
+
+                    for (i, op) in ops_cloned.iter().enumerate() {
+                        current_forward = match op {
+                            UnaryOp::Exp => current_forward.exp(),
+                            UnaryOp::Log => current_forward.log(),
+                            UnaryOp::Neg => -current_forward,
+                            UnaryOp::Relu => current_forward.relu(),
+                        };
+
+                        // Lower this intermediate value into the graph
+                        // (These will be gradient nodes since they're created during gradient construction)
+                        let intermediate_idx =
+                            self.lower_gradient_expr(&current_forward, &mut gradient_nodes);
+                        forward_intermediates.push(intermediate_idx);
+
+                        // Update shape tracking
+                        if i == ops_cloned.len() - 1 {
+                            // Last intermediate should match node_idx output
+                            let node_out_shape = self.shapes.get(&node_idx).unwrap().clone();
+                            current_forward =
+                                crate::TensorExpr::node_ref(intermediate_idx, node_out_shape);
+                        } else {
+                            let inter_shape = self.shapes.get(&intermediate_idx).unwrap().clone();
+                            current_forward =
+                                crate::TensorExpr::node_ref(intermediate_idx, inter_shape);
+                        }
+                    }
+
+                    // Now compute gradients by walking backwards through the chain
+                    // For each op, multiply current_grad by the local derivative
+                    for (i, op) in ops_cloned.iter().enumerate().rev() {
+                        let grad_out_shape = self.shapes.get(&current_grad).unwrap().clone();
+                        let grad_out_expr = crate::TensorExpr::node_ref(current_grad, grad_out_shape);
+
+                        // Get the input to this operation (the output of the previous op, or original input)
+                        let op_input = forward_intermediates[i];
+                        let op_input_shape = self.shapes.get(&op_input).unwrap().clone();
+
+                        // Get the output of this operation
+                        let op_output = forward_intermediates[i + 1];
+                        let op_output_shape = self.shapes.get(&op_output).unwrap().clone();
+
+                        let local_grad_expr = match op {
+                            UnaryOp::Exp => {
+                                // d(exp(x))/dx = exp(x) = op_output
+                                let op_output_expr =
+                                    crate::TensorExpr::node_ref(op_output, op_output_shape);
+                                grad_out_expr * op_output_expr
+                            }
+                            UnaryOp::Log => {
+                                // d(log(x))/dx = 1/x
+                                let op_input_expr =
+                                    crate::TensorExpr::node_ref(op_input, op_input_shape);
+                                grad_out_expr / op_input_expr
+                            }
+                            UnaryOp::Neg => {
+                                // d(-x)/dx = -1
+                                -grad_out_expr
+                            }
+                            UnaryOp::Relu => {
+                                // d(relu(x))/dx = (x > 0)
+                                let op_input_expr =
+                                    crate::TensorExpr::node_ref(op_input, op_input_shape.clone());
+                                let num_elements: usize = op_input_shape.iter().product();
+                                let zero_expr = crate::TensorExpr::constant(
+                                    vec![0.0f32; num_elements],
+                                    op_input_shape,
+                                );
+                                let condition_expr = op_input_expr.gt(zero_expr);
+                                grad_out_expr.mask(condition_expr)
+                            }
+                        };
+
+                        // Update current_grad for the next iteration (going backwards)
+                        current_grad =
+                            self.lower_gradient_expr(&local_grad_expr, &mut gradient_nodes);
+                    }
+
+                    // Accumulate the final gradient to the input
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_x,
+                        current_grad,
+                    );
                 }
             }
         }
@@ -1510,5 +1618,189 @@ mod tests {
             .count();
 
         assert_eq!(fused_count, 2, "Should have 2 FusedUnary nodes");
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_gradient_fused_unary_simple_chain() {
+        // Test: gradient computation for fused exp -> log chain
+        // y = log(exp(x)), dy/dx = log'(exp(x)) * exp'(x) = (1/exp(x)) * exp(x) = 1
+        let x = Parameter::new(vec![1.0f32], vec![1]);
+        let x_id = x.id();
+
+        let y = TensorExpr::from(x).exp().log();
+        let mut graph: TensorGraph<f32> = y.into();
+
+        // Apply fusion before adding gradients
+        let num_fused = graph.apply_fusion();
+        assert_eq!(num_fused, 1, "Should have fused one chain");
+
+        // Find the output node (should be the FusedUnary node)
+        let topo = graph.toposort();
+        let output_node = *topo.last().unwrap();
+
+        // Verify it's a FusedUnary node
+        assert!(
+            matches!(graph[output_node], TensorGraphNode::FusedUnary { .. }),
+            "Output should be FusedUnary"
+        );
+
+        // Add gradients - this should NOT panic
+        let grad_graph = graph.with_gradients(output_node);
+
+        // Verify parameter has a gradient
+        let metadata = grad_graph.gradient_metadata();
+        assert!(
+            metadata.param_to_grad.contains_key(&x_id),
+            "Parameter should have gradient"
+        );
+
+        // Verify gradient nodes were created
+        assert!(
+            !metadata.gradient_nodes.is_empty(),
+            "Should have created gradient nodes"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_gradient_fused_unary_longer_chain() {
+        // Test: gradient computation for fused neg -> relu -> exp chain
+        let x = Parameter::new(vec![2.0f32], vec![1]);
+        let x_id = x.id();
+
+        let y = (-TensorExpr::from(x)).relu().exp();
+        let mut graph: TensorGraph<f32> = y.into();
+
+        // Apply fusion
+        let num_fused = graph.apply_fusion();
+        assert_eq!(num_fused, 1, "Should have fused one chain");
+
+        // Find the output node
+        let topo = graph.toposort();
+        let output_node = *topo.last().unwrap();
+
+        // Add gradients - should work
+        let grad_graph = graph.with_gradients(output_node);
+
+        // Verify parameter has gradient
+        let metadata = grad_graph.gradient_metadata();
+        assert!(
+            metadata.param_to_grad.contains_key(&x_id),
+            "Parameter should have gradient"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_gradient_fused_vs_unfused_simple() {
+        // Compare gradient nodes between fused and unfused versions
+        // Both should produce equivalent gradient computation (though graph structure differs)
+
+        let x = Parameter::new(vec![1.5f32], vec![1]);
+        let x_id = x.id();
+
+        // Unfused version
+        let y_unfused = TensorExpr::from(x.clone()).exp().log();
+        let graph_unfused: TensorGraph<f32> = y_unfused.into();
+        let topo_unfused = graph_unfused.toposort();
+        let output_unfused = *topo_unfused.last().unwrap();
+        let grad_graph_unfused = graph_unfused.with_gradients(output_unfused);
+
+        // Fused version
+        let y_fused = TensorExpr::from(x).exp().log();
+        let mut graph_fused: TensorGraph<f32> = y_fused.into();
+        graph_fused.apply_fusion();
+        let topo_fused = graph_fused.toposort();
+        let output_fused = *topo_fused.last().unwrap();
+        let grad_graph_fused = graph_fused.with_gradients(output_fused);
+
+        // Both should have gradients for the parameter
+        let metadata_unfused = grad_graph_unfused.gradient_metadata();
+        let metadata_fused = grad_graph_fused.gradient_metadata();
+
+        assert!(metadata_unfused.param_to_grad.contains_key(&x_id));
+        assert!(metadata_fused.param_to_grad.contains_key(&x_id));
+
+        // Both should have created gradient nodes
+        assert!(!metadata_unfused.gradient_nodes.is_empty());
+        assert!(!metadata_fused.gradient_nodes.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_gradient_fused_relu_chain() {
+        // Test gradient for chain with relu (has conditional gradient)
+        // y = relu(log(exp(x)))
+        let x = Parameter::new(vec![2.0f32], vec![1]);
+        let x_id = x.id();
+
+        let y = TensorExpr::from(x).exp().log().relu();
+        let mut graph: TensorGraph<f32> = y.into();
+
+        // Apply fusion
+        let num_fused = graph.apply_fusion();
+        assert_eq!(num_fused, 1, "Should have fused one chain");
+
+        // Add gradients
+        let topo = graph.toposort();
+        let output_node = *topo.last().unwrap();
+        let grad_graph = graph.with_gradients(output_node);
+
+        // Verify gradient was created
+        let metadata = grad_graph.gradient_metadata();
+        assert!(
+            metadata.param_to_grad.contains_key(&x_id),
+            "Parameter should have gradient"
+        );
+
+        // Should have created Gt and Mask nodes for relu gradient
+        let has_gt = grad_graph
+            .graph
+            .node_indices()
+            .any(|idx| matches!(grad_graph[idx], TensorGraphNode::Gt));
+        let has_mask = grad_graph
+            .graph
+            .node_indices()
+            .any(|idx| matches!(grad_graph[idx], TensorGraphNode::Mask));
+
+        assert!(has_gt, "Should have Gt node for relu gradient");
+        assert!(has_mask, "Should have Mask node for relu gradient");
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_gradient_fused_multiple_params() {
+        // Test gradient when fused chain is part of larger computation
+        // z = (exp(log(x))) + y
+        let x = Parameter::new(vec![1.0f32], vec![1]);
+        let x_id = x.id();
+        let y = Parameter::new(vec![2.0f32], vec![1]);
+        let y_id = y.id();
+
+        let exp_log_x = TensorExpr::from(x).exp().log();
+        let z = exp_log_x + TensorExpr::from(y);
+
+        let mut graph: TensorGraph<f32> = z.into();
+
+        // Apply fusion (should fuse exp -> log)
+        let num_fused = graph.apply_fusion();
+        assert_eq!(num_fused, 1, "Should have fused one chain");
+
+        // Add gradients
+        let topo = graph.toposort();
+        let output_node = *topo.last().unwrap();
+        let grad_graph = graph.with_gradients(output_node);
+
+        // Both parameters should have gradients
+        let metadata = grad_graph.gradient_metadata();
+        assert!(
+            metadata.param_to_grad.contains_key(&x_id),
+            "Parameter x should have gradient"
+        );
+        assert!(
+            metadata.param_to_grad.contains_key(&y_id),
+            "Parameter y should have gradient"
+        );
     }
 }

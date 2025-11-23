@@ -967,3 +967,439 @@ fn forward_fused_with_branching_preserved() {
     let expected = vec![e + 1.0, e.powi(2) + 2.0, e.powi(3) + 3.0];
     assert_approx_eq!(output, expected);
 }
+
+// ============================================================================
+// Fusion Gradient Tests
+// ============================================================================
+
+#[test]
+#[cfg(feature = "fusion")]
+fn gradient_fused_exp_log_chain() {
+    let mut runtime = create_runtime();
+
+    // Test: f(x) = log(exp(x)) with fusion
+    // Mathematically: log(exp(x)) = x, so df/dx = 1
+    // Chain rule: df/dx = (1/exp(x)) * exp(x) = 1
+    let x = Parameter::new(vec![1.0, 2.0, 3.0], vec![3]);
+    let x_id = x.id();
+
+    let node = TensorExpr::from(x).exp().log().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion
+    let num_fused = graph.apply_fusion();
+    assert_eq!(num_fused, 1, "Should have fused exp->log chain");
+
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 3);
+
+    // Expected: all gradients should be 1.0
+    for (i, &g) in grad.iter().enumerate() {
+        assert!(
+            (g - 1.0).abs() < EPSILON,
+            "Expected gradient 1.0, got {} at index {}",
+            g,
+            i
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn gradient_fused_vs_unfused_exp_log() {
+    let mut runtime_fused = create_runtime();
+    let mut runtime_unfused = create_runtime();
+
+    // Compare gradient values between fused and unfused versions
+    // They should produce identical numerical results
+    let x_fused = Parameter::new(vec![1.0, 2.0, 3.0], vec![3]);
+    let x_fused_id = x_fused.id();
+    let x_unfused = Parameter::new(vec![1.0, 2.0, 3.0], vec![3]);
+    let x_unfused_id = x_unfused.id();
+
+    // Fused version
+    let node_fused = TensorExpr::from(x_fused).exp().log().reduce_sum(0);
+    let mut graph_fused: TensorGraph<f32> = node_fused.into();
+    graph_fused.apply_fusion();
+    let loss_fused = *graph_fused.toposort().last().unwrap();
+    let grad_graph_fused = graph_fused.with_gradients(loss_fused);
+
+    // Unfused version
+    let node_unfused = TensorExpr::from(x_unfused).exp().log().reduce_sum(0);
+    let graph_unfused: TensorGraph<f32> = node_unfused.into();
+    let loss_unfused = *graph_unfused.toposort().last().unwrap();
+    let grad_graph_unfused = graph_unfused.with_gradients(loss_unfused);
+
+    // Execute both
+    runtime_fused
+        .execute(&grad_graph_fused, HashMap::new())
+        .unwrap();
+    runtime_unfused
+        .execute(&grad_graph_unfused, HashMap::new())
+        .unwrap();
+
+    let grads_fused = runtime_fused.get_gradients(&grad_graph_fused);
+    let grads_unfused = runtime_unfused.get_gradients(&grad_graph_unfused);
+
+    let grad_fused = grads_fused
+        .get(&x_fused_id)
+        .expect("Fused gradient missing");
+    let grad_unfused = grads_unfused
+        .get(&x_unfused_id)
+        .expect("Unfused gradient missing");
+
+    // Gradients should be identical
+    assert_approx_eq!(grad_fused, grad_unfused);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn gradient_fused_neg_exp_chain() {
+    let mut runtime = create_runtime();
+
+    // Test: f(x) = sum(exp(neg(x))) where x = [1, 2, 3]
+    // exp(neg(x)) = exp(-x) = [e^-1, e^-2, e^-3]
+    // df/dx = -exp(-x) = [-e^-1, -e^-2, -e^-3]
+    let x_data = vec![1.0, 2.0, 3.0];
+    let x = Parameter::new(x_data.clone(), vec![3]);
+    let x_id = x.id();
+
+    let node = (-TensorExpr::from(x)).exp().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+    graph.apply_fusion();
+
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 3);
+
+    // Expected: -exp(-x)
+    let expected: Vec<f32> = x_data.iter().map(|&v| -(-v).exp()).collect();
+    assert_approx_eq!(grad, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn gradient_fused_relu_chain() {
+    let mut runtime = create_runtime();
+
+    // Test: f(x) = sum(relu(neg(x))) where x = [-2, -1, 0, 1, 2]
+    // neg(x) = [2, 1, 0, -1, -2]
+    // relu(neg(x)) = [2, 1, 0, 0, 0]
+    // df/dx: gradient is -1 where neg(x) > 0, else 0
+    //        = [-1, -1, 0, 0, 0]
+    let x = Parameter::new(vec![-2.0, -1.0, 0.0, 1.0, 2.0], vec![5]);
+    let x_id = x.id();
+
+    let node = (-TensorExpr::from(x)).relu().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+    graph.apply_fusion();
+
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 5);
+
+    let expected = vec![-1.0, -1.0, 0.0, 0.0, 0.0];
+    assert_approx_eq!(grad, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn gradient_fused_log_relu_chain() {
+    let mut runtime = create_runtime();
+
+    // Test: f(x) = sum(log(relu(x))) where x = [0.5, 1, 2, 3]
+    // relu(x) = [0.5, 1, 2, 3]
+    // log(relu(x)) = [ln(0.5), 0, ln(2), ln(3)]
+    // df/dx = (1/relu(x)) * relu'(x) = 1/x where x > 0
+    let x_data = vec![0.5, 1.0, 2.0, 3.0];
+    let x = Parameter::new(x_data.clone(), vec![4]);
+    let x_id = x.id();
+
+    let node = TensorExpr::from(x).relu().log().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+    graph.apply_fusion();
+
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    // Expected: 1/x for all positive x
+    let expected: Vec<f32> = x_data.iter().map(|&v| 1.0 / v).collect();
+    assert_approx_eq!(grad, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn gradient_fused_longer_chain() {
+    let mut runtime = create_runtime();
+
+    // Test: f(x) = sum(exp(log(exp(x)))) where x = [1, 2]
+    // exp(log(exp(x))) = exp(x) mathematically
+    // df/dx = exp(x)
+    let x_data = vec![1.0, 2.0];
+    let x = Parameter::new(x_data.clone(), vec![2]);
+    let x_id = x.id();
+
+    let node = TensorExpr::from(x).exp().log().exp().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+    let num_fused = graph.apply_fusion();
+    assert!(num_fused > 0, "Should have fused at least one chain");
+
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 2);
+
+    // Expected: exp(x)
+    let expected: Vec<f32> = x_data.iter().map(|&v| v.exp()).collect();
+    assert_approx_eq!(grad, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn gradient_fused_in_larger_graph() {
+    let mut runtime = create_runtime();
+
+    // Test: gradient when fused chain is part of larger computation
+    // f(x, y) = sum((exp(log(x))) + y^2)
+    // df/dx = 1 (from exp(log(x)) = x)
+    // df/dy = 2y
+    let x = Parameter::new(vec![2.0, 3.0], vec![2]);
+    let x_id = x.id();
+    let y_data = vec![1.0, 2.0];
+    let y = Parameter::new(y_data.clone(), vec![2]);
+    let y_id = y.id();
+
+    let exp_log_x = TensorExpr::from(x).exp().log();
+    let y_sq = TensorExpr::from(y.clone()) * TensorExpr::from(y);
+    let node = (exp_log_x + y_sq).reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+    graph.apply_fusion();
+
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad_x = grads.get(&x_id).expect("x gradient missing");
+    let grad_y = grads.get(&y_id).expect("y gradient missing");
+
+    assert_eq!(grad_x.len(), 2);
+    assert_eq!(grad_y.len(), 2);
+
+    // Check x gradient (should be all 1.0)
+    for (i, &g) in grad_x.iter().enumerate() {
+        assert!(
+            (g - 1.0).abs() < EPSILON,
+            "Expected x gradient 1.0, got {} at index {}",
+            g,
+            i
+        );
+    }
+
+    // Check y gradient (should be 2y)
+    let expected_y: Vec<f32> = y_data.iter().map(|&v| 2.0 * v).collect();
+    assert_approx_eq!(grad_y, &expected_y);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn gradient_fused_training_step() {
+    let mut runtime = create_runtime();
+
+    // Simulate a simple training step with fused operations
+    // Model: y_pred = exp(log(W * x + b))  (simplified to W*x + b after fusion)
+    // Loss: L = sum((y_pred - y_true)^2)
+    // This tests that fusion works in a realistic training scenario
+
+    // Initialize parameters
+    let w = Parameter::new(vec![2.0, 3.0], vec![2]);
+    let w_id = w.id();
+    let b = Parameter::new(vec![0.5], vec![1]);
+    let b_id = b.id();
+
+    // Input and target
+    let x = Constant::new(vec![1.0, 2.0], vec![2]);
+    let y_true = Constant::new(vec![10.0], vec![1]);
+
+    // Forward pass: y_pred = exp(log(W*x + b))
+    let wx = TensorExpr::from(w) * TensorExpr::from(x);
+    let wx_sum = wx.reduce_sum(0); // Sum to get scalar-like shape [1]
+    let linear = wx_sum + TensorExpr::from(b);
+
+    // Apply fused chain: exp(log(z)) which should optimize to z
+    let y_pred = linear.exp().log();
+
+    // Loss: (y_pred - y_true)^2
+    let diff = y_pred - TensorExpr::from(y_true);
+    let loss = diff.clone() * diff;
+
+    let mut graph: TensorGraph<f32> = loss.into();
+
+    // Apply fusion (should fuse exp->log chain)
+    let num_fused = graph.apply_fusion();
+    assert!(num_fused >= 1, "Should have fused at least one chain");
+
+    // Compute gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    // Verify we got gradients for both parameters
+    let grad_w = grads.get(&w_id).expect("W gradient missing");
+    let grad_b = grads.get(&b_id).expect("b gradient missing");
+
+    assert_eq!(grad_w.len(), 2);
+    assert_eq!(grad_b.len(), 1);
+
+    // Expected forward values:
+    // W*x = [2*1, 3*2] = [2, 6]
+    // sum(W*x) = 8
+    // linear = 8 + 0.5 = 8.5
+    // y_pred = exp(log(8.5)) = 8.5
+    // diff = 8.5 - 10 = -1.5
+    // loss = (-1.5)^2 = 2.25
+
+    // Expected gradients:
+    // dL/dy_pred = 2 * (y_pred - y_true) = 2 * (-1.5) = -3.0
+    // dy_pred/d(linear) = 1 (from exp(log(z)) = z)
+    // dL/d(linear) = -3.0
+    // d(linear)/dW = x = [1, 2]
+    // dL/dW = -3.0 * [1, 2] = [-3.0, -6.0]
+    // dL/db = -3.0
+
+    let expected_grad_w = vec![-3.0, -6.0];
+    let expected_grad_b = vec![-3.0];
+
+    assert_approx_eq!(grad_w, &expected_grad_w);
+    assert_approx_eq!(grad_b, &expected_grad_b);
+
+    // Simulate parameter update (gradient descent with lr=0.1)
+    let lr = 0.1;
+    let w_new: Vec<f32> = vec![2.0, 3.0]
+        .iter()
+        .zip(grad_w.iter())
+        .map(|(w, g)| w - lr * g)
+        .collect();
+    let b_new: Vec<f32> = vec![0.5]
+        .iter()
+        .zip(grad_b.iter())
+        .map(|(b, g)| b - lr * g)
+        .collect();
+
+    // Expected updates:
+    // W_new = [2.0, 3.0] - 0.1 * [-3.0, -6.0] = [2.3, 3.6]
+    // b_new = 0.5 - 0.1 * (-3.0) = 0.8
+    let expected_w_new = vec![2.3, 3.6];
+    let expected_b_new = vec![0.8];
+
+    assert_approx_eq!(&w_new, &expected_w_new);
+    assert_approx_eq!(&b_new, &expected_b_new);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn gradient_fused_multi_step_training() {
+    // Test multiple training steps to ensure fusion works across iterations
+    // This verifies that the fused gradient computation is stable and correct
+    let mut runtime = create_runtime();
+
+    // Simple model: minimize sum(exp(log(x)))^2 where target is 0
+    // With fusion: minimize sum(x^2)
+    let mut x_data = vec![5.0, -3.0, 2.0];
+
+    for step in 0..5 {
+        let x = Parameter::new(x_data.clone(), vec![3]);
+        let x_id = x.id();
+
+        // Apply fused transformation
+        let transformed = TensorExpr::from(x).exp().log();
+
+        // Loss: sum(transformed^2)
+        let loss = (transformed.clone() * transformed).reduce_sum(0);
+
+        let mut graph: TensorGraph<f32> = loss.into();
+        graph.apply_fusion();
+
+        let loss_node = *graph.toposort().last().unwrap();
+        let grad_graph = graph.with_gradients(loss_node);
+
+        runtime.execute(&grad_graph, HashMap::new()).unwrap();
+
+        // Get loss value and gradient
+        let loss_value = runtime
+            .get_value(loss_node)
+            .expect("Loss value not found")
+            .to_vec();
+        let grads = runtime.get_gradients(&grad_graph);
+        let grad = grads.get(&x_id).expect("Gradient missing");
+
+        // Expected gradient: 2*x
+        let expected_grad: Vec<f32> = x_data.iter().map(|&v| 2.0 * v).collect();
+        assert_approx_eq!(grad, &expected_grad);
+
+        // Update parameters
+        let lr = 0.1;
+        x_data = x_data
+            .iter()
+            .zip(grad.iter())
+            .map(|(x, g)| x - lr * g)
+            .collect();
+
+        eprintln!("Step {}: loss = {:?}, x = {:?}", step, loss_value, x_data);
+
+        // Verify loss is positive (unless x is near zero)
+        if step > 0 {
+            assert!(
+                loss_value[0] > 0.0 || x_data.iter().all(|&v| v.abs() < EPSILON),
+                "Loss should be positive unless x is near zero"
+            );
+        }
+    }
+
+    // After 5 steps, parameters should be closer to 0
+    // With lr=0.1 and gradient=2x, we decay by factor of 0.8 per step
+    // After 5 steps: x *= 0.8^5 ≈ 0.328
+    // Initial max was 5, so final should be around 5*0.328 ≈ 1.64
+    for &v in x_data.iter() {
+        assert!(
+            v.abs() < 2.0,
+            "Parameters should have decreased in magnitude after 5 steps: {:?}",
+            x_data
+        );
+    }
+}

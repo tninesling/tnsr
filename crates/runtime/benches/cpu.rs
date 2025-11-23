@@ -6,7 +6,7 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use runtime::{Executor, SimpleExecutor};
-use tensor::Constant;
+use tensor::{Constant, Parameter};
 use tensor::TensorExpr;
 
 pub fn benches(c: &mut Criterion) {
@@ -364,6 +364,131 @@ pub fn benches(c: &mut Criterion) {
                     b.iter(|| {
                         let _ = std::hint::black_box(
                             exec_fused.execute(&*graph_fused_clone, Default::default()),
+                        );
+                    });
+                },
+            );
+        }
+        group.finish();
+    }
+
+    // Fusion: gradient of unary chain (exp -> log)
+    #[cfg(feature = "fusion")]
+    {
+        let mut group = c.benchmark_group("fusion_gradient_exp_log");
+        for &n in &sizes {
+            // Count both forward and backward passes
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 4) as u64,
+            ));
+            let shape = vec![n, n];
+
+            // Unfused gradient graph
+            let mut exec_unfused = SimpleExecutor::new();
+            let x_unfused = Parameter::new(vec![1.0f32; n * n], shape.clone());
+            let expr_unfused = TensorExpr::from(x_unfused).exp().log().reduce_sum(1).reduce_sum(0);
+            let mut graph_unfused = tensor::graph::TensorGraph::<f32>::new();
+            expr_unfused.lower_to_graph(&mut graph_unfused);
+            let topo_unfused = graph_unfused.toposort();
+            let loss_unfused = *topo_unfused.last().unwrap();
+            let grad_graph_unfused = graph_unfused.with_gradients(loss_unfused);
+            let grad_graph_unfused = Arc::new(grad_graph_unfused);
+
+            // Fused gradient graph
+            let mut exec_fused = SimpleExecutor::new();
+            let x_fused = Parameter::new(vec![1.0f32; n * n], shape.clone());
+            let expr_fused = TensorExpr::from(x_fused).exp().log().reduce_sum(1).reduce_sum(0);
+            let mut graph_fused = tensor::graph::TensorGraph::<f32>::new();
+            expr_fused.lower_to_graph(&mut graph_fused);
+            graph_fused.apply_fusion();
+            let topo_fused = graph_fused.toposort();
+            let loss_fused = *topo_fused.last().unwrap();
+            let grad_graph_fused = graph_fused.with_gradients(loss_fused);
+            let grad_graph_fused = Arc::new(grad_graph_fused);
+
+            let grad_graph_unfused_clone = Arc::clone(&grad_graph_unfused);
+            group.bench_with_input(
+                BenchmarkId::new("unfused", format!("{n}x{n}")),
+                &n,
+                move |b, &_| {
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec_unfused.execute(&*grad_graph_unfused_clone, Default::default()),
+                        );
+                    });
+                },
+            );
+
+            let grad_graph_fused_clone = Arc::clone(&grad_graph_fused);
+            group.bench_with_input(
+                BenchmarkId::new("fused", format!("{n}x{n}")),
+                &n,
+                move |b, &_| {
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec_fused.execute(&*grad_graph_fused_clone, Default::default()),
+                        );
+                    });
+                },
+            );
+        }
+        group.finish();
+    }
+
+    // Fusion: gradient of longer chain (neg -> relu -> exp)
+    #[cfg(feature = "fusion")]
+    {
+        let mut group = c.benchmark_group("fusion_gradient_long_chain");
+        for &n in &sizes {
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 4) as u64,
+            ));
+            let shape = vec![n, n];
+
+            // Unfused gradient graph
+            let mut exec_unfused = SimpleExecutor::new();
+            let x_unfused = Parameter::new(vec![1.0f32; n * n], shape.clone());
+            let expr_unfused = (-TensorExpr::from(x_unfused)).relu().exp().reduce_sum(1).reduce_sum(0);
+            let mut graph_unfused = tensor::graph::TensorGraph::<f32>::new();
+            expr_unfused.lower_to_graph(&mut graph_unfused);
+            let topo_unfused = graph_unfused.toposort();
+            let loss_unfused = *topo_unfused.last().unwrap();
+            let grad_graph_unfused = graph_unfused.with_gradients(loss_unfused);
+            let grad_graph_unfused = Arc::new(grad_graph_unfused);
+
+            // Fused gradient graph
+            let mut exec_fused = SimpleExecutor::new();
+            let x_fused = Parameter::new(vec![1.0f32; n * n], shape.clone());
+            let expr_fused = (-TensorExpr::from(x_fused)).relu().exp().reduce_sum(1).reduce_sum(0);
+            let mut graph_fused = tensor::graph::TensorGraph::<f32>::new();
+            expr_fused.lower_to_graph(&mut graph_fused);
+            graph_fused.apply_fusion();
+            let topo_fused = graph_fused.toposort();
+            let loss_fused = *topo_fused.last().unwrap();
+            let grad_graph_fused = graph_fused.with_gradients(loss_fused);
+            let grad_graph_fused = Arc::new(grad_graph_fused);
+
+            let grad_graph_unfused_clone = Arc::clone(&grad_graph_unfused);
+            group.bench_with_input(
+                BenchmarkId::new("unfused", format!("{n}x{n}")),
+                &n,
+                move |b, &_| {
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec_unfused.execute(&*grad_graph_unfused_clone, Default::default()),
+                        );
+                    });
+                },
+            );
+
+            let grad_graph_fused_clone = Arc::clone(&grad_graph_fused);
+            group.bench_with_input(
+                BenchmarkId::new("fused", format!("{n}x{n}")),
+                &n,
+                move |b, &_| {
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec_fused.execute(&*grad_graph_fused_clone, Default::default()),
                         );
                     });
                 },

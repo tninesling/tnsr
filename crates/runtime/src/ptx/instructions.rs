@@ -47,8 +47,8 @@ pub enum Operand<T: PtxType> {
     ImmI32(i32),
     ImmU64(u64),
     ImmF32(f32),
-    Addr(String),      // Parameter address (formatted with brackets [name])
-    Symbol(String),    // Symbol reference (formatted without brackets)
+    Addr(String),   // Parameter address (formatted with brackets [name])
+    Symbol(String), // Symbol reference (formatted without brackets)
 }
 
 impl<T: PtxType> Operand<T> {

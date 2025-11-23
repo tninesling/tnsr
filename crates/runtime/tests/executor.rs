@@ -32,7 +32,7 @@ macro_rules! assert_approx_eq {
 ///
 /// The Runtime will prefer CUDA if available, otherwise falls back to CPU.
 fn create_runtime() -> Runtime {
-    Runtime::with_backend(runtime::Backend::Ptx).unwrap()
+    Runtime::new()
 }
 
 // ============================================================================
@@ -71,14 +71,14 @@ fn forward_matmul_simple() {
     // Use identity matrices with a scalar multiplier for easy verification
     let mut a_data = vec![0.0; 16 * 16];
     let mut b_data = vec![0.0; 16 * 16];
-    
+
     // A = 2 * I (identity matrix scaled by 2)
     // B = 3 * I (identity matrix scaled by 3)
     for i in 0..16 {
         a_data[i * 16 + i] = 2.0;
         b_data[i * 16 + i] = 3.0;
     }
-    
+
     let a = Constant::new(a_data, vec![16, 16]);
     let b = Constant::new(b_data, vec![16, 16]);
     let node = TensorExpr::from(a).matmul(b);
@@ -102,14 +102,14 @@ fn forward_matmul_32x32() {
     // Use identity matrices with a scalar multiplier for easy verification
     let mut a_data = vec![0.0; 32 * 32];
     let mut b_data = vec![0.0; 32 * 32];
-    
+
     // A = 2 * I (identity matrix scaled by 2)
     // B = 3 * I (identity matrix scaled by 3)
     for i in 0..32 {
         a_data[i * 32 + i] = 2.0;
         b_data[i * 32 + i] = 3.0;
     }
-    
+
     let a = Constant::new(a_data, vec![32, 32]);
     let b = Constant::new(b_data, vec![32, 32]);
     let node = TensorExpr::from(a).matmul(b);
@@ -300,25 +300,43 @@ fn gradient_matmul_chain_rule() {
 
     let graph: TensorGraph<f32> = z.into();
     let loss_node = *graph.toposort().last().unwrap();
-    
+
     eprintln!("\n=== Forward Graph ===");
     for (idx, node) in graph.graph.node_references() {
-        let shape = graph.shapes.get(&idx).map(|s| format!("{:?}", s)).unwrap_or("N/A".to_string());
+        let shape = graph
+            .shapes
+            .get(&idx)
+            .map(|s| format!("{:?}", s))
+            .unwrap_or("N/A".to_string());
         eprintln!("Node {:?}: {} shape {}", idx.index(), node.name(), shape);
     }
-    
+
     let grad_graph = graph.with_gradients(loss_node);
-    
+
     eprintln!("\n=== Gradient Graph ===");
     for (idx, node) in grad_graph.graph.node_references() {
-        let shape = grad_graph.shapes.get(&idx).map(|s| format!("{:?}", s)).unwrap_or("N/A".to_string());
+        let shape = grad_graph
+            .shapes
+            .get(&idx)
+            .map(|s| format!("{:?}", s))
+            .unwrap_or("N/A".to_string());
         let inputs = grad_graph.inputs(idx);
-        eprintln!("Node {:?}: {} shape {} inputs: {:?}", idx.index(), node.name(), shape, inputs.iter().map(|i| i.index()).collect::<Vec<_>>());
+        eprintln!(
+            "Node {:?}: {} shape {} inputs: {:?}",
+            idx.index(),
+            node.name(),
+            shape,
+            inputs.iter().map(|i| i.index()).collect::<Vec<_>>()
+        );
     }
-    eprintln!("\nParameter {} gradient node: {:?}\n", a_id, grad_graph.gradient_metadata().param_to_grad.get(&a_id));
+    eprintln!(
+        "\nParameter {} gradient node: {:?}\n",
+        a_id,
+        grad_graph.gradient_metadata().param_to_grad.get(&a_id)
+    );
 
     runtime.execute(&grad_graph, HashMap::new()).unwrap();
-    
+
     let grads = runtime.get_gradients(&grad_graph);
 
     let grad_a = grads.get(&a_id).expect("Parameter gradient missing");
@@ -332,7 +350,8 @@ fn gradient_matmul_chain_rule() {
         assert!(
             (val - 2.0).abs() < EPSILON,
             "Expected gradient 2.0, got {} at index {}",
-            val, i
+            val,
+            i
         );
     }
 }
@@ -496,21 +515,24 @@ fn gradient_matmul_with_transpose() {
 
     let graph: TensorGraph<f32> = node.into();
     let loss_node = *graph.toposort().last().unwrap();
-    
+
     eprintln!("\n=== FORWARD GRAPH ===");
     for idx in graph.toposort().iter() {
         eprintln!("Node {:?}: {:?}", idx.index(), graph[*idx].name());
     }
-    
+
     let grad_graph = graph.with_gradients(loss_node);
-    
-    eprintln!("\n=== GRADIENT GRAPH (total {} nodes) ===", grad_graph.len());
+
+    eprintln!(
+        "\n=== GRADIENT GRAPH (total {} nodes) ===",
+        grad_graph.len()
+    );
     for idx in grad_graph.toposort().iter() {
         eprintln!("Node {:?}: {:?}", idx.index(), grad_graph[*idx].name());
     }
 
     runtime.execute(&grad_graph, HashMap::new()).unwrap();
-    
+
     // Debug: Check what Node 10 contains after execution
     eprintln!("\n=== DEBUG: Checking Node 10 after execution ===");
     if let Some(node10_val) = runtime.get_value(petgraph::graph::NodeIndex::new(10)) {
@@ -518,7 +540,7 @@ fn gradient_matmul_with_transpose() {
     } else {
         eprintln!("Node 10: NOT FOUND in cache");
     }
-    
+
     let grads = runtime.get_gradients(&grad_graph);
 
     let grad = grads.get(&a_id).expect("Parameter gradient missing");
@@ -592,7 +614,7 @@ fn forward_matmul_result_reused() {
     // D = C + C
     let a = Constant::new(vec![1.0, 0.0, 0.0, 1.0], vec![2, 2]); // Identity
     let b = Constant::new(vec![2.0, 0.0, 0.0, 2.0], vec![2, 2]); // 2*I
-    
+
     let c = TensorExpr::from(a).matmul(b);
     let node = c.clone() + c;
 
@@ -615,7 +637,7 @@ fn forward_chained_matmuls() {
     let a = Constant::new(vec![1.0, 0.0, 0.0, 1.0], vec![2, 2]); // Identity
     let b = Constant::new(vec![2.0, 0.0, 0.0, 2.0], vec![2, 2]); // 2*I
     let c = Constant::new(vec![3.0, 0.0, 0.0, 3.0], vec![2, 2]); // 3*I
-    
+
     let ab = TensorExpr::from(a).matmul(b);
     let node = ab.matmul(c);
 
@@ -708,7 +730,7 @@ fn forward_matmul_then_transpose() {
     // Test: transpose(A @ B) - tests if we can transpose a matmul result
     let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
     let b = Constant::new(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2]);
-    
+
     let ab = TensorExpr::from(a).matmul(b);
     let node = ab.transpose();
 
@@ -728,7 +750,7 @@ fn forward_matmul_with_transpose_input() {
     // Test: A @ (B^T) - tests matmul with a transposed input
     let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
     let b = Constant::new(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2]);
-    
+
     let node = TensorExpr::from(a).matmul(TensorExpr::from(b).transpose());
 
     let graph: TensorGraph<f32> = node.into();

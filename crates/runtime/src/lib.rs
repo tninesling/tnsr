@@ -87,9 +87,9 @@ use anyhow::{Context, Result};
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
+pub mod optimizer;
 #[cfg(feature = "cuda")]
 pub mod ptx;
-pub mod optimizer;
 mod runtime;
 mod tile;
 

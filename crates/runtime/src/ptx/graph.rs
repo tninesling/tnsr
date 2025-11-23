@@ -100,6 +100,7 @@ impl LoweringContext {
     }
 }
 
+#[allow(dead_code)]
 fn dtype_to_ptx_type(dtype: crate::tile::DType) -> super::types::Type {
     match dtype {
         crate::tile::DType::F16 => super::types::Type::F16,
@@ -127,7 +128,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
         } => {
             // Track tile dimensions
             ctx.tile_dims.insert(*var, (*rows, *cols));
-            
+
             use crate::tile::MemorySpace;
             match space {
                 MemorySpace::Register => {
@@ -137,14 +138,14 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 MemorySpace::Shared => {
                     // Calculate size in bytes for this tile
                     let tile_size_bytes = rows * cols * dtype.size_bytes();
-                    
+
                     // Get base address of shared memory array
                     let base_ptr = func.add_u64_register();
                     func.add_inst(Inst::MovU64 {
                         dst: base_ptr.clone(),
                         src: Operand::symbol("shared"),
                     });
-                    
+
                     // Add current offset to get this tile's pointer
                     let tile_ptr = func.add_u64_register();
                     func.add_inst(Inst::AddU64(super::instructions::AddInst::new(
@@ -152,7 +153,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                         base_ptr,
                         Operand::imm_u64(ctx.shared_mem_offset as u64),
                     )));
-                    
+
                     // Store the pointer and update offset
                     ctx.shared_mem_ptrs.insert(*var, tile_ptr);
                     ctx.shared_mem_offset += tile_size_bytes;
@@ -179,14 +180,22 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             // Calculate element offset: row_offset + col_offset
             let row_offset_reg = lower_expr(func, ctx, row_offset);
             let col_offset_reg = lower_expr(func, ctx, col_offset);
-            
+
             // Element offset = row_offset + col_offset
             let elem_offset = func.add_u64_register();
-            func.add_inst(Inst::add_u64(elem_offset.clone(), row_offset_reg, col_offset_reg));
-            
+            func.add_inst(Inst::add_u64(
+                elem_offset.clone(),
+                row_offset_reg,
+                col_offset_reg,
+            ));
+
             // Byte offset = element offset * sizeof(f32) = element offset * 4
             let byte_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(byte_offset.clone(), elem_offset, Operand::imm_u64(4)));
+            func.add_inst(Inst::mul_u64(
+                byte_offset.clone(),
+                elem_offset,
+                Operand::imm_u64(4),
+            ));
 
             // Add offset to base pointer
             let addr = func.add_u64_register();
@@ -201,23 +210,23 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 // Destination is shared memory: load to temp register, then store to shared
                 let temp_reg = func.add_f32_register();
                 func.add_inst(Inst::load_global_scalar_f32(temp_reg.clone(), addr));
-                
+
                 // Calculate offset within shared memory tile: threadIdx.y * cols + threadIdx.x
                 let (_, cols) = ctx.tile_dims.get(dest).expect("Tile dimensions not found");
-                
+
                 // Convert tid.y and tid.x from u32 to i32 for arithmetic
                 let tid_y_i32 = func.add_i32_register();
                 func.add_inst(Inst::mov_i32(
                     tid_y_i32.clone(),
                     super::instructions::THREAD_ID.y.clone(),
                 ));
-                
+
                 let tid_x_i32 = func.add_i32_register();
                 func.add_inst(Inst::mov_i32(
                     tid_x_i32.clone(),
                     super::instructions::THREAD_ID.x.clone(),
                 ));
-                
+
                 // row_offset = tid_y * cols
                 let row_offset = func.add_i32_register();
                 func.add_inst(Inst::mul_i32(
@@ -225,19 +234,15 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                     tid_y_i32,
                     Operand::imm_i32(*cols as i32),
                 ));
-                
+
                 // elem_idx = row_offset + tid_x
                 let elem_idx = func.add_i32_register();
-                func.add_inst(Inst::add_i32(
-                    elem_idx.clone(),
-                    row_offset,
-                    tid_x_i32,
-                ));
-                
+                func.add_inst(Inst::add_i32(elem_idx.clone(), row_offset, tid_x_i32));
+
                 // Convert to u64
                 let elem_idx_u64 = func.add_u64_register();
                 func.add_inst(Inst::convert_u64_i32(elem_idx_u64.clone(), elem_idx));
-                
+
                 // byte_offset = elem_idx * 4
                 let byte_offset = func.add_u64_register();
                 func.add_inst(Inst::mul_u64(
@@ -245,15 +250,11 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                     elem_idx_u64,
                     Operand::imm_u64(4),
                 ));
-                
+
                 // Add offset to base pointer
                 let final_addr = func.add_u64_register();
-                func.add_inst(Inst::add_u64(
-                    final_addr.clone(),
-                    shared_ptr,
-                    byte_offset,
-                ));
-                
+                func.add_inst(Inst::add_u64(final_addr.clone(), shared_ptr, byte_offset));
+
                 func.add_inst(Inst::StSharedF32 {
                     addr: final_addr,
                     src: vec![temp_reg],
@@ -286,14 +287,22 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             // TODO: This assumes row_offset already accounts for row-major layout
             let row_offset_reg = lower_expr(func, ctx, row_offset);
             let col_offset_reg = lower_expr(func, ctx, col_offset);
-            
+
             // Element offset = row_offset + col_offset
             let elem_offset = func.add_u64_register();
-            func.add_inst(Inst::add_u64(elem_offset.clone(), row_offset_reg, col_offset_reg));
-            
+            func.add_inst(Inst::add_u64(
+                elem_offset.clone(),
+                row_offset_reg,
+                col_offset_reg,
+            ));
+
             // Byte offset = element offset * sizeof(f32) = element offset * 4
             let byte_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(byte_offset.clone(), elem_offset, Operand::imm_u64(4)));
+            func.add_inst(Inst::mul_u64(
+                byte_offset.clone(),
+                elem_offset,
+                Operand::imm_u64(4),
+            ));
 
             // Add offset to base pointer
             let addr = func.add_u64_register();
@@ -310,7 +319,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             // Track that this register tile is backed by shared memory
             // We don't need to emit any PTX here - MatMul will access shared memory directly
             ctx.reg_to_shared.insert(*dest, *src);
-            
+
             // Also copy the tile dimensions
             if let Some(&dims) = ctx.tile_dims.get(src) {
                 ctx.tile_dims.insert(*dest, dims);
@@ -330,116 +339,170 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
         } => {
             // Matrix multiply: each thread computes one output element
             // Thread at (ty, tx) computes C[ty][tx] = sum over k of A[ty][k] * B[k][tx]
-            
+
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-            
+
             // Resolve register tiles to their shared memory sources
             let a_smem = ctx.reg_to_shared.get(a).copied().unwrap_or(*a);
             let b_smem = ctx.reg_to_shared.get(b).copied().unwrap_or(*b);
-            
+
             // Get shared memory pointers for A and B tiles
-            let a_ptr = ctx.shared_mem_ptrs.get(&a_smem)
-                .expect("MatMul operand A not in shared memory").clone();
-            let b_ptr = ctx.shared_mem_ptrs.get(&b_smem)
-                .expect("MatMul operand B not in shared memory").clone();
-            
+            let a_ptr = ctx
+                .shared_mem_ptrs
+                .get(&a_smem)
+                .expect("MatMul operand A not in shared memory")
+                .clone();
+            let b_ptr = ctx
+                .shared_mem_ptrs
+                .get(&b_smem)
+                .expect("MatMul operand B not in shared memory")
+                .clone();
+
             // Get tile dimensions
-            let (_a_rows, a_cols) = ctx.tile_dims.get(&a_smem)
+            let (_a_rows, a_cols) = ctx
+                .tile_dims
+                .get(&a_smem)
                 .expect("Tile dimensions not found for A");
-            let (_b_rows, b_cols) = ctx.tile_dims.get(&b_smem)
+            let (_b_rows, b_cols) = ctx
+                .tile_dims
+                .get(&b_smem)
                 .expect("Tile dimensions not found for B");
             let tile_k = *a_cols; // K dimension of the tile
-            
+
             // Get threadIdx.y and threadIdx.x (this thread's position in the output tile)
             let tid_y = func.add_u32_register();
             let tid_x = func.add_u32_register();
-            func.add_inst(Inst::mov_u32(tid_y.clone(), super::instructions::THREAD_ID.y.clone()));
-            func.add_inst(Inst::mov_u32(tid_x.clone(), super::instructions::THREAD_ID.x.clone()));
-            
+            func.add_inst(Inst::mov_u32(
+                tid_y.clone(),
+                super::instructions::THREAD_ID.y.clone(),
+            ));
+            func.add_inst(Inst::mov_u32(
+                tid_x.clone(),
+                super::instructions::THREAD_ID.x.clone(),
+            ));
+
             // Hoist invariant computations outside the loop
             // Convert thread indices to u64 once
             let tid_y_u64 = func.add_u64_register();
             let tid_x_u64 = func.add_u64_register();
             func.add_inst(Inst::convert_u64_u32(tid_y_u64.clone(), tid_y.clone()));
             func.add_inst(Inst::convert_u64_u32(tid_x_u64.clone(), tid_x.clone()));
-            
+
             // Compute A row base offset: threadIdx.y * a_cols * 4 (in bytes)
             let a_row_base = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(a_row_base.clone(), tid_y_u64.clone(), Operand::imm_u64(*a_cols as u64)));
-            func.add_inst(Inst::mul_u64(a_row_base.clone(), a_row_base.clone(), Operand::imm_u64(4)));
+            func.add_inst(Inst::mul_u64(
+                a_row_base.clone(),
+                tid_y_u64.clone(),
+                Operand::imm_u64(*a_cols as u64),
+            ));
+            func.add_inst(Inst::mul_u64(
+                a_row_base.clone(),
+                a_row_base.clone(),
+                Operand::imm_u64(4),
+            ));
             let a_row_ptr = func.add_u64_register();
             func.add_inst(Inst::add_u64(a_row_ptr.clone(), a_ptr.clone(), a_row_base));
-            
+
             // Compute B column base offset: threadIdx.x * 4 (in bytes)
             let b_col_base = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(b_col_base.clone(), tid_x_u64.clone(), Operand::imm_u64(4)));
+            func.add_inst(Inst::mul_u64(
+                b_col_base.clone(),
+                tid_x_u64.clone(),
+                Operand::imm_u64(4),
+            ));
             let b_col_ptr = func.add_u64_register();
             func.add_inst(Inst::add_u64(b_col_ptr.clone(), b_ptr.clone(), b_col_base));
-            
+
             // Reusable registers for the loop
             let a_addr = func.add_u64_register();
             let b_addr = func.add_u64_register();
             let a_val = func.add_f32_register();
             let b_val = func.add_f32_register();
             let prod = func.add_f32_register();
-            
+
             // Loop over k dimension using PTX control flow instead of unrolling
             // for (k = 0; k < tile_k; k++)
             let k_idx = func.add_i32_register();
             let k_limit = func.add_i32_register();
-            
+
             // Initialize k = 0
             func.add_inst(Inst::mov_i32(k_idx.clone(), Operand::imm_u64(0)));
             // Load limit into register
-            func.add_inst(Inst::mov_i32(k_limit.clone(), Operand::imm_u64(tile_k as u64)));
-            
+            func.add_inst(Inst::mov_i32(
+                k_limit.clone(),
+                Operand::imm_u64(tile_k as u64),
+            ));
+
             // Loop start label
             let loop_start = format!("matmul_loop_start_{}", ctx.label_counter);
             let loop_end = format!("matmul_loop_end_{}", ctx.label_counter);
             ctx.label_counter += 1;
-            
+
             func.add_inst(Inst::Label(loop_start.clone()));
-            
+
             // Check loop condition: setp.ge sets pred when k >= tile_k (exit condition)
             let exit_pred = func.add_predicate_register();
             func.add_inst(Inst::SetpI32(super::instructions::SetpInst::new(
-                exit_pred.clone(), 
-                k_idx.clone(), 
-                k_limit.clone(), 
-                super::instructions::CompareOp::Ge
+                exit_pred.clone(),
+                k_idx.clone(),
+                k_limit.clone(),
+                super::instructions::CompareOp::Ge,
             )));
-            func.add_inst(Inst::Bra { condition: exit_pred, target: loop_end.clone() });
-            
+            func.add_inst(Inst::Bra {
+                condition: exit_pred,
+                target: loop_end.clone(),
+            });
+
             // Loop body:
             // Convert k to u64 for address calculations
             let k_u64 = func.add_u64_register();
             func.add_inst(Inst::convert_u64_i32(k_u64.clone(), k_idx.clone()));
-            
+
             // Load A[threadIdx.y][k] from shared memory
             // Address = a_row_ptr + k * 4
             let k_offset_a = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(k_offset_a.clone(), k_u64.clone(), Operand::imm_u64(4)));
+            func.add_inst(Inst::mul_u64(
+                k_offset_a.clone(),
+                k_u64.clone(),
+                Operand::imm_u64(4),
+            ));
             func.add_inst(Inst::add_u64(a_addr.clone(), a_row_ptr.clone(), k_offset_a));
             func.add_inst(Inst::load_shared_scalar_f32(a_val.clone(), a_addr.clone()));
-            
+
             // Load B[k][threadIdx.x] from shared memory
             // Address = b_col_ptr + k * b_cols * 4
             let k_offset_b = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(k_offset_b.clone(), k_u64.clone(), Operand::imm_u64(*b_cols as u64)));
-            func.add_inst(Inst::mul_u64(k_offset_b.clone(), k_offset_b.clone(), Operand::imm_u64(4)));
+            func.add_inst(Inst::mul_u64(
+                k_offset_b.clone(),
+                k_u64.clone(),
+                Operand::imm_u64(*b_cols as u64),
+            ));
+            func.add_inst(Inst::mul_u64(
+                k_offset_b.clone(),
+                k_offset_b.clone(),
+                Operand::imm_u64(4),
+            ));
             func.add_inst(Inst::add_u64(b_addr.clone(), b_col_ptr.clone(), k_offset_b));
             func.add_inst(Inst::load_shared_scalar_f32(b_val.clone(), b_addr.clone()));
-            
+
             // Multiply and accumulate: dest += a_val * b_val
             func.add_inst(Inst::mul_f32(prod.clone(), a_val.clone(), b_val.clone()));
-            func.add_inst(Inst::add_f32(dest_reg.clone(), dest_reg.clone(), prod.clone()));
-            
+            func.add_inst(Inst::add_f32(
+                dest_reg.clone(),
+                dest_reg.clone(),
+                prod.clone(),
+            ));
+
             // Increment k
-            func.add_inst(Inst::add_i32(k_idx.clone(), k_idx.clone(), Operand::imm_i32(1)));
-            
+            func.add_inst(Inst::add_i32(
+                k_idx.clone(),
+                k_idx.clone(),
+                Operand::imm_i32(1),
+            ));
+
             // Branch back to loop start
             func.add_inst(Inst::BraUni { target: loop_start });
-            
+
             // Loop end label
             func.add_inst(Inst::Label(loop_end));
         }
@@ -506,73 +569,80 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             let zero = Operand::imm_f32(0.0);
             func.add_inst(Inst::max_f32(dest_reg, src_reg, zero));
         }
-        Stmt::Transpose { dest, src: _, input_shape, output_shape } => {
+        Stmt::Transpose {
+            dest,
+            src: _,
+            input_shape,
+            output_shape,
+        } => {
             // Implement 2D transpose: output[i,j] = input[j,i]
             // For input shape [rows, cols] -> output shape [cols, rows]
             // Each thread computes one output element
-            
+
             assert_eq!(input_shape.len(), 2, "Transpose only supports 2D tensors");
             assert_eq!(output_shape.len(), 2, "Transpose only supports 2D tensors");
-            
+
             let rows = input_shape[0]; // Input rows
             let cols = input_shape[1]; // Input cols
-            
+
             assert_eq!(output_shape[0], cols, "Output rows should equal input cols");
             assert_eq!(output_shape[1], rows, "Output cols should equal input rows");
-            
+
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-            
+
             // Get parameter pointers for direct memory access
-            let src_ptr = ctx.param_ptrs.get("input")
-                .expect("Input parameter not found").clone();
-            
+            let src_ptr = ctx
+                .param_ptrs
+                .get("input")
+                .expect("Input parameter not found")
+                .clone();
+
             // Get thread index (which output element this thread computes)
             let tid = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_u32(tid.clone(), super::instructions::THREAD_ID.x.clone()));
-            
+            func.add_inst(Inst::convert_u64_u32(
+                tid.clone(),
+                super::instructions::THREAD_ID.x.clone(),
+            ));
+
             // Calculate output position (out_row, out_col) from thread id
             // tid = out_row * output_cols + out_col
             // out_row = tid / output_cols
             // out_col = tid % output_cols
-            
+
             let out_row = func.add_u64_register();
             func.add_inst(Inst::div_u64(
                 out_row.clone(),
                 tid.clone(),
                 Operand::imm_u64(rows as u64), // output_cols = input_rows
             ));
-            
+
             let temp = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 temp.clone(),
                 out_row.clone(),
                 Operand::imm_u64(rows as u64),
             ));
-            
+
             let out_col = func.add_u64_register();
-            func.add_inst(Inst::sub_u64(
-                out_col.clone(),
-                tid.clone(),
-                temp,
-            ));
-            
+            func.add_inst(Inst::sub_u64(out_col.clone(), tid.clone(), temp));
+
             // Map to input position: input[out_col, out_row]
             // input_offset = out_col * input_cols + out_row
-            
+
             let input_row_offset = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 input_row_offset.clone(),
                 out_col.clone(),
                 Operand::imm_u64(cols as u64), // input_cols
             ));
-            
+
             let input_offset = func.add_u64_register();
             func.add_inst(Inst::add_u64(
                 input_offset.clone(),
                 input_row_offset,
                 out_row,
             ));
-            
+
             // Load from input[input_offset]
             let byte_offset = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
@@ -580,19 +650,15 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 input_offset,
                 Operand::imm_u64(4), // sizeof(f32)
             ));
-            
+
             let input_addr = func.add_u64_register();
-            func.add_inst(Inst::add_u64(
-                input_addr.clone(),
-                src_ptr,
-                byte_offset,
-            ));
-            
+            func.add_inst(Inst::add_u64(input_addr.clone(), src_ptr, byte_offset));
+
             func.add_inst(Inst::load_global_scalar_f32(dest_reg, input_addr));
         }
         Stmt::BroadcastAxis {
             dest,
-            src,
+            src: _,
             axis,
             input_shape,
             output_shape,
@@ -601,78 +667,80 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             // Broadcast means copying values from input to multiple output positions
             // Example: input [2,1], output [2,3], axis=1
             //   output[i,j] = input[i, 0] for all j
-            
+
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-            
+
             // Get parameter pointers for direct access
-            let src_ptr = ctx.param_ptrs.get("input")
-                .expect("Input parameter not found").clone();
-            
+            let src_ptr = ctx
+                .param_ptrs
+                .get("input")
+                .expect("Input parameter not found")
+                .clone();
+
             // Get thread index (which output element this thread computes)
             let tid = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_u32(tid.clone(), super::instructions::THREAD_ID.x.clone()));
-            
+            func.add_inst(Inst::convert_u64_u32(
+                tid.clone(),
+                super::instructions::THREAD_ID.x.clone(),
+            ));
+
             // Calculate strides for input tensor
             let input_stride: Vec<usize> = {
                 let mut strides = vec![1; input_shape.len()];
-                for i in (0..input_shape.len()-1).rev() {
+                for i in (0..input_shape.len() - 1).rev() {
                     strides[i] = strides[i + 1] * input_shape[i + 1];
                 }
                 strides
             };
-            
+
             // Calculate input offset based on output thread index
             // For broadcasting along axis 1 with shapes [2,1] -> [2,3]:
             //   output[i,j] maps to input[i, 0]
             //   tid represents output position in row-major order
             //   row = tid / output_cols
-            
+
             let input_offset = if output_shape.len() == 2 && *axis == 1 {
                 // Common case: 2D broadcast along last axis
                 // tid = row * output_cols + col
                 // input_offset = row * input_stride[0] (since input has size 1 along axis 1)
-                
+
                 let row = func.add_u64_register();
                 func.add_inst(Inst::div_u64(
                     row.clone(),
                     tid.clone(),
                     Operand::imm_u64(output_shape[1] as u64),
                 ));
-                
+
                 let offset = func.add_u64_register();
                 func.add_inst(Inst::mul_u64(
                     offset.clone(),
                     row,
                     Operand::imm_u64(input_stride[0] as u64),
                 ));
-                
+
                 offset
             } else if output_shape.len() == 2 && *axis == 0 {
                 // 2D broadcast along first axis
                 // output[i,j] maps to input[0, j]
                 // col = tid % output_shape[1] = tid - (tid / output_shape[1]) * output_shape[1]
-                
+
                 let div_result = func.add_u64_register();
                 func.add_inst(Inst::div_u64(
                     div_result.clone(),
                     tid.clone(),
                     Operand::imm_u64(output_shape[1] as u64),
                 ));
-                
+
                 let mul_result = func.add_u64_register();
                 func.add_inst(Inst::mul_u64(
                     mul_result.clone(),
                     div_result,
                     Operand::imm_u64(output_shape[1] as u64),
                 ));
-                
+
                 let col = func.add_u64_register();
-                func.add_inst(Inst::sub_u64(
-                    col.clone(),
-                    tid.clone(),
-                    mul_result,
-                ));
-                
+                func.add_inst(Inst::sub_u64(col.clone(), tid.clone(), mul_result));
+
                 col
             } else if output_shape.len() == 1 && *axis == 0 {
                 // 1D broadcast along axis 0: [1] -> [N]
@@ -686,51 +754,64 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 func.add_inst(Inst::mov_u64(offset.clone(), tid.clone()));
                 offset
             };
-            
+
             // Convert element offset to byte offset
             let byte_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(byte_offset.clone(), input_offset, Operand::imm_u64(4)));
-            
+            func.add_inst(Inst::mul_u64(
+                byte_offset.clone(),
+                input_offset,
+                Operand::imm_u64(4),
+            ));
+
             // Load from input
             let addr = func.add_u64_register();
             func.add_inst(Inst::add_u64(addr.clone(), src_ptr.clone(), byte_offset));
-            
+
             func.add_inst(Inst::load_global_scalar_f32(dest_reg, addr));
         }
         Stmt::ReduceAxis {
             dest,
-            src,
+            src: _,
             op,
             axis,
             input_shape,
-            output_shape,
+            output_shape: _,
         } => {
             // Each thread computes one output element by reducing along the specified axis
             // Example: input shape [2, 3], axis=1, output shape [2, 1]
             //   Thread 0 computes output[0] = reduce(input[0, :])
             //   Thread 1 computes output[1] = reduce(input[1, :])
-            
+
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-            
+
             // Get parameter pointers for direct access
-            let src_ptr = ctx.param_ptrs.get("input")
-                .expect("Input parameter not found").clone();
-            let dest_ptr = ctx.param_ptrs.get("output")
-                .expect("Output parameter not found").clone();
-            
+            let src_ptr = ctx
+                .param_ptrs
+                .get("input")
+                .expect("Input parameter not found")
+                .clone();
+            let _dest_ptr = ctx
+                .param_ptrs
+                .get("output")
+                .expect("Output parameter not found")
+                .clone();
+
             // Calculate strides for input tensor
             let input_stride: Vec<usize> = {
                 let mut strides = vec![1; input_shape.len()];
-                for i in (0..input_shape.len()-1).rev() {
+                for i in (0..input_shape.len() - 1).rev() {
                     strides[i] = strides[i + 1] * input_shape[i + 1];
                 }
                 strides
             };
-            
+
             // Get thread index (which output element this thread computes)
             let tid = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_u32(tid.clone(), super::instructions::THREAD_ID.x.clone()));
-            
+            func.add_inst(Inst::convert_u64_u32(
+                tid.clone(),
+                super::instructions::THREAD_ID.x.clone(),
+            ));
+
             // Initialize accumulator based on reduce operation
             let accumulator = func.add_f32_register();
             match op {
@@ -738,21 +819,24 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                     func.add_inst(Inst::mov_f32(accumulator.clone(), Operand::imm_f32(0.0)));
                 }
                 crate::tile::ReduceOp::Max => {
-                    func.add_inst(Inst::mov_f32(accumulator.clone(), Operand::imm_f32(f32::NEG_INFINITY)));
+                    func.add_inst(Inst::mov_f32(
+                        accumulator.clone(),
+                        Operand::imm_f32(f32::NEG_INFINITY),
+                    ));
                 }
             }
-            
+
             // Calculate the size of the reduction axis
             let reduce_size = input_shape[*axis];
-            
+
             // Loop over the reduction axis
             for k in 0..reduce_size {
                 // Calculate input index based on output thread index and reduction position
                 // For axis=1, input_shape=[2,3]: thread i accesses input[i, k]
                 // offset = i * input_stride[0] + k * input_stride[1]
-                
-                let mut input_offset = func.add_u64_register();
-                
+
+                let input_offset = func.add_u64_register();
+
                 // Start with tid * stride[axis-1] (or 0 if axis==0)
                 if *axis == 0 {
                     // Reducing along first axis: all threads access input[k, tid, ...]
@@ -763,7 +847,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                         Operand::imm_u64(k as u64),
                         Operand::imm_u64(input_stride[0] as u64),
                     ));
-                    
+
                     let tid_contrib = func.add_u64_register();
                     if input_shape.len() > 1 {
                         func.add_inst(Inst::mul_u64(
@@ -774,7 +858,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                     } else {
                         func.add_inst(Inst::mov_u64(tid_contrib.clone(), Operand::imm_u64(0)));
                     }
-                    
+
                     func.add_inst(Inst::add_u64(input_offset.clone(), k_contrib, tid_contrib));
                 } else {
                     // Reducing along axis > 0: thread i accesses input[i, k] (for 2D)
@@ -785,28 +869,32 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                         tid.clone(),
                         Operand::imm_u64(input_stride[axis - 1] as u64),
                     ));
-                    
+
                     let k_contrib = func.add_u64_register();
                     func.add_inst(Inst::mul_u64(
                         k_contrib.clone(),
                         Operand::imm_u64(k as u64),
                         Operand::imm_u64(input_stride[*axis] as u64),
                     ));
-                    
+
                     func.add_inst(Inst::add_u64(input_offset.clone(), tid_contrib, k_contrib));
                 }
-                
+
                 // Convert element offset to byte offset
                 let byte_offset = func.add_u64_register();
-                func.add_inst(Inst::mul_u64(byte_offset.clone(), input_offset, Operand::imm_u64(4)));
-                
+                func.add_inst(Inst::mul_u64(
+                    byte_offset.clone(),
+                    input_offset,
+                    Operand::imm_u64(4),
+                ));
+
                 // Load input element
                 let addr = func.add_u64_register();
                 func.add_inst(Inst::add_u64(addr.clone(), src_ptr.clone(), byte_offset));
-                
+
                 let value = func.add_f32_register();
                 func.add_inst(Inst::load_global_scalar_f32(value.clone(), addr));
-                
+
                 // Accumulate based on operation
                 match op {
                     crate::tile::ReduceOp::Sum | crate::tile::ReduceOp::Mean => {
@@ -821,7 +909,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                     }
                 }
             }
-            
+
             // For Mean operation, divide by the reduction size
             if matches!(op, crate::tile::ReduceOp::Mean) {
                 let divisor = Operand::imm_f32(reduce_size as f32);
@@ -968,7 +1056,7 @@ fn lower_expr(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operan
                 result
             } else {
                 // Variable reference - would need to be tracked in context
-                Operand::reg(&format!("%{}", name))
+                Operand::reg(format!("%{}", name))
             }
         }
         Expr::BlockIdx(dim) => {
@@ -1021,7 +1109,7 @@ fn lower_expr_i32(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Op
             if let Some(loop_var) = ctx.loop_vars.get(name) {
                 loop_var.clone()
             } else {
-                Operand::reg(&format!("%{}", name))
+                Operand::reg(format!("%{}", name))
             }
         }
         _ => {
@@ -1370,8 +1458,14 @@ mod tests {
         let func: Function = tile_ir.into();
 
         // Gt uses setp and selp
-        let has_setp = func.body.iter().any(|inst| matches!(inst, Inst::SetpF32(_)));
-        let has_selp = func.body.iter().any(|inst| matches!(inst, Inst::SelpF32(_)));
+        let has_setp = func
+            .body
+            .iter()
+            .any(|inst| matches!(inst, Inst::SetpF32(_)));
+        let has_selp = func
+            .body
+            .iter()
+            .any(|inst| matches!(inst, Inst::SelpF32(_)));
 
         assert!(has_setp, "Gt should use setp instruction");
         assert!(has_selp, "Gt should use selp instruction");
@@ -1413,10 +1507,13 @@ mod tests {
         // Basic sanity checks on the output
         assert!(ptx_str.contains(".visible .entry simple_kernel"));
         assert!(ptx_str.contains("ret;"));
-        assert!(ptx_str.contains(".param .u64 input"));  // Parameters are pointers in PTX
-        
+        assert!(ptx_str.contains(".param .u64 input")); // Parameters are pointers in PTX
+
         // Print the generated PTX for inspection
-        println!("\n========== Generated PTX ==========\n{}\n===================================", ptx_str);
+        println!(
+            "\n========== Generated PTX ==========\n{}\n===================================",
+            ptx_str
+        );
     }
 
     #[test]
@@ -1546,35 +1643,5 @@ mod tests {
             "\n========== Realistic Kernel PTX ==========\n{}\n==========================================",
             ptx_str
         );
-    }
-
-    #[test]
-    #[ignore]
-    fn print_matmul_256x256_ptx() {
-        use tensor::{Constant, TensorExpr};
-        use petgraph::visit::IntoNodeReferences;
-        use crate::ptx::Module;
-
-        let n = 256;
-        let shape = vec![n, n];
-        let a = Constant::new(vec![1.0f32; n * n], shape.clone());
-        let b = Constant::new(vec![0.5f32; n * n], shape.clone());
-        let mut graph = tensor::graph::TensorGraph::<f32>::new();
-        let expr = TensorExpr::from(a.clone()).matmul(TensorExpr::from(b.clone()));
-        expr.lower_to_graph(&mut graph);
-
-        // Convert to TileGraph, then PtxGraph
-        let tile_graph: crate::tile::TileGraph = graph.into();
-        let ptx_graph: PtxGraph = tile_graph.into();
-
-        let mut module = Module::new();
-
-        // Add all functions from the graph
-        for (_node_idx, function) in ptx_graph.graph.node_references() {
-            module.add_function(function.clone());
-        }
-
-        // Print the PTX
-        println!("\n========== 256x256 MatMul PTX ==========\n{}\n==========================================", module.to_string());
     }
 }

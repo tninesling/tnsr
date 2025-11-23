@@ -308,39 +308,43 @@ impl PtxExecutor {
                     }
 
                     const TILE_SIZE: usize = 16;
-                    
+
                     // Pad dimensions to multiples of TILE_SIZE
-                    let m_padded = ((m + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
-                    let n_padded = ((n + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
-                    let k_padded = ((k_a + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
-                    
+                    let m_padded = m.div_ceil(TILE_SIZE) * TILE_SIZE;
+                    let n_padded = n.div_ceil(TILE_SIZE) * TILE_SIZE;
+                    let k_padded = k_a.div_ceil(TILE_SIZE) * TILE_SIZE;
+
                     let stream = self.device.default_stream();
-                    
+
                     // Allocate padded matrices (zero-initialized)
                     let mut a_padded = stream.alloc_zeros::<f32>(m_padded * k_padded).unwrap();
                     stream.synchronize().unwrap();
                     let mut b_padded = stream.alloc_zeros::<f32>(k_padded * n_padded).unwrap();
                     stream.synchronize().unwrap();
-                    
+
                     // Copy original data into padded matrices (row by row to handle padding)
                     for i in 0..m {
                         let src_offset = i * k_a;
                         let dst_offset = i * k_padded;
-                        stream.memcpy_dtod(
-                            &a.slice(src_offset..(src_offset + k_a)),
-                            &mut a_padded.slice_mut(dst_offset..(dst_offset + k_a))
-                        ).unwrap();
+                        stream
+                            .memcpy_dtod(
+                                &a.slice(src_offset..(src_offset + k_a)),
+                                &mut a_padded.slice_mut(dst_offset..(dst_offset + k_a)),
+                            )
+                            .unwrap();
                     }
-                    
+
                     for i in 0..k_a {
                         let src_offset = i * n;
                         let dst_offset = i * n_padded;
-                        stream.memcpy_dtod(
-                            &b.slice(src_offset..(src_offset + n)),
-                            &mut b_padded.slice_mut(dst_offset..(dst_offset + n))
-                        ).unwrap();
+                        stream
+                            .memcpy_dtod(
+                                &b.slice(src_offset..(src_offset + n)),
+                                &mut b_padded.slice_mut(dst_offset..(dst_offset + n)),
+                            )
+                            .unwrap();
                     }
-                    
+
                     // Allocate padded output
                     let mut out_padded = stream.alloc_zeros::<f32>(m_padded * n_padded).unwrap();
 
@@ -364,26 +368,28 @@ impl PtxExecutor {
 
                     // Extract the unpadded result from the padded output
                     let out_len = m * n;
-                    
+
                     // IMPORTANT: Drop input padded buffers BEFORE allocating output
                     // This prevents CUDA's allocator from reusing their memory
                     drop(a_padded);
                     drop(b_padded);
                     stream.synchronize().unwrap();
-                    
+
                     // Allocate final output buffer
                     let mut out = stream.alloc_zeros::<f32>(out_len).unwrap();
-                    
+
                     // Copy unpadded rows from out_padded to out (device-to-device)
                     for i in 0..m {
                         let src_offset = i * n_padded;
                         let dst_offset = i * n;
-                        stream.memcpy_dtod(
-                            &out_padded.slice(src_offset..(src_offset + n)),
-                            &mut out.slice_mut(dst_offset..(dst_offset + n))
-                        ).unwrap();
+                        stream
+                            .memcpy_dtod(
+                                &out_padded.slice(src_offset..(src_offset + n)),
+                                &mut out.slice_mut(dst_offset..(dst_offset + n)),
+                            )
+                            .unwrap();
                     }
-                    
+
                     // Drop output padded buffer after copying
                     drop(out_padded);
                     stream.synchronize().unwrap();

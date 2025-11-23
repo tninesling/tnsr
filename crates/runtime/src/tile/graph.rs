@@ -1,468 +1,21 @@
+use std::collections::HashMap;
+
 use petgraph::Graph;
+use petgraph::graph::NodeIndex;
+
 use tensor::graph::TensorGraph;
 use tensor::graph::TensorGraphNode;
 
-/////////////////////////////////////
-/// TILE IR DEFINITIONS
-/////////////////////////////////////
+use super::builder::TileIRBuilder;
+use super::ir::{DType, Dim, Expr, MatMulLayout, ReduceOp, TileIR};
 
-/// The complete Tile IR for a kernel
-pub struct TileIR {
-    pub kernel_name: String,
-    pub params: Vec<KernelParam>,
-    pub body: Block,
-    pub shared_mem_bytes: usize,
-}
-
-/// Kernel parameters (inputs/outputs)
-pub struct KernelParam {
-    pub name: String,
-    pub dtype: DType,
-    pub is_input: bool,
-}
-
-/// A block of statements (like a basic block)
-pub struct Block {
-    pub stmts: Vec<Stmt>,
-}
-
-/// Operations on tiles
-pub enum Stmt {
-    /// Allocate a tile variable
-    AllocTile {
-        var: TileVar,
-        space: MemorySpace,
-        dtype: DType,
-        rows: usize,
-        cols: usize,
-    },
-
-    /// Load from global memory to shared/register
-    Load {
-        dest: TileVar,
-        src_param: String, // Parameter name
-        row_offset: Expr,
-        col_offset: Expr,
-    },
-
-    /// Store from register/shared to global
-    Store {
-        dest_param: String, // Parameter name
-        src: TileVar,
-        row_offset: Expr,
-        col_offset: Expr,
-    },
-
-    /// Load from shared memory to register tile (for tensor cores)
-    /// Maps to wmma::load_matrix_sync or PTX ldmatrix
-    LoadSharedToReg {
-        dest: TileVar,
-        src: TileVar,
-    },
-
-    /// Zero out a tile
-    Zero {
-        tile: TileVar,
-    },
-
-    /// Matrix multiply with accumulation: dest = dest + (a @ b)
-    MatMul {
-        dest: TileVar,        // Accumulator (f32)
-        a: TileVar,           // Operand (f16)
-        b: TileVar,           // Operand (f16)
-        layout: MatMulLayout, // NN, NT, TN, TT
-    },
-
-    /// Element-wise binary operations
-    Add {
-        dest: TileVar,
-        a: TileVar,
-        b: TileVar,
-    },
-    Sub {
-        dest: TileVar,
-        a: TileVar,
-        b: TileVar,
-    },
-    Mul {
-        dest: TileVar,
-        a: TileVar,
-        b: TileVar,
-    },
-    Div {
-        dest: TileVar,
-        a: TileVar,
-        b: TileVar,
-    },
-
-    /// Element-wise unary operations
-    Neg {
-        dest: TileVar,
-        src: TileVar,
-    },
-    Exp {
-        dest: TileVar,
-        src: TileVar,
-    },
-    Log {
-        dest: TileVar,
-        src: TileVar,
-    },
-    Relu {
-        dest: TileVar,
-        src: TileVar,
-    },
-
-    /// Transpose operation
-    Transpose {
-        dest: TileVar,
-        src: TileVar,
-        input_shape: Vec<usize>,
-        output_shape: Vec<usize>,
-    },
-
-    /// Broadcast along axis
-    BroadcastAxis {
-        dest: TileVar,
-        src: TileVar,
-        axis: usize,
-        input_shape: Vec<usize>,
-        output_shape: Vec<usize>,
-    },
-
-    /// Reduce along axis
-    ReduceAxis {
-        dest: TileVar,
-        src: TileVar,
-        op: ReduceOp,
-        axis: usize,
-        input_shape: Vec<usize>,
-        output_shape: Vec<usize>,
-    },
-
-    /// Greater than comparison
-    Gt {
-        dest: TileVar,
-        a: TileVar,
-        b: TileVar,
-    },
-
-    /// Mask operation (select values based on condition)
-    Mask {
-        dest: TileVar,
-        values: TileVar,
-        condition: TileVar,
-    },
-
-    /// Synchronization barrier
-    Barrier,
-
-    /// For loop
-    ForLoop {
-        loop_var: String,
-        start: Expr,
-        end: Expr,
-        body: Block,
-    },
-}
-
-/// Tile variable reference (like SSA values)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TileVar(pub usize);
-
-/// Memory spaces
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MemorySpace {
-    Register,
-    Shared,
-    Global,
-}
-
-/// Data types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DType {
-    F16,
-    BF16,
-    F32,
-}
-
-impl DType {
-    pub fn size_bytes(&self) -> usize {
-        match self {
-            DType::F16 => 2,
-            DType::BF16 => 2,
-            DType::F32 => 4,
-        }
-    }
-}
-
-/// Matrix multiply layout
-#[derive(Debug, Clone, Copy)]
-pub enum MatMulLayout {
-    NN, // A @ B
-    NT, // A @ B^T
-    TN, // A^T @ B
-    TT, // A^T @ B^T
-}
-
-/// Reduction operations
-#[derive(Debug, Clone, Copy)]
-pub enum ReduceOp {
-    Sum,
-    Max,
-    Mean,
-}
-
-/// Simple expressions for indices and loop bounds
-#[derive(Debug, Clone)]
-pub enum Expr {
-    Const(i64),
-    Var(String),
-    BlockIdx(Dim),
-    ThreadIdx(Dim),
-    Mul(Box<Expr>, Box<Expr>),
-    Add(Box<Expr>, Box<Expr>),
-}
-
-impl std::ops::Mul<usize> for Expr {
-    type Output = Expr;
-
-    fn mul(self, rhs: usize) -> Self::Output {
-        Expr::Mul(Box::new(self), Box::new(Expr::Const(rhs as i64)))
-    }
-}
-
-impl std::ops::Mul<i64> for Expr {
-    type Output = Expr;
-
-    fn mul(self, rhs: i64) -> Self::Output {
-        Expr::Mul(Box::new(self), Box::new(Expr::Const(rhs)))
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Dim {
-    X,
-    Y,
-    Z,
-}
-
-/////////////////////////////////////
-/// TILE IR BUILDER
-/////////////////////////////////////
-
-pub struct TileIRBuilder {
-    kernel_name: String,
-    params: Vec<KernelParam>,
-    stmts: Vec<Stmt>,
-    next_var: usize,
-    shared_mem_bytes: usize,
-}
-
-impl TileIRBuilder {
-    pub fn new() -> Self {
-        Self {
-            kernel_name: String::new(),
-            params: Vec::new(),
-            stmts: Vec::new(),
-            next_var: 0,
-            shared_mem_bytes: 0,
-        }
-    }
-
-    pub fn start_kernel(&mut self, name: &str) {
-        self.kernel_name = name.to_string();
-    }
-
-    pub fn add_param(&mut self, name: &str, dtype: DType, is_input: bool) {
-        self.params.push(KernelParam {
-            name: name.to_string(),
-            dtype,
-            is_input,
-        });
-    }
-
-    pub fn alloc_shared(&mut self, dtype: DType, rows: usize, cols: usize) -> TileVar {
-        let var = TileVar(self.next_var);
-        self.next_var += 1;
-
-        self.stmts.push(Stmt::AllocTile {
-            var,
-            space: MemorySpace::Shared,
-            dtype,
-            rows,
-            cols,
-        });
-
-        // Track shared memory usage
-        self.shared_mem_bytes += rows * cols * dtype.size_bytes();
-
-        var
-    }
-
-    pub fn alloc_register(&mut self, dtype: DType, rows: usize, cols: usize) -> TileVar {
-        let var = TileVar(self.next_var);
-        self.next_var += 1;
-
-        self.stmts.push(Stmt::AllocTile {
-            var,
-            space: MemorySpace::Register,
-            dtype,
-            rows,
-            cols,
-        });
-
-        var
-    }
-
-    pub fn zero(&mut self, tile: TileVar) {
-        self.stmts.push(Stmt::Zero { tile });
-    }
-
-    pub fn matmul(&mut self, dest: TileVar, a: TileVar, b: TileVar, layout: MatMulLayout) {
-        self.stmts.push(Stmt::MatMul { dest, a, b, layout });
-    }
-
-    pub fn barrier(&mut self) {
-        self.stmts.push(Stmt::Barrier);
-    }
-
-    pub fn load_global_to_shared(
-        &mut self,
-        dest: TileVar,
-        src_param: &str,
-        row_offset: Expr,
-        col_offset: Expr,
-    ) {
-        self.stmts.push(Stmt::Load {
-            dest,
-            src_param: src_param.to_string(),
-            row_offset,
-            col_offset,
-        });
-    }
-
-    pub fn load_shared_to_register(&mut self, dest: TileVar, src: TileVar) {
-        self.stmts.push(Stmt::LoadSharedToReg { dest, src });
-    }
-
-    pub fn store(&mut self, dest_param: &str, src: TileVar, row_offset: Expr, col_offset: Expr) {
-        self.stmts.push(Stmt::Store {
-            dest_param: dest_param.to_string(),
-            src,
-            row_offset,
-            col_offset,
-        });
-    }
-
-    pub fn add(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
-        self.stmts.push(Stmt::Add { dest, a, b });
-    }
-
-    pub fn sub(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
-        self.stmts.push(Stmt::Sub { dest, a, b });
-    }
-
-    pub fn mul(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
-        self.stmts.push(Stmt::Mul { dest, a, b });
-    }
-
-    pub fn div(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
-        self.stmts.push(Stmt::Div { dest, a, b });
-    }
-
-    pub fn neg(&mut self, dest: TileVar, src: TileVar) {
-        self.stmts.push(Stmt::Neg { dest, src });
-    }
-
-    pub fn exp(&mut self, dest: TileVar, src: TileVar) {
-        self.stmts.push(Stmt::Exp { dest, src });
-    }
-
-    pub fn log(&mut self, dest: TileVar, src: TileVar) {
-        self.stmts.push(Stmt::Log { dest, src });
-    }
-
-    pub fn relu(&mut self, dest: TileVar, src: TileVar) {
-        self.stmts.push(Stmt::Relu { dest, src });
-    }
-
-    pub fn transpose(&mut self, dest: TileVar, src: TileVar, input_shape: Vec<usize>, output_shape: Vec<usize>) {
-        self.stmts.push(Stmt::Transpose { dest, src, input_shape, output_shape });
-    }
-
-    pub fn broadcast_axis(&mut self, dest: TileVar, src: TileVar, axis: usize, input_shape: Vec<usize>, output_shape: Vec<usize>) {
-        self.stmts.push(Stmt::BroadcastAxis { dest, src, axis, input_shape, output_shape });
-    }
-
-    pub fn reduce_axis(&mut self, dest: TileVar, src: TileVar, op: ReduceOp, axis: usize, input_shape: Vec<usize>, output_shape: Vec<usize>) {
-        self.stmts.push(Stmt::ReduceAxis {
-            dest,
-            src,
-            op,
-            axis,
-            input_shape,
-            output_shape,
-        });
-    }
-
-    pub fn gt(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
-        self.stmts.push(Stmt::Gt { dest, a, b });
-    }
-
-    pub fn mask(&mut self, dest: TileVar, values: TileVar, condition: TileVar) {
-        self.stmts.push(Stmt::Mask {
-            dest,
-            values,
-            condition,
-        });
-    }
-
-    pub fn for_loop<F>(&mut self, var_name: &str, start: i64, end: i64, body_fn: F)
-    where
-        F: FnOnce(&mut Self, String),
-    {
-        let var = var_name.to_string();
-
-        // Build body in temporary builder
-        let mut body_builder = TileIRBuilder::new();
-        body_builder.next_var = self.next_var;
-        body_fn(&mut body_builder, var.clone());
-        self.next_var = body_builder.next_var;
-
-        self.stmts.push(Stmt::ForLoop {
-            loop_var: var,
-            start: Expr::Const(start),
-            end: Expr::Const(end),
-            body: Block {
-                stmts: body_builder.stmts,
-            },
-        });
-    }
-
-    pub fn finish(self) -> TileIR {
-        TileIR {
-            kernel_name: self.kernel_name,
-            params: self.params,
-            body: Block { stmts: self.stmts },
-            shared_mem_bytes: self.shared_mem_bytes,
-        }
-    }
-}
-
-/////////////////////////////////////
-/// TENSOR TO TILE IR LOWERING
-/////////////////////////////////////
-
+#[allow(dead_code)]
 pub struct TileGraph {
     pub graph: Graph<TileIR, usize>,
 }
 
 impl<G> From<TensorGraph<f32, G>> for TileGraph {
     fn from(tensor_graph: TensorGraph<f32, G>) -> Self {
-        use petgraph::graph::NodeIndex;
-        use std::collections::HashMap;
-
         // Pre-compute input shapes for MatMul, BroadcastAxis, ReduceAxis, and Transpose nodes
         let mut op_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
         for idx in tensor_graph.graph.node_indices() {
@@ -500,6 +53,7 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
 }
 
 impl TileGraph {
+    #[allow(dead_code)]
     fn lower_node(
         node: TensorGraphNode<f32>,
         shape: &[usize],
@@ -512,26 +66,26 @@ impl TileGraph {
             TensorGraphNode::Unary { op } => Self::lower_unary(op, shape),
             TensorGraphNode::Binary { op } => Self::lower_binary(op, shape),
             TensorGraphNode::MatMul => {
-                let m = shape[0];
+                let _m = shape[0];
                 let n = shape[1];
                 let k = input_shapes[0][1];
                 // Pad dimensions to multiples of TILE_SIZE (16)
                 const TILE_SIZE: usize = 16;
-                let m_padded = ((m + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
-                let n_padded = ((n + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
-                let k_padded = ((k + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+                let m_padded = _m.div_ceil(TILE_SIZE) * TILE_SIZE;
+                let n_padded = n.div_ceil(TILE_SIZE) * TILE_SIZE;
+                let k_padded = k.div_ceil(TILE_SIZE) * TILE_SIZE;
                 Self::lower_matmul(m_padded, n_padded, k_padded, false, false)
             }
             TensorGraphNode::Transpose => {
-                let input_shape = input_shapes.get(0).map(|s| s.to_vec()).unwrap_or_default();
+                let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
                 Self::lower_transpose(input_shape, shape)
             }
             TensorGraphNode::BroadcastAxis { axis } => {
-                let input_shape = input_shapes.get(0).map(|s| s.to_vec()).unwrap_or_default();
+                let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
                 Self::lower_broadcast_axis(axis, input_shape, shape)
             }
             TensorGraphNode::ReduceAxis { op, axis } => {
-                let input_shape = input_shapes.get(0).map(|s| s.to_vec()).unwrap_or_default();
+                let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
                 Self::lower_reduce_axis(op, axis, input_shape, shape)
             }
             TensorGraphNode::Gt => Self::lower_gt(shape),
@@ -539,7 +93,8 @@ impl TileGraph {
         }
     }
 
-    fn lower_matmul(m: usize, n: usize, k: usize, transpose_a: bool, transpose_b: bool) -> TileIR {
+    #[allow(dead_code)]
+    fn lower_matmul(_m: usize, n: usize, k: usize, transpose_a: bool, transpose_b: bool) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("matmul");
 
@@ -566,7 +121,7 @@ impl TileGraph {
         builder.zero(c_reg);
 
         // Calculate number of K tiles needed
-        let k_tiles = (k + tile_k - 1) / tile_k;
+        let k_tiles = k.div_ceil(tile_k);
 
         // Main tiling loop over K dimension
         builder.for_loop("k_tile", 0, k_tiles as i64, |builder, k_var| {
@@ -582,16 +137,8 @@ impl TileGraph {
                 Box::new(Expr::ThreadIdx(Dim::X)),
             );
             // Linear offset for A (row-major): row * K + col
-            let a_offset = Expr::Add(
-                Box::new(a_row * k),
-                Box::new(a_col),
-            );
-            builder.load_global_to_shared(
-                a_smem,
-                "A",
-                a_offset,
-                Expr::Const(0),
-            );
+            let a_offset = Expr::Add(Box::new(a_row * k), Box::new(a_col));
+            builder.load_global_to_shared(a_smem, "A", a_offset, Expr::Const(0));
 
             // Load B tile to shared memory
             // Each thread loads one element: B[base_row + threadIdx.y][base_col + threadIdx.x]
@@ -605,16 +152,8 @@ impl TileGraph {
                 Box::new(Expr::ThreadIdx(Dim::X)),
             );
             // Linear offset for B (row-major): row * N + col
-            let b_offset = Expr::Add(
-                Box::new(b_row * n),
-                Box::new(b_col),
-            );
-            builder.load_global_to_shared(
-                b_smem,
-                "B",
-                b_offset,
-                Expr::Const(0),
-            );
+            let b_offset = Expr::Add(Box::new(b_row * n), Box::new(b_col));
+            builder.load_global_to_shared(b_smem, "B", b_offset, Expr::Const(0));
 
             builder.barrier();
 
@@ -648,20 +187,13 @@ impl TileGraph {
             Box::new(Expr::BlockIdx(Dim::X) * tile_n),
             Box::new(Expr::ThreadIdx(Dim::X)),
         );
-        let linear_offset = Expr::Add(
-            Box::new(global_row * n),
-            Box::new(global_col),
-        );
-        builder.store(
-            "C",
-            c_reg,
-            linear_offset,
-            Expr::Const(0),
-        );
+        let linear_offset = Expr::Add(Box::new(global_row * n), Box::new(global_col));
+        builder.store("C", c_reg, linear_offset, Expr::Const(0));
 
         builder.finish()
     }
 
+    #[allow(dead_code)]
     fn lower_constant(_data: std::sync::Arc<Vec<f32>>, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("constant");
@@ -679,6 +211,7 @@ impl TileGraph {
         builder.finish()
     }
 
+    #[allow(dead_code)]
     fn lower_input(name: &'static str, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel(&format!("input_{}", name));
@@ -694,6 +227,7 @@ impl TileGraph {
         builder.finish()
     }
 
+    #[allow(dead_code)]
     fn lower_parameter(
         _id: usize,
         _data: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
@@ -713,6 +247,7 @@ impl TileGraph {
         builder.finish()
     }
 
+    #[allow(dead_code)]
     fn lower_unary(op: tensor::UnaryOp, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         let kernel_name = match op {
@@ -745,6 +280,7 @@ impl TileGraph {
         builder.finish()
     }
 
+    #[allow(dead_code)]
     fn lower_binary(op: tensor::BinaryOp, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         let kernel_name = match op {
@@ -780,6 +316,7 @@ impl TileGraph {
         builder.finish()
     }
 
+    #[allow(dead_code)]
     fn lower_transpose(input_shape: Vec<usize>, output_shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("transpose");
@@ -788,10 +325,24 @@ impl TileGraph {
 
         // For now, just handle the simple case of 2D transpose
         // TODO: generalize to arbitrary dimensional transpose
-        assert_eq!(input_shape.len(), 2, "Transpose only supports 2D tensors for now");
-        assert_eq!(output_shape.len(), 2, "Transpose only supports 2D tensors for now");
-        assert_eq!(input_shape[0], output_shape[1], "Input rows should equal output cols");
-        assert_eq!(input_shape[1], output_shape[0], "Input cols should equal output rows");
+        assert_eq!(
+            input_shape.len(),
+            2,
+            "Transpose only supports 2D tensors for now"
+        );
+        assert_eq!(
+            output_shape.len(),
+            2,
+            "Transpose only supports 2D tensors for now"
+        );
+        assert_eq!(
+            input_shape[0], output_shape[1],
+            "Input rows should equal output cols"
+        );
+        assert_eq!(
+            input_shape[1], output_shape[0],
+            "Input cols should equal output rows"
+        );
 
         let total_elements: usize = output_shape.iter().product();
         let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
@@ -799,8 +350,13 @@ impl TileGraph {
 
         // Don't load here - Transpose will load directly from global memory with transposed addressing
         // Each thread handles one output element
-        builder.transpose(tile_out, tile_in, input_shape.clone(), output_shape.to_vec());
-        
+        builder.transpose(
+            tile_out,
+            tile_in,
+            input_shape.clone(),
+            output_shape.to_vec(),
+        );
+
         // Each thread writes its result using its thread index
         let offset = Expr::ThreadIdx(Dim::X);
         builder.store("output", tile_out, offset, Expr::Const(0));
@@ -808,7 +364,12 @@ impl TileGraph {
         builder.finish()
     }
 
-    fn lower_broadcast_axis(axis: usize, input_shape: Vec<usize>, output_shape: &[usize]) -> TileIR {
+    #[allow(dead_code)]
+    fn lower_broadcast_axis(
+        axis: usize,
+        input_shape: Vec<usize>,
+        output_shape: &[usize],
+    ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("broadcast_axis");
         builder.add_param("input", DType::F32, true);
@@ -821,7 +382,7 @@ impl TileGraph {
         // Don't load here - BroadcastAxis will load directly from global memory
         // Each thread handles one output element
         builder.broadcast_axis(tile_out, tile_in, axis, input_shape, output_shape.to_vec());
-        
+
         // Each thread writes its result using its thread index
         let offset = Expr::ThreadIdx(Dim::X);
         builder.store("output", tile_out, offset, Expr::Const(0));
@@ -829,7 +390,13 @@ impl TileGraph {
         builder.finish()
     }
 
-    fn lower_reduce_axis(op: tensor::ReduceOp, axis: usize, input_shape: Vec<usize>, output_shape: &[usize]) -> TileIR {
+    #[allow(dead_code)]
+    fn lower_reduce_axis(
+        op: tensor::ReduceOp,
+        axis: usize,
+        input_shape: Vec<usize>,
+        output_shape: &[usize],
+    ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("reduce_axis");
         builder.add_param("input", DType::F32, true);
@@ -847,7 +414,14 @@ impl TileGraph {
             tensor::ReduceOp::Max => ReduceOp::Max,
             tensor::ReduceOp::Mean => ReduceOp::Mean,
         };
-        builder.reduce_axis(tile_out, tile_in, tile_op, axis, input_shape, output_shape.to_vec());
+        builder.reduce_axis(
+            tile_out,
+            tile_in,
+            tile_op,
+            axis,
+            input_shape,
+            output_shape.to_vec(),
+        );
 
         // Each thread writes its result using its thread index
         let offset = Expr::ThreadIdx(Dim::X);
@@ -856,6 +430,7 @@ impl TileGraph {
         builder.finish()
     }
 
+    #[allow(dead_code)]
     fn lower_gt(shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("gt");
@@ -878,6 +453,7 @@ impl TileGraph {
         builder.finish()
     }
 
+    #[allow(dead_code)]
     fn lower_mask(shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("mask");

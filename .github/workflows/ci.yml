@@ -20,8 +20,11 @@ jobs:
         include:
           - arch: x86_64
             os: ubuntu-latest
+            packages: --workspace
           - arch: aarch64
             os: macos-14
+            # `nn` has a dep on `candle-datasets`, which uses `gemm-f16`. That doesn't compile on these mac runners
+            packages: -p runtime -p tensor
     steps:
       - uses: actions/checkout@v4
 
@@ -37,10 +40,10 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run tests
-        run: cargo nextest run --workspace
+        run: cargo nextest run ${{ matrix.packages }}
 
       - name: Run doc tests
-        run: cargo test --workspace --doc
+        run: cargo test ${{ matrix.packages }} --doc
 
   lint:
     name: Lint and Format

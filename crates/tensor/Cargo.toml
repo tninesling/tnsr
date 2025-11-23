@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 default = ["implicit_broadcast"]
 implicit_broadcast = []
+fusion = []
 
 [dependencies]
 anyhow = { workspace = true }

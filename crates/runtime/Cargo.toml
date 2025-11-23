@@ -19,6 +19,7 @@ rayon = { version = "1.11", optional = true }
 default = ["parallel"]
 cuda = ["cudarc"]
 parallel = ["rayon"]
+fusion = ["tensor/fusion"]
 
 [[bench]]
 name = "cpu"

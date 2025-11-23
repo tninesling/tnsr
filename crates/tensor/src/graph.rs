@@ -71,8 +71,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use itertools::Itertools;
-use petgraph::graph::Graph;
 pub use petgraph::graph::NodeIndex;
+use petgraph::stable_graph::StableGraph;
 use petgraph::visit::EdgeRef;
 
 use crate::BinaryOp;
@@ -110,6 +110,11 @@ pub enum TensorGraphNode<D> {
     Unary {
         op: UnaryOp,
     },
+    /// Fused sequence of unary operations (for operator fusion optimization).
+    #[cfg(feature = "fusion")]
+    FusedUnary {
+        ops: Vec<UnaryOp>,
+    },
     Binary {
         op: BinaryOp,
     },
@@ -140,6 +145,8 @@ impl<D> TensorGraphNode<D> {
                 UnaryOp::Log => "Log",
                 UnaryOp::Relu => "Relu",
             },
+            #[cfg(feature = "fusion")]
+            TensorGraphNode::FusedUnary { .. } => "FusedUnary",
             TensorGraphNode::Binary { op } => match op {
                 BinaryOp::Add => "Add",
                 BinaryOp::Sub => "Sub",
@@ -227,7 +234,7 @@ impl<D> From<BinaryOp> for TensorGraphNode<D> {
 /// See the `runtime` crate documentation for execution details.
 #[derive(Clone)]
 pub struct TensorGraph<D, G = NoGrad> {
-    pub graph: Graph<TensorGraphNode<D>, usize>,
+    pub graph: StableGraph<TensorGraphNode<D>, usize>,
     pub shapes: HashMap<NodeIndex, crate::Shape>,
     gradients: G,
     _phantom: std::marker::PhantomData<G>,
@@ -243,7 +250,7 @@ impl<D> TensorGraph<D, NoGrad> {
     /// Create a new empty TensorGraph without gradients.
     pub fn new() -> Self {
         Self {
-            graph: Graph::new(),
+            graph: StableGraph::new(),
             shapes: HashMap::new(),
             gradients: NoGrad,
             _phantom: std::marker::PhantomData,
@@ -271,6 +278,77 @@ impl<D, G> TensorGraph<D, G> {
             .sorted_by_key(|e| e.weight())
             .map(|e| e.source())
             .collect()
+    }
+
+    /// Apply operator fusion optimization to the graph.
+    ///
+    /// This pass identifies chains of consecutive unary operations and fuses them
+    /// into single `FusedUnary` nodes, reducing kernel launch overhead and memory traffic.
+    ///
+    /// # Returns
+    ///
+    /// The number of fusion transformations applied.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let x = TensorExpr::<f32>::input("x", vec![4]);
+    /// let y = x.exp().log().relu();
+    /// let mut graph: TensorGraph<f32> = y.into();
+    /// let num_fused = graph.apply_fusion();
+    /// // Graph now contains a single FusedUnary(Exp, Log, Relu) node
+    /// assert_eq!(num_fused, 1);
+    /// ```
+    #[cfg(feature = "fusion")]
+    pub fn apply_fusion(&mut self) -> usize
+    where
+        D: Clone,
+    {
+        use crate::fusion::FusionAnalyzer;
+
+        let analyzer = FusionAnalyzer::new(self);
+        let chains = analyzer.find_fusible_chains();
+        let num_chains = chains.len();
+
+        let mut nodes_to_remove = Vec::new();
+
+        // For each chain, replace it with a FusedUnary node
+        for chain in chains {
+            // Create the fused node
+            let fused_node = self.graph.add_node(TensorGraphNode::FusedUnary {
+                ops: chain.ops.clone(),
+            });
+
+            // Copy the shape from the end node of the chain
+            if let Some(shape) = self.shapes.get(&chain.end_node) {
+                self.shapes.insert(fused_node, shape.clone());
+            }
+
+            // Add edge from start_node to fused_node
+            self.graph.add_edge(chain.start_node, fused_node, 0);
+
+            // Redirect all edges from end_node to fused_node
+            let outgoing_edges: Vec<_> = self
+                .graph
+                .edges_directed(chain.end_node, petgraph::Direction::Outgoing)
+                .map(|e| (e.target(), *e.weight()))
+                .collect();
+
+            for (target, weight) in outgoing_edges {
+                self.graph.add_edge(fused_node, target, weight);
+            }
+
+            // Mark nodes for removal (but don't remove yet to avoid index shifting)
+            nodes_to_remove.extend(chain.chain_nodes.iter().copied());
+        }
+
+        // Remove all marked nodes after all fused nodes have been created
+        for node in nodes_to_remove {
+            self.graph.remove_node(node);
+            self.shapes.remove(&node);
+        }
+
+        num_chains
     }
 }
 
@@ -809,6 +887,12 @@ impl TensorGraph<f32, NoGrad> {
                     // They don't need gradients (they're non-differentiable operations)
                     // Skip gradient computation for these nodes
                 }
+                #[cfg(feature = "fusion")]
+                TensorGraphNode::FusedUnary { .. } => {
+                    // TODO: Implement gradient computation for fused unary operations
+                    // For now, FusedUnary should only be used in inference graphs without gradients
+                    panic!("Gradient computation for FusedUnary not yet implemented");
+                }
             }
         }
 
@@ -1300,5 +1384,131 @@ mod tests {
             "Expected at least 1 BroadcastAxis node for ReduceAxis Sum gradient, got {}",
             broadcast_count
         );
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_apply_fusion_simple_chain() {
+        // Create graph: x -> exp -> log
+        let x = TensorExpr::<f32>::input("x", vec![4]);
+        let y = x.exp().log();
+        let mut graph: TensorGraph<f32> = y.into();
+
+        let initial_node_count = graph.len();
+        let num_fused = graph.apply_fusion();
+
+        assert_eq!(num_fused, 1, "Should fuse one chain");
+        // Should have 2 nodes: input and fused
+        assert_eq!(graph.len(), 2, "Should have input + fused node");
+        assert!(
+            graph.len() < initial_node_count,
+            "Should have fewer nodes after fusion"
+        );
+
+        // Verify the fused node exists and has the right ops
+        let fused_node = graph
+            .graph
+            .node_indices()
+            .find(|&idx| matches!(graph[idx], TensorGraphNode::FusedUnary { .. }));
+
+        assert!(fused_node.is_some(), "Should have a FusedUnary node");
+
+        if let TensorGraphNode::FusedUnary { ops } = &graph[fused_node.unwrap()] {
+            assert_eq!(ops.len(), 2, "Should have 2 ops");
+            assert_eq!(ops[0], UnaryOp::Exp);
+            assert_eq!(ops[1], UnaryOp::Log);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_apply_fusion_longer_chain() {
+        // Create graph: x -> neg -> exp -> log -> relu
+        let x = TensorExpr::<f32>::input("x", vec![4]);
+        let y = (-x).exp().log().relu();
+        let mut graph: TensorGraph<f32> = y.into();
+
+        let num_fused = graph.apply_fusion();
+
+        assert_eq!(num_fused, 1, "Should fuse one chain");
+
+        // Verify the fused node has all 4 ops
+        let fused_node = graph
+            .graph
+            .node_indices()
+            .find(|&idx| matches!(graph[idx], TensorGraphNode::FusedUnary { .. }));
+
+        assert!(fused_node.is_some(), "Should have a FusedUnary node");
+
+        if let TensorGraphNode::FusedUnary { ops } = &graph[fused_node.unwrap()] {
+            assert_eq!(ops.len(), 4, "Should have 4 ops");
+            assert_eq!(ops[0], UnaryOp::Neg);
+            assert_eq!(ops[1], UnaryOp::Exp);
+            assert_eq!(ops[2], UnaryOp::Log);
+            assert_eq!(ops[3], UnaryOp::Relu);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_apply_fusion_no_single_op() {
+        // Create graph: x -> exp (single op, should not fuse)
+        let x = TensorExpr::<f32>::input("x", vec![4]);
+        let y = x.exp();
+        let mut graph: TensorGraph<f32> = y.into();
+
+        let num_fused = graph.apply_fusion();
+
+        assert_eq!(num_fused, 0, "Should not fuse single op");
+
+        // Verify no FusedUnary node exists
+        let has_fused = graph
+            .graph
+            .node_indices()
+            .any(|idx| matches!(graph[idx], TensorGraphNode::FusedUnary { .. }));
+
+        assert!(!has_fused, "Should not have FusedUnary node");
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_apply_fusion_with_branching() {
+        // Create graph with branching: x -> exp -> (log, relu) -> add
+        let x = TensorExpr::<f32>::input("x", vec![4]);
+        let exp_x = x.exp();
+        let log_exp = exp_x.clone().log();
+        let relu_exp = exp_x.relu();
+        let y = log_exp + relu_exp;
+        let mut graph: TensorGraph<f32> = y.into();
+
+        let num_fused = graph.apply_fusion();
+
+        // Should not fuse because exp has multiple consumers
+        assert_eq!(num_fused, 0, "Should not fuse with branching");
+    }
+
+    #[test]
+    #[cfg(feature = "fusion")]
+    fn test_apply_fusion_multiple_independent_chains() {
+        // Create two independent chains: x -> exp -> log, y -> neg -> relu
+        let x = TensorExpr::<f32>::input("x", vec![4]);
+        let y = TensorExpr::<f32>::input("y", vec![4]);
+        let a = x.exp().log();
+        let b = (-y).relu();
+        let result = a + b;
+        let mut graph: TensorGraph<f32> = result.into();
+
+        let num_fused = graph.apply_fusion();
+
+        assert_eq!(num_fused, 2, "Should fuse two independent chains");
+
+        // Verify two FusedUnary nodes exist
+        let fused_count = graph
+            .graph
+            .node_indices()
+            .filter(|&idx| matches!(graph[idx], TensorGraphNode::FusedUnary { .. }))
+            .count();
+
+        assert_eq!(fused_count, 2, "Should have 2 FusedUnary nodes");
     }
 }

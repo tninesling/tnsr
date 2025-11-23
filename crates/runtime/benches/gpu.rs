@@ -367,6 +367,156 @@ pub fn benches(c: &mut Criterion) {
         }
         group.finish();
     }
+
+    // Fusion: unary chain (relu -> log -> exp)
+    #[cfg(feature = "fusion")]
+    {
+        let mut group = c.benchmark_group("fusion_unary_chain");
+        for &n in &sizes {
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 2) as u64,
+            ));
+            let shape = vec![n, n];
+            let a = Constant::new(vec![1.0f32; n * n], shape.clone());
+
+            // Unfused graph: relu -> log -> exp
+            let mut graph_unfused = tensor::graph::TensorGraph::<f32>::new();
+            let expr = TensorExpr::from(a.clone()).relu().log().exp();
+            expr.lower_to_graph(&mut graph_unfused);
+            let graph_unfused = Arc::new(graph_unfused);
+
+            // Fused graph: FusedUnary([relu, log, exp])
+            let mut graph_fused = tensor::graph::TensorGraph::<f32>::new();
+            let expr = TensorExpr::from(a.clone()).relu().log().exp();
+            expr.lower_to_graph(&mut graph_fused);
+            graph_fused.apply_fusion();
+            let graph_fused = Arc::new(graph_fused);
+
+            {
+                let graph_unfused_cuda = Arc::clone(&graph_unfused);
+                group.bench_function(BenchmarkId::new("unfused_cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec.execute(&*graph_unfused_cuda, Default::default()),
+                        );
+                    });
+                });
+            }
+
+            {
+                let graph_fused_cuda = Arc::clone(&graph_fused);
+                group.bench_function(BenchmarkId::new("fused_cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec.execute(&*graph_fused_cuda, Default::default()),
+                        );
+                    });
+                });
+            }
+
+            {
+                let graph_unfused_ptx = Arc::clone(&graph_unfused);
+                group.bench_function(BenchmarkId::new("unfused_ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec.execute(&*graph_unfused_ptx, Default::default()),
+                        );
+                    });
+                });
+            }
+
+            {
+                let graph_fused_ptx = Arc::clone(&graph_fused);
+                group.bench_function(BenchmarkId::new("fused_ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec.execute(&*graph_fused_ptx, Default::default()),
+                        );
+                    });
+                });
+            }
+        }
+        group.finish();
+    }
+
+    // Fusion: longer unary chain (neg -> relu -> log -> exp)
+    #[cfg(feature = "fusion")]
+    {
+        let mut group = c.benchmark_group("fusion_long_chain");
+        for &n in &sizes {
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 2) as u64,
+            ));
+            let shape = vec![n, n];
+            let a = Constant::new(vec![1.0f32; n * n], shape.clone());
+
+            // Unfused graph: neg -> relu -> log -> exp
+            let mut graph_unfused = tensor::graph::TensorGraph::<f32>::new();
+            let expr = (-TensorExpr::from(a.clone())).relu().log().exp();
+            expr.lower_to_graph(&mut graph_unfused);
+            let graph_unfused = Arc::new(graph_unfused);
+
+            // Fused graph: FusedUnary([neg, relu, log, exp])
+            let mut graph_fused = tensor::graph::TensorGraph::<f32>::new();
+            let expr = (-TensorExpr::from(a.clone())).relu().log().exp();
+            expr.lower_to_graph(&mut graph_fused);
+            graph_fused.apply_fusion();
+            let graph_fused = Arc::new(graph_fused);
+
+            {
+                let graph_unfused_cuda = Arc::clone(&graph_unfused);
+                group.bench_function(BenchmarkId::new("unfused_cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec.execute(&*graph_unfused_cuda, Default::default()),
+                        );
+                    });
+                });
+            }
+
+            {
+                let graph_fused_cuda = Arc::clone(&graph_fused);
+                group.bench_function(BenchmarkId::new("fused_cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec.execute(&*graph_fused_cuda, Default::default()),
+                        );
+                    });
+                });
+            }
+
+            {
+                let graph_unfused_ptx = Arc::clone(&graph_unfused);
+                group.bench_function(BenchmarkId::new("unfused_ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec.execute(&*graph_unfused_ptx, Default::default()),
+                        );
+                    });
+                });
+            }
+
+            {
+                let graph_fused_ptx = Arc::clone(&graph_fused);
+                group.bench_function(BenchmarkId::new("fused_ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(
+                            exec.execute(&*graph_fused_ptx, Default::default()),
+                        );
+                    });
+                });
+            }
+        }
+        group.finish();
+    }
 }
 
 criterion_group!(benches_group, benches);

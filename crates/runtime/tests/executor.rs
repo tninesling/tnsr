@@ -4,6 +4,7 @@
 //! The Runtime automatically selects the best available backend (CUDA or CPU).
 
 use std::collections::HashMap;
+use std::ops::Neg;
 
 use petgraph::visit::IntoNodeReferences;
 use runtime::{Executor, Runtime};
@@ -880,4 +881,89 @@ fn gradient_relu_detailed() {
             actual
         );
     }
+}
+
+// ============================================================================
+// Fusion Tests
+// ============================================================================
+
+#[test]
+#[cfg(feature = "fusion")]
+fn forward_fused_unary_chain() {
+    let mut runtime = create_runtime();
+
+    // Test: exp(log(relu(x))) where x = [1.0, 2.0, 3.0, 4.0]
+    // relu([1, 2, 3, 4]) = [1, 2, 3, 4]
+    // log([1, 2, 3, 4]) = [0, ln(2), ln(3), ln(4)]
+    // exp([0, ln(2), ln(3), ln(4)]) = [1, 2, 3, 4]
+    let x = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
+    let node = TensorExpr::from(x).relu().log().exp();
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion optimization
+    graph.apply_fusion();
+
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    let expected = vec![1.0, 2.0, 3.0, 4.0];
+    assert_approx_eq!(result, expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn forward_fused_vs_unfused_same_result() {
+    let mut runtime_fused = create_runtime();
+    let mut runtime_unfused = create_runtime();
+
+    // Test that fused and unfused graphs produce the same result
+    // Chain: neg(exp(x)) where x = [0.0, 1.0, 2.0]
+    let x1 = Constant::new(vec![0.0, 1.0, 2.0], vec![3]);
+    let node1 = TensorExpr::from(x1).exp().neg();
+
+    let x2 = Constant::new(vec![0.0, 1.0, 2.0], vec![3]);
+    let node2 = TensorExpr::from(x2).exp().neg();
+
+    let mut graph_fused: TensorGraph<f32> = node1.into();
+    let graph_unfused: TensorGraph<f32> = node2.into();
+
+    // Apply fusion to one graph only
+    graph_fused.apply_fusion();
+
+    let result_fused = runtime_fused.execute(&graph_fused, HashMap::new()).unwrap();
+    let result_unfused = runtime_unfused
+        .execute(&graph_unfused, HashMap::new())
+        .unwrap();
+
+    assert_approx_eq!(result_fused, result_unfused);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn forward_fused_with_branching_preserved() {
+    let mut runtime = create_runtime();
+
+    // Test that branching prevents fusion where it should
+    // x -> exp -> [relu, log]
+    // The exp node has multiple consumers, so it shouldn't be fused
+    let x = Constant::new(vec![1.0, 2.0, 3.0], vec![3]);
+    let exp_node = TensorExpr::from(x).exp();
+    let relu_branch = exp_node.clone().relu();
+    let log_branch = exp_node.log();
+    let result = relu_branch + log_branch;
+
+    let mut graph: TensorGraph<f32> = result.into();
+
+    // Apply fusion - should not fuse exp with either relu or log
+    graph.apply_fusion();
+
+    let output = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // Expected: relu(exp([1,2,3])) + log(exp([1,2,3]))
+    //         = relu([e, e^2, e^3]) + log([e, e^2, e^3])
+    //         = [e, e^2, e^3] + [1, 2, 3]
+    //         = [e+1, e^2+2, e^3+3]
+    let e = std::f32::consts::E;
+    let expected = vec![e + 1.0, e.powi(2) + 2.0, e.powi(3) + 3.0];
+    assert_approx_eq!(output, expected);
 }

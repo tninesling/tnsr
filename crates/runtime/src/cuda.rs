@@ -643,6 +643,28 @@ impl Executor<f32> for CudaExecutor {
 
                     out_device
                 }
+                #[cfg(feature = "fusion")]
+                TensorGraphNode::FusedUnary { ops } => {
+                    let inputs = graph.inputs(*node_idx);
+                    let mut current = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing input value for fused unary operation")?
+                        .clone();
+
+                    // Execute fused operations sequentially
+                    // Note: CudaExecutor uses static PTX kernels, so we fall back
+                    // to sequential execution. PtxExecutor will generate fused kernels.
+                    for op in ops {
+                        current = match op {
+                            tensor::UnaryOp::Neg => self.neg(&current),
+                            tensor::UnaryOp::Exp => self.exp(&current),
+                            tensor::UnaryOp::Log => self.log(&current),
+                            tensor::UnaryOp::Relu => self.relu(&current),
+                        };
+                    }
+                    current
+                }
                 TensorGraphNode::Transpose => {
                     let in_idx = graph.inputs(*node_idx)[0];
                     let input = self

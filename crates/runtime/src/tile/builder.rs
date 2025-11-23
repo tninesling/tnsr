@@ -160,6 +160,12 @@ impl TileIRBuilder {
         self.stmts.push(Stmt::Relu { dest, src });
     }
 
+    #[cfg(feature = "fusion")]
+    #[allow(dead_code)]
+    pub fn fused_unary(&mut self, dest: TileVar, src: TileVar, ops: Vec<super::ir::FusedUnaryOp>) {
+        self.stmts.push(Stmt::FusedUnary { dest, src, ops });
+    }
+
     #[allow(dead_code)]
     pub fn transpose(
         &mut self,

@@ -111,6 +111,14 @@ pub enum Stmt {
         src: TileVar,
     },
 
+    /// Fused sequence of unary operations (operator fusion optimization)
+    #[cfg(feature = "fusion")]
+    FusedUnary {
+        dest: TileVar,
+        src: TileVar,
+        ops: Vec<FusedUnaryOp>,
+    },
+
     /// Transpose operation
     Transpose {
         dest: TileVar,
@@ -214,6 +222,17 @@ pub enum ReduceOp {
     Sum,
     Max,
     Mean,
+}
+
+/// Unary operations for fusion
+#[cfg(feature = "fusion")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum FusedUnaryOp {
+    Neg,
+    Exp,
+    Log,
+    Relu,
 }
 
 /// Simple expressions for indices and loop bounds

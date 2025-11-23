@@ -42,6 +42,8 @@
 //! // let result = executor.forward(&y, inputs)?;
 //! ```
 
+#[cfg(feature = "fusion")]
+pub mod fusion;
 pub mod graph;
 
 use std::ops::Add;
@@ -202,7 +204,7 @@ impl<D: DType> Input<D> {
 }
 
 /// Element-wise unary operations on tensors.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnaryOp {
     /// Negation: `-x`
     Neg,
@@ -904,7 +906,7 @@ impl<D: DType> TensorExpr<D> {
                 }
                 ExprKind::Unary { op, x } => {
                     let x_idx = lower_rec(x, g);
-                    let node_idx = g.graph.add_node(op.clone().into());
+                    let node_idx = g.graph.add_node((*op).into());
                     g.shapes.insert(node_idx, expr.shape().clone());
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx

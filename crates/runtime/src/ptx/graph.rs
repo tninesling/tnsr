@@ -569,6 +569,48 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             let zero = Operand::imm_f32(0.0);
             func.add_inst(Inst::max_f32(dest_reg, src_reg, zero));
         }
+        #[cfg(feature = "fusion")]
+        Stmt::FusedUnary { dest, src, ops } => {
+            let dest_reg = ctx.get_or_alloc_reg(func, *dest);
+            let mut current_reg = ctx.get_or_alloc_reg(func, *src);
+
+            // Chain the unary operations sequentially
+            for (i, op) in ops.iter().enumerate() {
+                // For all ops except the last, allocate intermediate registers
+                let output_reg = if i == ops.len() - 1 {
+                    dest_reg.clone()
+                } else {
+                    func.add_f32_register()
+                };
+
+                match op {
+                    crate::tile::ir::FusedUnaryOp::Neg => {
+                        func.add_inst(Inst::neg_f32(output_reg.clone(), current_reg));
+                    }
+                    crate::tile::ir::FusedUnaryOp::Exp => {
+                        // exp(x) = 2^(x * log2(e))
+                        let log2e = Operand::imm_f32(std::f32::consts::LOG2_E);
+                        let scaled = func.add_f32_register();
+                        func.add_inst(Inst::mul_f32(scaled.clone(), current_reg, log2e));
+                        func.add_inst(Inst::ex2_f32(output_reg.clone(), scaled));
+                    }
+                    crate::tile::ir::FusedUnaryOp::Log => {
+                        // log(x) = log2(x) * ln(2)
+                        let log2_result = func.add_f32_register();
+                        func.add_inst(Inst::lg2_f32(log2_result.clone(), current_reg));
+                        let ln2 = Operand::imm_f32(std::f32::consts::LN_2);
+                        func.add_inst(Inst::mul_f32(output_reg.clone(), log2_result, ln2));
+                    }
+                    crate::tile::ir::FusedUnaryOp::Relu => {
+                        // relu(x) = max(0, x)
+                        let zero = Operand::imm_f32(0.0);
+                        func.add_inst(Inst::max_f32(output_reg.clone(), current_reg, zero));
+                    }
+                }
+
+                current_reg = output_reg;
+            }
+        }
         Stmt::Transpose {
             dest,
             src: _,

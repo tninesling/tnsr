@@ -308,6 +308,27 @@ impl SimpleExecutor {
             .map(|(v, c)| if *c != 0.0 { *v } else { 0.0 })
             .collect()
     }
+
+    #[cfg(feature = "fusion")]
+    fn fused_unary(&self, x: &[f32], ops: &[tensor::UnaryOp]) -> Vec<f32> {
+        let _span = trace_span!("fused_unary", num_ops = ops.len()).entered();
+
+        // Apply all operations in a single pass to avoid intermediate allocations
+        get_iter(x)
+            .copied()
+            .map(|mut val| {
+                for op in ops {
+                    val = match op {
+                        tensor::UnaryOp::Neg => -val,
+                        tensor::UnaryOp::Exp => val.exp(),
+                        tensor::UnaryOp::Log => val.ln(),
+                        tensor::UnaryOp::Relu => val.max(0.0),
+                    };
+                }
+                val
+            })
+            .collect()
+    }
 }
 
 impl Executor<f32> for SimpleExecutor {
@@ -424,6 +445,17 @@ impl Executor<f32> for SimpleExecutor {
                         condition.len()
                     );
                     self.mask(values, condition)
+                }
+                #[cfg(feature = "fusion")]
+                TensorGraphNode::FusedUnary { ops } => {
+                    let _span = trace_span!("fused_unary", node = node_idx.index()).entered();
+                    let inputs = graph.inputs(*node_idx);
+                    let x = self.values.get(&inputs[0]).with_context(|| {
+                        format!("Value for node {} not computed", inputs[0].index())
+                    })?;
+
+                    // Apply all operations in a single pass (no intermediate allocations)
+                    self.fused_unary(x, ops)
                 }
             };
             self.values.insert(*node_idx, result);

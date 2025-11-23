@@ -36,18 +36,21 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
         }
 
         Self {
-            graph: tensor_graph.graph.map_owned(
-                |idx, node| {
-                    let shape = tensor_graph.shapes.get(&idx).unwrap();
-                    // Get input shapes for operations that need them
-                    let input_shapes = op_input_shapes
-                        .get(&idx)
-                        .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
-                        .unwrap_or_default();
-                    Self::lower_node(node, shape, &input_shapes)
-                },
-                |_, e| e,
-            ),
+            graph: tensor_graph
+                .graph
+                .map_owned(
+                    |idx, node| {
+                        let shape = tensor_graph.shapes.get(&idx).unwrap();
+                        // Get input shapes for operations that need them
+                        let input_shapes = op_input_shapes
+                            .get(&idx)
+                            .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
+                            .unwrap_or_default();
+                        Self::lower_node(node, shape, &input_shapes)
+                    },
+                    |_, e| e,
+                )
+                .into(),
         }
     }
 }
@@ -64,6 +67,8 @@ impl TileGraph {
             TensorGraphNode::Input { name } => Self::lower_input(name, shape),
             TensorGraphNode::Parameter { id, data } => Self::lower_parameter(id, data, shape),
             TensorGraphNode::Unary { op } => Self::lower_unary(op, shape),
+            #[cfg(feature = "fusion")]
+            TensorGraphNode::FusedUnary { ops } => Self::lower_fused_unary(ops, shape),
             TensorGraphNode::Binary { op } => Self::lower_binary(op, shape),
             TensorGraphNode::MatMul => {
                 let _m = shape[0];
@@ -275,6 +280,38 @@ impl TileGraph {
             tensor::UnaryOp::Relu => builder.relu(tile_out, tile_in),
         }
 
+        builder.store("output", tile_out, offset, Expr::Const(0));
+
+        builder.finish()
+    }
+
+    #[allow(dead_code)]
+    #[cfg(feature = "fusion")]
+    fn lower_fused_unary(ops: Vec<tensor::UnaryOp>, shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("fused_unary");
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+
+        let offset: Expr = Expr::ThreadIdx(Dim::X);
+        builder.load_global_to_shared(tile_in, "input", offset.clone(), Expr::Const(0));
+
+        // Convert tensor::UnaryOp to tile::FusedUnaryOp
+        let tile_ops: Vec<super::ir::FusedUnaryOp> = ops
+            .into_iter()
+            .map(|op| match op {
+                tensor::UnaryOp::Neg => super::ir::FusedUnaryOp::Neg,
+                tensor::UnaryOp::Exp => super::ir::FusedUnaryOp::Exp,
+                tensor::UnaryOp::Log => super::ir::FusedUnaryOp::Log,
+                tensor::UnaryOp::Relu => super::ir::FusedUnaryOp::Relu,
+            })
+            .collect();
+
+        builder.fused_unary(tile_out, tile_in, tile_ops);
         builder.store("output", tile_out, offset, Expr::Const(0));
 
         builder.finish()

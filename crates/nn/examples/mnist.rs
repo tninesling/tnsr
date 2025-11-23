@@ -1,13 +1,89 @@
 use std::time::Instant;
 
-use candle_datasets::vision::mnist;
 use clap::Parser;
+use mnist::MnistBuilder;
 use nn::Model;
 use rand::prelude::*;
 use runtime::optimizer::SGD;
 use runtime::{Executor, Runtime};
 use tensor::Input;
 use tensor::Parameter;
+
+/// MNIST dataset downloader and loader utilities
+mod mnist_loader {
+    use std::fs;
+    use std::io::{Read, Write};
+    use std::path::{Path, PathBuf};
+
+    use flate2::read::GzDecoder;
+
+    /// Base URL for MNIST dataset files (Google Cloud Storage mirror)
+    const MNIST_BASE_URL: &str = "https://storage.googleapis.com/cvdf-datasets/mnist";
+
+    /// MNIST dataset file names
+    const TRAIN_IMAGES: &str = "train-images-idx3-ubyte";
+    const TRAIN_LABELS: &str = "train-labels-idx1-ubyte";
+    const TEST_IMAGES: &str = "t10k-images-idx3-ubyte";
+    const TEST_LABELS: &str = "t10k-labels-idx1-ubyte";
+
+    /// Ensures all MNIST dataset files are downloaded and decompressed in the data directory.
+    pub fn ensure_mnist_data(data_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        // Create data directory if it doesn't exist
+        fs::create_dir_all(data_dir)?;
+
+        let files = [TRAIN_IMAGES, TRAIN_LABELS, TEST_IMAGES, TEST_LABELS];
+
+        for file_name in &files {
+            let file_path = data_dir.join(file_name);
+
+            if file_path.exists() {
+                println!("  ✓ {} already exists, skipping", file_name);
+                continue;
+            }
+
+            println!("  Downloading {}...", file_name);
+            let gz_file_name = format!("{}.gz", file_name);
+            let url = format!("{}/{}", MNIST_BASE_URL, gz_file_name);
+
+            // Download the .gz file
+            let response = reqwest::blocking::get(&url)?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Failed to download {}: HTTP {}",
+                    gz_file_name,
+                    response.status()
+                )
+                .into());
+            }
+
+            let gz_bytes = response.bytes()?;
+
+            println!("  Decompressing {}...", gz_file_name);
+
+            // Decompress directly to file
+            let mut decoder = GzDecoder::new(&gz_bytes[..]);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+
+            // Write decompressed data to file
+            let mut output_file = fs::File::create(&file_path)?;
+            output_file.write_all(&decompressed)?;
+
+            println!("  ✓ {} ready", file_name);
+        }
+
+        Ok(())
+    }
+
+    /// Returns the default data directory path (project_root/data)
+    pub fn default_data_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("data"))
+            .unwrap_or_else(|| PathBuf::from("data"))
+    }
+}
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -71,28 +147,48 @@ fn main() {
 
     let mut rng = StdRng::seed_from_u64(args.seed);
 
-    // Load dataset from HF hub.
+    // Ensure MNIST data is downloaded and decompressed
+    println!("Checking MNIST dataset...");
+    let data_dir = mnist_loader::default_data_dir();
+    if let Err(e) = mnist_loader::ensure_mnist_data(&data_dir) {
+        eprintln!("Failed to download MNIST dataset: {}", e);
+        std::process::exit(1);
+    }
+    println!("MNIST dataset ready in {}", data_dir.display());
+
+    // Load dataset from the mnist crate
     let ds_span = tracing::span!(tracing::Level::INFO, "load_mnist");
     let _enter = ds_span.enter();
-    let ds = mnist::load()
-        .expect("failed to load MNIST from hub; ensure network access or provide local IDX files");
+    let mnist_data = MnistBuilder::new()
+        .label_format_digit()
+        .training_set_length(60_000)
+        .validation_set_length(0)
+        .test_set_length(10_000)
+        .finalize();
     drop(_enter);
     println!("MNIST dataset loaded.");
 
-    let train_images_2d: Vec<Vec<f32>> =
-        ds.train_images.to_vec2().expect("to_vec2 for train_images");
-    let n_train = train_images_2d.len();
-    let train_images: Vec<f32> = train_images_2d.into_iter().flatten().collect();
-    let train_labels_raw: Vec<u8> = ds.train_labels.to_vec1().expect("to_vec1 for train_labels");
-    assert_eq!(n_train, train_labels_raw.len());
+    // Convert training images from u8 to f32 and normalize to [0, 1]
+    let train_images: Vec<f32> = mnist_data
+        .trn_img
+        .iter()
+        .map(|&x| x as f32 / 255.0)
+        .collect();
+    let train_labels_raw: Vec<u8> = mnist_data.trn_lbl;
+    let n_train = train_labels_raw.len();
+    assert_eq!(n_train * 784, train_images.len());
     let train_labels_oh = one_hot(&train_labels_raw, 10);
     println!("Training samples: {n_train}");
 
-    let test_images_2d: Vec<Vec<f32>> = ds.test_images.to_vec2().expect("to_vec2 for test_images");
-    let n_test = test_images_2d.len();
-    let test_images: Vec<f32> = test_images_2d.into_iter().flatten().collect();
-    let test_labels_raw: Vec<u8> = ds.test_labels.to_vec1().expect("to_vec1 for test_labels");
-    assert_eq!(n_test, test_labels_raw.len());
+    // Convert test images from u8 to f32 and normalize to [0, 1]
+    let test_images: Vec<f32> = mnist_data
+        .tst_img
+        .iter()
+        .map(|&x| x as f32 / 255.0)
+        .collect();
+    let test_labels_raw: Vec<u8> = mnist_data.tst_lbl;
+    let n_test = test_labels_raw.len();
+    assert_eq!(n_test * 784, test_images.len());
     println!("Test samples: {n_test}");
 
     // Parameters

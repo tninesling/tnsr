@@ -1,3 +1,4 @@
+data/
 target/
 .env
 mnist_trace.json

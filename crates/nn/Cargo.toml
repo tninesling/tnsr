@@ -17,4 +17,6 @@ parallel = ["runtime/parallel"]
 
 [dev-dependencies]
 runtime = { path = "../runtime" }
-candle-datasets = "0.9"
+mnist = "0.6"
+reqwest = { version = "0.12", features = ["blocking"] }
+flate2 = "1.0"

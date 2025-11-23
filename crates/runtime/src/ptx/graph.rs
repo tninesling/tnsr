@@ -13,9 +13,16 @@ pub struct PtxGraph {
 impl From<TileGraph> for PtxGraph {
     fn from(tile_graph: TileGraph) -> Self {
         Self {
-            graph: tile_graph
-                .graph
-                .map_owned(|_, func| func.into(), |_, weight| weight),
+            graph: tile_graph.graph.map_owned(
+                |node_idx, tile_ir| {
+                    // Convert TileIR to Function
+                    let mut func: Function = tile_ir.into();
+                    // Make the kernel name unique by appending the node index
+                    func.name = format!("{}_{}", func.name, node_idx.index());
+                    func
+                },
+                |_, weight| weight,
+            ),
         }
     }
 }
@@ -120,7 +127,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             dest,
             src_param,
             row_offset,
-            col_offset,
+            col_offset: _,
         } => {
             // Load from global memory to register/shared
             // Simplified: load a single f32 value
@@ -147,7 +154,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             dest_param,
             src,
             row_offset,
-            col_offset,
+            col_offset: _,
         } => {
             // Store from register/shared to global memory
             let src_reg = ctx.get_or_alloc_reg(func, *src);

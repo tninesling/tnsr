@@ -15,6 +15,8 @@ use crate::{Executor, SimpleExecutor};
 #[cfg(feature = "cuda")]
 use crate::cuda::CudaExecutor;
 #[cfg(feature = "cuda")]
+use crate::ptx::PtxExecutor;
+#[cfg(feature = "cuda")]
 use anyhow::Context;
 
 /// Available execution backends.
@@ -25,6 +27,9 @@ pub enum Backend {
     /// GPU-based execution using CUDA (requires `cuda` feature)
     #[cfg(feature = "cuda")]
     Cuda,
+    /// GPU-based execution using PTX JIT compilation (requires `cuda` feature)
+    #[cfg(feature = "cuda")]
+    Ptx,
 }
 
 /// Unified runtime that automatically selects the best available backend.
@@ -72,6 +77,9 @@ pub enum Runtime {
     /// GPU-based executor (only available with `cuda` feature)
     #[cfg(feature = "cuda")]
     Cuda(CudaExecutor),
+    /// PTX JIT executor (only available with `cuda` feature)
+    #[cfg(feature = "cuda")]
+    Ptx(PtxExecutor),
 }
 
 impl Runtime {
@@ -149,6 +157,12 @@ impl Runtime {
                     CudaExecutor::try_new().context("Failed to initialize CUDA executor")?;
                 Ok(Runtime::Cuda(executor))
             }
+            #[cfg(feature = "cuda")]
+            Backend::Ptx => {
+                let executor =
+                    PtxExecutor::try_new().context("Failed to initialize PTX executor")?;
+                Ok(Runtime::Ptx(executor))
+            }
         }
     }
 
@@ -171,6 +185,8 @@ impl Runtime {
             Runtime::Cpu(_) => Backend::Cpu,
             #[cfg(feature = "cuda")]
             Runtime::Cuda(_) => Backend::Cuda,
+            #[cfg(feature = "cuda")]
+            Runtime::Ptx(_) => Backend::Ptx,
         }
     }
 
@@ -183,7 +199,7 @@ impl Runtime {
     pub fn is_cuda(&self) -> bool {
         #[cfg(feature = "cuda")]
         {
-            matches!(self, Runtime::Cuda(_))
+            matches!(self, Runtime::Cuda(_) | Runtime::Ptx(_))
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -227,6 +243,8 @@ impl Runtime {
             Runtime::Cpu(executor) => executor.get_value(node_idx).cloned(),
             #[cfg(feature = "cuda")]
             Runtime::Cuda(executor) => executor.get_value(node_idx),
+            #[cfg(feature = "cuda")]
+            Runtime::Ptx(executor) => executor.get_value(node_idx),
         }
     }
 }
@@ -242,11 +260,16 @@ impl Executor<f32> for Runtime {
         &mut self,
         graph: &TensorGraph<f32, G>,
         inputs: HashMap<String, Vec<f32>>,
-    ) -> Result<Vec<f32>> {
+    ) -> Result<Vec<f32>>
+    where
+        TensorGraph<f32, G>: Clone,
+    {
         match self {
             Runtime::Cpu(executor) => executor.execute(graph, inputs),
             #[cfg(feature = "cuda")]
             Runtime::Cuda(executor) => executor.execute(graph, inputs),
+            #[cfg(feature = "cuda")]
+            Runtime::Ptx(executor) => executor.execute(graph, inputs),
         }
     }
 
@@ -255,6 +278,8 @@ impl Executor<f32> for Runtime {
             Runtime::Cpu(executor) => executor.get_gradients(graph),
             #[cfg(feature = "cuda")]
             Runtime::Cuda(executor) => executor.get_gradients(graph),
+            #[cfg(feature = "cuda")]
+            Runtime::Ptx(executor) => executor.get_gradients(graph),
         }
     }
 }

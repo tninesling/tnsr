@@ -87,8 +87,9 @@ use anyhow::{Context, Result};
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
+#[cfg(feature = "cuda")]
+pub mod ptx;
 pub mod optimizer;
-mod ptx;
 mod runtime;
 mod tile;
 
@@ -183,7 +184,9 @@ pub trait Executor<D> {
         &mut self,
         graph: &TensorGraph<D, G>,
         inputs: HashMap<String, Vec<D>>,
-    ) -> Result<Vec<D>>;
+    ) -> Result<Vec<D>>
+    where
+        TensorGraph<D, G>: Clone;
 
     /// Retrieve computed gradients for parameters.
     ///

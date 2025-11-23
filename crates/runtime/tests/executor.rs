@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use petgraph::visit::IntoNodeReferences;
 use runtime::{Executor, Runtime};
 use tensor::graph::TensorGraph;
 use tensor::{Constant, Parameter, TensorExpr};
@@ -37,6 +38,30 @@ fn create_runtime() -> Runtime {
 // ============================================================================
 // Execution Tests
 // ============================================================================
+
+#[test]
+fn forward_matmul_2x2() {
+    let mut runtime = create_runtime();
+
+    // Simple 2x2 matrix multiplication test
+    // A = [[1, 2],    B = [[5, 6],
+    //      [3, 4]]         [7, 8]]
+    // Expected C = A @ B = [[19, 22],
+    //                       [43, 50]]
+    let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+    let b = Constant::new(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2]);
+    let node = TensorExpr::from(a).matmul(b);
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // C[0,0] = 1*5 + 2*7 = 19
+    // C[0,1] = 1*6 + 2*8 = 22
+    // C[1,0] = 3*5 + 4*7 = 43
+    // C[1,1] = 3*6 + 4*8 = 50
+    let expected = vec![19.0, 22.0, 43.0, 50.0];
+    assert_approx_eq!(result, expected);
+}
 
 #[test]
 fn forward_matmul_simple() {
@@ -275,20 +300,39 @@ fn gradient_matmul_chain_rule() {
 
     let graph: TensorGraph<f32> = z.into();
     let loss_node = *graph.toposort().last().unwrap();
+    
+    eprintln!("\n=== Forward Graph ===");
+    for (idx, node) in graph.graph.node_references() {
+        let shape = graph.shapes.get(&idx).map(|s| format!("{:?}", s)).unwrap_or("N/A".to_string());
+        eprintln!("Node {:?}: {} shape {}", idx.index(), node.name(), shape);
+    }
+    
     let grad_graph = graph.with_gradients(loss_node);
+    
+    eprintln!("\n=== Gradient Graph ===");
+    for (idx, node) in grad_graph.graph.node_references() {
+        let shape = grad_graph.shapes.get(&idx).map(|s| format!("{:?}", s)).unwrap_or("N/A".to_string());
+        let inputs = grad_graph.inputs(idx);
+        eprintln!("Node {:?}: {} shape {} inputs: {:?}", idx.index(), node.name(), shape, inputs.iter().map(|i| i.index()).collect::<Vec<_>>());
+    }
+    eprintln!("\nParameter {} gradient node: {:?}\n", a_id, grad_graph.gradient_metadata().param_to_grad.get(&a_id));
 
     runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    
     let grads = runtime.get_gradients(&grad_graph);
 
     let grad_a = grads.get(&a_id).expect("Parameter gradient missing");
     assert_eq!(grad_a.len(), 4);
 
+    // Debug: print all gradient values
+    eprintln!("Gradient values for parameter {}: {:?}", a_id, grad_a);
+
     // With B=I and C=2I, z = sum(2A), so dz/dA = 2*ones
-    for &val in grad_a.iter() {
+    for (i, &val) in grad_a.iter().enumerate() {
         assert!(
             (val - 2.0).abs() < EPSILON,
-            "Expected gradient 2.0, got {}",
-            val
+            "Expected gradient 2.0, got {} at index {}",
+            val, i
         );
     }
 }
@@ -433,6 +477,268 @@ fn gradient_transpose_operation() {
             g
         );
     }
+}
+
+#[test]
+fn gradient_matmul_with_transpose() {
+    let mut runtime = create_runtime();
+
+    // Simple test: z = sum(A @ B^T)
+    // This tests the gradient pattern used in matmul backprop
+    let a = Parameter::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+    let a_id = a.id();
+    let b = Constant::new(vec![1.0, 0.0, 0.0, 1.0], vec![2, 2]); // Identity
+
+    let node = TensorExpr::from(a)
+        .matmul(TensorExpr::from(b).transpose())
+        .reduce_sum(1)
+        .reduce_sum(0);
+
+    let graph: TensorGraph<f32> = node.into();
+    let loss_node = *graph.toposort().last().unwrap();
+    
+    eprintln!("\n=== FORWARD GRAPH ===");
+    for idx in graph.toposort().iter() {
+        eprintln!("Node {:?}: {:?}", idx.index(), graph[*idx].name());
+    }
+    
+    let grad_graph = graph.with_gradients(loss_node);
+    
+    eprintln!("\n=== GRADIENT GRAPH (total {} nodes) ===", grad_graph.len());
+    for idx in grad_graph.toposort().iter() {
+        eprintln!("Node {:?}: {:?}", idx.index(), grad_graph[*idx].name());
+    }
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    
+    // Debug: Check what Node 10 contains after execution
+    eprintln!("\n=== DEBUG: Checking Node 10 after execution ===");
+    if let Some(node10_val) = runtime.get_value(petgraph::graph::NodeIndex::new(10)) {
+        eprintln!("Node 10 value: {:?}", node10_val);
+    } else {
+        eprintln!("Node 10: NOT FOUND in cache");
+    }
+    
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&a_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    eprintln!("Gradient for A @ I^T: {:?}", grad);
+
+    // A @ I^T = A, so sum(A) has gradient of all ones
+    for (i, &g) in grad.iter().enumerate() {
+        assert!(
+            (g - 1.0).abs() < EPSILON,
+            "Expected gradient 1.0, got {} at index {}",
+            g,
+            i
+        );
+    }
+}
+
+#[test]
+fn gradient_transpose_then_matmul() {
+    let mut runtime = create_runtime();
+
+    // Test: z = sum(A^T @ B) where B is a constant
+    // This tests if we can compute gradients through transpose followed by matmul
+    let a = Parameter::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+    let a_id = a.id();
+    let b = Constant::new(vec![1.0, 1.0, 1.0, 1.0], vec![2, 2]); // All ones
+
+    let node = TensorExpr::from(a)
+        .transpose()
+        .matmul(b)
+        .reduce_sum(1)
+        .reduce_sum(0);
+
+    let graph: TensorGraph<f32> = node.into();
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&a_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    eprintln!("Gradient for A^T @ ones: {:?}", grad);
+
+    // Expected gradient should be all 2.0
+    // d/dA sum(A^T @ ones) = d/dA sum([a+c, b+d], [a+c, b+d])
+    // = d/dA [2a+2c, 2b+2d] = [[2, 2], [2, 2]]
+    for (i, &g) in grad.iter().enumerate() {
+        assert!(
+            (g - 2.0).abs() < EPSILON,
+            "Expected gradient 2.0, got {} at index {}",
+            g,
+            i
+        );
+    }
+}
+
+// ============================================================================
+// Focused Tests to Isolate MatMul Bug
+// ============================================================================
+
+#[test]
+fn forward_matmul_result_reused() {
+    let mut runtime = create_runtime();
+
+    // Test: (A @ B) used in two different operations
+    // This tests if matmul result can be read multiple times
+    // C = A @ B (2x2 @ 2x2 = 2x2)
+    // D = C + C
+    let a = Constant::new(vec![1.0, 0.0, 0.0, 1.0], vec![2, 2]); // Identity
+    let b = Constant::new(vec![2.0, 0.0, 0.0, 2.0], vec![2, 2]); // 2*I
+    
+    let c = TensorExpr::from(a).matmul(b);
+    let node = c.clone() + c;
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // Expected: (I @ 2I) + (I @ 2I) = 2I + 2I = 4I
+    let mut expected = vec![0.0; 4];
+    expected[0] = 4.0;
+    expected[3] = 4.0;
+    assert_approx_eq!(result, expected);
+}
+
+#[test]
+fn forward_chained_matmuls() {
+    let mut runtime = create_runtime();
+
+    // Test: (A @ B) @ C - tests if matmul result can be input to another matmul
+    // All 2x2 matrices
+    let a = Constant::new(vec![1.0, 0.0, 0.0, 1.0], vec![2, 2]); // Identity
+    let b = Constant::new(vec![2.0, 0.0, 0.0, 2.0], vec![2, 2]); // 2*I
+    let c = Constant::new(vec![3.0, 0.0, 0.0, 3.0], vec![2, 2]); // 3*I
+    
+    let ab = TensorExpr::from(a).matmul(b);
+    let node = ab.matmul(c);
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // Expected: (I @ 2I) @ 3I = 2I @ 3I = 6I
+    let mut expected = vec![0.0; 4];
+    expected[0] = 6.0;
+    expected[3] = 6.0;
+    assert_approx_eq!(result, expected);
+}
+
+#[test]
+fn forward_transpose_2x2() {
+    let mut runtime = create_runtime();
+
+    // Test: Basic 2x2 transpose
+    // Input:  [[1, 2],    Output: [[1, 3],
+    //          [3, 4]]             [2, 4]]
+    let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+    let node = TensorExpr::from(a).transpose();
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // Row-major: [[1, 3], [2, 4]] = [1, 3, 2, 4]
+    let expected = vec![1.0, 3.0, 2.0, 4.0];
+    assert_approx_eq!(result, expected);
+}
+
+#[test]
+fn forward_transpose_2x3() {
+    let mut runtime = create_runtime();
+
+    // Test: 2x3 -> 3x2 transpose
+    // Input:  [[1, 2, 3],     Output: [[1, 4],
+    //          [4, 5, 6]]              [2, 5],
+    //                                  [3, 6]]
+    let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+    let node = TensorExpr::from(a).transpose();
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // Row-major: [[1, 4], [2, 5], [3, 6]] = [1, 4, 2, 5, 3, 6]
+    let expected = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+    assert_approx_eq!(result, expected);
+}
+
+#[test]
+fn forward_transpose_3x2() {
+    let mut runtime = create_runtime();
+
+    // Test: 3x2 -> 2x3 transpose
+    // Input:  [[1, 2],       Output: [[1, 3, 5],
+    //          [3, 4],                [2, 4, 6]]
+    //          [5, 6]]
+    let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![3, 2]);
+    let node = TensorExpr::from(a).transpose();
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // Row-major: [[1, 3, 5], [2, 4, 6]] = [1, 3, 5, 2, 4, 6]
+    let expected = vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0];
+    assert_approx_eq!(result, expected);
+}
+
+#[test]
+fn forward_transpose_double() {
+    let mut runtime = create_runtime();
+
+    // Test: transpose(transpose(A)) = A
+    let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+    let node = TensorExpr::from(a.clone()).transpose().transpose();
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // Should get back the original
+    let expected = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    assert_approx_eq!(result, expected);
+}
+
+#[test]
+fn forward_matmul_then_transpose() {
+    let mut runtime = create_runtime();
+
+    // Test: transpose(A @ B) - tests if we can transpose a matmul result
+    let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+    let b = Constant::new(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2]);
+    
+    let ab = TensorExpr::from(a).matmul(b);
+    let node = ab.transpose();
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // A @ B = [[19, 22], [43, 50]] (row-major: [19, 22, 43, 50])
+    // Transposed = [[19, 43], [22, 50]] (row-major: [19, 43, 22, 50])
+    let expected = vec![19.0, 43.0, 22.0, 50.0];
+    assert_approx_eq!(result, expected);
+}
+
+#[test]
+fn forward_matmul_with_transpose_input() {
+    let mut runtime = create_runtime();
+
+    // Test: A @ (B^T) - tests matmul with a transposed input
+    let a = Constant::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+    let b = Constant::new(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2]);
+    
+    let node = TensorExpr::from(a).matmul(TensorExpr::from(b).transpose());
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // B^T = [[5, 7], [6, 8]] (row-major: [5, 7, 6, 8])
+    // A @ B^T = [[1*5+2*6, 1*7+2*8], [3*5+4*6, 3*7+4*8]]
+    //         = [[17, 23], [39, 53]]
+    let expected = vec![17.0, 23.0, 39.0, 53.0];
+    assert_approx_eq!(result, expected);
 }
 
 #[test]

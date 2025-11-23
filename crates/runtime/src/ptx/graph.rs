@@ -466,12 +466,89 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             let zero = Operand::imm_f32(0.0);
             func.add_inst(Inst::max_f32(dest_reg, src_reg, zero));
         }
-        Stmt::Transpose { dest, src } => {
-            // TODO: Implement proper transpose with addressing logic
-            // For now, just copy src to dest as placeholder
+        Stmt::Transpose { dest, src: _, input_shape, output_shape } => {
+            // Implement 2D transpose: output[i,j] = input[j,i]
+            // For input shape [rows, cols] -> output shape [cols, rows]
+            // Each thread computes one output element
+            
+            assert_eq!(input_shape.len(), 2, "Transpose only supports 2D tensors");
+            assert_eq!(output_shape.len(), 2, "Transpose only supports 2D tensors");
+            
+            let rows = input_shape[0]; // Input rows
+            let cols = input_shape[1]; // Input cols
+            
+            assert_eq!(output_shape[0], cols, "Output rows should equal input cols");
+            assert_eq!(output_shape[1], rows, "Output cols should equal input rows");
+            
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-            let src_reg = ctx.get_or_alloc_reg(func, *src);
-            func.add_inst(Inst::mov_f32(dest_reg, src_reg));
+            
+            // Get parameter pointers for direct memory access
+            let src_ptr = ctx.param_ptrs.get("input")
+                .expect("Input parameter not found").clone();
+            
+            // Get thread index (which output element this thread computes)
+            let tid = func.add_u64_register();
+            func.add_inst(Inst::convert_u64_u32(tid.clone(), super::instructions::THREAD_ID.x.clone()));
+            
+            // Calculate output position (out_row, out_col) from thread id
+            // tid = out_row * output_cols + out_col
+            // out_row = tid / output_cols
+            // out_col = tid % output_cols
+            
+            let out_row = func.add_u64_register();
+            func.add_inst(Inst::div_u64(
+                out_row.clone(),
+                tid.clone(),
+                Operand::imm_u64(rows as u64), // output_cols = input_rows
+            ));
+            
+            let temp = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                temp.clone(),
+                out_row.clone(),
+                Operand::imm_u64(rows as u64),
+            ));
+            
+            let out_col = func.add_u64_register();
+            func.add_inst(Inst::sub_u64(
+                out_col.clone(),
+                tid.clone(),
+                temp,
+            ));
+            
+            // Map to input position: input[out_col, out_row]
+            // input_offset = out_col * input_cols + out_row
+            
+            let input_row_offset = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                input_row_offset.clone(),
+                out_col.clone(),
+                Operand::imm_u64(cols as u64), // input_cols
+            ));
+            
+            let input_offset = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                input_offset.clone(),
+                input_row_offset,
+                out_row,
+            ));
+            
+            // Load from input[input_offset]
+            let byte_offset = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                byte_offset.clone(),
+                input_offset,
+                Operand::imm_u64(4), // sizeof(f32)
+            ));
+            
+            let input_addr = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                input_addr.clone(),
+                src_ptr,
+                byte_offset,
+            ));
+            
+            func.add_inst(Inst::load_global_scalar_f32(dest_reg, input_addr));
         }
         Stmt::BroadcastAxis {
             dest,
@@ -557,6 +634,12 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 ));
                 
                 col
+            } else if output_shape.len() == 1 && *axis == 0 {
+                // 1D broadcast along axis 0: [1] -> [N]
+                // All output elements map to input[0]
+                let offset = func.add_u64_register();
+                func.add_inst(Inst::mov_u64(offset.clone(), Operand::imm_u64(0)));
+                offset
             } else {
                 // Fallback: assume simple 1:1 mapping
                 let offset = func.add_u64_register();

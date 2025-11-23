@@ -61,7 +61,6 @@ impl PtxExecutor {
         }
 
         let ptx_src = module.to_string();
-        eprintln!("=== Generated PTX ===\n{}\n=== End PTX ===", ptx_src);
 
         let cuda_module = self
             .device
@@ -109,6 +108,9 @@ impl PtxExecutor {
             .as_ref()
             .context("No PTX graph available. Call compile() first.")?;
 
+        // Clear values from previous execution
+        self.values.clear();
+
         let order = graph.toposort();
 
         for node_idx in order.iter() {
@@ -152,7 +154,7 @@ impl PtxExecutor {
                         .context("Failed to copy parameter to CUDA device")?;
                     device_data
                 }
-                TensorGraphNode::Unary { op } => {
+                TensorGraphNode::Unary { op: _ } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 
                     let ins = graph.inputs(*node_idx);
@@ -175,7 +177,7 @@ impl PtxExecutor {
 
                     out
                 }
-                TensorGraphNode::Binary { op } => {
+                TensorGraphNode::Binary { op: _ } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 
                     let ins = graph.inputs(*node_idx);
@@ -305,18 +307,48 @@ impl PtxExecutor {
                         );
                     }
 
-                    let out_len = m * n;
+                    const TILE_SIZE: usize = 16;
+                    
+                    // Pad dimensions to multiples of TILE_SIZE
+                    let m_padded = ((m + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+                    let n_padded = ((n + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+                    let k_padded = ((k_a + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+                    
                     let stream = self.device.default_stream();
-                    let mut out = stream.alloc_zeros::<f32>(out_len).unwrap();
+                    
+                    // Allocate padded matrices (zero-initialized)
+                    let mut a_padded = stream.alloc_zeros::<f32>(m_padded * k_padded).unwrap();
+                    stream.synchronize().unwrap();
+                    let mut b_padded = stream.alloc_zeros::<f32>(k_padded * n_padded).unwrap();
+                    stream.synchronize().unwrap();
+                    
+                    // Copy original data into padded matrices (row by row to handle padding)
+                    for i in 0..m {
+                        let src_offset = i * k_a;
+                        let dst_offset = i * k_padded;
+                        stream.memcpy_dtod(
+                            &a.slice(src_offset..(src_offset + k_a)),
+                            &mut a_padded.slice_mut(dst_offset..(dst_offset + k_a))
+                        ).unwrap();
+                    }
+                    
+                    for i in 0..k_a {
+                        let src_offset = i * n;
+                        let dst_offset = i * n_padded;
+                        stream.memcpy_dtod(
+                            &b.slice(src_offset..(src_offset + n)),
+                            &mut b_padded.slice_mut(dst_offset..(dst_offset + n))
+                        ).unwrap();
+                    }
+                    
+                    // Allocate padded output
+                    let mut out_padded = stream.alloc_zeros::<f32>(m_padded * n_padded).unwrap();
 
                     let f = module.load_function(kernel_name)?;
 
-                    // Calculate grid dimensions based on 16x16 tiles
-                    // Each block computes a 16x16 tile of the output matrix
-                    // grid_x = number of column tiles, grid_y = number of row tiles
-                    const TILE_SIZE: usize = 16;
-                    let grid_x = (n + TILE_SIZE - 1) / TILE_SIZE;  // Columns
-                    let grid_y = (m + TILE_SIZE - 1) / TILE_SIZE;  // Rows
+                    // Calculate grid dimensions based on padded sizes
+                    let grid_x = n_padded / TILE_SIZE;
+                    let grid_y = m_padded / TILE_SIZE;
 
                     let cfg = LaunchConfig {
                         grid_dim: (grid_x as u32, grid_y as u32, 1),
@@ -324,11 +356,40 @@ impl PtxExecutor {
                         shared_mem_bytes: 0,
                     };
                     let mut launcher = stream.launch_builder(&f);
-                    launcher.arg(a);
-                    launcher.arg(b);
-                    launcher.arg(&mut out);
+                    launcher.arg(&a_padded);
+                    launcher.arg(&b_padded);
+                    launcher.arg(&mut out_padded);
                     unsafe { launcher.launch(cfg) }
                         .with_context(|| format!("CUDA {} kernel launch failed", kernel_name))?;
+
+                    // Extract the unpadded result from the padded output
+                    let out_len = m * n;
+                    
+                    // Copy padded output to host
+                    let mut out_padded_host = vec![0.0f32; out_padded.len()];
+                    stream.memcpy_dtoh(&out_padded, &mut out_padded_host).unwrap();
+                    stream.synchronize().unwrap();
+                    
+                    // Extract unpadded data on host
+                    let mut out_host = vec![0.0f32; out_len];
+                    for i in 0..m {
+                        let src_offset = i * n_padded;
+                        let dst_offset = i * n;
+                        out_host[dst_offset..(dst_offset + n)]
+                            .copy_from_slice(&out_padded_host[src_offset..(src_offset + n)]);
+                    }
+                    
+                    // IMPORTANT: Explicitly drop padded buffers BEFORE allocating final output
+                    // This ensures CUDA doesn't reuse their memory for the output buffer
+                    drop(a_padded);
+                    drop(b_padded);
+                    drop(out_padded);
+                    stream.synchronize().unwrap(); // Wait for async frees to complete
+                    
+                    // Allocate final output buffer and copy unpadded data
+                    let mut out = stream.alloc_zeros::<f32>(out_len).unwrap();
+                    stream.memcpy_htod(&out_host, &mut out).unwrap();
+                    stream.synchronize().unwrap();
 
                     out
                 }
@@ -401,7 +462,7 @@ impl PtxExecutor {
 
                     let len = input.len();
                     let stream = self.device.default_stream();
-                    let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+                    let mut out = unsafe { stream.alloc::<f32>(len).unwrap() };
 
                     let f = module.load_function(kernel_name)?;
                     let cfg = LaunchConfig::for_num_elems(len as u32);
@@ -412,9 +473,6 @@ impl PtxExecutor {
                         .with_context(|| format!("CUDA {} kernel launch failed", kernel_name))?;
 
                     out
-                }
-                _ => {
-                    anyhow::bail!("Unsupported operation: {}", node.name());
                 }
             };
 

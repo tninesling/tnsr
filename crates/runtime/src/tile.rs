@@ -117,6 +117,8 @@ pub enum Stmt {
     Transpose {
         dest: TileVar,
         src: TileVar,
+        input_shape: Vec<usize>,
+        output_shape: Vec<usize>,
     },
 
     /// Broadcast along axis
@@ -385,8 +387,8 @@ impl TileIRBuilder {
         self.stmts.push(Stmt::Relu { dest, src });
     }
 
-    pub fn transpose(&mut self, dest: TileVar, src: TileVar) {
-        self.stmts.push(Stmt::Transpose { dest, src });
+    pub fn transpose(&mut self, dest: TileVar, src: TileVar, input_shape: Vec<usize>, output_shape: Vec<usize>) {
+        self.stmts.push(Stmt::Transpose { dest, src, input_shape, output_shape });
     }
 
     pub fn broadcast_axis(&mut self, dest: TileVar, src: TileVar, axis: usize, input_shape: Vec<usize>, output_shape: Vec<usize>) {
@@ -461,7 +463,7 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
         use petgraph::graph::NodeIndex;
         use std::collections::HashMap;
 
-        // Pre-compute input shapes for MatMul, BroadcastAxis, and ReduceAxis nodes
+        // Pre-compute input shapes for MatMul, BroadcastAxis, ReduceAxis, and Transpose nodes
         let mut op_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
         for idx in tensor_graph.graph.node_indices() {
             if matches!(
@@ -469,6 +471,7 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
                 TensorGraphNode::MatMul
                     | TensorGraphNode::BroadcastAxis { .. }
                     | TensorGraphNode::ReduceAxis { .. }
+                    | TensorGraphNode::Transpose
             ) {
                 let inputs: Vec<Vec<usize>> = tensor_graph
                     .graph
@@ -512,9 +515,17 @@ impl TileGraph {
                 let m = shape[0];
                 let n = shape[1];
                 let k = input_shapes[0][1];
-                Self::lower_matmul(m, n, k, false, false)
+                // Pad dimensions to multiples of TILE_SIZE (16)
+                const TILE_SIZE: usize = 16;
+                let m_padded = ((m + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+                let n_padded = ((n + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+                let k_padded = ((k + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+                Self::lower_matmul(m_padded, n_padded, k_padded, false, false)
             }
-            TensorGraphNode::Transpose => Self::lower_transpose(shape),
+            TensorGraphNode::Transpose => {
+                let input_shape = input_shapes.get(0).map(|s| s.to_vec()).unwrap_or_default();
+                Self::lower_transpose(input_shape, shape)
+            }
             TensorGraphNode::BroadcastAxis { axis } => {
                 let input_shape = input_shapes.get(0).map(|s| s.to_vec()).unwrap_or_default();
                 Self::lower_broadcast_axis(axis, input_shape, shape)
@@ -769,19 +780,30 @@ impl TileGraph {
         builder.finish()
     }
 
-    fn lower_transpose(shape: &[usize]) -> TileIR {
+    fn lower_transpose(input_shape: Vec<usize>, output_shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("transpose");
         builder.add_param("input", DType::F32, true);
         builder.add_param("output", DType::F32, false);
 
-        let total_elements: usize = shape.iter().product();
+        // For now, just handle the simple case of 2D transpose
+        // TODO: generalize to arbitrary dimensional transpose
+        assert_eq!(input_shape.len(), 2, "Transpose only supports 2D tensors for now");
+        assert_eq!(output_shape.len(), 2, "Transpose only supports 2D tensors for now");
+        assert_eq!(input_shape[0], output_shape[1], "Input rows should equal output cols");
+        assert_eq!(input_shape[1], output_shape[0], "Input cols should equal output rows");
+
+        let total_elements: usize = output_shape.iter().product();
         let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
         let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
 
-        builder.load_global_to_shared(tile_in, "input", Expr::Const(0), Expr::Const(0));
-        builder.transpose(tile_out, tile_in);
-        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+        // Don't load here - Transpose will load directly from global memory with transposed addressing
+        // Each thread handles one output element
+        builder.transpose(tile_out, tile_in, input_shape.clone(), output_shape.to_vec());
+        
+        // Each thread writes its result using its thread index
+        let offset = Expr::ThreadIdx(Dim::X);
+        builder.store("output", tile_out, offset, Expr::Const(0));
 
         builder.finish()
     }

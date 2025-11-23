@@ -23,7 +23,7 @@
 //! Most users should use [`Runtime`] which automatically selects the best available backend:
 //!
 //! ```rust
-//! use runtime::Runtime;
+//! use runtime::{Executor, Runtime};
 //! use tensor::{TensorExpr, graph::TensorGraph};
 //! use std::collections::HashMap;
 //!
@@ -77,7 +77,7 @@
 //! let mut inputs = HashMap::new();
 //! inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 //!
-//! let result = executor.forward(&graph, inputs).unwrap();
+//! let result = executor.execute(&graph, inputs).unwrap();
 //! assert_eq!(result.len(), 6);
 //! ```
 
@@ -88,7 +88,10 @@ use anyhow::{Context, Result};
 #[cfg(feature = "cuda")]
 pub mod cuda;
 pub mod optimizer;
+#[cfg(feature = "cuda")]
+pub mod ptx;
 mod runtime;
+mod tile;
 
 pub use runtime::{Backend, Runtime};
 
@@ -181,7 +184,9 @@ pub trait Executor<D> {
         &mut self,
         graph: &TensorGraph<D, G>,
         inputs: HashMap<String, Vec<D>>,
-    ) -> Result<Vec<D>>;
+    ) -> Result<Vec<D>>
+    where
+        TensorGraph<D, G>: Clone;
 
     /// Retrieve computed gradients for parameters.
     ///
@@ -210,7 +215,7 @@ pub trait Executor<D> {
 /// # Example
 ///
 /// ```rust
-/// use runtime::Runtime;
+/// use runtime::{Executor, Runtime};
 /// use tensor::{TensorExpr, graph::TensorGraph};
 /// use std::collections::HashMap;
 ///
@@ -416,26 +421,20 @@ impl Executor<f32> for SimpleExecutor {
                 }
                 TensorGraphNode::Mask => {
                     let _span = trace_span!("mask", node = node_idx.index()).entered();
-                    eprintln!("TensorGraphNode::Mask handler");
                     let ins = graph.inputs(*node_idx);
-                    eprintln!("ins[0]={}, ins[1]={}", ins[0].index(), ins[1].index());
                     let values = self.values.get(&ins[0]).with_context(|| {
                         format!("Value for node {} not computed", ins[0].index())
                     })?;
-                    eprintln!("values={:?}", values);
                     let condition = self.values.get(&ins[1]).with_context(|| {
                         format!("Condition for node {} not computed", ins[1].index())
                     })?;
-                    eprintln!("condition={:?}", condition);
                     anyhow::ensure!(
                         values.len() == condition.len(),
                         "Mask op shape mismatch: {} vs {}",
                         values.len(),
                         condition.len()
                     );
-                    let result = self.mask(values, condition);
-                    eprintln!("Mask node result={:?}", result);
-                    result
+                    self.mask(values, condition)
                 }
             };
             self.values.insert(*node_idx, result);

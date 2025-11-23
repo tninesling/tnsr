@@ -250,14 +250,13 @@ impl CudaExecutor {
         let _span = trace_span!("matmul").entered();
         let stream = self.device.default_stream();
 
-        let out_len = m * n;
         let mut out = stream.alloc_zeros::<f32>(m * n).unwrap();
 
         let f = self
             .module
             .load_function("matmul")
             .expect("Failed to load matmul function");
-        let cfg = LaunchConfig::for_num_elems(out_len as u32);
+        let cfg = LaunchConfig::for_num_elems((m * n) as u32);
         let lhs_len_u64 = lhs.len() as u64;
         let rhs_len_u64 = rhs.len() as u64;
         let m_u64 = m as u64;

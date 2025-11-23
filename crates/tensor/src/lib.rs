@@ -43,8 +43,6 @@
 //! ```
 
 pub mod graph;
-pub mod ptx;
-pub mod tile;
 
 use std::ops::Add;
 use std::ops::Div;

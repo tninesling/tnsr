@@ -124,6 +124,8 @@ pub enum Stmt {
         dest: TileVar,
         src: TileVar,
         axis: usize,
+        input_shape: Vec<usize>,
+        output_shape: Vec<usize>,
     },
 
     /// Reduce along axis
@@ -132,6 +134,8 @@ pub enum Stmt {
         src: TileVar,
         op: ReduceOp,
         axis: usize,
+        input_shape: Vec<usize>,
+        output_shape: Vec<usize>,
     },
 
     /// Greater than comparison
@@ -385,16 +389,18 @@ impl TileIRBuilder {
         self.stmts.push(Stmt::Transpose { dest, src });
     }
 
-    pub fn broadcast_axis(&mut self, dest: TileVar, src: TileVar, axis: usize) {
-        self.stmts.push(Stmt::BroadcastAxis { dest, src, axis });
+    pub fn broadcast_axis(&mut self, dest: TileVar, src: TileVar, axis: usize, input_shape: Vec<usize>, output_shape: Vec<usize>) {
+        self.stmts.push(Stmt::BroadcastAxis { dest, src, axis, input_shape, output_shape });
     }
 
-    pub fn reduce_axis(&mut self, dest: TileVar, src: TileVar, op: ReduceOp, axis: usize) {
+    pub fn reduce_axis(&mut self, dest: TileVar, src: TileVar, op: ReduceOp, axis: usize, input_shape: Vec<usize>, output_shape: Vec<usize>) {
         self.stmts.push(Stmt::ReduceAxis {
             dest,
             src,
             op,
             axis,
+            input_shape,
+            output_shape,
         });
     }
 
@@ -455,16 +461,21 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
         use petgraph::graph::NodeIndex;
         use std::collections::HashMap;
 
-        // Pre-compute input shapes for MatMul nodes
-        let mut matmul_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
+        // Pre-compute input shapes for MatMul, BroadcastAxis, and ReduceAxis nodes
+        let mut op_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
         for idx in tensor_graph.graph.node_indices() {
-            if matches!(tensor_graph.graph[idx], TensorGraphNode::MatMul) {
+            if matches!(
+                tensor_graph.graph[idx],
+                TensorGraphNode::MatMul
+                    | TensorGraphNode::BroadcastAxis { .. }
+                    | TensorGraphNode::ReduceAxis { .. }
+            ) {
                 let inputs: Vec<Vec<usize>> = tensor_graph
                     .graph
                     .neighbors_directed(idx, petgraph::Direction::Incoming)
                     .filter_map(|pred_idx| tensor_graph.shapes.get(&pred_idx).cloned())
                     .collect();
-                matmul_input_shapes.insert(idx, inputs);
+                op_input_shapes.insert(idx, inputs);
             }
         }
 
@@ -472,8 +483,8 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
             graph: tensor_graph.graph.map_owned(
                 |idx, node| {
                     let shape = tensor_graph.shapes.get(&idx).unwrap();
-                    // Get input shapes for MatMul
-                    let input_shapes = matmul_input_shapes
+                    // Get input shapes for operations that need them
+                    let input_shapes = op_input_shapes
                         .get(&idx)
                         .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
                         .unwrap_or_default();
@@ -504,8 +515,14 @@ impl TileGraph {
                 Self::lower_matmul(m, n, k, false, false)
             }
             TensorGraphNode::Transpose => Self::lower_transpose(shape),
-            TensorGraphNode::BroadcastAxis { axis } => Self::lower_broadcast_axis(axis, shape),
-            TensorGraphNode::ReduceAxis { op, axis } => Self::lower_reduce_axis(op, axis, shape),
+            TensorGraphNode::BroadcastAxis { axis } => {
+                let input_shape = input_shapes.get(0).map(|s| s.to_vec()).unwrap_or_default();
+                Self::lower_broadcast_axis(axis, input_shape, shape)
+            }
+            TensorGraphNode::ReduceAxis { op, axis } => {
+                let input_shape = input_shapes.get(0).map(|s| s.to_vec()).unwrap_or_default();
+                Self::lower_reduce_axis(op, axis, input_shape, shape)
+            }
             TensorGraphNode::Gt => Self::lower_gt(shape),
             TensorGraphNode::Mask => Self::lower_mask(shape),
         }
@@ -702,7 +719,7 @@ impl TileGraph {
         let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
 
         // Each thread processes one element using thread index
-        let offset: Expr = Expr::ThreadIdx(Dim::X) * 4_i64;
+        let offset: Expr = Expr::ThreadIdx(Dim::X);
         builder.load_global_to_shared(tile_in, "input", offset.clone(), Expr::Const(0));
 
         match op {
@@ -736,7 +753,7 @@ impl TileGraph {
         let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
 
         // Each thread processes one element using thread index
-        let offset: Expr = Expr::ThreadIdx(Dim::X) * 4_i64;
+        let offset: Expr = Expr::ThreadIdx(Dim::X);
         builder.load_global_to_shared(tile_a, "a", offset.clone(), Expr::Const(0));
         builder.load_global_to_shared(tile_b, "b", offset.clone(), Expr::Const(0));
 
@@ -769,43 +786,50 @@ impl TileGraph {
         builder.finish()
     }
 
-    fn lower_broadcast_axis(axis: usize, shape: &[usize]) -> TileIR {
+    fn lower_broadcast_axis(axis: usize, input_shape: Vec<usize>, output_shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("broadcast_axis");
         builder.add_param("input", DType::F32, true);
         builder.add_param("output", DType::F32, false);
 
-        let total_elements: usize = shape.iter().product();
+        let total_elements: usize = output_shape.iter().product();
         let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
         let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
 
-        builder.load_global_to_shared(tile_in, "input", Expr::Const(0), Expr::Const(0));
-        builder.broadcast_axis(tile_out, tile_in, axis);
-        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+        // Don't load here - BroadcastAxis will load directly from global memory
+        // Each thread handles one output element
+        builder.broadcast_axis(tile_out, tile_in, axis, input_shape, output_shape.to_vec());
+        
+        // Each thread writes its result using its thread index
+        let offset = Expr::ThreadIdx(Dim::X);
+        builder.store("output", tile_out, offset, Expr::Const(0));
 
         builder.finish()
     }
 
-    fn lower_reduce_axis(op: tensor::ReduceOp, axis: usize, shape: &[usize]) -> TileIR {
+    fn lower_reduce_axis(op: tensor::ReduceOp, axis: usize, input_shape: Vec<usize>, output_shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("reduce_axis");
         builder.add_param("input", DType::F32, true);
         builder.add_param("output", DType::F32, false);
 
-        let total_elements: usize = shape.iter().product();
+        let total_elements: usize = output_shape.iter().product();
         let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
         let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
 
-        builder.load_global_to_shared(tile_in, "input", Expr::Const(0), Expr::Const(0));
+        // Don't load here - ReduceAxis will load directly from global memory
+        // Each thread handles one output element
 
         let tile_op = match op {
             tensor::ReduceOp::Sum => ReduceOp::Sum,
             tensor::ReduceOp::Max => ReduceOp::Max,
             tensor::ReduceOp::Mean => ReduceOp::Mean,
         };
-        builder.reduce_axis(tile_out, tile_in, tile_op, axis);
+        builder.reduce_axis(tile_out, tile_in, tile_op, axis, input_shape, output_shape.to_vec());
 
-        builder.store("output", tile_out, Expr::Const(0), Expr::Const(0));
+        // Each thread writes its result using its thread index
+        let offset = Expr::ThreadIdx(Dim::X);
+        builder.store("output", tile_out, offset, Expr::Const(0));
 
         builder.finish()
     }
@@ -823,7 +847,7 @@ impl TileGraph {
         let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
 
         // Each thread processes one element using thread index
-        let offset: Expr = Expr::ThreadIdx(Dim::X) * 4_i64;
+        let offset: Expr = Expr::ThreadIdx(Dim::X);
         builder.load_global_to_shared(tile_a, "a", offset.clone(), Expr::Const(0));
         builder.load_global_to_shared(tile_b, "b", offset.clone(), Expr::Const(0));
         builder.gt(tile_out, tile_a, tile_b);
@@ -845,7 +869,7 @@ impl TileGraph {
         let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
 
         // Each thread processes one element using thread index
-        let offset: Expr = Expr::ThreadIdx(Dim::X) * 4_i64;
+        let offset: Expr = Expr::ThreadIdx(Dim::X);
         builder.load_global_to_shared(tile_values, "values", offset.clone(), Expr::Const(0));
         builder.load_global_to_shared(tile_cond, "condition", offset.clone(), Expr::Const(0));
         builder.mask(tile_out, tile_values, tile_cond);

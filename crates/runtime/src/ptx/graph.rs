@@ -71,6 +71,8 @@ struct LoweringContext {
     tile_dims: HashMap<TileVar, (usize, usize)>,
     /// Maps register tile vars to their shared memory source (for LoadSharedToReg)
     reg_to_shared: HashMap<TileVar, TileVar>,
+    /// Counter for generating unique labels
+    label_counter: usize,
 }
 
 impl LoweringContext {
@@ -83,6 +85,7 @@ impl LoweringContext {
             shared_mem_offset: 0,
             tile_dims: HashMap::new(),
             reg_to_shared: HashMap::new(),
+            label_counter: 0,
         }
     }
 
@@ -353,55 +356,92 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             func.add_inst(Inst::mov_u32(tid_y.clone(), super::instructions::THREAD_ID.y.clone()));
             func.add_inst(Inst::mov_u32(tid_x.clone(), super::instructions::THREAD_ID.x.clone()));
             
-            // Loop over k dimension: for (k = 0; k < tile_k; k++)
-            for k in 0..tile_k {
-                // Load A[threadIdx.y][k] from shared memory
-                // Offset in elements = threadIdx.y * a_cols + k
-                let a_offset = func.add_u64_register();
-                let ty_u64 = func.add_u64_register();
-                func.add_inst(Inst::convert_u64_u32(ty_u64.clone(), tid_y.clone()));
-                func.add_inst(Inst::mul_u64(a_offset.clone(), ty_u64, Operand::imm_u64(*a_cols as u64)));
-                let a_k_offset = func.add_u64_register();
-                func.add_inst(Inst::add_u64(a_k_offset.clone(), a_offset, Operand::imm_u64(k as u64)));
-                
-                // Byte offset = element offset * 4
-                let a_byte_offset = func.add_u64_register();
-                func.add_inst(Inst::mul_u64(a_byte_offset.clone(), a_k_offset, Operand::imm_u64(4)));
-                
-                // Address = base + byte_offset
-                let a_addr = func.add_u64_register();
-                func.add_inst(Inst::add_u64(a_addr.clone(), a_ptr.clone(), a_byte_offset));
-                
-                // Load A element
-                let a_val = func.add_f32_register();
-                func.add_inst(Inst::load_shared_scalar_f32(a_val.clone(), a_addr));
-                
-                // Load B[k][threadIdx.x] from shared memory
-                // Offset in elements = k * b_cols + threadIdx.x
-                let b_offset = func.add_u64_register();
-                func.add_inst(Inst::mul_u64(b_offset.clone(), Operand::imm_u64(k as u64), Operand::imm_u64(*b_cols as u64)));
-                let tx_u64 = func.add_u64_register();
-                func.add_inst(Inst::convert_u64_u32(tx_u64.clone(), tid_x.clone()));
-                let b_kx_offset = func.add_u64_register();
-                func.add_inst(Inst::add_u64(b_kx_offset.clone(), b_offset, tx_u64));
-                
-                // Byte offset = element offset * 4
-                let b_byte_offset = func.add_u64_register();
-                func.add_inst(Inst::mul_u64(b_byte_offset.clone(), b_kx_offset, Operand::imm_u64(4)));
-                
-                // Address = base + byte_offset
-                let b_addr = func.add_u64_register();
-                func.add_inst(Inst::add_u64(b_addr.clone(), b_ptr.clone(), b_byte_offset));
-                
-                // Load B element
-                let b_val = func.add_f32_register();
-                func.add_inst(Inst::load_shared_scalar_f32(b_val.clone(), b_addr));
-                
-                // Multiply and accumulate: dest += a_val * b_val
-                let prod = func.add_f32_register();
-                func.add_inst(Inst::mul_f32(prod.clone(), a_val, b_val));
-                func.add_inst(Inst::add_f32(dest_reg.clone(), dest_reg.clone(), prod));
-            }
+            // Hoist invariant computations outside the loop
+            // Convert thread indices to u64 once
+            let tid_y_u64 = func.add_u64_register();
+            let tid_x_u64 = func.add_u64_register();
+            func.add_inst(Inst::convert_u64_u32(tid_y_u64.clone(), tid_y.clone()));
+            func.add_inst(Inst::convert_u64_u32(tid_x_u64.clone(), tid_x.clone()));
+            
+            // Compute A row base offset: threadIdx.y * a_cols * 4 (in bytes)
+            let a_row_base = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(a_row_base.clone(), tid_y_u64.clone(), Operand::imm_u64(*a_cols as u64)));
+            func.add_inst(Inst::mul_u64(a_row_base.clone(), a_row_base.clone(), Operand::imm_u64(4)));
+            let a_row_ptr = func.add_u64_register();
+            func.add_inst(Inst::add_u64(a_row_ptr.clone(), a_ptr.clone(), a_row_base));
+            
+            // Compute B column base offset: threadIdx.x * 4 (in bytes)
+            let b_col_base = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(b_col_base.clone(), tid_x_u64.clone(), Operand::imm_u64(4)));
+            let b_col_ptr = func.add_u64_register();
+            func.add_inst(Inst::add_u64(b_col_ptr.clone(), b_ptr.clone(), b_col_base));
+            
+            // Reusable registers for the loop
+            let a_addr = func.add_u64_register();
+            let b_addr = func.add_u64_register();
+            let a_val = func.add_f32_register();
+            let b_val = func.add_f32_register();
+            let prod = func.add_f32_register();
+            
+            // Loop over k dimension using PTX control flow instead of unrolling
+            // for (k = 0; k < tile_k; k++)
+            let k_idx = func.add_i32_register();
+            let k_limit = func.add_i32_register();
+            
+            // Initialize k = 0
+            func.add_inst(Inst::mov_i32(k_idx.clone(), Operand::imm_u64(0)));
+            // Load limit into register
+            func.add_inst(Inst::mov_i32(k_limit.clone(), Operand::imm_u64(tile_k as u64)));
+            
+            // Loop start label
+            let loop_start = format!("matmul_loop_start_{}", ctx.label_counter);
+            let loop_end = format!("matmul_loop_end_{}", ctx.label_counter);
+            ctx.label_counter += 1;
+            
+            func.add_inst(Inst::Label(loop_start.clone()));
+            
+            // Check loop condition: setp.ge sets pred when k >= tile_k (exit condition)
+            let exit_pred = func.add_predicate_register();
+            func.add_inst(Inst::SetpI32(super::instructions::SetpInst::new(
+                exit_pred.clone(), 
+                k_idx.clone(), 
+                k_limit.clone(), 
+                super::instructions::CompareOp::Ge
+            )));
+            func.add_inst(Inst::Bra { condition: exit_pred, target: loop_end.clone() });
+            
+            // Loop body:
+            // Convert k to u64 for address calculations
+            let k_u64 = func.add_u64_register();
+            func.add_inst(Inst::convert_u64_i32(k_u64.clone(), k_idx.clone()));
+            
+            // Load A[threadIdx.y][k] from shared memory
+            // Address = a_row_ptr + k * 4
+            let k_offset_a = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(k_offset_a.clone(), k_u64.clone(), Operand::imm_u64(4)));
+            func.add_inst(Inst::add_u64(a_addr.clone(), a_row_ptr.clone(), k_offset_a));
+            func.add_inst(Inst::load_shared_scalar_f32(a_val.clone(), a_addr.clone()));
+            
+            // Load B[k][threadIdx.x] from shared memory
+            // Address = b_col_ptr + k * b_cols * 4
+            let k_offset_b = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(k_offset_b.clone(), k_u64.clone(), Operand::imm_u64(*b_cols as u64)));
+            func.add_inst(Inst::mul_u64(k_offset_b.clone(), k_offset_b.clone(), Operand::imm_u64(4)));
+            func.add_inst(Inst::add_u64(b_addr.clone(), b_col_ptr.clone(), k_offset_b));
+            func.add_inst(Inst::load_shared_scalar_f32(b_val.clone(), b_addr.clone()));
+            
+            // Multiply and accumulate: dest += a_val * b_val
+            func.add_inst(Inst::mul_f32(prod.clone(), a_val.clone(), b_val.clone()));
+            func.add_inst(Inst::add_f32(dest_reg.clone(), dest_reg.clone(), prod.clone()));
+            
+            // Increment k
+            func.add_inst(Inst::add_i32(k_idx.clone(), k_idx.clone(), Operand::imm_i32(1)));
+            
+            // Branch back to loop start
+            func.add_inst(Inst::BraUni { target: loop_start });
+            
+            // Loop end label
+            func.add_inst(Inst::Label(loop_end));
         }
         Stmt::Add { dest, a, b } => {
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
@@ -1506,5 +1546,35 @@ mod tests {
             "\n========== Realistic Kernel PTX ==========\n{}\n==========================================",
             ptx_str
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn print_matmul_256x256_ptx() {
+        use tensor::{Constant, TensorExpr};
+        use petgraph::visit::IntoNodeReferences;
+        use crate::ptx::Module;
+
+        let n = 256;
+        let shape = vec![n, n];
+        let a = Constant::new(vec![1.0f32; n * n], shape.clone());
+        let b = Constant::new(vec![0.5f32; n * n], shape.clone());
+        let mut graph = tensor::graph::TensorGraph::<f32>::new();
+        let expr = TensorExpr::from(a.clone()).matmul(TensorExpr::from(b.clone()));
+        expr.lower_to_graph(&mut graph);
+
+        // Convert to TileGraph, then PtxGraph
+        let tile_graph: crate::tile::TileGraph = graph.into();
+        let ptx_graph: PtxGraph = tile_graph.into();
+
+        let mut module = Module::new();
+
+        // Add all functions from the graph
+        for (_node_idx, function) in ptx_graph.graph.node_references() {
+            module.add_function(function.clone());
+        }
+
+        // Print the PTX
+        println!("\n========== 256x256 MatMul PTX ==========\n{}\n==========================================", module.to_string());
     }
 }

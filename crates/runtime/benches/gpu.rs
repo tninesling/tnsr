@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
@@ -5,13 +7,15 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use runtime::Executor;
 use runtime::cuda::CudaExecutor;
+use runtime::ptx::PtxExecutor;
 use tensor::Constant;
 use tensor::TensorExpr;
 
 pub fn benches(c: &mut Criterion) {
-    let sizes: [usize; 2] = [32, 256];
+    let sizes: [usize; 4] = [32, 256, 512, 1024];
 
-    // NOTE: These benchmarks use CudaExecutor directly to measure GPU-only performance.
+    // NOTE: These benchmarks compare CudaExecutor (static PTX) vs PtxExecutor (tiled codegen).
+    // CudaExecutor uses pre-compiled PTX kernels, while PtxExecutor compiles graphs to PTX.
     // For application code, prefer using Runtime::new() or Runtime::with_backend(Backend::Cuda).
     // Example:
     //   let mut runtime = Runtime::with_backend(Backend::Cuda).unwrap();
@@ -29,17 +33,28 @@ pub fn benches(c: &mut Criterion) {
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
             let expr = -TensorExpr::from(a.clone());
             expr.lower_to_graph(&mut graph);
+            let graph = Arc::new(graph);
 
-            let mut exec = CudaExecutor::new();
-            group.bench_with_input(
-                BenchmarkId::from_parameter(format!("{}x{}", n, n)),
-                &n,
-                move |b, &_| {
+            {
+                let graph_cuda = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_cuda, Default::default()));
                     });
-                },
-            );
+                });
+            }
+
+            {
+                let graph_ptx = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                    });
+                });
+            }
         }
         group.finish();
     }
@@ -56,17 +71,28 @@ pub fn benches(c: &mut Criterion) {
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
             let expr = TensorExpr::from(a.clone()).exp();
             expr.lower_to_graph(&mut graph);
+            let graph = Arc::new(graph);
 
-            let mut exec = CudaExecutor::new();
-            group.bench_with_input(
-                BenchmarkId::from_parameter(format!("{}x{}", n, n)),
-                &n,
-                move |b, &_| {
+            {
+                let graph_cuda = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_cuda, Default::default()));
                     });
-                },
-            );
+                });
+            }
+
+            {
+                let graph_ptx = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                    });
+                });
+            }
         }
         group.finish();
     }
@@ -83,17 +109,28 @@ pub fn benches(c: &mut Criterion) {
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
             let expr = TensorExpr::from(a.clone()).log();
             expr.lower_to_graph(&mut graph);
+            let graph = Arc::new(graph);
 
-            let mut exec = CudaExecutor::new();
-            group.bench_with_input(
-                BenchmarkId::from_parameter(format!("{}x{}", n, n)),
-                &n,
-                move |b, &_| {
+            {
+                let graph_cuda = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_cuda, Default::default()));
                     });
-                },
-            );
+                });
+            }
+
+            {
+                let graph_ptx = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                    });
+                });
+            }
         }
         group.finish();
     }
@@ -110,17 +147,28 @@ pub fn benches(c: &mut Criterion) {
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
             let expr = TensorExpr::from(a.clone()).relu();
             expr.lower_to_graph(&mut graph);
+            let graph = Arc::new(graph);
 
-            let mut exec = CudaExecutor::new();
-            group.bench_with_input(
-                BenchmarkId::from_parameter(format!("{}x{}", n, n)),
-                &n,
-                move |b, &_| {
+            {
+                let graph_cuda = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
                     b.iter(|| {
-                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_cuda, Default::default()));
                     });
-                },
-            );
+                });
+            }
+
+            {
+                let graph_ptx = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                    });
+                });
+            }
         }
         group.finish();
     }
@@ -138,17 +186,28 @@ pub fn benches(c: &mut Criterion) {
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
             let expr = TensorExpr::from(a.clone()) + TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
+            let graph = Arc::new(graph);
 
-            let mut exec = CudaExecutor::new();
-            group.bench_with_input(
-                BenchmarkId::from_parameter(format!("{}x{}", n, n)),
-                &n,
-                move |bch, &_| {
-                    bch.iter(|| {
-                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
+            {
+                let graph_cuda = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
+                    b.iter(|| {
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_cuda, Default::default()));
                     });
-                },
-            );
+                });
+            }
+
+            {
+                let graph_ptx = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                    });
+                });
+            }
         }
         group.finish();
     }
@@ -166,17 +225,28 @@ pub fn benches(c: &mut Criterion) {
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
             let expr = TensorExpr::from(a.clone()) - TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
+            let graph = Arc::new(graph);
 
-            let mut exec = CudaExecutor::new();
-            group.bench_with_input(
-                BenchmarkId::from_parameter(format!("{}x{}", n, n)),
-                &n,
-                move |bch, &_| {
-                    bch.iter(|| {
-                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
+            {
+                let graph_cuda = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
+                    b.iter(|| {
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_cuda, Default::default()));
                     });
-                },
-            );
+                });
+            }
+
+            {
+                let graph_ptx = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                    });
+                });
+            }
         }
         group.finish();
     }
@@ -194,17 +264,28 @@ pub fn benches(c: &mut Criterion) {
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
             let expr = TensorExpr::from(a.clone()) * TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
+            let graph = Arc::new(graph);
 
-            let mut exec = CudaExecutor::new();
-            group.bench_with_input(
-                BenchmarkId::from_parameter(format!("{}x{}", n, n)),
-                &n,
-                move |bch, &_| {
-                    bch.iter(|| {
-                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
+            {
+                let graph_cuda = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
+                    b.iter(|| {
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_cuda, Default::default()));
                     });
-                },
-            );
+                });
+            }
+
+            {
+                let graph_ptx = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                    });
+                });
+            }
         }
         group.finish();
     }
@@ -222,17 +303,67 @@ pub fn benches(c: &mut Criterion) {
             let mut graph = tensor::graph::TensorGraph::<f32>::new();
             let expr = TensorExpr::from(a.clone()) / TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
+            let graph = Arc::new(graph);
 
-            let mut exec = CudaExecutor::new();
-            group.bench_with_input(
-                BenchmarkId::from_parameter(format!("{}x{}", n, n)),
-                &n,
-                move |bch, &_| {
-                    bch.iter(|| {
-                        let _ = std::hint::black_box(exec.forward(&graph, Default::default()));
+            {
+                let graph_cuda = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
+                    b.iter(|| {
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_cuda, Default::default()));
                     });
-                },
-            );
+                });
+            }
+
+            {
+                let graph_ptx = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                    });
+                });
+            }
+        }
+        group.finish();
+    }
+
+    // MatMul - the key comparison benchmark
+    {
+        let mut group = c.benchmark_group("matmul");
+        for &n in &sizes {
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 3) as u64,
+            ));
+            let shape = vec![n, n];
+            let a = Constant::new(vec![1.0f32; n * n], shape.clone());
+            let b = Constant::new(vec![0.5f32; n * n], shape.clone());
+            let mut graph = tensor::graph::TensorGraph::<f32>::new();
+            let expr = TensorExpr::from(a.clone()).matmul(TensorExpr::from(b.clone()));
+            expr.lower_to_graph(&mut graph);
+            let graph = Arc::new(graph);
+
+            {
+                let graph_cuda = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("cuda", format!("{n}x{n}")), |b| {
+                    let mut exec = CudaExecutor::new();
+                    b.iter(|| {
+                        let _ =
+                            std::hint::black_box(exec.execute(&*graph_cuda, Default::default()));
+                    });
+                });
+            }
+
+            {
+                let graph_ptx = Arc::clone(&graph);
+                group.bench_function(BenchmarkId::new("ptx", format!("{n}x{n}")), |b| {
+                    let mut exec = PtxExecutor::new();
+                    b.iter(|| {
+                        let _ = std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                    });
+                });
+            }
         }
         group.finish();
     }

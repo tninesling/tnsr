@@ -20,10 +20,8 @@ jobs:
         include:
           - arch: x86_64
             os: ubuntu-latest
-            packages: --workspace
           - arch: aarch64
             os: macos-latest
-            packages: --workspace
     steps:
       - uses: actions/checkout@v4
 
@@ -39,10 +37,10 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run tests
-        run: cargo nextest run ${{ matrix.packages }}
+        run: cargo nextest run --workspace
 
       - name: Run doc tests
-        run: cargo test ${{ matrix.packages }} --doc
+        run: cargo test --workspace --doc
 
   lint:
     name: Lint and Format

@@ -245,33 +245,33 @@ impl CudaExecutor {
         rhs: &CudaSlice<f32>,
         m: usize,
         n: usize,
-        k: usize,
+        _k: usize,
     ) -> CudaSlice<f32> {
         let _span = trace_span!("matmul").entered();
         let stream = self.device.default_stream();
 
-        let out_len = m * n;
         let mut out = stream.alloc_zeros::<f32>(m * n).unwrap();
 
         let f = self
             .module
             .load_function("matmul")
             .expect("Failed to load matmul function");
-        let cfg = LaunchConfig::for_num_elems(out_len as u32);
-        let lhs_len_u64 = lhs.len() as u64;
-        let rhs_len_u64 = rhs.len() as u64;
-        let m_u64 = m as u64;
-        let n_u64 = n as u64;
-        let k_u64 = k as u64;
+        
+        // Use tiled 2D grid where each block computes a 16x16 tile
+        // Each block has 16x16 threads, and each thread computes one output element
+        let tile_size = 16;
+        let grid_x = (n + tile_size - 1) / tile_size; // Number of tile columns
+        let grid_y = (m + tile_size - 1) / tile_size; // Number of tile rows
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (grid_x as u32, grid_y as u32, 1),
+            block_dim: (tile_size as u32, tile_size as u32, 1),
+            shared_mem_bytes: 0,
+        };
+        
         let mut launcher = stream.launch_builder(&f);
-        launcher.arg(lhs);
-        launcher.arg(&lhs_len_u64);
-        launcher.arg(rhs);
-        launcher.arg(&rhs_len_u64);
-        launcher.arg(&mut out);
-        launcher.arg(&m_u64);
-        launcher.arg(&n_u64);
-        launcher.arg(&k_u64);
+        launcher.arg(lhs);   // A matrix
+        launcher.arg(rhs);   // B matrix
+        launcher.arg(&mut out); // C matrix (output)
         unsafe { launcher.launch(cfg) }.expect("CUDA matmul failed");
 
         out

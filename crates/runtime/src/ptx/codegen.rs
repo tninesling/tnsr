@@ -193,8 +193,25 @@ impl fmt::Display for Function {
             writeln!(f, "    .reg .b64 %rd<{}>;", self.i64_registers.len())?;
         }
         writeln!(f, "\n")?;
+        
+        // Track whether we're inside a loop (after the first label)
+        let mut in_loop = false;
+        
         for inst in &self.body {
-            writeln!(f, "    {inst}")?;
+            match inst {
+                Inst::Label(name) => {
+                    // Add newline before labels for better readability
+                    writeln!(f, "\n    {name}:")?;
+                    in_loop = true;
+                }
+                _ => {
+                    if in_loop {
+                        writeln!(f, "      {inst}")?;
+                    } else {
+                        writeln!(f, "    {inst}")?;
+                    }
+                }
+            }
         }
         for label in &self.labels {
             writeln!(f, "\n{}:", label.name)?;

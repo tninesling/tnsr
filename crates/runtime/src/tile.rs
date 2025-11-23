@@ -452,14 +452,15 @@ pub struct TileGraph {
 
 impl<G> From<TensorGraph<f32, G>> for TileGraph {
     fn from(tensor_graph: TensorGraph<f32, G>) -> Self {
-        use std::collections::HashMap;
         use petgraph::graph::NodeIndex;
+        use std::collections::HashMap;
 
         // Pre-compute input shapes for MatMul nodes
         let mut matmul_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
         for idx in tensor_graph.graph.node_indices() {
             if matches!(tensor_graph.graph[idx], TensorGraphNode::MatMul) {
-                let inputs: Vec<Vec<usize>> = tensor_graph.graph
+                let inputs: Vec<Vec<usize>> = tensor_graph
+                    .graph
                     .neighbors_directed(idx, petgraph::Direction::Incoming)
                     .filter_map(|pred_idx| tensor_graph.shapes.get(&pred_idx).cloned())
                     .collect();
@@ -472,7 +473,8 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
                 |idx, node| {
                     let shape = tensor_graph.shapes.get(&idx).unwrap();
                     // Get input shapes for MatMul
-                    let input_shapes = matmul_input_shapes.get(&idx)
+                    let input_shapes = matmul_input_shapes
+                        .get(&idx)
                         .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
                         .unwrap_or_default();
                     Self::lower_node(node, shape, &input_shapes)
@@ -484,14 +486,23 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
 }
 
 impl TileGraph {
-    fn lower_node(node: TensorGraphNode<f32>, shape: &[usize], input_shapes: &[&[usize]]) -> TileIR {
+    fn lower_node(
+        node: TensorGraphNode<f32>,
+        shape: &[usize],
+        input_shapes: &[&[usize]],
+    ) -> TileIR {
         match node {
             TensorGraphNode::Constant { data } => Self::lower_constant(data, shape),
             TensorGraphNode::Input { name } => Self::lower_input(name, shape),
             TensorGraphNode::Parameter { id, data } => Self::lower_parameter(id, data, shape),
             TensorGraphNode::Unary { op } => Self::lower_unary(op, shape),
             TensorGraphNode::Binary { op } => Self::lower_binary(op, shape),
-            TensorGraphNode::MatMul => Self::lower_matmul(shape, input_shapes, false, false),
+            TensorGraphNode::MatMul => {
+                let m = shape[0];
+                let n = shape[1];
+                let k = input_shapes[0][1];
+                Self::lower_matmul(m, n, k, false, false)
+            }
             TensorGraphNode::Transpose => Self::lower_transpose(shape),
             TensorGraphNode::BroadcastAxis { axis } => Self::lower_broadcast_axis(axis, shape),
             TensorGraphNode::ReduceAxis { op, axis } => Self::lower_reduce_axis(op, axis, shape),
@@ -500,71 +511,90 @@ impl TileGraph {
         }
     }
 
-    fn lower_matmul(
-        shape: &[usize], // Output shape [M, N]
-        input_shapes: &[&[usize]], // Input shapes [A_shape, B_shape]
-        transpose_a: bool,
-        transpose_b: bool,
-    ) -> TileIR {
+    fn lower_matmul(m: usize, n: usize, k: usize, transpose_a: bool, transpose_b: bool) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("matmul");
 
-        // Fixed tile sizes for MVP
-        const M: usize = 16;
-        const N: usize = 16;
-        const K: usize = 16;
-
-        // Add parameters for inputs and outputs
+        // Add parameters for input and output matrices
         builder.add_param("A", DType::F32, true);
-        builder.add_param("B", DType::F16, true);
+        builder.add_param("B", DType::F32, true);
         builder.add_param("C", DType::F32, false);
 
-        // Allocate shared memory for input tiles
-        let a_smem = builder.alloc_shared(DType::F32, M, K);
-        let b_smem = builder.alloc_shared(DType::F32, K, N);
+        // Tile sizes for shared memory
+        let tile_m = 16;
+        let tile_n = 16;
+        let tile_k = 16;
 
-        // Allocate register tiles
-        let a_reg = builder.alloc_register(DType::F32, M, K);
-        let b_reg = builder.alloc_register(DType::F16, K, N);
-        let c_reg = builder.alloc_register(DType::F32, M, N);
+        // Allocate shared memory for input tiles
+        let a_smem = builder.alloc_shared(DType::F32, tile_m, tile_k);
+        let b_smem = builder.alloc_shared(DType::F32, tile_k, tile_n);
+
+        // Allocate register tiles for computation
+        let a_reg = builder.alloc_register(DType::F32, tile_m, tile_k);
+        let b_reg = builder.alloc_register(DType::F32, tile_k, tile_n);
+        let c_reg = builder.alloc_register(DType::F32, tile_m, tile_n);
 
         // Initialize accumulator
         builder.zero(c_reg);
 
-        // Get K dimension from input shapes
-        // For A[M, K] @ B[K, N], K is input_shapes[0][1]
-        let k_dim = if input_shapes.len() >= 2 && input_shapes[0].len() >= 2 {
-            input_shapes[0][1]
-        } else {
-            K  // fallback to tile size
-        };
-        let k_tiles = k_dim / K;
+        // Calculate number of K tiles needed
+        let k_tiles = (k + tile_k - 1) / tile_k;
 
-        // Main tiling loop
-        builder.for_loop("k", 0, k_tiles as i64, |builder, k_var| {
+        // Main tiling loop over K dimension
+        builder.for_loop("k_tile", 0, k_tiles as i64, |builder, k_var| {
             // Load A tile to shared memory
+            // Each thread loads one element: A[base_row + threadIdx.y][base_col + threadIdx.x]
+            // For A: base_row = blockIdx.y * tile_m, base_col = k_tile * tile_k
+            let a_row = Expr::Add(
+                Box::new(Expr::BlockIdx(Dim::Y) * tile_m),
+                Box::new(Expr::ThreadIdx(Dim::Y)),
+            );
+            let a_col = Expr::Add(
+                Box::new(Expr::Var(k_var.clone()) * tile_k),
+                Box::new(Expr::ThreadIdx(Dim::X)),
+            );
+            // Linear offset for A (row-major): row * K + col
+            let a_offset = Expr::Add(
+                Box::new(a_row * k),
+                Box::new(a_col),
+            );
             builder.load_global_to_shared(
                 a_smem,
                 "A",
-                Expr::BlockIdx(Dim::X) * M,
-                Expr::Var(k_var.clone()) * K,
+                a_offset,
+                Expr::Const(0),
             );
 
             // Load B tile to shared memory
+            // Each thread loads one element: B[base_row + threadIdx.y][base_col + threadIdx.x]
+            // For B: base_row = k_tile * tile_k, base_col = blockIdx.x * tile_n
+            let b_row = Expr::Add(
+                Box::new(Expr::Var(k_var) * tile_k),
+                Box::new(Expr::ThreadIdx(Dim::Y)),
+            );
+            let b_col = Expr::Add(
+                Box::new(Expr::BlockIdx(Dim::X) * tile_n),
+                Box::new(Expr::ThreadIdx(Dim::X)),
+            );
+            // Linear offset for B (row-major): row * N + col
+            let b_offset = Expr::Add(
+                Box::new(b_row * n),
+                Box::new(b_col),
+            );
             builder.load_global_to_shared(
                 b_smem,
                 "B",
-                Expr::Var(k_var) * K,
-                Expr::BlockIdx(Dim::Y) * N,
+                b_offset,
+                Expr::Const(0),
             );
 
             builder.barrier();
 
-            // Load to registers (simplified - assume warp load)
+            // Load from shared memory to registers
             builder.load_shared_to_register(a_reg, a_smem);
             builder.load_shared_to_register(b_reg, b_smem);
 
-            // Compute
+            // Compute: C_reg += A_reg @ B_reg
             let layout = match (transpose_a, transpose_b) {
                 (false, false) => MatMulLayout::NN,
                 (false, true) => MatMulLayout::NT,
@@ -577,12 +607,28 @@ impl TileGraph {
             builder.barrier();
         });
 
-        // Store result to output
+        // Store result to global memory
+        // Each thread stores one element of the output tile
+        // Global row = blockIdx.y * tile_m + threadIdx.y
+        // Global col = blockIdx.x * tile_n + threadIdx.x
+        // Linear offset = (global_row) * N + (global_col)
+        let global_row = Expr::Add(
+            Box::new(Expr::BlockIdx(Dim::Y) * tile_m),
+            Box::new(Expr::ThreadIdx(Dim::Y)),
+        );
+        let global_col = Expr::Add(
+            Box::new(Expr::BlockIdx(Dim::X) * tile_n),
+            Box::new(Expr::ThreadIdx(Dim::X)),
+        );
+        let linear_offset = Expr::Add(
+            Box::new(global_row * n),
+            Box::new(global_col),
+        );
         builder.store(
             "C",
             c_reg,
-            Expr::BlockIdx(Dim::X) * M,
-            Expr::BlockIdx(Dim::Y) * N,
+            linear_offset,
+            Expr::Const(0),
         );
 
         builder.finish()

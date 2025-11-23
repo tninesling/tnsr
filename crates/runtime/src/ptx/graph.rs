@@ -67,6 +67,10 @@ struct LoweringContext {
     loop_vars: HashMap<String, Operand<I32>>,
     /// Current offset into shared memory for allocation
     shared_mem_offset: usize,
+    /// Maps TileVar to its dimensions (rows, cols)
+    tile_dims: HashMap<TileVar, (usize, usize)>,
+    /// Maps register tile vars to their shared memory source (for LoadSharedToReg)
+    reg_to_shared: HashMap<TileVar, TileVar>,
 }
 
 impl LoweringContext {
@@ -77,6 +81,8 @@ impl LoweringContext {
             param_ptrs: HashMap::new(),
             loop_vars: HashMap::new(),
             shared_mem_offset: 0,
+            tile_dims: HashMap::new(),
+            reg_to_shared: HashMap::new(),
         }
     }
 
@@ -116,6 +122,9 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             rows,
             cols,
         } => {
+            // Track tile dimensions
+            ctx.tile_dims.insert(*var, (*rows, *cols));
+            
             use crate::tile::MemorySpace;
             match space {
                 MemorySpace::Register => {
@@ -154,7 +163,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             dest,
             src_param,
             row_offset,
-            col_offset: _,
+            col_offset,
         } => {
             // Load from global memory to register or shared memory
             // Get parameter pointer from cache (already loaded during initialization)
@@ -164,15 +173,24 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 .expect("Parameter not found in context")
                 .clone();
 
-            // Calculate offset from row/col
-            let offset_reg = lower_expr(func, ctx, row_offset);
+            // Calculate element offset: row_offset + col_offset
+            let row_offset_reg = lower_expr(func, ctx, row_offset);
+            let col_offset_reg = lower_expr(func, ctx, col_offset);
+            
+            // Element offset = row_offset + col_offset
+            let elem_offset = func.add_u64_register();
+            func.add_inst(Inst::add_u64(elem_offset.clone(), row_offset_reg, col_offset_reg));
+            
+            // Byte offset = element offset * sizeof(f32) = element offset * 4
+            let byte_offset = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(byte_offset.clone(), elem_offset, Operand::imm_u64(4)));
 
             // Add offset to base pointer
             let addr = func.add_u64_register();
             func.add_inst(Inst::AddU64(super::instructions::AddInst::new(
                 addr.clone(),
                 param_ptr,
-                offset_reg,
+                byte_offset,
             )));
 
             // Check if destination is shared memory or register
@@ -180,8 +198,61 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 // Destination is shared memory: load to temp register, then store to shared
                 let temp_reg = func.add_f32_register();
                 func.add_inst(Inst::load_global_scalar_f32(temp_reg.clone(), addr));
+                
+                // Calculate offset within shared memory tile: threadIdx.y * cols + threadIdx.x
+                let (_, cols) = ctx.tile_dims.get(dest).expect("Tile dimensions not found");
+                
+                // Convert tid.y and tid.x from u32 to i32 for arithmetic
+                let tid_y_i32 = func.add_i32_register();
+                func.add_inst(Inst::mov_i32(
+                    tid_y_i32.clone(),
+                    super::instructions::THREAD_ID.y.clone(),
+                ));
+                
+                let tid_x_i32 = func.add_i32_register();
+                func.add_inst(Inst::mov_i32(
+                    tid_x_i32.clone(),
+                    super::instructions::THREAD_ID.x.clone(),
+                ));
+                
+                // row_offset = tid_y * cols
+                let row_offset = func.add_i32_register();
+                func.add_inst(Inst::mul_i32(
+                    row_offset.clone(),
+                    tid_y_i32,
+                    Operand::imm_i32(*cols as i32),
+                ));
+                
+                // elem_idx = row_offset + tid_x
+                let elem_idx = func.add_i32_register();
+                func.add_inst(Inst::add_i32(
+                    elem_idx.clone(),
+                    row_offset,
+                    tid_x_i32,
+                ));
+                
+                // Convert to u64
+                let elem_idx_u64 = func.add_u64_register();
+                func.add_inst(Inst::convert_u64_i32(elem_idx_u64.clone(), elem_idx));
+                
+                // byte_offset = elem_idx * 4
+                let byte_offset = func.add_u64_register();
+                func.add_inst(Inst::mul_u64(
+                    byte_offset.clone(),
+                    elem_idx_u64,
+                    Operand::imm_u64(4),
+                ));
+                
+                // Add offset to base pointer
+                let final_addr = func.add_u64_register();
+                func.add_inst(Inst::add_u64(
+                    final_addr.clone(),
+                    shared_ptr,
+                    byte_offset,
+                ));
+                
                 func.add_inst(Inst::StSharedF32 {
-                    addr: shared_ptr,
+                    addr: final_addr,
                     src: vec![temp_reg],
                     vec: super::instructions::VecWidth::Scalar,
                 });
@@ -195,7 +266,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             dest_param,
             src,
             row_offset,
-            col_offset: _,
+            col_offset,
         } => {
             // Store from register/shared to global memory
             let src_reg = ctx.get_or_alloc_reg(func, *src);
@@ -207,26 +278,39 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
                 .expect("Parameter not found in context")
                 .clone();
 
-            // Calculate offset
-            let offset_reg = lower_expr(func, ctx, row_offset);
+            // Calculate element offset: row * N + col (need to know matrix width N)
+            // For now, just use row_offset which should already include the full offset
+            // TODO: This assumes row_offset already accounts for row-major layout
+            let row_offset_reg = lower_expr(func, ctx, row_offset);
+            let col_offset_reg = lower_expr(func, ctx, col_offset);
+            
+            // Element offset = row_offset + col_offset
+            let elem_offset = func.add_u64_register();
+            func.add_inst(Inst::add_u64(elem_offset.clone(), row_offset_reg, col_offset_reg));
+            
+            // Byte offset = element offset * sizeof(f32) = element offset * 4
+            let byte_offset = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(byte_offset.clone(), elem_offset, Operand::imm_u64(4)));
 
             // Add offset to base pointer
             let addr = func.add_u64_register();
             func.add_inst(Inst::AddU64(super::instructions::AddInst::new(
                 addr.clone(),
                 param_ptr,
-                offset_reg,
+                byte_offset,
             )));
 
             // Store to global memory
             func.add_inst(Inst::store_global_scalar_f32(addr, src_reg));
         }
         Stmt::LoadSharedToReg { dest, src } => {
-            // Load from shared memory to register
-            let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-
-            if let Some(src_ptr) = ctx.shared_mem_ptrs.get(src) {
-                func.add_inst(Inst::load_shared_scalar_f32(dest_reg, src_ptr.clone()));
+            // Track that this register tile is backed by shared memory
+            // We don't need to emit any PTX here - MatMul will access shared memory directly
+            ctx.reg_to_shared.insert(*dest, *src);
+            
+            // Also copy the tile dimensions
+            if let Some(&dims) = ctx.tile_dims.get(src) {
+                ctx.tile_dims.insert(*dest, dims);
             }
         }
         Stmt::Zero { tile } => {
@@ -241,16 +325,83 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             b,
             layout: _,
         } => {
-            // Matrix multiply using tensor cores
-            // This is a placeholder - real implementation would use WMMA or MMA instructions
+            // Matrix multiply: each thread computes one output element
+            // Thread at (ty, tx) computes C[ty][tx] = sum over k of A[ty][k] * B[k][tx]
+            
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-            let a_reg = ctx.get_or_alloc_reg(func, *a);
-            let b_reg = ctx.get_or_alloc_reg(func, *b);
-
-            // Placeholder: just multiply and add (not a real matmul)
-            let temp = func.add_f32_register();
-            func.add_inst(Inst::mul_f32(temp.clone(), a_reg, b_reg));
-            func.add_inst(Inst::add_f32(dest_reg.clone(), dest_reg, temp));
+            
+            // Resolve register tiles to their shared memory sources
+            let a_smem = ctx.reg_to_shared.get(a).copied().unwrap_or(*a);
+            let b_smem = ctx.reg_to_shared.get(b).copied().unwrap_or(*b);
+            
+            // Get shared memory pointers for A and B tiles
+            let a_ptr = ctx.shared_mem_ptrs.get(&a_smem)
+                .expect("MatMul operand A not in shared memory").clone();
+            let b_ptr = ctx.shared_mem_ptrs.get(&b_smem)
+                .expect("MatMul operand B not in shared memory").clone();
+            
+            // Get tile dimensions
+            let (_a_rows, a_cols) = ctx.tile_dims.get(&a_smem)
+                .expect("Tile dimensions not found for A");
+            let (_b_rows, b_cols) = ctx.tile_dims.get(&b_smem)
+                .expect("Tile dimensions not found for B");
+            let tile_k = *a_cols; // K dimension of the tile
+            
+            // Get threadIdx.y and threadIdx.x (this thread's position in the output tile)
+            let tid_y = func.add_u32_register();
+            let tid_x = func.add_u32_register();
+            func.add_inst(Inst::mov_u32(tid_y.clone(), super::instructions::THREAD_ID.y.clone()));
+            func.add_inst(Inst::mov_u32(tid_x.clone(), super::instructions::THREAD_ID.x.clone()));
+            
+            // Loop over k dimension: for (k = 0; k < tile_k; k++)
+            for k in 0..tile_k {
+                // Load A[threadIdx.y][k] from shared memory
+                // Offset in elements = threadIdx.y * a_cols + k
+                let a_offset = func.add_u64_register();
+                let ty_u64 = func.add_u64_register();
+                func.add_inst(Inst::convert_u64_u32(ty_u64.clone(), tid_y.clone()));
+                func.add_inst(Inst::mul_u64(a_offset.clone(), ty_u64, Operand::imm_u64(*a_cols as u64)));
+                let a_k_offset = func.add_u64_register();
+                func.add_inst(Inst::add_u64(a_k_offset.clone(), a_offset, Operand::imm_u64(k as u64)));
+                
+                // Byte offset = element offset * 4
+                let a_byte_offset = func.add_u64_register();
+                func.add_inst(Inst::mul_u64(a_byte_offset.clone(), a_k_offset, Operand::imm_u64(4)));
+                
+                // Address = base + byte_offset
+                let a_addr = func.add_u64_register();
+                func.add_inst(Inst::add_u64(a_addr.clone(), a_ptr.clone(), a_byte_offset));
+                
+                // Load A element
+                let a_val = func.add_f32_register();
+                func.add_inst(Inst::load_shared_scalar_f32(a_val.clone(), a_addr));
+                
+                // Load B[k][threadIdx.x] from shared memory
+                // Offset in elements = k * b_cols + threadIdx.x
+                let b_offset = func.add_u64_register();
+                func.add_inst(Inst::mul_u64(b_offset.clone(), Operand::imm_u64(k as u64), Operand::imm_u64(*b_cols as u64)));
+                let tx_u64 = func.add_u64_register();
+                func.add_inst(Inst::convert_u64_u32(tx_u64.clone(), tid_x.clone()));
+                let b_kx_offset = func.add_u64_register();
+                func.add_inst(Inst::add_u64(b_kx_offset.clone(), b_offset, tx_u64));
+                
+                // Byte offset = element offset * 4
+                let b_byte_offset = func.add_u64_register();
+                func.add_inst(Inst::mul_u64(b_byte_offset.clone(), b_kx_offset, Operand::imm_u64(4)));
+                
+                // Address = base + byte_offset
+                let b_addr = func.add_u64_register();
+                func.add_inst(Inst::add_u64(b_addr.clone(), b_ptr.clone(), b_byte_offset));
+                
+                // Load B element
+                let b_val = func.add_f32_register();
+                func.add_inst(Inst::load_shared_scalar_f32(b_val.clone(), b_addr));
+                
+                // Multiply and accumulate: dest += a_val * b_val
+                let prod = func.add_f32_register();
+                func.add_inst(Inst::mul_f32(prod.clone(), a_val, b_val));
+                func.add_inst(Inst::add_f32(dest_reg.clone(), dest_reg.clone(), prod));
+            }
         }
         Stmt::Add { dest, a, b } => {
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);

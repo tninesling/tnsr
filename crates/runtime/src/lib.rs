@@ -303,16 +303,10 @@ impl SimpleExecutor {
 
     fn mask(&self, values: &[f32], condition: &[f32]) -> Vec<f32> {
         let _span = trace_span!("mask").entered();
-        eprintln!(
-            "mask function: values={:?}, condition={:?}",
-            values, condition
-        );
-        let result: Vec<f32> = get_iter(values)
+        get_iter(values)
             .zip(get_iter(condition))
             .map(|(v, c)| if *c != 0.0 { *v } else { 0.0 })
-            .collect();
-        eprintln!("mask result: {:?}", result);
-        result
+            .collect()
     }
 }
 
@@ -325,11 +319,6 @@ impl Executor<f32> for SimpleExecutor {
         let order = graph.toposort();
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
-            println!(
-                "DEBUG: Executing node {}: {}",
-                node_idx.index(),
-                node.name()
-            );
             let result = match node {
                 TensorGraphNode::Constant { data } => {
                     let _span = trace_span!("constant", node = node_idx.index()).entered();

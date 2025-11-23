@@ -9,7 +9,7 @@ implicit_broadcast = []
 
 [dependencies]
 anyhow = { workspace = true }
-itertools = "0.14.0"
+itertools = { workspace = true }
 petgraph = "0.8.3"
 
 [dev-dependencies]

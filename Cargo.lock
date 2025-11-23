@@ -2766,6 +2766,7 @@ dependencies = [
  "anyhow",
  "criterion",
  "cudarc",
+ "itertools 0.13.0",
  "lazy_static",
  "petgraph",
  "rayon",
@@ -3172,7 +3173,7 @@ dependencies = [
  "anyhow",
  "criterion",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "petgraph",
 ]
 

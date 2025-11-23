@@ -70,6 +70,37 @@ fn forward_matmul_simple() {
 }
 
 #[test]
+fn forward_matmul_32x32() {
+    let mut runtime = create_runtime();
+
+    // A[32,32] @ B[32,32] = C[32,32]
+    // Use identity matrices with a scalar multiplier for easy verification
+    let mut a_data = vec![0.0; 32 * 32];
+    let mut b_data = vec![0.0; 32 * 32];
+    
+    // A = 2 * I (identity matrix scaled by 2)
+    // B = 3 * I (identity matrix scaled by 3)
+    for i in 0..32 {
+        a_data[i * 32 + i] = 2.0;
+        b_data[i * 32 + i] = 3.0;
+    }
+    
+    let a = Constant::new(a_data, vec![32, 32]);
+    let b = Constant::new(b_data, vec![32, 32]);
+    let node = TensorExpr::from(a).matmul(b);
+
+    let graph: TensorGraph<f32> = node.into();
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // Expected: 2*I @ 3*I = 6*I (identity matrix scaled by 6)
+    let mut expected = vec![0.0; 32 * 32];
+    for i in 0..32 {
+        expected[i * 32 + i] = 6.0;
+    }
+    assert_approx_eq!(result, expected);
+}
+
+#[test]
 fn forward_broadcast_then_reduce() {
     let mut runtime = create_runtime();
 

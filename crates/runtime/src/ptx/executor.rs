@@ -312,13 +312,15 @@ impl PtxExecutor {
                     let f = module.load_function(kernel_name)?;
 
                     // Calculate grid dimensions based on 16x16 tiles
+                    // Each block computes a 16x16 tile of the output matrix
+                    // grid_x = number of column tiles, grid_y = number of row tiles
                     const TILE_SIZE: usize = 16;
-                    let grid_x = (m + TILE_SIZE - 1) / TILE_SIZE;
-                    let grid_y = (n + TILE_SIZE - 1) / TILE_SIZE;
+                    let grid_x = (n + TILE_SIZE - 1) / TILE_SIZE;  // Columns
+                    let grid_y = (m + TILE_SIZE - 1) / TILE_SIZE;  // Rows
 
                     let cfg = LaunchConfig {
                         grid_dim: (grid_x as u32, grid_y as u32, 1),
-                        block_dim: (256, 1, 1), // 256 threads = 8 warps of 32 threads each
+                        block_dim: (TILE_SIZE as u32, TILE_SIZE as u32, 1), // 16x16 thread block
                         shared_mem_bytes: 0,
                     };
                     let mut launcher = stream.launch_builder(&f);

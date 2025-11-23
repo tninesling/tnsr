@@ -42,7 +42,7 @@ pub enum Backend {
 /// # Examples
 ///
 /// ```rust
-/// use runtime::Runtime;
+/// use runtime::{Executor, Runtime};
 /// use tensor::{TensorExpr, graph::TensorGraph};
 /// use std::collections::HashMap;
 ///
@@ -178,6 +178,8 @@ impl Runtime {
     ///     Backend::Cpu => println!("Using CPU"),
     ///     # #[cfg(feature = "cuda")]
     ///     Backend::Cuda => println!("Using CUDA"),
+    ///     # #[cfg(feature = "cuda")]
+    ///     Backend::Ptx => println!("Using PTX"),
     /// }
     /// ```
     pub fn backend(&self) -> Backend {
@@ -222,14 +224,14 @@ impl Runtime {
     /// # Examples
     ///
     /// ```rust
-    /// use runtime::Runtime;
+    /// use runtime::{Executor, Runtime};
     /// use tensor::{TensorExpr, graph::TensorGraph};
     /// use std::collections::HashMap;
     ///
     /// let mut runtime = Runtime::new();
     /// let x = TensorExpr::<f32>::input("x", vec![2, 2]);
     /// let graph: TensorGraph<f32> = x.into();
-    /// let node_idx = graph.output();
+    /// let node_idx = *graph.toposort().last().unwrap();
     ///
     /// let mut inputs = HashMap::new();
     /// inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0]);

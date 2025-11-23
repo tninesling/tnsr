@@ -23,7 +23,7 @@
 //! Most users should use [`Runtime`] which automatically selects the best available backend:
 //!
 //! ```rust
-//! use runtime::Runtime;
+//! use runtime::{Executor, Runtime};
 //! use tensor::{TensorExpr, graph::TensorGraph};
 //! use std::collections::HashMap;
 //!
@@ -77,7 +77,7 @@
 //! let mut inputs = HashMap::new();
 //! inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 //!
-//! let result = executor.forward(&graph, inputs).unwrap();
+//! let result = executor.execute(&graph, inputs).unwrap();
 //! assert_eq!(result.len(), 6);
 //! ```
 
@@ -215,7 +215,7 @@ pub trait Executor<D> {
 /// # Example
 ///
 /// ```rust
-/// use runtime::Runtime;
+/// use runtime::{Executor, Runtime};
 /// use tensor::{TensorExpr, graph::TensorGraph};
 /// use std::collections::HashMap;
 ///

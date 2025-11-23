@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test on ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-latest
+            packages: --workspace
+          - arch: aarch64
+            os: macos-latest
+            # `nn` has a dep on `candle-datasets`, which uses `gemm-f16`. That doesn't compile on these mac runners
+            packages: -p runtime -p tensor
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run tests
+        run: cargo nextest run ${{ matrix.packages }}
+
+      - name: Run doc tests
+        run: cargo test ${{ matrix.packages }} --doc
+
+  lint:
+    name: Lint and Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings

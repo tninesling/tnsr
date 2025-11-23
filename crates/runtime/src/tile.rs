@@ -61,7 +61,9 @@ pub enum Stmt {
     },
 
     /// Zero out a tile
-    Zero { tile: TileVar },
+    Zero {
+        tile: TileVar,
+    },
 
     /// Matrix multiply with accumulation: dest = dest + (a @ b)
     MatMul {
@@ -388,7 +390,12 @@ impl TileIRBuilder {
     }
 
     pub fn reduce_axis(&mut self, dest: TileVar, src: TileVar, op: ReduceOp, axis: usize) {
-        self.stmts.push(Stmt::ReduceAxis { dest, src, op, axis });
+        self.stmts.push(Stmt::ReduceAxis {
+            dest,
+            src,
+            op,
+            axis,
+        });
     }
 
     pub fn gt(&mut self, dest: TileVar, a: TileVar, b: TileVar) {

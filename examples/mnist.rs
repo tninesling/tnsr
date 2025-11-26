@@ -2,12 +2,12 @@ use std::time::Instant;
 
 use clap::Parser;
 use mnist::MnistBuilder;
-use nn::Model;
 use rand::prelude::*;
-use runtime::optimizer::SGD;
-use runtime::{Executor, Runtime};
-use tensor::Input;
-use tensor::Parameter;
+use tnsr::nn;
+use tnsr::nn::Model;
+use tnsr::optimizer::SGD;
+use tnsr::tensor::{Input, Parameter};
+use tnsr::{Executor, Runtime};
 
 /// MNIST dataset downloader and loader utilities
 mod mnist_loader {
@@ -141,8 +141,8 @@ fn main() {
     let args = Args::parse();
 
     // Initialize chrome tracing
-    let guard = runtime::init_chrome_tracing("mnist_trace.json")
-        .expect("Failed to initialize chrome tracing");
+    let guard =
+        tnsr::init_chrome_tracing("mnist_trace.json").expect("Failed to initialize chrome tracing");
     println!("Chrome tracing initialized. Trace will be written to mnist_trace.json");
 
     let mut rng = StdRng::seed_from_u64(args.seed);

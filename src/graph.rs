@@ -1,26 +1,5 @@
 //! Lowered computation graph representation with gradient support.
 //!
-//! This module provides the lowered DAG representation of tensor computations
-//! that executors use to perform actual computation. It includes automatic
-//! differentiation support through a typestate pattern.
-//!
-//! # Key Types
-//!
-//! - [`TensorGraph`] - The main computation graph structure
-//! - [`TensorGraphNode`] - Individual operations in the graph (constants, parameters, ops)
-//! - [`NoGrad`] - Typestate marker for forward-only graphs
-//! - [`WithGrad`] - Typestate marker for graphs with gradient computation
-//!
-//! # Gradient Computation
-//!
-//! Convert a forward-only graph to one with gradients using [`TensorGraph::with_gradients`]:
-//!
-//! ```ignore
-//! let forward_graph: TensorGraph<f32, NoGrad> = expr.into();
-//! let grad_graph = forward_graph.with_gradients(loss_node);
-//! // grad_graph now contains both forward and gradient computation nodes
-//! ```
-//!
 //! Gradients are added to the graph by constructing the derivative computations directly from
 //! graph nodes in reverse topological order, starting from the loss node. This means an execution
 //! of the graph will compute both forward values and gradients in a single pass. So, there is no
@@ -75,10 +54,7 @@ use petgraph::graph::Graph;
 pub use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 
-use crate::BinaryOp;
-use crate::ReduceOp;
-use crate::TensorExpr;
-use crate::UnaryOp;
+use crate::tensor::{BinaryOp, ReduceOp, TensorExpr, UnaryOp};
 
 /// Typestate marker for graphs without gradients.
 #[derive(Clone)]
@@ -228,7 +204,7 @@ impl<D> From<BinaryOp> for TensorGraphNode<D> {
 #[derive(Clone)]
 pub struct TensorGraph<D, G = NoGrad> {
     pub graph: Graph<TensorGraphNode<D>, usize>,
-    pub shapes: HashMap<NodeIndex, crate::Shape>,
+    pub shapes: HashMap<NodeIndex, crate::tensor::Shape>,
     gradients: G,
     _phantom: std::marker::PhantomData<G>,
 }
@@ -281,50 +257,54 @@ impl TensorGraph<f32, NoGrad> {
     /// expressions into graph nodes.
     fn lower_gradient_expr(
         &mut self,
-        expr: &crate::TensorExpr<f32>,
+        expr: &crate::tensor::TensorExpr<f32>,
         gradient_nodes: &mut HashSet<NodeIndex>,
     ) -> NodeIndex {
         let node_idx = expr.lower_to_graph(self);
 
         // Mark all newly created nodes as gradient nodes
         // We need to traverse the expression tree and mark all nodes
-        fn mark_gradient_nodes(expr: &crate::TensorExpr<f32>, visited: &mut HashSet<NodeIndex>) {
-            match &expr.0.kind {
-                crate::ExprKind::NodeRef { idx } => {
+        fn mark_gradient_nodes(
+            expr: &crate::tensor::TensorExpr<f32>,
+            visited: &mut HashSet<NodeIndex>,
+        ) {
+            match expr.kind() {
+                crate::tensor::ExprKind::NodeRef { idx } => {
                     // Don't mark NodeRef nodes as they reference existing nodes
                     visited.insert(*idx);
                 }
-                crate::ExprKind::Constant { .. } => {
+                crate::tensor::ExprKind::Constant { .. } => {
                     // Constants created during gradient construction are gradient nodes
                 }
-                crate::ExprKind::Input { .. } | crate::ExprKind::Parameter { .. } => {
+                crate::tensor::ExprKind::Input { .. }
+                | crate::tensor::ExprKind::Parameter { .. } => {
                     // These already exist in the graph
                 }
-                crate::ExprKind::Unary { x, .. } => {
+                crate::tensor::ExprKind::Unary { x, .. } => {
                     mark_gradient_nodes(x, visited);
                 }
-                crate::ExprKind::Binary { a, b, .. } => {
+                crate::tensor::ExprKind::Binary { a, b, .. } => {
                     mark_gradient_nodes(a, visited);
                     mark_gradient_nodes(b, visited);
                 }
-                crate::ExprKind::MatMul { a, b } => {
+                crate::tensor::ExprKind::MatMul { a, b } => {
                     mark_gradient_nodes(a, visited);
                     mark_gradient_nodes(b, visited);
                 }
-                crate::ExprKind::Transpose { x } => {
+                crate::tensor::ExprKind::Transpose { x } => {
                     mark_gradient_nodes(x, visited);
                 }
-                crate::ExprKind::BroadcastAxis { x, .. } => {
+                crate::tensor::ExprKind::BroadcastAxis { x, .. } => {
                     mark_gradient_nodes(x, visited);
                 }
-                crate::ExprKind::ReduceAxis { x, .. } => {
+                crate::tensor::ExprKind::ReduceAxis { x, .. } => {
                     mark_gradient_nodes(x, visited);
                 }
-                crate::ExprKind::Gt { a, b } => {
+                crate::tensor::ExprKind::Gt { a, b } => {
                     mark_gradient_nodes(a, visited);
                     mark_gradient_nodes(b, visited);
                 }
-                crate::ExprKind::Mask { values, condition } => {
+                crate::tensor::ExprKind::Mask { values, condition } => {
                     mark_gradient_nodes(values, visited);
                     mark_gradient_nodes(condition, visited);
                 }
@@ -457,7 +437,7 @@ impl TensorGraph<f32, NoGrad> {
                             // Use fluent syntax for negation
                             let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
                             let grad_out_expr =
-                                crate::TensorExpr::node_ref(grad_output, grad_out_shape);
+                                crate::tensor::TensorExpr::node_ref(grad_output, grad_out_shape);
                             let neg_grad_expr = -grad_out_expr;
                             let neg_grad =
                                 self.lower_gradient_expr(&neg_grad_expr, &mut gradient_nodes);
@@ -479,9 +459,9 @@ impl TensorGraph<f32, NoGrad> {
                             let input_a_shape = self.shapes.get(&input_a).unwrap().clone();
 
                             let grad_out_expr =
-                                crate::TensorExpr::node_ref(grad_output, grad_out_shape.clone());
-                            let input_b_expr = crate::TensorExpr::node_ref(input_b, input_b_shape);
-                            let input_a_expr = crate::TensorExpr::node_ref(input_a, input_a_shape);
+                                TensorExpr::node_ref(grad_output, grad_out_shape.clone());
+                            let input_b_expr = TensorExpr::node_ref(input_b, input_b_shape);
+                            let input_a_expr = TensorExpr::node_ref(input_a, input_a_shape);
 
                             let grad_a_expr = grad_out_expr.clone() * input_b_expr;
                             let grad_b_expr = grad_out_expr * input_a_expr;
@@ -513,11 +493,9 @@ impl TensorGraph<f32, NoGrad> {
                             let input_a_shape = self.shapes.get(&input_a).unwrap().clone();
                             let input_b_shape = self.shapes.get(&input_b).unwrap().clone();
 
-                            let grad_out_expr =
-                                crate::TensorExpr::node_ref(grad_output, grad_out_shape);
-                            let input_a_expr = crate::TensorExpr::node_ref(input_a, input_a_shape);
-                            let input_b_expr =
-                                crate::TensorExpr::node_ref(input_b, input_b_shape.clone());
+                            let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
+                            let input_a_expr = TensorExpr::node_ref(input_a, input_a_shape);
+                            let input_b_expr = TensorExpr::node_ref(input_b, input_b_shape.clone());
 
                             let grad_a_expr = grad_out_expr.clone() / input_b_expr.clone();
                             let grad_b_expr = -(grad_out_expr * input_a_expr)
@@ -557,10 +535,8 @@ impl TensorGraph<f32, NoGrad> {
                             let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
                             let node_out_shape = self.shapes.get(&node_idx).unwrap().clone();
 
-                            let grad_out_expr =
-                                crate::TensorExpr::node_ref(grad_output, grad_out_shape);
-                            let node_out_expr =
-                                crate::TensorExpr::node_ref(node_idx, node_out_shape);
+                            let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
+                            let node_out_expr = TensorExpr::node_ref(node_idx, node_out_shape);
 
                             let grad_x_expr = grad_out_expr * node_out_expr;
                             let grad_x =
@@ -580,9 +556,8 @@ impl TensorGraph<f32, NoGrad> {
                             let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
                             let input_x_shape = self.shapes.get(&input_x).unwrap().clone();
 
-                            let grad_out_expr =
-                                crate::TensorExpr::node_ref(grad_output, grad_out_shape);
-                            let input_x_expr = crate::TensorExpr::node_ref(input_x, input_x_shape);
+                            let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
+                            let input_x_expr = TensorExpr::node_ref(input_x, input_x_shape);
 
                             let grad_x_expr = grad_out_expr / input_x_expr;
                             let grad_x =
@@ -600,8 +575,7 @@ impl TensorGraph<f32, NoGrad> {
                             // grad_x = -grad_output
 
                             let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
-                            let grad_out_expr =
-                                crate::TensorExpr::node_ref(grad_output, grad_out_shape);
+                            let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
                             let grad_x_expr = -grad_out_expr;
                             let grad_x =
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes);
@@ -620,14 +594,10 @@ impl TensorGraph<f32, NoGrad> {
                             let input_x_shape = self.shapes.get(&input_x).unwrap().clone();
                             let num_elements: usize = input_x_shape.iter().product();
 
-                            let grad_out_expr =
-                                crate::TensorExpr::node_ref(grad_output, grad_out_shape);
-                            let input_x_expr =
-                                crate::TensorExpr::node_ref(input_x, input_x_shape.clone());
-                            let zero_expr = crate::TensorExpr::constant(
-                                vec![0.0f32; num_elements],
-                                input_x_shape,
-                            );
+                            let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
+                            let input_x_expr = TensorExpr::node_ref(input_x, input_x_shape.clone());
+                            let zero_expr =
+                                TensorExpr::constant(vec![0.0f32; num_elements], input_x_shape);
 
                             let condition_expr = input_x_expr.gt(zero_expr);
                             let grad_x_expr = grad_out_expr.mask(condition_expr);
@@ -875,8 +845,7 @@ impl From<TensorExpr<f32>> for TensorGraph<f32, NoGrad> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Constant;
-    use crate::Parameter;
+    use crate::tensor::{Constant, Parameter};
 
     #[test]
     fn test_with_gradients_api() {

@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 
+use crate::graph::{TensorGraph, WithGrad};
 use anyhow::Result;
 use petgraph::graph::NodeIndex;
-use tensor::graph::{TensorGraph, WithGrad};
 
 use crate::{Executor, SimpleExecutor};
 

@@ -1,18 +1,12 @@
-//! Integration tests for graph execution.
-//!
-//! Tests graph execution and gradient computation using the unified Runtime.
-//! The Runtime automatically selects the best available backend (CUDA or CPU).
-
 use std::collections::HashMap;
 
 use petgraph::visit::IntoNodeReferences;
-use runtime::{Executor, Runtime};
-use tensor::graph::TensorGraph;
-use tensor::{Constant, Parameter, TensorExpr};
+use tnsr::graph::TensorGraph;
+use tnsr::tensor::{Constant, Parameter, TensorExpr};
+use tnsr::{Executor, Runtime};
 
 const EPSILON: f32 = 1e-5;
 
-/// Helper macro to assert approximate equality for float vectors.
 macro_rules! assert_approx_eq {
     ($a:expr, $b:expr) => {
         if (&$a)

@@ -1,15 +1,13 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
+use super::{Module, PtxGraph};
+use crate::Executor;
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
+use crate::tile::TileGraph;
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use petgraph::visit::IntoNodeReferences;
-use tensor::graph::{TensorGraph, TensorGraphNode, WithGrad};
-
-use super::{Module, PtxGraph};
-use crate::Executor;
-use crate::tile::TileGraph;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// PTX executor that compiles TensorGraph → TileGraph → PtxGraph → PTX string
 /// and executes kernels via cudarc

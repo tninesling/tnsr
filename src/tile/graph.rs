@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 
-use tensor::graph::TensorGraph;
-use tensor::graph::TensorGraphNode;
+use crate::graph::{TensorGraph, TensorGraphNode};
+use crate::tensor;
 
 use super::builder::TileIRBuilder;
 use super::ir::{DType, Dim, Expr, MatMulLayout, ReduceOp, TileIR};

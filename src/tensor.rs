@@ -1,49 +1,3 @@
-//! Tensor expression library providing lazy evaluation and automatic differentiation.
-//!
-//! This crate implements a **lazy evaluation** system for tensor computations. Graph construction
-//! is infallible by design—errors are deferred until execution time when graphs are lowered
-//! and executed.
-//!
-//! # Architecture
-//!
-//! The crate is organized into three main components:
-//!
-//! - **Expression Layer** (`TensorExpr`, `Input`, `Parameter`, `Constant`): High-level API for
-//!   building computation graphs. Operations like `+`, `*`, `matmul()`, and `broadcast()` construct
-//!   expression trees without performing any computation.
-//!
-//! - **Graph Layer** (`graph` module): Intermediate representation as a directed acyclic graph (DAG)
-//!   of operations. Expression trees are lowered to this representation for optimization and execution.
-//!
-//! - **Compilation Layer** (`ptx` module): PTX (CUDA assembly) code generation for GPU execution.
-//!
-//! # Design Principles
-//!
-//! - **Lazy Evaluation**: Expressions are built as immutable trees; no computation happens until
-//!   graphs are lowered and executed by a runtime executor.
-//!
-//! - **Deferred Validation**: Graph construction never fails. Shape mismatches, invalid operations,
-//!   and resource allocation errors are detected during lowering or execution.
-//!
-//! - **Explicit Broadcasting**: Users must call `.broadcast()` to adjust tensor shapes for operations
-//!   requiring matching dimensions (when `implicit_broadcast` feature is disabled).
-//!
-//! # Example
-//!
-//! ```rust
-//! use tensor::{TensorExpr, Parameter};
-//!
-//! // Build expression graph (infallible)
-//! let x = TensorExpr::<f32>::input("x", vec![64, 10]);
-//! let w = Parameter::new(vec![0.1; 100], vec![10, 10]);
-//! let y = x.matmul(w).relu();
-//!
-//! // Lowering and execution may fail (handled by runtime)
-//! // let result = executor.forward(&y, inputs)?;
-//! ```
-
-pub mod graph;
-
 use std::ops::Add;
 use std::ops::Div;
 use std::ops::Mul;
@@ -53,7 +7,8 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use graph::TensorGraphNode;
+use crate::graph;
+use crate::graph::TensorGraphNode;
 use petgraph::graph::NodeIndex;
 
 static PARAM_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -327,6 +282,12 @@ impl<D: DType, R: Into<TensorExpr<D>>> Div<R> for Parameter<D> {
 #[derive(Clone, Debug)]
 pub struct TensorExpr<D: DType>(Arc<ExprNode<D>>);
 
+impl<D: DType> TensorExpr<D> {
+    pub fn kind(&self) -> &ExprKind<D> {
+        &self.0.kind
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ExprNode<D: DType> {
     shape: Shape,
@@ -334,7 +295,7 @@ struct ExprNode<D: DType> {
 }
 
 #[derive(Clone, Debug)]
-enum ExprKind<D: DType> {
+pub enum ExprKind<D: DType> {
     Constant {
         data: Arc<Vec<D>>,
     },

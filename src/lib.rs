@@ -1,105 +1,23 @@
-//! Runtime execution engine for tensor computation graphs.
-//!
-//! This crate provides executors that execute computation graphs
-//! lowered from the `tensor` crate. Gradients are computed during execution
-//! when using graphs with gradient metadata (`TensorGraph<D, WithGrad>`).
-//!
-//! # Architecture
-//!
-//! - **Runtime**: Unified interface with automatic backend selection. Recommended for most users.
-//!   Automatically chooses between CPU and GPU at runtime based on availability.
-//!
-//! - **Executor Trait**: Common interface for graph execution and gradient retrieval,
-//!   returning `Result<Vec<D>>` for proper error handling.
-//!
-//! - **SimpleExecutor**: CPU-based executor with optional parallelism (via `parallel` feature).
-//!   Uses naive algorithms suitable for testing and small models.
-//!
-//! - **CudaExecutor** (optional): GPU-accelerated executor using CUDA kernels (via `cuda` feature).
-//!   Automatically manages device memory and kernel launches.
-//!
-//! # Getting Started
-//!
-//! Most users should use [`Runtime`] which automatically selects the best available backend:
-//!
-//! ```rust
-//! use runtime::{Executor, Runtime};
-//! use tensor::{TensorExpr, graph::TensorGraph};
-//! use std::collections::HashMap;
-//!
-//! let mut runtime = Runtime::new();
-//! let x = TensorExpr::<f32>::input("x", vec![2, 3]);
-//! let graph: TensorGraph<f32> = x.into();
-//!
-//! let mut inputs = HashMap::new();
-//! inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-//!
-//! let result = runtime.execute(&graph, inputs).unwrap();
-//! assert_eq!(result.len(), 6);
-//! ```
-//!
-//! # Gradient Computation
-//!
-//! Gradients are computed during execution using graphs created with
-//! `TensorGraph::with_gradients()`. After executing the graph, use
-//! `get_gradients()` to retrieve parameter gradients for optimization.
-//!
-//! # Error Handling
-//!
-//! Execution failures return `Result` types with `anyhow::Error` for:
-//! - Missing inputs or computed values
-//! - Shape mismatches
-//! - Memory allocation failures
-//! - Invalid operations (e.g., unsupported dimensions)
-//! - CUDA-specific errors (kernel launch failures, device errors)
-//!
-//! Use `.unwrap()` in tests or the `?` operator in production code to handle errors.
-//!
-//! # Features
-//!
-//! - `cuda`: Enable GPU acceleration via CUDA (requires CUDA toolkit)
-//! - `parallel`: Enable CPU parallelism via Rayon
-//!
-//! # Advanced: Direct Executor Usage
-//!
-//! For direct control over the backend, you can use [`SimpleExecutor`] or
-//! [`CudaExecutor`] directly:
-//!
-//! ```rust
-//! use runtime::{Executor, SimpleExecutor};
-//! use tensor::{TensorExpr, graph::TensorGraph};
-//! use std::collections::HashMap;
-//!
-//! let mut executor = SimpleExecutor::new();
-//! let x = TensorExpr::<f32>::input("x", vec![2, 3]);
-//! let graph: TensorGraph<f32> = x.into();
-//!
-//! let mut inputs = HashMap::new();
-//! inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-//!
-//! let result = executor.execute(&graph, inputs).unwrap();
-//! assert_eq!(result.len(), 6);
-//! ```
-
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
+pub mod graph;
+pub mod nn;
 pub mod optimizer;
 #[cfg(feature = "cuda")]
 pub mod ptx;
-mod runtime;
-mod tile;
+pub mod runtime;
+pub mod tensor;
+pub mod tile;
 
 pub use runtime::{Backend, Runtime};
 
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
-use tensor::graph::TensorGraph;
-use tensor::graph::TensorGraphNode;
-use tensor::graph::WithGrad;
 use tracing::trace_span;
 use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::prelude::*;

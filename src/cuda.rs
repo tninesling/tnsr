@@ -1,12 +1,11 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
+use crate::Executor;
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
+use crate::tensor;
 use anyhow::{Context as _, Result, anyhow};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
-use tensor::graph::{TensorGraph, TensorGraphNode, WithGrad};
-
-use crate::Executor;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::trace_span;
 
 static PTX: &str = include_str!("cuda-kernels.ptx");

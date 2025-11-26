@@ -1,52 +1,7 @@
-//! Neural network building blocks and loss functions.
-//!
-//! This crate provides common neural network operations built on top of the `tensor` crate's
-//! expression API. All functions construct lazy computation graphs—no computation occurs until
-//! the resulting expressions are lowered to graphs and executed by a runtime executor.
-//!
-//! # Components
-//!
-//! - **Layers**: `linear()` - fully connected layer with optional bias
-//! - **Activations**: `relu()` - rectified linear unit
-//! - **Loss Functions**:
-//!   - `mse_loss()` - mean squared error for regression
-//!   - `cross_entropy_one_hot_logits()` - cross-entropy for classification with one-hot labels
-//! - **Utilities**: `reduce_logsumexp_simple()` - numerically stable log-sum-exp reduction
-//! - **Model Builder**: `Model` - structured API for building and managing computation graphs
-//!
-//! # Design
-//!
-//! All operations are **infallible** during graph construction. Shape mismatches and invalid
-//! operations will be detected when graphs are lowered and executed. Functions expect properly
-//! shaped inputs—use `.broadcast()` explicitly when needed for operations requiring matching
-//! dimensions.
-//!
-//! # Example
-//!
-//! ```rust
-//! use nn::{linear, relu, mse_loss};
-//! use tensor::{TensorExpr, Parameter, Constant};
-//!
-//! // Build a simple MLP (no computation yet)
-//! let x = TensorExpr::<f32>::input("x", vec![32, 784]); // batch=32, features=784
-//! let w1 = Parameter::new(vec![0.1; 784 * 128], vec![784, 128]);
-//! let b1 = Constant::new(vec![0.0; 128], vec![1, 128]);
-//!
-//! let h = linear(x, w1, Some(b1));
-//! let h = relu(h);
-//!
-//! // Execution happens in the runtime crate
-//! // let result = executor.forward(&h.into(), inputs)?;
-//! ```
-
 use std::collections::HashMap;
 
-use tensor::Constant;
-use tensor::DType;
-use tensor::Shape;
-use tensor::TensorExpr;
-use tensor::graph::NodeIndex;
-use tensor::graph::TensorGraph;
+use crate::graph::{NodeIndex, TensorGraph};
+use crate::tensor::{Constant, DType, Shape, TensorExpr};
 
 /// Fully connected (linear) layer: `y = x @ w + b`.
 ///
@@ -365,12 +320,9 @@ impl<D: DType> Default for Model<D> {
 
 #[cfg(test)]
 mod tests {
-    use runtime::Executor;
-    use runtime::SimpleExecutor;
-
-    use tensor::graph::TensorGraph;
-
-    use super::*; // bring trait methods like lower_to_graph into scope
+    use super::*;
+    use crate::graph::TensorGraph;
+    use crate::{Executor, SimpleExecutor};
 
     const EPSILON: f32 = 1e-5;
 

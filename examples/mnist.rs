@@ -187,25 +187,18 @@ fn main() {
     assert_eq!(n_test * 784, test_images.len());
     println!("Test samples: {n_test}");
 
-    // Parameters
+    println!("Building computation graph...");
     let w1 = Parameter::new(xavier_init(&mut rng, 784, 128), vec![784, 128]);
     let b1 = Parameter::new(vec![0.0f32; 128], vec![1, 128]);
     let w2 = Parameter::new(xavier_init(&mut rng, 128, 10), vec![128, 10]);
     let b2 = Parameter::new(vec![0.0f32; 10], vec![1, 10]);
-
-    // Model
-    println!("Building computation graph...");
     let model = build_mlp_model(args.batch_size, &w1, &b1, &w2, &b2);
-
-    // Get output indices
     let logits_idx = model.get_output("logits").expect("logits output");
     let loss_idx = model.loss().expect("loss node");
 
-    // Augment graph with gradient computation nodes (consumes graph, so we clone)
-    let grad_graph = model.graph().clone().with_gradients(loss_idx);
-
+    // Augment graph with gradient computation nodes (consumes the graph)
+    let grad_graph = model.into_graph().with_gradients(loss_idx);
     let opt = SGD::new(args.lr);
-
     let mut runtime = Runtime::new();
     println!("Using backend: {:?}", runtime.backend());
 
@@ -269,8 +262,6 @@ fn main() {
 
                 // Forward pass computes both loss and gradients
                 let loss_value = runtime.execute(&grad_graph, inputs.clone()).unwrap();
-
-                // Extract gradients from executor
                 let grads = runtime.get_gradients(&grad_graph);
 
                 if steps.is_multiple_of(50)
@@ -292,7 +283,7 @@ fn main() {
             );
         }
 
-        // Evaluate
+        // Evaluate on current epoch (use borrowed grad_graph for now)
         let test_batches = n_test.div_ceil(args.batch_size);
         let eval_span = tracing::span!(
             tracing::Level::INFO,
@@ -330,10 +321,8 @@ fn main() {
             inputs.insert("images".to_string(), x);
             inputs.insert("labels".to_string(), dummy_labels);
 
-            // Forward pass through the unified graph
-            runtime.execute(model.graph(), inputs).unwrap();
-
-            // Extract logits using get_value()
+            // Forward pass through the gradient graph (still has gradients during training)
+            runtime.execute(&grad_graph, inputs).unwrap();
             let logits = runtime.get_value(logits_idx).unwrap();
 
             for i in 0..bs {
@@ -357,9 +346,64 @@ fn main() {
             "evaluation time {:.2}s",
             training_start.elapsed().as_secs_f32()
         );
-
-        // End of epoch - _eg guard will be dropped here
     }
+
+    // Convert training graph to inference-only graph (strip gradients)
+    // This consumes the grad_graph and returns an owned NoGrad graph
+    let infer_graph = grad_graph.without_gradients();
+
+    // Final evaluation using inference-only graph
+    println!("\nFinal evaluation using inference-only graph...");
+    let final_eval_span = tracing::span!(tracing::Level::INFO, "final_evaluation");
+    let _fev = final_eval_span.enter();
+    let mut correct = 0usize;
+    let mut seen = 0usize;
+    let test_batches = n_test.div_ceil(args.batch_size);
+    for b in 0..test_batches {
+        let start = b * args.batch_size;
+        let end = ((b + 1) * args.batch_size).min(n_test);
+        let bs = end - start;
+        if bs == 0 {
+            continue;
+        }
+        let mut x = vec![0.0f32; args.batch_size * 784];
+        for (i, j) in (start..end).enumerate() {
+            let src = &test_images[j * 784..(j + 1) * 784];
+            let dst = &mut x[i * 784..(i + 1) * 784];
+            dst.copy_from_slice(src);
+        }
+        let dummy_labels = vec![0.0f32; args.batch_size * 10];
+        let mut inputs = std::collections::HashMap::new();
+        inputs.insert("images".to_string(), x);
+        inputs.insert("labels".to_string(), dummy_labels);
+
+        // Use the inference graph (no gradient computation overhead)
+        runtime.execute(&infer_graph, inputs).unwrap();
+        let logits = runtime.get_value(logits_idx).unwrap();
+
+        for i in 0..bs {
+            let row = &logits[i * 10..(i + 1) * 10];
+            let pred = row
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| !v.is_nan())
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+            if pred as u8 == test_labels_raw[start + i] {
+                correct += 1;
+            }
+        }
+        seen += bs;
+    }
+    let final_acc = correct as f32 / seen as f32;
+    println!(
+        "Final test accuracy (inference graph): {:.2}% ({}/{})",
+        final_acc * 100.0,
+        correct,
+        seen
+    );
+    drop(_fev);
 
     println!("Training completed. Flushing chrome trace...");
 

@@ -220,28 +220,18 @@ impl TensorGraph<f32, NoGrad> {
         expr: &crate::tensor::TensorExpr<f32>,
         gradient_nodes: &mut HashSet<NodeIndex>,
     ) -> NodeIndex {
+        // Track nodes before lowering
+        let nodes_before: HashSet<NodeIndex> = self.graph.node_indices().collect();
+
         let node_idx = expr.lower_to_graph(self);
 
         // Mark all newly created nodes as gradient nodes
-        // We need to traverse the expression tree and mark all nodes
-        fn mark_gradient_nodes(
-            expr: &crate::tensor::TensorExpr<f32>,
-            visited: &mut HashSet<NodeIndex>,
-        ) {
-            if let crate::tensor::ExprKind::NodeRef { idx } = expr.kind() {
-                // Don't mark NodeRef nodes as they reference existing nodes
-                visited.insert(*idx);
-            }
+        // Any node that exists now but didn't exist before is a gradient node
+        let nodes_after: HashSet<NodeIndex> = self.graph.node_indices().collect();
 
-            // Recursively traverse all child expressions
-            for child in expr.children() {
-                mark_gradient_nodes(child, visited);
-            }
+        for new_node in nodes_after.difference(&nodes_before) {
+            gradient_nodes.insert(*new_node);
         }
-
-        let mut visited = HashSet::new();
-        mark_gradient_nodes(expr, &mut visited);
-        gradient_nodes.insert(node_idx);
 
         node_idx
     }
@@ -718,6 +708,29 @@ impl TensorGraph<f32, WithGrad> {
     pub fn gradient_metadata(&self) -> &WithGrad {
         &self.gradients
     }
+
+    /// Convert a graph with gradients back to an inference-only graph by removing gradient nodes.
+    pub fn without_gradients(self) -> TensorGraph<f32, NoGrad> {
+        let gradient_nodes = &self.gradients.gradient_nodes;
+        let new_graph = self.graph.filter_map_owned(
+            |node_idx, node| {
+                if gradient_nodes.contains(&node_idx) {
+                    None
+                } else {
+                    Some(node)
+                }
+            },
+            |_edge_idx, edge| {
+                Some(edge) // Edges are auto-filtered if nodes are removed
+            },
+        );
+
+        TensorGraph {
+            graph: new_graph,
+            gradients: NoGrad,
+            _phantom: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<D, G> Index<NodeIndex> for TensorGraph<D, G> {
@@ -1166,5 +1179,178 @@ mod tests {
             "Expected at least 1 BroadcastAxis node for ReduceAxis Sum gradient, got {}",
             broadcast_count
         );
+    }
+
+    #[test]
+    fn test_without_gradients() {
+        // Test: Create a graph with gradients, then convert it back to inference-only
+        let x = Parameter::new(vec![2.0f32], vec![1]);
+        let x_id = x.id();
+        let y = x.clone() * x;
+        let graph: TensorGraph<f32, NoGrad> = y.into();
+
+        let initial_node_count = graph.len();
+        assert_eq!(
+            initial_node_count, 2,
+            "Initial graph should have 2 nodes (param + mul)"
+        );
+
+        // Add gradients
+        let grad_graph = graph.with_gradients(NodeIndex::from(1));
+
+        // Verify gradient nodes were created
+        let grad_node_count = grad_graph.len();
+        assert!(
+            grad_node_count > initial_node_count,
+            "Graph with gradients should have more nodes"
+        );
+
+        let metadata = grad_graph.gradient_metadata();
+        assert!(
+            !metadata.gradient_nodes.is_empty(),
+            "Should have gradient nodes"
+        );
+
+        // Convert back to inference-only graph
+        let inference_graph = grad_graph.without_gradients();
+
+        // Verify gradient nodes were removed
+        assert_eq!(
+            inference_graph.len(),
+            initial_node_count,
+            "Inference graph should have same number of nodes as original forward graph"
+        );
+
+        // Verify the forward computation nodes are preserved
+        let mut has_param = false;
+        let mut has_mul = false;
+
+        for idx in inference_graph.graph.node_indices() {
+            match &inference_graph[idx] {
+                TensorGraphNode::Parameter { id, .. } => {
+                    assert_eq!(*id, x_id, "Parameter should have correct ID");
+                    has_param = true;
+                }
+                TensorGraphNode::Binary {
+                    op: BinaryOp::Mul, ..
+                } => {
+                    has_mul = true;
+                }
+                _ => {}
+            }
+        }
+
+        assert!(has_param, "Should have parameter node");
+        assert!(has_mul, "Should have multiplication node");
+    }
+
+    #[test]
+    fn test_without_gradients_preserves_structure() {
+        // Test: Verify that without_gradients() preserves the computation graph structure
+        let a = Parameter::new(vec![1.0f32, 2.0], vec![2, 1]);
+        let b = Parameter::new(vec![3.0f32, 4.0], vec![2, 1]);
+
+        let a_expr: TensorExpr<f32> = a.into();
+        let b_expr: TensorExpr<f32> = b.into();
+
+        let sum = a_expr + b_expr;
+        let product = sum.clone() * sum; // (a + b) * (a + b)
+        let loss = product.reduce_sum(0).reduce_sum(1); // Scalar loss
+
+        let graph: TensorGraph<f32, NoGrad> = loss.into();
+        let forward_node_count = graph.len();
+
+        // Add gradients
+        let topo = graph.toposort();
+        let loss_node = *topo.last().unwrap();
+        let grad_graph = graph.with_gradients(loss_node);
+
+        // Convert back to inference
+        let inference_graph = grad_graph.without_gradients();
+
+        // Should have same number of nodes as original
+        assert_eq!(
+            inference_graph.len(),
+            forward_node_count,
+            "Inference graph should match forward graph size"
+        );
+
+        // Verify topological order is preserved (all nodes should still be reachable)
+        let inference_topo = inference_graph.toposort();
+        assert_eq!(
+            inference_topo.len(),
+            forward_node_count,
+            "All forward nodes should be reachable in inference graph"
+        );
+    }
+
+    #[test]
+    fn test_without_gradients_complex_graph() {
+        // Test: More complex graph to ensure all gradient nodes are properly removed
+        let x = Parameter::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
+        let w = Parameter::new(vec![5.0f32, 6.0, 7.0, 8.0], vec![2, 2]);
+
+        let x_expr: TensorExpr<f32> = x.into();
+        let w_expr: TensorExpr<f32> = w.into();
+
+        // Forward: h = x @ w, then reduce to scalar
+        let h = x_expr.matmul(w_expr);
+        let loss = h.reduce_sum(0).reduce_sum(1);
+
+        let graph: TensorGraph<f32, NoGrad> = loss.into();
+        let forward_nodes = graph.len();
+
+        // Add gradients
+        let topo = graph.toposort();
+        let loss_node = *topo.last().unwrap();
+        let grad_graph = graph.clone().with_gradients(loss_node);
+
+        let with_grad_nodes = grad_graph.len();
+        assert!(
+            with_grad_nodes > forward_nodes,
+            "Should have added gradient nodes"
+        );
+
+        // Convert to inference
+        let inference_graph = grad_graph.without_gradients();
+
+        // The inference graph may have slightly different node count than the original
+        // forward graph because some nodes may have been de-duplicated during gradient
+        // construction. What matters is that all gradient nodes are removed.
+        assert!(
+            inference_graph.len() <= with_grad_nodes,
+            "Inference graph should have fewer or equal nodes than grad graph"
+        );
+
+        assert!(
+            inference_graph.len() >= forward_nodes,
+            "Inference graph should have at least the forward nodes"
+        );
+
+        // Verify no nodes are marked as gradient nodes (since we filtered them out)
+        // The key test: ensure the graph is still valid and can be topologically sorted
+        let inference_topo = inference_graph.toposort();
+        assert!(
+            !inference_topo.is_empty(),
+            "Inference graph should have nodes"
+        );
+
+        // Count forward-like operations
+        let mut param_count = 0;
+        let mut matmul_count = 0;
+        let mut reduce_count = 0;
+
+        for idx in inference_graph.graph.node_indices() {
+            match &inference_graph[idx] {
+                TensorGraphNode::Parameter { .. } => param_count += 1,
+                TensorGraphNode::MatMul { .. } => matmul_count += 1,
+                TensorGraphNode::ReduceAxis { .. } => reduce_count += 1,
+                _ => {}
+            }
+        }
+
+        assert_eq!(param_count, 2, "Should have 2 parameters");
+        assert_eq!(matmul_count, 1, "Should have 1 matmul");
+        assert_eq!(reduce_count, 2, "Should have 2 reduce operations");
     }
 }

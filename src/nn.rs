@@ -4,31 +4,6 @@ use crate::graph::{NodeIndex, TensorGraph};
 use crate::tensor::{Constant, DType, Shape, TensorExpr};
 
 /// Fully connected (linear) layer: `y = x @ w + b`.
-///
-/// Computes a matrix multiplication followed by optional bias addition with broadcasting.
-/// The bias is automatically broadcast to match the output shape.
-///
-/// # Parameters
-///
-/// - `x`: Input tensor of shape `[..., in_features]`
-/// - `w`: Weight matrix of shape `[in_features, out_features]`
-/// - `b`: Optional bias tensor of shape `[1, out_features]` (broadcast to match output)
-///
-/// # Returns
-///
-/// Output tensor of shape `[..., out_features]`
-///
-/// # Example
-///
-/// ```rust
-/// use nn::{linear, constant_f32};
-///
-/// let x = constant_f32(vec![1.0, 2.0, 3.0], vec![1, 3]);
-/// let w = constant_f32(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], vec![3, 2]);
-/// let b = constant_f32(vec![0.5, -0.5], vec![1, 2]);
-///
-/// let y = linear(x, w, Some(b)); // shape: [1, 2]
-/// ```
 pub fn linear<D: DType + Default + 'static>(
     x: impl Into<TensorExpr<D>>,
     w: impl Into<TensorExpr<D>>,
@@ -57,29 +32,6 @@ pub fn linear<D: DType + Default + 'static>(
 }
 
 /// Mean squared error loss: `mean((pred - target)^2)`.
-///
-/// Computes the element-wise squared difference between predictions and targets,
-/// then reduces to a scalar by averaging over all elements.
-///
-/// # Parameters
-///
-/// - `pred`: Predicted values of any shape
-/// - `target`: Target values (must match `pred` shape)
-///
-/// # Returns
-///
-/// Scalar tensor containing the mean squared error
-///
-/// # Example
-///
-/// ```rust
-/// use nn::{mse_loss, constant_f32};
-///
-/// let pred = constant_f32(vec![1.0, 2.0, 3.0], vec![3]);
-/// let target = constant_f32(vec![1.5, 2.0, 2.5], vec![3]);
-///
-/// let loss = mse_loss(pred, target); // scalar: mean of [0.25, 0.0, 0.25]
-/// ```
 pub fn mse_loss(
     pred: impl Into<TensorExpr<f32>>,
     target: impl Into<TensorExpr<f32>>,
@@ -92,69 +44,16 @@ pub fn mse_loss(
 }
 
 /// Creates a constant f32 tensor.
-///
-/// Convenience wrapper around `Constant::new()` for `f32` tensors.
-///
-/// # Parameters
-///
-/// - `data`: Flattened data in row-major order
-/// - `shape`: Dimensions of the tensor
-///
-/// # Returns
-///
-/// A `Constant<f32>` tensor
-///
-/// # Panics
-///
-/// Panics if `data.len() != shape.iter().product()`
 pub fn constant_f32(data: Vec<f32>, shape: Shape) -> Constant<f32> {
     Constant::new(data, shape)
 }
 
 /// Rectified linear unit activation: `max(0, x)`.
-///
-/// Applies the ReLU activation function element-wise. Convenience wrapper
-/// around `TensorExpr::relu()`.
-///
-/// # Parameters
-///
-/// - `x`: Input tensor of any shape
-///
-/// # Returns
-///
-/// Output tensor with same shape as input, with negative values replaced by 0
-///
-/// # Example
-///
-/// ```rust
-/// use nn::{relu, constant_f32};
-///
-/// let x = constant_f32(vec![-1.0, 0.0, 1.0, 2.0], vec![4]);
-/// let y = relu(x); // [0.0, 0.0, 1.0, 2.0]
-/// ```
 pub fn relu(x: impl Into<TensorExpr<f32>>) -> TensorExpr<f32> {
     x.into().relu()
 }
 
 /// Numerically stable log-sum-exp reduction along an axis.
-///
-/// Computes `log(sum(exp(x)))` along the specified axis using the identity:
-/// `log(sum(exp(x))) = m + log(sum(exp(x) / exp(m)))` where `m = max(x)`.
-/// This prevents overflow when exponentiating large values.
-///
-/// # Parameters
-///
-/// - `x`: Input tensor
-/// - `axis`: Dimension to reduce over
-///
-/// # Returns
-///
-/// Tensor with the specified axis reduced (shape has that dimension removed)
-///
-/// # Note
-///
-/// This is a simplified implementation. For multi-dimensional cases, proper broadcasting
-/// of the max value would improve numerical stability further.
 pub fn reduce_logsumexp_simple(x: impl Into<TensorExpr<f32>>, axis: usize) -> TensorExpr<f32> {
     // Numerically stable-ish log-sum-exp without needing broadcast of per-row max
     let x = x.into();
@@ -166,37 +65,7 @@ pub fn reduce_logsumexp_simple(x: impl Into<TensorExpr<f32>>, axis: usize) -> Te
     l + m
 }
 
-/// Cross-entropy loss for one-hot labels with logit inputs.
-///
-/// Computes the cross-entropy loss between one-hot encoded labels and un-normalized
-/// logits (no softmax applied). The loss is computed as:
-/// `mean(logsumexp(logits, axis) - sum(labels * logits, axis))`.
-///
-/// This formulation is numerically stable and does not require computing softmax explicitly.
-///
-/// # Parameters
-///
-/// - `logits`: Un-normalized predictions of shape `[batch, ..., num_classes, ...]`
-/// - `labels_one_hot`: One-hot encoded labels (same shape as logits)
-/// - `class_axis`: Dimension representing the class axis (typically last dimension)
-///
-/// # Returns
-///
-/// Scalar tensor containing the mean cross-entropy loss over all examples
-///
-/// # Example
-///
-/// ```rust
-/// use nn::{cross_entropy_one_hot_logits, constant_f32};
-///
-/// // Batch of 2, 3 classes
-/// let logits = constant_f32(vec![2.0, 1.0, 0.1, 0.5, 2.5, 1.0], vec![2, 3]);
-/// let labels = constant_f32(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], vec![2, 3]); // classes [0, 1]
-///
-/// let loss = cross_entropy_one_hot_logits(logits, labels, 1); // scalar
-/// ```
-// Cross-entropy for one-hot labels with logits input (no softmax),
-// computed as mean(logsumexp(logits) - sum(labels * logits, class_axis)).
+/// Cross-entropy loss for one-hot labels with logit inputs (no softmax).
 pub fn cross_entropy_one_hot_logits(
     logits: impl Into<TensorExpr<f32>>,
     labels_one_hot: impl Into<TensorExpr<f32>>,
@@ -217,41 +86,6 @@ pub fn cross_entropy_one_hot_logits(
 }
 
 /// A model structure for organizing computation graphs with multiple outputs.
-///
-/// `Model` provides a structured API for constructing computation graphs with named outputs
-/// (like "logits", "loss", etc.) instead of returning messy tuples of `(TensorGraph, NodeIndex, ...)`.
-///
-/// # Example
-///
-/// ```ignore
-/// use nn::Model;
-/// use tensor::{Input, Parameter};
-///
-/// let batch_size = 32;
-/// let w1 = Parameter::new(vec![0.1; 784 * 128], vec![784, 128]);
-/// let b1 = Parameter::new(vec![0.0; 128], vec![1, 128]);
-/// let w2 = Parameter::new(vec![0.1; 128 * 10], vec![128, 10]);
-/// let b2 = Parameter::new(vec![0.0; 10], vec![1, 10]);
-///
-/// // Build model graph
-/// let images = Input::<f32>::new("images", vec![batch_size, 784]);
-/// let labels = Input::<f32>::new("labels", vec![batch_size, 10]);
-///
-/// let h = nn::relu(nn::linear(images, &w1, Some(&b1)));
-/// let logits = nn::linear(h, &w2, Some(&b2));
-/// let loss = nn::cross_entropy_one_hot_logits(logits.clone(), labels, 1);
-///
-/// // Create model
-/// let mut model = Model::new();
-/// model.add_output("logits", logits);
-/// model.add_output("loss", loss.clone());
-/// model.set_loss(loss);
-///
-/// // Access outputs
-/// let logits_idx = model.get_output("logits").unwrap();
-/// let loss_idx = model.loss().unwrap();
-/// let graph = model.graph();
-/// ```
 #[derive(Clone)]
 pub struct Model<D: DType> {
     /// The underlying computation graph

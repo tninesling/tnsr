@@ -61,8 +61,6 @@ use crate::tensor::{BinaryOp, ReduceOp, TensorExpr, UnaryOp};
 pub struct NoGrad;
 
 /// Typestate marker for graphs with gradient computation nodes.
-///
-/// Tracks gradient nodes and parameter mappings for automatic differentiation.
 #[derive(Clone, Debug)]
 pub struct WithGrad {
     /// Maps parameter ID to its gradient accumulation node.
@@ -168,58 +166,6 @@ impl<D> TensorGraphNode<D> {
 }
 
 /// Directed acyclic graph (DAG) representation of tensor computations.
-///
-/// `TensorGraph` is the lowered representation of [`TensorExpr`] that's used by executors
-/// to perform actual computation. It uses a typestate pattern with generic parameter `G`
-/// to track whether gradient computation nodes have been added.
-///
-/// # Type States
-///
-/// - `TensorGraph<D, NoGrad>` - Forward-only graph without gradient computation
-/// - `TensorGraph<D, WithGrad>` - Graph with gradient nodes for automatic differentiation
-///
-/// # Structure
-///
-/// Each node in the graph represents an operation (constant, input, parameter, unary, binary,
-/// matmul, etc.), and edges represent data flow between operations. The graph maintains:
-/// - Node operations and their relationships
-/// - Shape information for each node
-/// - Gradient metadata (when `G = WithGrad`)
-///
-/// # Usage
-///
-/// Create a graph by converting from a [`TensorExpr`]:
-///
-/// ```rust
-/// use tensor::{TensorExpr, graph::TensorGraph};
-///
-/// let x = TensorExpr::<f32>::input("x", vec![2, 3]);
-/// let y = x.relu();
-/// let graph: TensorGraph<f32> = y.into();
-/// ```
-///
-/// For training with gradients, use [`with_gradients`](TensorGraph::with_gradients):
-///
-/// ```ignore
-/// use tensor::{Parameter, graph::TensorGraph};
-///
-/// let w = Parameter::new(vec![1.0, 2.0], vec![2, 1]);
-/// let x = TensorExpr::<f32>::input("x", vec![2, 1]);
-/// let y = w * x;  // Forward computation
-/// let loss = y.reduce_sum(0);  // Scalar loss
-///
-/// let graph: TensorGraph<f32> = loss.into();
-/// let grad_graph = graph.with_gradients(loss_node);
-/// // grad_graph now contains both forward and gradient computation nodes
-/// ```
-///
-/// # Execution
-///
-/// Graphs are executed by implementors of the `Executor` trait from the `runtime` crate:
-/// - `SimpleExecutor` for CPU execution
-/// - `CudaExecutor` for GPU execution (with `cuda` feature)
-///
-/// See the `runtime` crate documentation for execution details.
 #[derive(Clone)]
 pub struct TensorGraph<D, G = NoGrad> {
     pub graph: Graph<TensorGraphNode<D>, usize>,
@@ -269,9 +215,6 @@ impl<D, G> TensorGraph<D, G> {
 
 impl TensorGraph<f32, NoGrad> {
     /// Helper method to lower a TensorExpr into the graph during gradient construction.
-    ///
-    /// This method is used internally by `with_gradients` to convert fluent operator
-    /// expressions into graph nodes.
     fn lower_gradient_expr(
         &mut self,
         expr: &crate::tensor::TensorExpr<f32>,
@@ -304,36 +247,6 @@ impl TensorGraph<f32, NoGrad> {
     }
 
     /// Create a new graph with gradient computation nodes for automatic differentiation.
-    ///
-    /// This method transforms a forward-only graph into one that computes gradients
-    /// during the forward pass. Gradient nodes are added for each operation that
-    /// depends (directly or transitively) on parameters.
-    ///
-    /// # Arguments
-    ///
-    /// * `loss_node` - The scalar loss node to differentiate with respect to
-    ///
-    /// # Returns
-    ///
-    /// A `TensorGraph<f32, WithGrad>` containing both forward and gradient computation nodes.
-    ///
-    /// # Gradient Computation Strategy
-    ///
-    /// For each node in topological order from loss back to parameters:
-    /// - Binary Add: d(a+b)/da = 1, d(a+b)/db = 1 → grad_a = grad_out, grad_b = grad_out
-    /// - Binary Mul: d(a*b)/da = b, d(a*b)/db = a → grad_a = grad_out * b, grad_b = grad_out * a
-    /// - Unary Exp: d(exp(x))/dx = exp(x) → grad_x = grad_out * exp(x)
-    /// - MatMul: d(A@B)/dA = dC @ B^T, d(A@B)/dB = A^T @ dC
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let x = Parameter::new(vec![2.0], vec![1]);
-    /// let y = x.clone() * x; // y = x^2
-    /// let graph: TensorGraph<f32, NoGrad> = y.into();
-    /// let grad_graph = graph.with_gradients(NodeIndex::from(1));
-    /// // grad_graph now contains nodes to compute dy/dx = 2*x
-    /// ```
     pub fn with_gradients(mut self, loss_node: NodeIndex) -> TensorGraph<f32, WithGrad> {
         let mut param_to_grad: HashMap<usize, NodeIndex> = HashMap::new();
         let mut gradient_nodes: HashSet<NodeIndex> = HashSet::new();

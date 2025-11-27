@@ -1,13 +1,9 @@
-use std::collections::HashMap;
-
-use petgraph::Graph;
-use petgraph::graph::NodeIndex;
-
-use crate::graph::{TensorGraph, TensorGraphNode};
-use crate::tensor;
-
 use super::builder::TileIRBuilder;
 use super::ir::{DType, Dim, Expr, MatMulLayout, ReduceOp, TileIR};
+use crate::graph::{TensorGraph, TensorGraphNode};
+use crate::tensor;
+use petgraph::{Direction, Graph, graph::NodeIndex};
+use std::collections::HashMap;
 
 #[allow(dead_code)]
 pub struct TileGraph {
@@ -28,7 +24,7 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
             ) {
                 let inputs: Vec<Vec<usize>> = tensor_graph
                     .graph
-                    .neighbors_directed(idx, petgraph::Direction::Incoming)
+                    .neighbors_directed(idx, Direction::Incoming)
                     .filter_map(|pred_idx| tensor_graph.shapes.get(&pred_idx).cloned())
                     .collect();
                 op_input_shapes.insert(idx, inputs);

@@ -1,15 +1,9 @@
-use std::ops::Add;
-use std::ops::Div;
-use std::ops::Mul;
-use std::ops::Sub;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-
 use crate::graph;
 use crate::graph::TensorGraphNode;
 use petgraph::graph::NodeIndex;
+use std::ops::{Add, Div, Mul, Sub};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 static PARAM_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -687,10 +681,7 @@ impl<D: DType, R: Into<TensorExpr<D>>> Add<R> for TensorExpr<D> {
     type Output = TensorExpr<D>;
     fn add(self, rhs: R) -> Self::Output {
         let rhs = rhs.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Binary {
@@ -706,10 +697,7 @@ impl<D: DType, R: Into<TensorExpr<D>>> Sub<R> for TensorExpr<D> {
     type Output = TensorExpr<D>;
     fn sub(self, rhs: R) -> Self::Output {
         let rhs = rhs.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Binary {
@@ -725,10 +713,7 @@ impl<D: DType, R: Into<TensorExpr<D>>> Mul<R> for TensorExpr<D> {
     type Output = TensorExpr<D>;
     fn mul(self, rhs: R) -> Self::Output {
         let rhs = rhs.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Binary {
@@ -744,10 +729,7 @@ impl<D: DType, R: Into<TensorExpr<D>>> Div<R> for TensorExpr<D> {
     type Output = TensorExpr<D>;
     fn div(self, rhs: R) -> Self::Output {
         let rhs = rhs.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Binary {
@@ -766,10 +748,7 @@ impl<D: DType> TensorExpr<D> {
         D: 'static,
     {
         let other = other.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), other.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Gt { a: self, b: other },
@@ -782,10 +761,7 @@ impl<D: DType> TensorExpr<D> {
         D: 'static,
     {
         let condition = condition.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), condition.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Mask {
@@ -873,19 +849,14 @@ impl<D: DType> TensorExpr<D> {
                 ExprKind::Binary { op, a, b } => {
                     let a_idx = lower_rec(a, g);
                     let b_idx = lower_rec(b, g);
-                    // Implicit broadcasting is not supported with the new axis-based broadcast system.
-                    // Users must explicitly broadcast operands to matching shapes before binary ops.
-                    #[cfg(feature = "implicit_broadcast")]
-                    {
-                        if a.shape() != expr.shape() || b.shape() != expr.shape() {
-                            panic!(
-                                "Binary op requires matching shapes. Use .broadcast() explicitly.\n\
+                    if a.shape() != expr.shape() || b.shape() != expr.shape() {
+                        panic!(
+                            "Binary op requires matching shapes. Use .broadcast() explicitly.\n\
                                  Left shape: {:?}, Right shape: {:?}, Output shape: {:?}",
-                                a.shape(),
-                                b.shape(),
-                                expr.shape()
-                            );
-                        }
+                            a.shape(),
+                            b.shape(),
+                            expr.shape()
+                        );
                     }
                     let node_idx = g.graph.add_node(op.clone().into());
                     g.shapes.insert(node_idx, expr.shape().clone());

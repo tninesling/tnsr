@@ -1,5 +1,3 @@
-// TILE IR BUILDER
-
 use super::ir::{
     Block, DType, Expr, KernelParam, MatMulLayout, MemorySpace, ReduceOp, Stmt, TileIR, TileVar,
 };

@@ -77,11 +77,7 @@ mod mnist_loader {
 
     /// Returns the default data directory path (project_root/data)
     pub fn default_data_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("data"))
-            .unwrap_or_else(|| PathBuf::from("data"))
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data")
     }
 }
 

@@ -15,9 +15,8 @@ cudarc = { version = "0.17.3", features = ["cuda-12090"], optional = true }
 rayon = { version = "1.11", optional = true }
 
 [features]
-default = ["cuda", "implicit_broadcast", "parallel"]
+default = ["parallel"]
 cuda = ["cudarc"]
-implicit_broadcast = []
 parallel = ["rayon"]
 
 [[bench]]

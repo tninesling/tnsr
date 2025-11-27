@@ -1,7 +1,3 @@
-// TILE IR DEFINITIONS
-
-/// The complete Tile IR for a kernel
-#[allow(dead_code)]
 pub struct TileIR {
     pub kernel_name: String,
     pub params: Vec<KernelParam>,
@@ -9,22 +5,16 @@ pub struct TileIR {
     pub shared_mem_bytes: usize,
 }
 
-/// Kernel parameters (inputs/outputs)
-#[allow(dead_code)]
 pub struct KernelParam {
     pub name: String,
     pub dtype: DType,
     pub is_input: bool,
 }
 
-/// A block of statements (like a basic block)
-#[allow(dead_code)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
 }
 
-/// Operations on tiles
-#[allow(dead_code)]
 pub enum Stmt {
     /// Allocate a tile variable
     AllocTile {
@@ -168,18 +158,14 @@ pub enum Stmt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TileVar(pub usize);
 
-/// Memory spaces
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum MemorySpace {
     Register,
     Shared,
     Global,
 }
 
-/// Data types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum DType {
     F16,
     BF16,

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::trace_span;
 
-static PTX: &str = include_str!("cuda-kernels.ptx");
+static PTX: &str = include_str!("kernels.ptx");
 
 pub struct CudaExecutor {
     device: Arc<CudaContext>,

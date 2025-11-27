@@ -22,17 +22,8 @@ use tracing::trace_span;
 use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::prelude::*;
 
-/// Iterator type for slice traversal, conditionally parallel based on features.
-///
-/// With the `parallel` feature enabled, uses Rayon for parallel iteration.
-/// Otherwise, uses standard sequential iteration.
 #[cfg(feature = "parallel")]
 pub type SliceIter<'a, T> = rayon::iter::MinLen<rayon::slice::Iter<'a, T>>;
-
-/// Iterator type for slice traversal, conditionally parallel based on features.
-///
-/// With the `parallel` feature enabled, uses Rayon for parallel iteration.
-/// Otherwise, uses standard sequential iteration.
 #[cfg(not(feature = "parallel"))]
 pub type SliceIter<'a, T> = std::slice::Iter<'a, T>;
 
@@ -57,16 +48,6 @@ pub struct TracingGuard {
 ///
 /// Returns a [`TracingGuard`] that must be kept alive for the duration of tracing.
 /// When dropped, all trace data is flushed to the file.
-///
-/// # Example
-///
-/// ```no_run
-/// use runtime::init_chrome_tracing;
-///
-/// let _guard = init_chrome_tracing("trace.json").unwrap();
-/// // ... perform traced operations ...
-/// // Trace is flushed when _guard is dropped
-/// ```
 pub fn init_chrome_tracing(file_path: &str) -> Result<TracingGuard, Box<dyn std::error::Error>> {
     let (chrome_layer, guard) = ChromeLayerBuilder::new().file(file_path).build();
 
@@ -173,31 +154,26 @@ impl SimpleExecutor {
 
     fn exp(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("exp").entered();
-
         get_iter(x).copied().map(f32::exp).collect()
     }
 
     fn log(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("log").entered();
-
         get_iter(x).copied().map(f32::ln).collect()
     }
 
     fn relu(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("relu").entered();
-
         get_iter(x).map(|v| v.max(0.0)).collect()
     }
 
     fn add(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
         let _span = trace_span!("add").entered();
-
         get_iter(a).zip(get_iter(b)).map(|(x, y)| x + y).collect()
     }
 
     fn sub(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
         let _span = trace_span!("sub").entered();
-
         get_iter(a).zip(get_iter(b)).map(|(x, y)| x - y).collect()
     }
 

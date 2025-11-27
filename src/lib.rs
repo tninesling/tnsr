@@ -114,18 +114,19 @@ pub trait Executor<D> {
 /// # Example
 ///
 /// ```rust
-/// use runtime::{Executor, Runtime};
-/// use tensor::{TensorExpr, graph::TensorGraph};
+/// use tnsr::{SimpleExecutor, Executor};
+/// use tnsr::tensor::TensorExpr;
+/// use tnsr::graph::TensorGraph;
 /// use std::collections::HashMap;
 ///
-/// let mut runtime = Runtime::new();
+/// let mut executor = SimpleExecutor::new();
 /// let x = TensorExpr::<f32>::input("x", vec![2, 3]);
 /// let graph: TensorGraph<f32> = x.into();
 ///
 /// let mut inputs = HashMap::new();
 /// inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ///
-/// let result = runtime.execute(&graph, inputs).unwrap();
+/// let result = executor.execute(&graph, inputs).unwrap();
 /// assert_eq!(result.len(), 6);
 /// ```
 #[derive(Default)]

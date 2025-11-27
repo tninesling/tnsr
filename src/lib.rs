@@ -214,11 +214,11 @@ impl Executor<f32> for SimpleExecutor {
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
             let result = match node {
-                TensorGraphNode::Constant { data } => {
+                TensorGraphNode::Constant { data, .. } => {
                     let _span = trace_span!("constant", node = node_idx.index()).entered();
                     data.as_ref().clone()
                 }
-                TensorGraphNode::Input { name } => {
+                TensorGraphNode::Input { name, .. } => {
                     let _span =
                         trace_span!("input", node = node_idx.index(), name = name).entered();
                     inputs
@@ -230,7 +230,7 @@ impl Executor<f32> for SimpleExecutor {
                     let _span = trace_span!("parameter", node = node_idx.index()).entered();
                     data.lock().unwrap().clone()
                 }
-                TensorGraphNode::Unary { op } => {
+                TensorGraphNode::Unary { op, .. } => {
                     let inputs = graph.inputs(*node_idx);
                     let x = self.values.get(&inputs[0]).with_context(|| {
                         format!("Value for node {} not computed", inputs[0].index())
@@ -242,7 +242,7 @@ impl Executor<f32> for SimpleExecutor {
                         tensor::UnaryOp::Relu => self.relu(x),
                     }
                 }
-                TensorGraphNode::Binary { op } => {
+                TensorGraphNode::Binary { op, .. } => {
                     let ins = graph.inputs(*node_idx);
                     let a = self.values.get(&ins[0]).with_context(|| {
                         format!("Value for node {} not computed", ins[0].index())
@@ -263,19 +263,19 @@ impl Executor<f32> for SimpleExecutor {
                         tensor::BinaryOp::Div => self.div(a, b),
                     }
                 }
-                TensorGraphNode::MatMul => {
+                TensorGraphNode::MatMul { .. } => {
                     let _span = trace_span!("matmul", node = node_idx.index()).entered();
                     matmul_forward(graph, &self.values, *node_idx)?
                 }
-                TensorGraphNode::Transpose => {
+                TensorGraphNode::Transpose { .. } => {
                     let _span = trace_span!("transpose", node = node_idx.index()).entered();
                     transpose_forward(graph, &self.values, *node_idx)?
                 }
-                TensorGraphNode::BroadcastAxis { axis } => {
+                TensorGraphNode::BroadcastAxis { axis, .. } => {
                     let _span = trace_span!("broadcast_axis", node = node_idx.index()).entered();
                     broadcast_axis_forward(graph, &self.values, *node_idx, *axis)?
                 }
-                TensorGraphNode::ReduceAxis { op, axis } => {
+                TensorGraphNode::ReduceAxis { op, axis, .. } => {
                     let _span = trace_span!(
                         "reduce_axis",
                         op = node.name(),
@@ -285,7 +285,7 @@ impl Executor<f32> for SimpleExecutor {
                     .entered();
                     reduce_axis_forward(graph, &self.values, *node_idx, op, *axis)?
                 }
-                TensorGraphNode::Gt => {
+                TensorGraphNode::Gt { .. } => {
                     let _span = trace_span!("gt", node = node_idx.index()).entered();
                     let ins = graph.inputs(*node_idx);
                     let a = self.values.get(&ins[0]).with_context(|| {
@@ -302,7 +302,7 @@ impl Executor<f32> for SimpleExecutor {
                     );
                     self.gt(a, b)
                 }
-                TensorGraphNode::Mask => {
+                TensorGraphNode::Mask { .. } => {
                     let _span = trace_span!("mask", node = node_idx.index()).entered();
                     let ins = graph.inputs(*node_idx);
                     let values = self.values.get(&ins[0]).with_context(|| {
@@ -373,14 +373,8 @@ fn matmul_forward<G>(
     let b = values
         .get(&b_idx)
         .context("Right operand value not computed for matmul")?;
-    let a_shape = graph
-        .shapes
-        .get(&a_idx)
-        .context("Shape missing for matmul left operand")?;
-    let b_shape = graph
-        .shapes
-        .get(&b_idx)
-        .context("Shape missing for matmul right operand")?;
+    let a_shape = graph.graph[a_idx].shape();
+    let b_shape = graph.graph[b_idx].shape();
     anyhow::ensure!(
         a_shape.len() == 2,
         "Matmul left operand must be 2D, got {}D",
@@ -438,10 +432,7 @@ fn transpose_forward<G>(
     let a = values
         .get(&a_idx)
         .context("Input value not computed for transpose")?;
-    let a_shape = graph
-        .shapes
-        .get(&a_idx)
-        .context("Shape missing for transpose input")?;
+    let a_shape = graph.graph[a_idx].shape();
 
     anyhow::ensure!(
         a_shape.len() == 2,
@@ -471,14 +462,8 @@ fn broadcast_axis_forward<G>(
     let in_val = values
         .get(&in_idx)
         .context("Input value not computed for broadcast_axis")?;
-    let in_shape = graph
-        .shapes
-        .get(&in_idx)
-        .context("Input shape missing for broadcast_axis")?;
-    let out_shape = graph
-        .shapes
-        .get(&node_idx)
-        .context("Output shape missing for broadcast_axis")?;
+    let in_shape = graph.graph[in_idx].shape();
+    let out_shape = graph.graph[node_idx].shape();
     let out_size: usize = out_shape.iter().product();
     let in_strides = rowmajor_strides(in_shape);
     let out_strides = rowmajor_strides(out_shape);
@@ -509,14 +494,8 @@ fn reduce_axis_forward<G>(
     let x = values
         .get(&in_idx)
         .context("Input value not computed for reduce_axis")?;
-    let in_shape = graph
-        .shapes
-        .get(&in_idx)
-        .context("Input shape missing for reduce_axis")?;
-    let out_shape = graph
-        .shapes
-        .get(&node_idx)
-        .context("Output shape missing for reduce_axis")?;
+    let in_shape = graph.graph[in_idx].shape();
+    let out_shape = graph.graph[node_idx].shape();
     let out_size: usize = out_shape.iter().product();
     let axis_size = in_shape[axis];
     let in_strides = rowmajor_strides(in_shape);

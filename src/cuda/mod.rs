@@ -319,7 +319,7 @@ impl Executor<f32> for CudaExecutor {
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
             let result = match node {
-                TensorGraphNode::Constant { data } => {
+                TensorGraphNode::Constant { data, .. } => {
                     let _span = trace_span!("constant", node = node_idx.index(), size = data.len())
                         .entered();
                     let stream = self.device.default_stream();
@@ -331,7 +331,7 @@ impl Executor<f32> for CudaExecutor {
                         .context("Failed to copy constant to CUDA device")?;
                     device_data
                 }
-                TensorGraphNode::Input { name } => {
+                TensorGraphNode::Input { name, .. } => {
                     let _span =
                         trace_span!("input", node = node_idx.index(), name = name).entered();
                     let val = inputs
@@ -347,7 +347,7 @@ impl Executor<f32> for CudaExecutor {
                         .context("Failed to copy input to CUDA device")?;
                     device_data
                 }
-                TensorGraphNode::Unary { op } => {
+                TensorGraphNode::Unary { op, .. } => {
                     let inputs = graph.inputs(*node_idx);
                     let input = self
                         .values
@@ -360,7 +360,7 @@ impl Executor<f32> for CudaExecutor {
                         tensor::UnaryOp::Relu => self.relu(input),
                     }
                 }
-                TensorGraphNode::Binary { op } => {
+                TensorGraphNode::Binary { op, .. } => {
                     let ins = graph.inputs(*node_idx);
                     let lhs = self
                         .values
@@ -377,7 +377,7 @@ impl Executor<f32> for CudaExecutor {
                         tensor::BinaryOp::Div => self.div(lhs, rhs),
                     }
                 }
-                TensorGraphNode::MatMul => {
+                TensorGraphNode::MatMul { .. } => {
                     let ins = graph.inputs(*node_idx);
                     let lhs = self
                         .values
@@ -387,14 +387,8 @@ impl Executor<f32> for CudaExecutor {
                         .values
                         .get(&ins[1])
                         .context("Missing right operand for matmul")?;
-                    let lhs_shape = graph
-                        .shapes
-                        .get(&ins[0])
-                        .context("Missing shape for matmul left operand")?;
-                    let rhs_shape = graph
-                        .shapes
-                        .get(&ins[1])
-                        .context("Missing shape for matmul right operand")?;
+                    let lhs_shape = graph.graph[ins[0]].shape();
+                    let rhs_shape = graph.graph[ins[1]].shape();
 
                     anyhow::ensure!(
                         lhs_shape.len() == 2,
@@ -435,21 +429,15 @@ impl Executor<f32> for CudaExecutor {
                         .context("Failed to copy parameter to CUDA device")?;
                     device_data
                 }
-                TensorGraphNode::BroadcastAxis { axis } => {
+                TensorGraphNode::BroadcastAxis { axis, .. } => {
                     let stream = self.device.default_stream();
                     let in_idx = graph.inputs(*node_idx)[0];
                     let in_val = self
                         .values
                         .get(&in_idx)
                         .context("Missing input value for broadcast")?;
-                    let in_shape = graph
-                        .shapes
-                        .get(&in_idx)
-                        .context("Missing input shape for broadcast")?;
-                    let out_shape = graph
-                        .shapes
-                        .get(node_idx)
-                        .context("Missing output shape for broadcast")?;
+                    let in_shape = graph.graph[in_idx].shape();
+                    let out_shape = graph.graph[*node_idx].shape();
                     let out_size: usize = out_shape.iter().product();
 
                     anyhow::ensure!(
@@ -539,20 +527,14 @@ impl Executor<f32> for CudaExecutor {
 
                     out
                 }
-                TensorGraphNode::ReduceAxis { op, axis } => {
+                TensorGraphNode::ReduceAxis { op, axis, .. } => {
                     let in_idx = graph.inputs(*node_idx)[0];
                     let x_device = self
                         .values
                         .get(&in_idx)
                         .context("Missing input value for reduce")?;
-                    let in_shape = graph
-                        .shapes
-                        .get(&in_idx)
-                        .context("Missing input shape for reduce")?;
-                    let out_shape = graph
-                        .shapes
-                        .get(node_idx)
-                        .context("Missing output shape for reduce")?;
+                    let in_shape = graph.graph[in_idx].shape();
+                    let out_shape = graph.graph[*node_idx].shape();
                     let out_len: usize = out_shape.iter().product();
 
                     anyhow::ensure!(
@@ -642,16 +624,13 @@ impl Executor<f32> for CudaExecutor {
 
                     out_device
                 }
-                TensorGraphNode::Transpose => {
+                TensorGraphNode::Transpose { .. } => {
                     let in_idx = graph.inputs(*node_idx)[0];
                     let input = self
                         .values
                         .get(&in_idx)
                         .context("Missing input value for transpose")?;
-                    let in_shape = graph
-                        .shapes
-                        .get(&in_idx)
-                        .context("Missing input shape for transpose")?;
+                    let in_shape = graph.graph[in_idx].shape();
 
                     anyhow::ensure!(
                         in_shape.len() == 2,
@@ -663,7 +642,7 @@ impl Executor<f32> for CudaExecutor {
                     let cols = in_shape[1];
                     self.transpose(input, rows, cols)
                 }
-                TensorGraphNode::Gt => {
+                TensorGraphNode::Gt { .. } => {
                     let ins = graph.inputs(*node_idx);
                     let lhs = self
                         .values
@@ -675,7 +654,7 @@ impl Executor<f32> for CudaExecutor {
                         .context("Missing right operand for Gt")?;
                     self.gt(lhs, rhs)
                 }
-                TensorGraphNode::Mask => {
+                TensorGraphNode::Mask { .. } => {
                     let ins = graph.inputs(*node_idx);
                     let values = self
                         .values

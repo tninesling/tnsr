@@ -785,33 +785,33 @@ impl<D: DType> TensorExpr<D> {
                     *idx
                 }
                 ExprKind::Constant { data } => {
-                    let idx = g
-                        .graph
-                        .add_node(TensorGraphNode::Constant { data: data.clone() });
-                    g.shapes.insert(idx, expr.shape().clone());
+                    let idx = g.graph.add_node(TensorGraphNode::Constant {
+                        data: data.clone(),
+                        shape: expr.shape().clone(),
+                    });
                     idx
                 }
                 ExprKind::Input { name } => {
                     // Reuse semantics like Input::lower_to_graph
                     for idx in g.graph.node_indices() {
-                        if let TensorGraphNode::Input { name: n } = &g[idx]
+                        if let TensorGraphNode::Input { name: n, shape } = &g[idx]
                             && n == name
                         {
-                            let existing_shape =
-                                g.shapes.get(&idx).expect("shape missing for input");
                             assert_eq!(
-                                existing_shape,
+                                shape,
                                 expr.shape(),
                                 "Input '{:?}' shape mismatch: {:?} vs {:?}",
                                 name,
-                                existing_shape,
+                                shape,
                                 expr.shape()
                             );
                             return idx;
                         }
                     }
-                    let idx = g.graph.add_node(TensorGraphNode::Input { name });
-                    g.shapes.insert(idx, expr.shape().clone());
+                    let idx = g.graph.add_node(TensorGraphNode::Input {
+                        name,
+                        shape: expr.shape().clone(),
+                    });
                     idx
                 }
                 ExprKind::Parameter { id, data } => {
@@ -819,8 +819,7 @@ impl<D: DType> TensorExpr<D> {
                         if let TensorGraphNode::Parameter { id: pid, .. } = &g[idx]
                             && pid == id
                         {
-                            let existing_shape =
-                                g.shapes.get(&idx).expect("shape missing for parameter");
+                            let existing_shape = g.graph[idx].shape();
                             assert_eq!(
                                 existing_shape,
                                 expr.shape(),
@@ -835,14 +834,16 @@ impl<D: DType> TensorExpr<D> {
                     let idx = g.graph.add_node(TensorGraphNode::Parameter {
                         id: *id,
                         data: data.clone(),
+                        shape: expr.shape().clone(),
                     });
-                    g.shapes.insert(idx, expr.shape().clone());
                     idx
                 }
                 ExprKind::Unary { op, x } => {
                     let x_idx = lower_rec(x, g);
-                    let node_idx = g.graph.add_node(op.clone().into());
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Unary {
+                        op: op.clone(),
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
@@ -858,8 +859,10 @@ impl<D: DType> TensorExpr<D> {
                             expr.shape()
                         );
                     }
-                    let node_idx = g.graph.add_node(op.clone().into());
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Binary {
+                        op: op.clone(),
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(a_idx, node_idx, 0);
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
@@ -867,18 +870,19 @@ impl<D: DType> TensorExpr<D> {
                 ExprKind::MatMul { a, b } => {
                     let a_idx = lower_rec(a, g);
                     let b_idx = lower_rec(b, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::MatMul);
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::MatMul {
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(a_idx, node_idx, 0);
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
                 }
                 ExprKind::BroadcastAxis { x, axis } => {
                     let x_idx = lower_rec(x, g);
-                    let node_idx = g
-                        .graph
-                        .add_node(TensorGraphNode::BroadcastAxis { axis: *axis });
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::BroadcastAxis {
+                        axis: *axis,
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
@@ -887,23 +891,25 @@ impl<D: DType> TensorExpr<D> {
                     let node_idx = g.graph.add_node(TensorGraphNode::ReduceAxis {
                         op: op.clone(),
                         axis: *axis,
+                        shape: expr.shape().clone(),
                     });
-                    g.shapes.insert(node_idx, expr.shape().clone());
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
                 ExprKind::Transpose { x } => {
                     let x_idx = lower_rec(x, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::Transpose);
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Transpose {
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
                 ExprKind::Gt { a, b } => {
                     let a_idx = lower_rec(a, g);
                     let b_idx = lower_rec(b, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::Gt);
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Gt {
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(a_idx, node_idx, 0);
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
@@ -911,8 +917,9 @@ impl<D: DType> TensorExpr<D> {
                 ExprKind::Mask { values, condition } => {
                     let values_idx = lower_rec(values, g);
                     let condition_idx = lower_rec(condition, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::Mask);
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Mask {
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(values_idx, node_idx, 0);
                     g.graph.add_edge(condition_idx, node_idx, 1);
                     node_idx

@@ -297,11 +297,7 @@ fn gradient_matmul_chain_rule() {
 
     eprintln!("\n=== Forward Graph ===");
     for (idx, node) in graph.graph.node_references() {
-        let shape = graph
-            .shapes
-            .get(&idx)
-            .map(|s| format!("{:?}", s))
-            .unwrap_or("N/A".to_string());
+        let shape = format!("{:?}", node.shape());
         eprintln!("Node {:?}: {} shape {}", idx.index(), node.name(), shape);
     }
 
@@ -309,11 +305,7 @@ fn gradient_matmul_chain_rule() {
 
     eprintln!("\n=== Gradient Graph ===");
     for (idx, node) in grad_graph.graph.node_references() {
-        let shape = grad_graph
-            .shapes
-            .get(&idx)
-            .map(|s| format!("{:?}", s))
-            .unwrap_or("N/A".to_string());
+        let shape = format!("{:?}", node.shape());
         let inputs = grad_graph.inputs(idx);
         eprintln!(
             "Node {:?}: {} shape {} inputs: {:?}",

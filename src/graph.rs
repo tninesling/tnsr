@@ -75,33 +75,48 @@ pub struct WithGrad {
 pub enum TensorGraphNode<D> {
     Constant {
         data: Arc<Vec<D>>,
+        shape: crate::tensor::Shape,
     },
     Input {
         name: &'static str,
+        shape: crate::tensor::Shape,
     },
     Parameter {
         id: usize,
         data: Arc<Mutex<Vec<D>>>,
+        shape: crate::tensor::Shape,
     },
     Unary {
         op: UnaryOp,
+        shape: crate::tensor::Shape,
     },
     Binary {
         op: BinaryOp,
+        shape: crate::tensor::Shape,
     },
-    MatMul,
-    Transpose,
+    MatMul {
+        shape: crate::tensor::Shape,
+    },
+    Transpose {
+        shape: crate::tensor::Shape,
+    },
     BroadcastAxis {
         axis: usize,
+        shape: crate::tensor::Shape,
     },
     ReduceAxis {
         op: ReduceOp,
         axis: usize,
+        shape: crate::tensor::Shape,
     },
     /// Greater than comparison: returns 1.0 where lhs > rhs, 0.0 otherwise
-    Gt,
+    Gt {
+        shape: crate::tensor::Shape,
+    },
     /// Mask operation: returns values where condition != 0.0, 0.0 otherwise
-    Mask,
+    Mask {
+        shape: crate::tensor::Shape,
+    },
 }
 
 impl<D> TensorGraphNode<D> {
@@ -110,41 +125,45 @@ impl<D> TensorGraphNode<D> {
             TensorGraphNode::Constant { .. } => "Constant",
             TensorGraphNode::Input { .. } => "Input",
             TensorGraphNode::Parameter { .. } => "Parameter",
-            TensorGraphNode::Unary { op } => match op {
+            TensorGraphNode::Unary { op, .. } => match op {
                 UnaryOp::Neg => "Neg",
                 UnaryOp::Exp => "Exp",
                 UnaryOp::Log => "Log",
                 UnaryOp::Relu => "Relu",
             },
-            TensorGraphNode::Binary { op } => match op {
+            TensorGraphNode::Binary { op, .. } => match op {
                 BinaryOp::Add => "Add",
                 BinaryOp::Sub => "Sub",
                 BinaryOp::Mul => "Mul",
                 BinaryOp::Div => "Div",
             },
-            TensorGraphNode::MatMul => "MatMul",
-            TensorGraphNode::Transpose => "Transpose",
+            TensorGraphNode::MatMul { .. } => "MatMul",
+            TensorGraphNode::Transpose { .. } => "Transpose",
             TensorGraphNode::BroadcastAxis { .. } => "BroadcastAxis",
             TensorGraphNode::ReduceAxis { op, .. } => match op {
                 ReduceOp::Sum => "ReduceAxisSum",
                 ReduceOp::Max => "ReduceAxisMax",
                 ReduceOp::Mean => "ReduceAxisMean",
             },
-            TensorGraphNode::Gt => "Gt",
-            TensorGraphNode::Mask => "Mask",
+            TensorGraphNode::Gt { .. } => "Gt",
+            TensorGraphNode::Mask { .. } => "Mask",
         }
     }
-}
 
-impl<D> From<UnaryOp> for TensorGraphNode<D> {
-    fn from(op: UnaryOp) -> Self {
-        TensorGraphNode::Unary { op }
-    }
-}
-
-impl<D> From<BinaryOp> for TensorGraphNode<D> {
-    fn from(op: BinaryOp) -> Self {
-        TensorGraphNode::Binary { op }
+    pub fn shape(&self) -> &crate::tensor::Shape {
+        match self {
+            TensorGraphNode::Constant { shape, .. } => shape,
+            TensorGraphNode::Input { shape, .. } => shape,
+            TensorGraphNode::Parameter { shape, .. } => shape,
+            TensorGraphNode::Unary { shape, .. } => shape,
+            TensorGraphNode::Binary { shape, .. } => shape,
+            TensorGraphNode::MatMul { shape } => shape,
+            TensorGraphNode::Transpose { shape } => shape,
+            TensorGraphNode::BroadcastAxis { shape, .. } => shape,
+            TensorGraphNode::ReduceAxis { shape, .. } => shape,
+            TensorGraphNode::Gt { shape } => shape,
+            TensorGraphNode::Mask { shape } => shape,
+        }
     }
 }
 
@@ -204,7 +223,6 @@ impl<D> From<BinaryOp> for TensorGraphNode<D> {
 #[derive(Clone)]
 pub struct TensorGraph<D, G = NoGrad> {
     pub graph: Graph<TensorGraphNode<D>, usize>,
-    pub shapes: HashMap<NodeIndex, crate::tensor::Shape>,
     gradients: G,
     _phantom: std::marker::PhantomData<G>,
 }
@@ -220,7 +238,6 @@ impl<D> TensorGraph<D, NoGrad> {
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
-            shapes: HashMap::new(),
             gradients: NoGrad,
             _phantom: std::marker::PhantomData,
         }
@@ -363,10 +380,7 @@ impl TensorGraph<f32, NoGrad> {
         }
 
         // Step 2: Validate loss node
-        let loss_shape = self
-            .shapes
-            .get(&loss_node)
-            .expect("loss node shape missing");
+        let loss_shape = self.graph[loss_node].shape();
         assert_eq!(
             loss_shape.iter().product::<usize>(),
             1,
@@ -378,8 +392,8 @@ impl TensorGraph<f32, NoGrad> {
         // We'll create a constant node with value 1.0
         let seed_grad_node = self.graph.add_node(TensorGraphNode::Constant {
             data: Arc::new(vec![1.0f32]),
+            shape: loss_shape.clone(),
         });
-        self.shapes.insert(seed_grad_node, loss_shape.clone());
         node_to_grad.insert(loss_node, seed_grad_node);
         gradient_nodes.insert(seed_grad_node);
 
@@ -400,7 +414,7 @@ impl TensorGraph<f32, NoGrad> {
 
             // Generate gradient nodes based on operation type
             match &self.graph[node_idx] {
-                TensorGraphNode::Binary { op } => {
+                TensorGraphNode::Binary { op, .. } => {
                     if inputs.len() != 2 {
                         panic!("Binary op should have 2 inputs");
                     }
@@ -435,7 +449,7 @@ impl TensorGraph<f32, NoGrad> {
                             );
 
                             // Use fluent syntax for negation
-                            let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            let grad_out_shape = self.graph[grad_output].shape().clone();
                             let grad_out_expr =
                                 crate::tensor::TensorExpr::node_ref(grad_output, grad_out_shape);
                             let neg_grad_expr = -grad_out_expr;
@@ -454,9 +468,9 @@ impl TensorGraph<f32, NoGrad> {
                             // grad_a = grad_output * b, grad_b = grad_output * a
 
                             // Use fluent syntax for gradient construction
-                            let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
-                            let input_b_shape = self.shapes.get(&input_b).unwrap().clone();
-                            let input_a_shape = self.shapes.get(&input_a).unwrap().clone();
+                            let grad_out_shape = self.graph[grad_output].shape().clone();
+                            let input_b_shape = self.graph[input_b].shape().clone();
+                            let input_a_shape = self.graph[input_a].shape().clone();
 
                             let grad_out_expr =
                                 TensorExpr::node_ref(grad_output, grad_out_shape.clone());
@@ -489,9 +503,9 @@ impl TensorGraph<f32, NoGrad> {
                             // grad_a = grad_output / b
                             // grad_b = -grad_output * a / (b * b)
 
-                            let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
-                            let input_a_shape = self.shapes.get(&input_a).unwrap().clone();
-                            let input_b_shape = self.shapes.get(&input_b).unwrap().clone();
+                            let grad_out_shape = self.graph[grad_output].shape().clone();
+                            let input_a_shape = self.graph[input_a].shape().clone();
+                            let input_b_shape = self.graph[input_b].shape().clone();
 
                             let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
                             let input_a_expr = TensorExpr::node_ref(input_a, input_a_shape);
@@ -521,7 +535,7 @@ impl TensorGraph<f32, NoGrad> {
                         }
                     }
                 }
-                TensorGraphNode::Unary { op } => {
+                TensorGraphNode::Unary { op, .. } => {
                     if inputs.len() != 1 {
                         panic!("Unary op should have 1 input");
                     }
@@ -532,8 +546,8 @@ impl TensorGraph<f32, NoGrad> {
                             // d(exp(x))/dx = exp(x)
                             // grad_x = grad_output * exp(x) = grad_output * node_output
 
-                            let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
-                            let node_out_shape = self.shapes.get(&node_idx).unwrap().clone();
+                            let grad_out_shape = self.graph[grad_output].shape().clone();
+                            let node_out_shape = self.graph[node_idx].shape().clone();
 
                             let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
                             let node_out_expr = TensorExpr::node_ref(node_idx, node_out_shape);
@@ -553,8 +567,8 @@ impl TensorGraph<f32, NoGrad> {
                             // d(log(x))/dx = 1/x
                             // grad_x = grad_output / x
 
-                            let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
-                            let input_x_shape = self.shapes.get(&input_x).unwrap().clone();
+                            let grad_out_shape = self.graph[grad_output].shape().clone();
+                            let input_x_shape = self.graph[input_x].shape().clone();
 
                             let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
                             let input_x_expr = TensorExpr::node_ref(input_x, input_x_shape);
@@ -574,7 +588,7 @@ impl TensorGraph<f32, NoGrad> {
                             // d(-x)/dx = -1
                             // grad_x = -grad_output
 
-                            let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            let grad_out_shape = self.graph[grad_output].shape().clone();
                             let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
                             let grad_x_expr = -grad_out_expr;
                             let grad_x =
@@ -590,8 +604,8 @@ impl TensorGraph<f32, NoGrad> {
                         UnaryOp::Relu => {
                             // d(relu(x))/dx = grad_output * (x > 0)
 
-                            let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
-                            let input_x_shape = self.shapes.get(&input_x).unwrap().clone();
+                            let grad_out_shape = self.graph[grad_output].shape().clone();
+                            let input_x_shape = self.graph[input_x].shape().clone();
                             let num_elements: usize = input_x_shape.iter().product();
 
                             let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
@@ -613,7 +627,7 @@ impl TensorGraph<f32, NoGrad> {
                         }
                     }
                 }
-                TensorGraphNode::MatMul => {
+                TensorGraphNode::MatMul { .. } => {
                     // d(A@B)/dA = dC @ B^T, d(A@B)/dB = A^T @ dC
                     if inputs.len() != 2 {
                         panic!("MatMul should have 2 inputs");
@@ -621,9 +635,9 @@ impl TensorGraph<f32, NoGrad> {
                     let input_a = inputs[0];
                     let input_b = inputs[1];
 
-                    let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
-                    let input_a_shape = self.shapes.get(&input_a).unwrap().clone();
-                    let input_b_shape = self.shapes.get(&input_b).unwrap().clone();
+                    let grad_out_shape = self.graph[grad_output].shape().clone();
+                    let input_a_shape = self.graph[input_a].shape().clone();
+                    let input_b_shape = self.graph[input_b].shape().clone();
 
                     let grad_out_expr = TensorExpr::<f32>::node_ref(grad_output, grad_out_shape);
                     let input_a_expr = TensorExpr::<f32>::node_ref(input_a, input_a_shape);
@@ -659,14 +673,14 @@ impl TensorGraph<f32, NoGrad> {
                 TensorGraphNode::Constant { .. } | TensorGraphNode::Input { .. } => {
                     // Constants and inputs don't need gradients
                 }
-                TensorGraphNode::Transpose => {
+                TensorGraphNode::Transpose { .. } => {
                     // d(A^T)/dA = (grad_output)^T
                     // Transpose gradient is just transpose of incoming gradient
                     if inputs.len() != 1 {
                         panic!("Transpose should have 1 input");
                     }
                     let input_a = inputs[0];
-                    let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
+                    let grad_out_shape = self.graph[grad_output].shape().clone();
 
                     let grad_out_expr = TensorExpr::<f32>::node_ref(grad_output, grad_out_shape);
 
@@ -681,7 +695,7 @@ impl TensorGraph<f32, NoGrad> {
                         grad_a,
                     );
                 }
-                TensorGraphNode::ReduceAxis { op, axis } => {
+                TensorGraphNode::ReduceAxis { op, axis, .. } => {
                     // For ReduceAxisSum: gradient is broadcast back to original shape
                     // If Y = sum(X, axis), then dX = broadcast(dY, axis)
                     match op {
@@ -690,8 +704,8 @@ impl TensorGraph<f32, NoGrad> {
                                 panic!("ReduceAxis should have 1 input");
                             }
                             let input_x = inputs[0];
-                            let input_shape = self.shapes.get(&input_x).unwrap().clone();
-                            let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            let input_shape = self.graph[input_x].shape().clone();
+                            let grad_out_shape = self.graph[grad_output].shape().clone();
                             let target_size = input_shape[*axis];
 
                             let grad_out_expr =
@@ -714,8 +728,8 @@ impl TensorGraph<f32, NoGrad> {
                                 panic!("ReduceAxis should have 1 input");
                             }
                             let input_x = inputs[0];
-                            let input_shape = self.shapes.get(&input_x).unwrap().clone();
-                            let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
+                            let input_shape = self.graph[input_x].shape().clone();
+                            let grad_out_shape = self.graph[grad_output].shape().clone();
                             let axis_size = input_shape[*axis];
                             let target_size = axis_size;
 
@@ -752,14 +766,14 @@ impl TensorGraph<f32, NoGrad> {
                         }
                     }
                 }
-                TensorGraphNode::BroadcastAxis { axis } => {
+                TensorGraphNode::BroadcastAxis { axis, .. } => {
                     // For BroadcastAxis: gradient is reduced back to original shape
                     // If Y = broadcast(X, axis), then dX = reduce_sum(dY, axis)
                     if inputs.len() != 1 {
                         panic!("BroadcastAxis should have 1 input");
                     }
                     let input_x = inputs[0];
-                    let grad_out_shape = self.shapes.get(&grad_output).unwrap().clone();
+                    let grad_out_shape = self.graph[grad_output].shape().clone();
 
                     let grad_out_expr = TensorExpr::<f32>::node_ref(grad_output, grad_out_shape);
 
@@ -774,7 +788,7 @@ impl TensorGraph<f32, NoGrad> {
                         grad_x,
                     );
                 }
-                TensorGraphNode::Gt | TensorGraphNode::Mask => {
+                TensorGraphNode::Gt { .. } | TensorGraphNode::Mask { .. } => {
                     // Gt and Mask are only used in gradient computation itself
                     // They don't need gradients (they're non-differentiable operations)
                     // Skip gradient computation for these nodes
@@ -784,7 +798,6 @@ impl TensorGraph<f32, NoGrad> {
 
         TensorGraph {
             graph: self.graph,
-            shapes: self.shapes,
             gradients: WithGrad {
                 param_to_grad,
                 gradient_nodes,
@@ -803,13 +816,13 @@ impl TensorGraph<f32, NoGrad> {
     ) {
         if let Some(&existing_grad) = node_to_grad.get(&node) {
             // Node already has a gradient, add them together
-            let sum_grad = self
-                .graph
-                .add_node(TensorGraphNode::Binary { op: BinaryOp::Add });
+            let grad_shape = self.graph[existing_grad].shape().clone();
+            let sum_grad = self.graph.add_node(TensorGraphNode::Binary {
+                op: BinaryOp::Add,
+                shape: grad_shape.clone(),
+            });
             self.graph.add_edge(existing_grad, sum_grad, 0);
             self.graph.add_edge(new_grad, sum_grad, 1);
-            let grad_shape = self.shapes.get(&existing_grad).unwrap().clone();
-            self.shapes.insert(sum_grad, grad_shape);
             gradient_nodes.insert(sum_grad);
             node_to_grad.insert(node, sum_grad);
         } else {
@@ -1007,7 +1020,7 @@ mod tests {
         // Walk through nodes to understand structure
         for idx in grad_graph.graph.node_indices() {
             let node = &grad_graph[idx];
-            let shape = grad_graph.shapes.get(&idx);
+            let shape = grad_graph.graph[idx].shape();
             let is_grad = metadata.gradient_nodes.contains(&idx);
             println!(
                 "Node {:?}: {} (shape: {:?}, is_grad: {})",
@@ -1077,7 +1090,7 @@ mod tests {
         let transpose_count = grad_graph
             .graph
             .node_indices()
-            .filter(|&idx| matches!(grad_graph[idx], TensorGraphNode::Transpose))
+            .filter(|&idx| matches!(grad_graph[idx], TensorGraphNode::Transpose { .. }))
             .count();
 
         assert!(
@@ -1198,7 +1211,7 @@ mod tests {
             .filter(|&idx| {
                 matches!(
                     grad_graph[idx],
-                    TensorGraphNode::Binary { op: BinaryOp::Mul }
+                    TensorGraphNode::Binary { op: BinaryOp::Mul, .. }
                 )
             })
             .count();

@@ -1,16 +1,8 @@
-//! Runtime abstraction for automatic backend selection.
-//!
-//! This module provides a unified [`Runtime`] interface that automatically selects
-//! the best available backend (CUDA or CPU) at runtime, eliminating the need for
-//! compile-time feature flags in user code.
-
-use std::collections::HashMap;
-
 use crate::graph::{TensorGraph, WithGrad};
+use crate::{Executor, SimpleExecutor};
 use anyhow::Result;
 use petgraph::graph::NodeIndex;
-
-use crate::{Executor, SimpleExecutor};
+use std::collections::HashMap;
 
 #[cfg(feature = "cuda")]
 use crate::cuda::CudaExecutor;

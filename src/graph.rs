@@ -285,46 +285,14 @@ impl TensorGraph<f32, NoGrad> {
             expr: &crate::tensor::TensorExpr<f32>,
             visited: &mut HashSet<NodeIndex>,
         ) {
-            match expr.kind() {
-                crate::tensor::ExprKind::NodeRef { idx } => {
-                    // Don't mark NodeRef nodes as they reference existing nodes
-                    visited.insert(*idx);
-                }
-                crate::tensor::ExprKind::Constant { .. } => {
-                    // Constants created during gradient construction are gradient nodes
-                }
-                crate::tensor::ExprKind::Input { .. }
-                | crate::tensor::ExprKind::Parameter { .. } => {
-                    // These already exist in the graph
-                }
-                crate::tensor::ExprKind::Unary { x, .. } => {
-                    mark_gradient_nodes(x, visited);
-                }
-                crate::tensor::ExprKind::Binary { a, b, .. } => {
-                    mark_gradient_nodes(a, visited);
-                    mark_gradient_nodes(b, visited);
-                }
-                crate::tensor::ExprKind::MatMul { a, b } => {
-                    mark_gradient_nodes(a, visited);
-                    mark_gradient_nodes(b, visited);
-                }
-                crate::tensor::ExprKind::Transpose { x } => {
-                    mark_gradient_nodes(x, visited);
-                }
-                crate::tensor::ExprKind::BroadcastAxis { x, .. } => {
-                    mark_gradient_nodes(x, visited);
-                }
-                crate::tensor::ExprKind::ReduceAxis { x, .. } => {
-                    mark_gradient_nodes(x, visited);
-                }
-                crate::tensor::ExprKind::Gt { a, b } => {
-                    mark_gradient_nodes(a, visited);
-                    mark_gradient_nodes(b, visited);
-                }
-                crate::tensor::ExprKind::Mask { values, condition } => {
-                    mark_gradient_nodes(values, visited);
-                    mark_gradient_nodes(condition, visited);
-                }
+            if let crate::tensor::ExprKind::NodeRef { idx } = expr.kind() {
+                // Don't mark NodeRef nodes as they reference existing nodes
+                visited.insert(*idx);
+            }
+
+            // Recursively traverse all child expressions
+            for child in expr.children() {
+                mark_gradient_nodes(child, visited);
             }
         }
 
@@ -1211,7 +1179,10 @@ mod tests {
             .filter(|&idx| {
                 matches!(
                     grad_graph[idx],
-                    TensorGraphNode::Binary { op: BinaryOp::Mul, .. }
+                    TensorGraphNode::Binary {
+                        op: BinaryOp::Mul,
+                        ..
+                    }
                 )
             })
             .count();

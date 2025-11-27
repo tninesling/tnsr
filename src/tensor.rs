@@ -280,6 +280,27 @@ impl<D: DType> TensorExpr<D> {
     pub fn kind(&self) -> &ExprKind<D> {
         &self.0.kind
     }
+
+    /// Returns references to child expressions for tree traversal.
+    ///
+    /// This enables generic traversal of expression trees without matching
+    /// on each expression kind individually.
+    pub fn children(&self) -> Vec<&TensorExpr<D>> {
+        match &self.0.kind {
+            ExprKind::Unary { x, .. } => vec![x],
+            ExprKind::Binary { a, b, .. } => vec![a, b],
+            ExprKind::MatMul { a, b } => vec![a, b],
+            ExprKind::Transpose { x } => vec![x],
+            ExprKind::BroadcastAxis { x, .. } => vec![x],
+            ExprKind::ReduceAxis { x, .. } => vec![x],
+            ExprKind::Gt { a, b } => vec![a, b],
+            ExprKind::Mask { values, condition } => vec![values, condition],
+            ExprKind::NodeRef { .. }
+            | ExprKind::Constant { .. }
+            | ExprKind::Input { .. }
+            | ExprKind::Parameter { .. } => vec![],
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

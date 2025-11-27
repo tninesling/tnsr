@@ -1,13 +1,9 @@
-use std::collections::HashMap;
-
-use petgraph::Graph;
-use petgraph::graph::NodeIndex;
-
-use tensor::graph::TensorGraph;
-use tensor::graph::TensorGraphNode;
-
 use super::builder::TileIRBuilder;
 use super::ir::{DType, Dim, Expr, MatMulLayout, ReduceOp, TileIR};
+use crate::graph::{TensorGraph, TensorGraphNode};
+use crate::tensor;
+use petgraph::{Direction, Graph, graph::NodeIndex};
+use std::collections::HashMap;
 
 #[allow(dead_code)]
 pub struct TileGraph {
@@ -21,15 +17,15 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
         for idx in tensor_graph.graph.node_indices() {
             if matches!(
                 tensor_graph.graph[idx],
-                TensorGraphNode::MatMul
+                TensorGraphNode::MatMul { .. }
                     | TensorGraphNode::BroadcastAxis { .. }
                     | TensorGraphNode::ReduceAxis { .. }
-                    | TensorGraphNode::Transpose
+                    | TensorGraphNode::Transpose { .. }
             ) {
                 let inputs: Vec<Vec<usize>> = tensor_graph
                     .graph
-                    .neighbors_directed(idx, petgraph::Direction::Incoming)
-                    .filter_map(|pred_idx| tensor_graph.shapes.get(&pred_idx).cloned())
+                    .neighbors_directed(idx, Direction::Incoming)
+                    .map(|pred_idx| tensor_graph.graph[pred_idx].shape().clone())
                     .collect();
                 op_input_shapes.insert(idx, inputs);
             }
@@ -38,13 +34,13 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
         Self {
             graph: tensor_graph.graph.map_owned(
                 |idx, node| {
-                    let shape = tensor_graph.shapes.get(&idx).unwrap();
+                    let shape = node.shape().clone();
                     // Get input shapes for operations that need them
                     let input_shapes = op_input_shapes
                         .get(&idx)
                         .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
                         .unwrap_or_default();
-                    Self::lower_node(node, shape, &input_shapes)
+                    Self::lower_node(node, &shape, &input_shapes)
                 },
                 |_, e| e,
             ),
@@ -60,12 +56,12 @@ impl TileGraph {
         input_shapes: &[&[usize]],
     ) -> TileIR {
         match node {
-            TensorGraphNode::Constant { data } => Self::lower_constant(data, shape),
-            TensorGraphNode::Input { name } => Self::lower_input(name, shape),
-            TensorGraphNode::Parameter { id, data } => Self::lower_parameter(id, data, shape),
-            TensorGraphNode::Unary { op } => Self::lower_unary(op, shape),
-            TensorGraphNode::Binary { op } => Self::lower_binary(op, shape),
-            TensorGraphNode::MatMul => {
+            TensorGraphNode::Constant { data, .. } => Self::lower_constant(data, shape),
+            TensorGraphNode::Input { name, .. } => Self::lower_input(name, shape),
+            TensorGraphNode::Parameter { id, data, .. } => Self::lower_parameter(id, data, shape),
+            TensorGraphNode::Unary { op, .. } => Self::lower_unary(op, shape),
+            TensorGraphNode::Binary { op, .. } => Self::lower_binary(op, shape),
+            TensorGraphNode::MatMul { .. } => {
                 let _m = shape[0];
                 let n = shape[1];
                 let k = input_shapes[0][1];
@@ -76,20 +72,20 @@ impl TileGraph {
                 let k_padded = k.div_ceil(TILE_SIZE) * TILE_SIZE;
                 Self::lower_matmul(m_padded, n_padded, k_padded, false, false)
             }
-            TensorGraphNode::Transpose => {
+            TensorGraphNode::Transpose { .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
                 Self::lower_transpose(input_shape, shape)
             }
-            TensorGraphNode::BroadcastAxis { axis } => {
+            TensorGraphNode::BroadcastAxis { axis, .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
                 Self::lower_broadcast_axis(axis, input_shape, shape)
             }
-            TensorGraphNode::ReduceAxis { op, axis } => {
+            TensorGraphNode::ReduceAxis { op, axis, .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
                 Self::lower_reduce_axis(op, axis, input_shape, shape)
             }
-            TensorGraphNode::Gt => Self::lower_gt(shape),
-            TensorGraphNode::Mask => Self::lower_mask(shape),
+            TensorGraphNode::Gt { .. } => Self::lower_gt(shape),
+            TensorGraphNode::Mask { .. } => Self::lower_mask(shape),
         }
     }
 

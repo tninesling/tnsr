@@ -1,10 +1,9 @@
-// TILE IR BUILDER
-
 use super::ir::{
     Block, DType, Expr, KernelParam, MatMulLayout, MemorySpace, ReduceOp, Stmt, TileIR, TileVar,
 };
 
 #[allow(dead_code)]
+#[derive(Default)]
 pub struct TileIRBuilder {
     kernel_name: String,
     params: Vec<KernelParam>,
@@ -16,13 +15,7 @@ pub struct TileIRBuilder {
 impl TileIRBuilder {
     #[allow(dead_code)]
     pub fn new() -> Self {
-        Self {
-            kernel_name: String::new(),
-            params: Vec::new(),
-            stmts: Vec::new(),
-            next_var: 0,
-            shared_mem_bytes: 0,
-        }
+        Self::default()
     }
 
     #[allow(dead_code)]

@@ -1,104 +1,22 @@
-//! Tensor expression library providing lazy evaluation and automatic differentiation.
-//!
-//! This crate implements a **lazy evaluation** system for tensor computations. Graph construction
-//! is infallible by design—errors are deferred until execution time when graphs are lowered
-//! and executed.
-//!
-//! # Architecture
-//!
-//! The crate is organized into three main components:
-//!
-//! - **Expression Layer** (`TensorExpr`, `Input`, `Parameter`, `Constant`): High-level API for
-//!   building computation graphs. Operations like `+`, `*`, `matmul()`, and `broadcast()` construct
-//!   expression trees without performing any computation.
-//!
-//! - **Graph Layer** (`graph` module): Intermediate representation as a directed acyclic graph (DAG)
-//!   of operations. Expression trees are lowered to this representation for optimization and execution.
-//!
-//! - **Compilation Layer** (`ptx` module): PTX (CUDA assembly) code generation for GPU execution.
-//!
-//! # Design Principles
-//!
-//! - **Lazy Evaluation**: Expressions are built as immutable trees; no computation happens until
-//!   graphs are lowered and executed by a runtime executor.
-//!
-//! - **Deferred Validation**: Graph construction never fails. Shape mismatches, invalid operations,
-//!   and resource allocation errors are detected during lowering or execution.
-//!
-//! - **Explicit Broadcasting**: Users must call `.broadcast()` to adjust tensor shapes for operations
-//!   requiring matching dimensions (when `implicit_broadcast` feature is disabled).
-//!
-//! # Example
-//!
-//! ```rust
-//! use tensor::{TensorExpr, Parameter};
-//!
-//! // Build expression graph (infallible)
-//! let x = TensorExpr::<f32>::input("x", vec![64, 10]);
-//! let w = Parameter::new(vec![0.1; 100], vec![10, 10]);
-//! let y = x.matmul(w).relu();
-//!
-//! // Lowering and execution may fail (handled by runtime)
-//! // let result = executor.forward(&y, inputs)?;
-//! ```
-
-pub mod graph;
-
-use std::ops::Add;
-use std::ops::Div;
-use std::ops::Mul;
-use std::ops::Sub;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-
-use graph::TensorGraphNode;
+use crate::graph;
+use crate::graph::TensorGraphNode;
 use petgraph::graph::NodeIndex;
+use std::ops::{Add, Div, Mul, Sub};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 static PARAM_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Marker trait for supported data types in tensor operations.
-///
-/// Currently implemented for `f32`, `f64`, and `i32`.
 pub trait DType: Clone {}
 impl DType for f32 {}
 impl DType for f64 {}
 impl DType for i32 {}
 
 /// Type alias for tensor shapes represented as dimension vectors.
-///
-/// For example, `vec![2, 3, 4]` represents a 3D tensor with shape 2×3×4.
 pub type Shape = Vec<usize>;
 
-/// Compute the output shape when broadcasting two tensors.
-///
-/// Follows NumPy-style broadcasting rules: dimensions are compared from right to left,
-/// and are compatible if they are equal or one of them is 1.
-///
-/// # Arguments
-///
-/// * `a` - Shape of the first tensor
-/// * `b` - Shape of the second tensor
-///
-/// # Returns
-///
-/// The broadcasted output shape
-///
-/// # Panics
-///
-/// Panics if shapes are incompatible for broadcasting
-///
-/// # Example
-///
-/// ```
-/// use tensor::broadcast_output_shape;
-///
-/// let shape_a = vec![3, 1, 5];
-/// let shape_b = vec![1, 4, 5];
-/// let result = broadcast_output_shape(&shape_a, &shape_b);
-/// assert_eq!(result, vec![3, 4, 5]);
-/// ```
+/// Compute the output shape when broadcasting two tensors using NumPy-style rules.
 pub fn broadcast_output_shape(a: &Shape, b: &Shape) -> Shape {
     let max_len = a.len().max(b.len());
     let mut out = Vec::with_capacity(max_len);
@@ -130,17 +48,6 @@ pub fn broadcast_output_shape(a: &Shape, b: &Shape) -> Shape {
 }
 
 /// A constant tensor with fixed data known at graph construction time.
-///
-/// Constants are embedded directly into the computation graph and their values
-/// cannot change during training. Useful for non-trainable values like bias initializations.
-///
-/// # Example
-///
-/// ```
-/// use tensor::Constant;
-///
-/// let bias = Constant::new(vec![0.1, 0.2, 0.3], vec![3]);
-/// ```
 #[derive(Clone)]
 pub struct Constant<D: DType> {
     data: Arc<Vec<D>>,
@@ -169,17 +76,6 @@ impl<D: DType, R: Into<TensorExpr<D>>> Add<R> for Constant<D> {
 }
 
 /// An input tensor whose data is provided at execution time.
-///
-/// Inputs represent external data fed into the computation graph (e.g., training batches,
-/// inference inputs). Values are supplied via the `inputs` parameter to the Executor.
-///
-/// # Example
-///
-/// ```
-/// use tensor::{TensorExpr, Input};
-///
-/// let x = TensorExpr::<f32>::input("batch", vec![32, 784]);
-/// ```
 #[derive(Clone, Debug)]
 pub struct Input<D: DType> {
     name: &'static str,
@@ -239,18 +135,6 @@ pub enum ReduceOp {
 }
 
 /// A trainable parameter with mutable data updated during optimization.
-///
-/// Parameters are updated by optimizers based on computed gradients. Each parameter
-/// has a unique ID used to track gradients across the computation graph.
-///
-/// # Example
-///
-/// ```
-/// use tensor::Parameter;
-///
-/// let weights = Parameter::new(vec![0.1; 100], vec![10, 10]);
-/// let id = weights.id(); // Unique parameter ID
-/// ```
 #[derive(Clone)]
 pub struct Parameter<D: DType> {
     id: usize,
@@ -327,6 +211,30 @@ impl<D: DType, R: Into<TensorExpr<D>>> Div<R> for Parameter<D> {
 #[derive(Clone, Debug)]
 pub struct TensorExpr<D: DType>(Arc<ExprNode<D>>);
 
+impl<D: DType> TensorExpr<D> {
+    pub fn kind(&self) -> &ExprKind<D> {
+        &self.0.kind
+    }
+
+    /// Returns references to child expressions for tree traversal.
+    pub fn children(&self) -> Vec<&TensorExpr<D>> {
+        match &self.0.kind {
+            ExprKind::Unary { x, .. } => vec![x],
+            ExprKind::Binary { a, b, .. } => vec![a, b],
+            ExprKind::MatMul { a, b } => vec![a, b],
+            ExprKind::Transpose { x } => vec![x],
+            ExprKind::BroadcastAxis { x, .. } => vec![x],
+            ExprKind::ReduceAxis { x, .. } => vec![x],
+            ExprKind::Gt { a, b } => vec![a, b],
+            ExprKind::Mask { values, condition } => vec![values, condition],
+            ExprKind::NodeRef { .. }
+            | ExprKind::Constant { .. }
+            | ExprKind::Input { .. }
+            | ExprKind::Parameter { .. } => vec![],
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ExprNode<D: DType> {
     shape: Shape,
@@ -334,7 +242,7 @@ struct ExprNode<D: DType> {
 }
 
 #[derive(Clone, Debug)]
-enum ExprKind<D: DType> {
+pub enum ExprKind<D: DType> {
     Constant {
         data: Arc<Vec<D>>,
     },
@@ -428,30 +336,7 @@ impl<D: DType> TensorExpr<D> {
         }))
     }
 
-    /// Create a reference to an existing node in a graph.
-    ///
-    /// This is used during gradient construction to build tensor expressions
-    /// that reference already-lowered graph nodes, enabling fluent operator
-    /// syntax for creating gradient computation nodes.
-    ///
-    /// # Arguments
-    ///
-    /// * `idx` - The NodeIndex of the existing graph node to reference
-    /// * `shape` - The shape of the tensor at this node
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Instead of manually adding nodes and edges:
-    /// let grad_a = graph.add_node(TensorGraphNode::Binary { op: BinaryOp::Mul });
-    /// graph.add_edge(grad_output, grad_a, 0);
-    /// graph.add_edge(input_b, grad_a, 1);
-    ///
-    /// // Use fluent syntax:
-    /// let grad_output_expr = TensorExpr::node_ref(grad_output, shape);
-    /// let input_b_expr = TensorExpr::node_ref(input_b, shape);
-    /// let grad_a_expr = grad_output_expr * input_b_expr;
-    /// ```
+    /// Create a reference to an existing node in a graph for gradient construction.
     pub fn node_ref(idx: NodeIndex, shape: Shape) -> Self {
         Self(Arc::new(ExprNode {
             shape,
@@ -726,10 +611,7 @@ impl<D: DType, R: Into<TensorExpr<D>>> Add<R> for TensorExpr<D> {
     type Output = TensorExpr<D>;
     fn add(self, rhs: R) -> Self::Output {
         let rhs = rhs.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Binary {
@@ -745,10 +627,7 @@ impl<D: DType, R: Into<TensorExpr<D>>> Sub<R> for TensorExpr<D> {
     type Output = TensorExpr<D>;
     fn sub(self, rhs: R) -> Self::Output {
         let rhs = rhs.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Binary {
@@ -764,10 +643,7 @@ impl<D: DType, R: Into<TensorExpr<D>>> Mul<R> for TensorExpr<D> {
     type Output = TensorExpr<D>;
     fn mul(self, rhs: R) -> Self::Output {
         let rhs = rhs.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Binary {
@@ -783,10 +659,7 @@ impl<D: DType, R: Into<TensorExpr<D>>> Div<R> for TensorExpr<D> {
     type Output = TensorExpr<D>;
     fn div(self, rhs: R) -> Self::Output {
         let rhs = rhs.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), rhs.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Binary {
@@ -805,10 +678,7 @@ impl<D: DType> TensorExpr<D> {
         D: 'static,
     {
         let other = other.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), other.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Gt { a: self, b: other },
@@ -821,10 +691,7 @@ impl<D: DType> TensorExpr<D> {
         D: 'static,
     {
         let condition = condition.into();
-        #[cfg(feature = "implicit_broadcast")]
         let out_shape = broadcast_output_shape(self.shape(), condition.shape());
-        #[cfg(not(feature = "implicit_broadcast"))]
-        let out_shape = self.shape().clone();
         TensorExpr(Arc::new(ExprNode {
             shape: out_shape,
             kind: ExprKind::Mask {
@@ -847,43 +714,38 @@ impl<D: DType> TensorExpr<D> {
                     // No new node is created - this allows referencing nodes during gradient construction
                     *idx
                 }
-                ExprKind::Constant { data } => {
-                    let idx = g
-                        .graph
-                        .add_node(TensorGraphNode::Constant { data: data.clone() });
-                    g.shapes.insert(idx, expr.shape().clone());
-                    idx
-                }
+                ExprKind::Constant { data } => g.graph.add_node(TensorGraphNode::Constant {
+                    data: data.clone(),
+                    shape: expr.shape().clone(),
+                }),
                 ExprKind::Input { name } => {
                     // Reuse semantics like Input::lower_to_graph
                     for idx in g.graph.node_indices() {
-                        if let TensorGraphNode::Input { name: n } = &g[idx]
+                        if let TensorGraphNode::Input { name: n, shape } = &g[idx]
                             && n == name
                         {
-                            let existing_shape =
-                                g.shapes.get(&idx).expect("shape missing for input");
                             assert_eq!(
-                                existing_shape,
+                                shape,
                                 expr.shape(),
                                 "Input '{:?}' shape mismatch: {:?} vs {:?}",
                                 name,
-                                existing_shape,
+                                shape,
                                 expr.shape()
                             );
                             return idx;
                         }
                     }
-                    let idx = g.graph.add_node(TensorGraphNode::Input { name });
-                    g.shapes.insert(idx, expr.shape().clone());
-                    idx
+                    g.graph.add_node(TensorGraphNode::Input {
+                        name,
+                        shape: expr.shape().clone(),
+                    })
                 }
                 ExprKind::Parameter { id, data } => {
                     for idx in g.graph.node_indices() {
                         if let TensorGraphNode::Parameter { id: pid, .. } = &g[idx]
                             && pid == id
                         {
-                            let existing_shape =
-                                g.shapes.get(&idx).expect("shape missing for parameter");
+                            let existing_shape = g.graph[idx].shape();
                             assert_eq!(
                                 existing_shape,
                                 expr.shape(),
@@ -895,39 +757,37 @@ impl<D: DType> TensorExpr<D> {
                             return idx;
                         }
                     }
-                    let idx = g.graph.add_node(TensorGraphNode::Parameter {
+                    g.graph.add_node(TensorGraphNode::Parameter {
                         id: *id,
                         data: data.clone(),
-                    });
-                    g.shapes.insert(idx, expr.shape().clone());
-                    idx
+                        shape: expr.shape().clone(),
+                    })
                 }
                 ExprKind::Unary { op, x } => {
                     let x_idx = lower_rec(x, g);
-                    let node_idx = g.graph.add_node(op.clone().into());
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Unary {
+                        op: op.clone(),
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
                 ExprKind::Binary { op, a, b } => {
                     let a_idx = lower_rec(a, g);
                     let b_idx = lower_rec(b, g);
-                    // Implicit broadcasting is not supported with the new axis-based broadcast system.
-                    // Users must explicitly broadcast operands to matching shapes before binary ops.
-                    #[cfg(feature = "implicit_broadcast")]
-                    {
-                        if a.shape() != expr.shape() || b.shape() != expr.shape() {
-                            panic!(
-                                "Binary op requires matching shapes. Use .broadcast() explicitly.\n\
+                    if a.shape() != expr.shape() || b.shape() != expr.shape() {
+                        panic!(
+                            "Binary op requires matching shapes. Use .broadcast() explicitly.\n\
                                  Left shape: {:?}, Right shape: {:?}, Output shape: {:?}",
-                                a.shape(),
-                                b.shape(),
-                                expr.shape()
-                            );
-                        }
+                            a.shape(),
+                            b.shape(),
+                            expr.shape()
+                        );
                     }
-                    let node_idx = g.graph.add_node(op.clone().into());
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Binary {
+                        op: op.clone(),
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(a_idx, node_idx, 0);
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
@@ -935,18 +795,19 @@ impl<D: DType> TensorExpr<D> {
                 ExprKind::MatMul { a, b } => {
                     let a_idx = lower_rec(a, g);
                     let b_idx = lower_rec(b, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::MatMul);
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::MatMul {
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(a_idx, node_idx, 0);
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
                 }
                 ExprKind::BroadcastAxis { x, axis } => {
                     let x_idx = lower_rec(x, g);
-                    let node_idx = g
-                        .graph
-                        .add_node(TensorGraphNode::BroadcastAxis { axis: *axis });
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::BroadcastAxis {
+                        axis: *axis,
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
@@ -955,23 +816,25 @@ impl<D: DType> TensorExpr<D> {
                     let node_idx = g.graph.add_node(TensorGraphNode::ReduceAxis {
                         op: op.clone(),
                         axis: *axis,
+                        shape: expr.shape().clone(),
                     });
-                    g.shapes.insert(node_idx, expr.shape().clone());
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
                 ExprKind::Transpose { x } => {
                     let x_idx = lower_rec(x, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::Transpose);
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Transpose {
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
                 ExprKind::Gt { a, b } => {
                     let a_idx = lower_rec(a, g);
                     let b_idx = lower_rec(b, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::Gt);
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Gt {
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(a_idx, node_idx, 0);
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
@@ -979,8 +842,9 @@ impl<D: DType> TensorExpr<D> {
                 ExprKind::Mask { values, condition } => {
                     let values_idx = lower_rec(values, g);
                     let condition_idx = lower_rec(condition, g);
-                    let node_idx = g.graph.add_node(TensorGraphNode::Mask);
-                    g.shapes.insert(node_idx, expr.shape().clone());
+                    let node_idx = g.graph.add_node(TensorGraphNode::Mask {
+                        shape: expr.shape().clone(),
+                    });
                     g.graph.add_edge(values_idx, node_idx, 0);
                     g.graph.add_edge(condition_idx, node_idx, 1);
                     node_idx

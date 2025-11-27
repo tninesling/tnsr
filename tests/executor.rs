@@ -1,18 +1,12 @@
-//! Integration tests for graph execution.
-//!
-//! Tests graph execution and gradient computation using the unified Runtime.
-//! The Runtime automatically selects the best available backend (CUDA or CPU).
-
 use std::collections::HashMap;
 
 use petgraph::visit::IntoNodeReferences;
-use runtime::{Executor, Runtime};
-use tensor::graph::TensorGraph;
-use tensor::{Constant, Parameter, TensorExpr};
+use tnsr::graph::TensorGraph;
+use tnsr::tensor::{Constant, Parameter, TensorExpr};
+use tnsr::{Executor, Runtime};
 
 const EPSILON: f32 = 1e-5;
 
-/// Helper macro to assert approximate equality for float vectors.
 macro_rules! assert_approx_eq {
     ($a:expr, $b:expr) => {
         if (&$a)
@@ -303,11 +297,7 @@ fn gradient_matmul_chain_rule() {
 
     eprintln!("\n=== Forward Graph ===");
     for (idx, node) in graph.graph.node_references() {
-        let shape = graph
-            .shapes
-            .get(&idx)
-            .map(|s| format!("{:?}", s))
-            .unwrap_or("N/A".to_string());
+        let shape = format!("{:?}", node.shape());
         eprintln!("Node {:?}: {} shape {}", idx.index(), node.name(), shape);
     }
 
@@ -315,11 +305,7 @@ fn gradient_matmul_chain_rule() {
 
     eprintln!("\n=== Gradient Graph ===");
     for (idx, node) in grad_graph.graph.node_references() {
-        let shape = grad_graph
-            .shapes
-            .get(&idx)
-            .map(|s| format!("{:?}", s))
-            .unwrap_or("N/A".to_string());
+        let shape = format!("{:?}", node.shape());
         let inputs = grad_graph.inputs(idx);
         eprintln!(
             "Node {:?}: {} shape {} inputs: {:?}",

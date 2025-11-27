@@ -1,16 +1,8 @@
-//! Runtime abstraction for automatic backend selection.
-//!
-//! This module provides a unified [`Runtime`] interface that automatically selects
-//! the best available backend (CUDA or CPU) at runtime, eliminating the need for
-//! compile-time feature flags in user code.
-
-use std::collections::HashMap;
-
+use crate::graph::{TensorGraph, WithGrad};
+use crate::{Executor, SimpleExecutor};
 use anyhow::Result;
 use petgraph::graph::NodeIndex;
-use tensor::graph::{TensorGraph, WithGrad};
-
-use crate::{Executor, SimpleExecutor};
+use std::collections::HashMap;
 
 #[cfg(feature = "cuda")]
 use crate::cuda::CudaExecutor;
@@ -34,43 +26,9 @@ pub enum Backend {
 
 /// Unified runtime that automatically selects the best available backend.
 ///
-/// The [`Runtime`] enum wraps either a CPU or GPU executor and provides
-/// a single consistent interface. Users can create a runtime with automatic
-/// backend detection using [`Runtime::new`], or explicitly choose a backend
-/// with [`Runtime::with_backend`].
-///
-/// # Examples
-///
-/// ```rust
-/// use runtime::{Executor, Runtime};
-/// use tensor::{TensorExpr, graph::TensorGraph};
-/// use std::collections::HashMap;
-///
-/// // Automatic backend selection (prefers CUDA if available)
-/// let mut runtime = Runtime::new();
-///
-/// let x = TensorExpr::<f32>::input("x", vec![2, 2]);
-/// let graph: TensorGraph<f32> = x.into();
-///
-/// let mut inputs = HashMap::new();
-/// inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0]);
-///
-/// let result = runtime.execute(&graph, inputs).unwrap();
-/// assert_eq!(result.len(), 4);
-/// ```
-///
-/// # Explicit Backend Selection
-///
-/// ```rust
-/// use runtime::{Runtime, Backend};
-///
-/// // Force CPU execution
-/// let mut cpu_runtime = Runtime::with_backend(Backend::Cpu).unwrap();
-///
-/// // Try CUDA, will error if not available
-/// # #[cfg(feature = "cuda")]
-/// let mut gpu_runtime = Runtime::with_backend(Backend::Cuda);
-/// ```
+/// Wraps either a CPU or GPU executor and provides a single consistent interface.
+/// Create with [`Runtime::new`] for automatic backend selection, or use
+/// [`Runtime::with_backend`] to explicitly choose a backend.
 pub enum Runtime {
     /// CPU-based executor
     Cpu(SimpleExecutor),
@@ -85,17 +43,7 @@ pub enum Runtime {
 impl Runtime {
     /// Create a runtime with automatic backend selection.
     ///
-    /// Prefers CUDA if the `cuda` feature is enabled and CUDA initialization succeeds,
-    /// otherwise falls back to CPU execution.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use runtime::Runtime;
-    ///
-    /// let runtime = Runtime::new();
-    /// println!("Using backend: {:?}", runtime.backend());
-    /// ```
+    /// Prefers CUDA if available, otherwise falls back to CPU.
     pub fn new() -> Self {
         #[cfg(feature = "cuda")]
         {
@@ -118,36 +66,6 @@ impl Runtime {
     }
 
     /// Create a runtime with an explicitly specified backend.
-    ///
-    /// # Arguments
-    ///
-    /// * `backend` - The execution backend to use
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(Runtime)` if the backend is available and initialization succeeds,
-    /// or an error if the backend is unavailable or initialization fails.
-    ///
-    /// # Errors
-    ///
-    /// - Returns an error if the CUDA backend is requested but the `cuda` feature is not enabled
-    /// - Returns an error if CUDA initialization fails (device unavailable, driver issues, etc.)
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use runtime::{Runtime, Backend};
-    ///
-    /// // CPU is always available
-    /// let cpu_runtime = Runtime::with_backend(Backend::Cpu).unwrap();
-    ///
-    /// // CUDA may not be available
-    /// # #[cfg(feature = "cuda")]
-    /// match Runtime::with_backend(Backend::Cuda) {
-    ///     Ok(runtime) => println!("CUDA runtime created"),
-    ///     Err(e) => println!("CUDA not available: {}", e),
-    /// }
-    /// ```
     pub fn with_backend(backend: Backend) -> Result<Self> {
         match backend {
             Backend::Cpu => Ok(Runtime::Cpu(SimpleExecutor::new())),
@@ -167,21 +85,6 @@ impl Runtime {
     }
 
     /// Returns the backend currently in use by this runtime.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use runtime::{Runtime, Backend};
-    ///
-    /// let runtime = Runtime::new();
-    /// match runtime.backend() {
-    ///     Backend::Cpu => println!("Using CPU"),
-    ///     # #[cfg(feature = "cuda")]
-    ///     Backend::Cuda => println!("Using CUDA"),
-    ///     # #[cfg(feature = "cuda")]
-    ///     Backend::Ptx => println!("Using PTX"),
-    /// }
-    /// ```
     pub fn backend(&self) -> Backend {
         match self {
             Runtime::Cpu(_) => Backend::Cpu,
@@ -209,37 +112,7 @@ impl Runtime {
         }
     }
 
-    /// Get the computed value for a specific node in the graph.
-    ///
-    /// This method allows retrieving intermediate values after execution.
-    ///
-    /// # Arguments
-    ///
-    /// * `node_idx` - The index of the node whose value to retrieve
-    ///
-    /// # Returns
-    ///
-    /// The computed tensor value as a flat vector, or `None` if the node hasn't been computed.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use runtime::{Executor, Runtime};
-    /// use tensor::{TensorExpr, graph::TensorGraph};
-    /// use std::collections::HashMap;
-    ///
-    /// let mut runtime = Runtime::new();
-    /// let x = TensorExpr::<f32>::input("x", vec![2, 2]);
-    /// let graph: TensorGraph<f32> = x.into();
-    /// let node_idx = *graph.toposort().last().unwrap();
-    ///
-    /// let mut inputs = HashMap::new();
-    /// inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0]);
-    ///
-    /// runtime.execute(&graph, inputs).unwrap();
-    /// let value = runtime.get_value(node_idx).unwrap();
-    /// assert_eq!(value.len(), 4);
-    /// ```
+    /// Get the computed value for a specific node after execution.
     pub fn get_value(&self, node_idx: NodeIndex) -> Option<Vec<f32>> {
         match self {
             Runtime::Cpu(executor) => executor.get_value(node_idx).cloned(),

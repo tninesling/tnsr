@@ -1,15 +1,13 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
+use super::{Module, PtxGraph};
+use crate::Executor;
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
+use crate::tile::TileGraph;
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use petgraph::visit::IntoNodeReferences;
-use tensor::graph::{TensorGraph, TensorGraphNode, WithGrad};
-
-use super::{Module, PtxGraph};
-use crate::Executor;
-use crate::tile::TileGraph;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// PTX executor that compiles TensorGraph → TileGraph → PtxGraph → PTX string
 /// and executes kernels via cudarc
@@ -116,7 +114,7 @@ impl PtxExecutor {
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
             let result = match node {
-                TensorGraphNode::Constant { data } => {
+                TensorGraphNode::Constant { data, .. } => {
                     let stream = self.device.default_stream();
                     let mut device_data = stream
                         .alloc_zeros::<f32>(data.len())
@@ -126,7 +124,7 @@ impl PtxExecutor {
                         .context("Failed to copy constant to CUDA device")?;
                     device_data
                 }
-                TensorGraphNode::Input { name } => {
+                TensorGraphNode::Input { name, .. } => {
                     let val = inputs
                         .get::<str>(name)
                         .with_context(|| format!("Input '{}' not found", name))?
@@ -154,7 +152,7 @@ impl PtxExecutor {
                         .context("Failed to copy parameter to CUDA device")?;
                     device_data
                 }
-                TensorGraphNode::Unary { op: _ } => {
+                TensorGraphNode::Unary { .. } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 
                     let ins = graph.inputs(*node_idx);
@@ -177,7 +175,7 @@ impl PtxExecutor {
 
                     out
                 }
-                TensorGraphNode::Binary { op: _ } => {
+                TensorGraphNode::Binary { .. } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 
                     let ins = graph.inputs(*node_idx);
@@ -205,7 +203,7 @@ impl PtxExecutor {
 
                     out
                 }
-                TensorGraphNode::Gt => {
+                TensorGraphNode::Gt { .. } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 
                     let ins = graph.inputs(*node_idx);
@@ -233,7 +231,7 @@ impl PtxExecutor {
 
                     out
                 }
-                TensorGraphNode::Mask => {
+                TensorGraphNode::Mask { .. } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 
                     let ins = graph.inputs(*node_idx);
@@ -260,7 +258,7 @@ impl PtxExecutor {
 
                     out
                 }
-                TensorGraphNode::MatMul => {
+                TensorGraphNode::MatMul { .. } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 
                     let ins = graph.inputs(*node_idx);
@@ -275,14 +273,8 @@ impl PtxExecutor {
 
                     // Get matrix dimensions from shapes
                     // A is [M, K], B is [K, N], output is [M, N]
-                    let a_shape = graph
-                        .shapes
-                        .get(&ins[0])
-                        .context("Missing shape for A matrix")?;
-                    let b_shape = graph
-                        .shapes
-                        .get(&ins[1])
-                        .context("Missing shape for B matrix")?;
+                    let a_shape = graph.graph[ins[0]].shape();
+                    let b_shape = graph.graph[ins[1]].shape();
 
                     if a_shape.len() != 2 || b_shape.len() != 2 {
                         anyhow::bail!(
@@ -406,10 +398,7 @@ impl PtxExecutor {
                         .context("Missing input for BroadcastAxis")?;
 
                     // Get output shape
-                    let out_shape = graph
-                        .shapes
-                        .get(node_idx)
-                        .context("Missing output shape for BroadcastAxis")?;
+                    let out_shape = graph.graph[*node_idx].shape();
                     let out_len: usize = out_shape.iter().product();
 
                     let stream = self.device.default_stream();
@@ -435,10 +424,7 @@ impl PtxExecutor {
                         .context("Missing input for ReduceAxis")?;
 
                     // Get output shape
-                    let out_shape = graph
-                        .shapes
-                        .get(node_idx)
-                        .context("Missing output shape for ReduceAxis")?;
+                    let out_shape = graph.graph[*node_idx].shape();
                     let out_len: usize = out_shape.iter().product();
 
                     let stream = self.device.default_stream();
@@ -454,7 +440,7 @@ impl PtxExecutor {
 
                     out
                 }
-                TensorGraphNode::Transpose => {
+                TensorGraphNode::Transpose { .. } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 
                     let ins = graph.inputs(*node_idx);

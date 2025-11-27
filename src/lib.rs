@@ -1,120 +1,29 @@
-//! Runtime execution engine for tensor computation graphs.
-//!
-//! This crate provides executors that execute computation graphs
-//! lowered from the `tensor` crate. Gradients are computed during execution
-//! when using graphs with gradient metadata (`TensorGraph<D, WithGrad>`).
-//!
-//! # Architecture
-//!
-//! - **Runtime**: Unified interface with automatic backend selection. Recommended for most users.
-//!   Automatically chooses between CPU and GPU at runtime based on availability.
-//!
-//! - **Executor Trait**: Common interface for graph execution and gradient retrieval,
-//!   returning `Result<Vec<D>>` for proper error handling.
-//!
-//! - **SimpleExecutor**: CPU-based executor with optional parallelism (via `parallel` feature).
-//!   Uses naive algorithms suitable for testing and small models.
-//!
-//! - **CudaExecutor** (optional): GPU-accelerated executor using CUDA kernels (via `cuda` feature).
-//!   Automatically manages device memory and kernel launches.
-//!
-//! # Getting Started
-//!
-//! Most users should use [`Runtime`] which automatically selects the best available backend:
-//!
-//! ```rust
-//! use runtime::{Executor, Runtime};
-//! use tensor::{TensorExpr, graph::TensorGraph};
-//! use std::collections::HashMap;
-//!
-//! let mut runtime = Runtime::new();
-//! let x = TensorExpr::<f32>::input("x", vec![2, 3]);
-//! let graph: TensorGraph<f32> = x.into();
-//!
-//! let mut inputs = HashMap::new();
-//! inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-//!
-//! let result = runtime.execute(&graph, inputs).unwrap();
-//! assert_eq!(result.len(), 6);
-//! ```
-//!
-//! # Gradient Computation
-//!
-//! Gradients are computed during execution using graphs created with
-//! `TensorGraph::with_gradients()`. After executing the graph, use
-//! `get_gradients()` to retrieve parameter gradients for optimization.
-//!
-//! # Error Handling
-//!
-//! Execution failures return `Result` types with `anyhow::Error` for:
-//! - Missing inputs or computed values
-//! - Shape mismatches
-//! - Memory allocation failures
-//! - Invalid operations (e.g., unsupported dimensions)
-//! - CUDA-specific errors (kernel launch failures, device errors)
-//!
-//! Use `.unwrap()` in tests or the `?` operator in production code to handle errors.
-//!
-//! # Features
-//!
-//! - `cuda`: Enable GPU acceleration via CUDA (requires CUDA toolkit)
-//! - `parallel`: Enable CPU parallelism via Rayon
-//!
-//! # Advanced: Direct Executor Usage
-//!
-//! For direct control over the backend, you can use [`SimpleExecutor`] or
-//! [`CudaExecutor`] directly:
-//!
-//! ```rust
-//! use runtime::{Executor, SimpleExecutor};
-//! use tensor::{TensorExpr, graph::TensorGraph};
-//! use std::collections::HashMap;
-//!
-//! let mut executor = SimpleExecutor::new();
-//! let x = TensorExpr::<f32>::input("x", vec![2, 3]);
-//! let graph: TensorGraph<f32> = x.into();
-//!
-//! let mut inputs = HashMap::new();
-//! inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-//!
-//! let result = executor.execute(&graph, inputs).unwrap();
-//! assert_eq!(result.len(), 6);
-//! ```
-
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
+pub mod graph;
+pub mod nn;
 pub mod optimizer;
 #[cfg(feature = "cuda")]
 pub mod ptx;
-mod runtime;
-mod tile;
+pub mod runtime;
+pub mod tensor;
+pub mod tile;
 
 pub use runtime::{Backend, Runtime};
 
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
-use tensor::graph::TensorGraph;
-use tensor::graph::TensorGraphNode;
-use tensor::graph::WithGrad;
 use tracing::trace_span;
 use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::prelude::*;
 
-/// Iterator type for slice traversal, conditionally parallel based on features.
-///
-/// With the `parallel` feature enabled, uses Rayon for parallel iteration.
-/// Otherwise, uses standard sequential iteration.
 #[cfg(feature = "parallel")]
 pub type SliceIter<'a, T> = rayon::iter::MinLen<rayon::slice::Iter<'a, T>>;
-
-/// Iterator type for slice traversal, conditionally parallel based on features.
-///
-/// With the `parallel` feature enabled, uses Rayon for parallel iteration.
-/// Otherwise, uses standard sequential iteration.
 #[cfg(not(feature = "parallel"))]
 pub type SliceIter<'a, T> = std::slice::Iter<'a, T>;
 
@@ -139,16 +48,6 @@ pub struct TracingGuard {
 ///
 /// Returns a [`TracingGuard`] that must be kept alive for the duration of tracing.
 /// When dropped, all trace data is flushed to the file.
-///
-/// # Example
-///
-/// ```no_run
-/// use runtime::init_chrome_tracing;
-///
-/// let _guard = init_chrome_tracing("trace.json").unwrap();
-/// // ... perform traced operations ...
-/// // Trace is flushed when _guard is dropped
-/// ```
 pub fn init_chrome_tracing(file_path: &str) -> Result<TracingGuard, Box<dyn std::error::Error>> {
     let (chrome_layer, guard) = ChromeLayerBuilder::new().file(file_path).build();
 
@@ -215,18 +114,19 @@ pub trait Executor<D> {
 /// # Example
 ///
 /// ```rust
-/// use runtime::{Executor, Runtime};
-/// use tensor::{TensorExpr, graph::TensorGraph};
+/// use tnsr::{SimpleExecutor, Executor};
+/// use tnsr::tensor::TensorExpr;
+/// use tnsr::graph::TensorGraph;
 /// use std::collections::HashMap;
 ///
-/// let mut runtime = Runtime::new();
+/// let mut executor = SimpleExecutor::new();
 /// let x = TensorExpr::<f32>::input("x", vec![2, 3]);
 /// let graph: TensorGraph<f32> = x.into();
 ///
 /// let mut inputs = HashMap::new();
 /// inputs.insert("x".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ///
-/// let result = runtime.execute(&graph, inputs).unwrap();
+/// let result = executor.execute(&graph, inputs).unwrap();
 /// assert_eq!(result.len(), 6);
 /// ```
 #[derive(Default)]
@@ -255,31 +155,26 @@ impl SimpleExecutor {
 
     fn exp(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("exp").entered();
-
         get_iter(x).copied().map(f32::exp).collect()
     }
 
     fn log(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("log").entered();
-
         get_iter(x).copied().map(f32::ln).collect()
     }
 
     fn relu(&self, x: &[f32]) -> Vec<f32> {
         let _span = trace_span!("relu").entered();
-
         get_iter(x).map(|v| v.max(0.0)).collect()
     }
 
     fn add(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
         let _span = trace_span!("add").entered();
-
         get_iter(a).zip(get_iter(b)).map(|(x, y)| x + y).collect()
     }
 
     fn sub(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
         let _span = trace_span!("sub").entered();
-
         get_iter(a).zip(get_iter(b)).map(|(x, y)| x - y).collect()
     }
 
@@ -320,11 +215,11 @@ impl Executor<f32> for SimpleExecutor {
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
             let result = match node {
-                TensorGraphNode::Constant { data } => {
+                TensorGraphNode::Constant { data, .. } => {
                     let _span = trace_span!("constant", node = node_idx.index()).entered();
                     data.as_ref().clone()
                 }
-                TensorGraphNode::Input { name } => {
+                TensorGraphNode::Input { name, .. } => {
                     let _span =
                         trace_span!("input", node = node_idx.index(), name = name).entered();
                     inputs
@@ -336,7 +231,7 @@ impl Executor<f32> for SimpleExecutor {
                     let _span = trace_span!("parameter", node = node_idx.index()).entered();
                     data.lock().unwrap().clone()
                 }
-                TensorGraphNode::Unary { op } => {
+                TensorGraphNode::Unary { op, .. } => {
                     let inputs = graph.inputs(*node_idx);
                     let x = self.values.get(&inputs[0]).with_context(|| {
                         format!("Value for node {} not computed", inputs[0].index())
@@ -348,7 +243,7 @@ impl Executor<f32> for SimpleExecutor {
                         tensor::UnaryOp::Relu => self.relu(x),
                     }
                 }
-                TensorGraphNode::Binary { op } => {
+                TensorGraphNode::Binary { op, .. } => {
                     let ins = graph.inputs(*node_idx);
                     let a = self.values.get(&ins[0]).with_context(|| {
                         format!("Value for node {} not computed", ins[0].index())
@@ -369,19 +264,19 @@ impl Executor<f32> for SimpleExecutor {
                         tensor::BinaryOp::Div => self.div(a, b),
                     }
                 }
-                TensorGraphNode::MatMul => {
+                TensorGraphNode::MatMul { .. } => {
                     let _span = trace_span!("matmul", node = node_idx.index()).entered();
                     matmul_forward(graph, &self.values, *node_idx)?
                 }
-                TensorGraphNode::Transpose => {
+                TensorGraphNode::Transpose { .. } => {
                     let _span = trace_span!("transpose", node = node_idx.index()).entered();
                     transpose_forward(graph, &self.values, *node_idx)?
                 }
-                TensorGraphNode::BroadcastAxis { axis } => {
+                TensorGraphNode::BroadcastAxis { axis, .. } => {
                     let _span = trace_span!("broadcast_axis", node = node_idx.index()).entered();
                     broadcast_axis_forward(graph, &self.values, *node_idx, *axis)?
                 }
-                TensorGraphNode::ReduceAxis { op, axis } => {
+                TensorGraphNode::ReduceAxis { op, axis, .. } => {
                     let _span = trace_span!(
                         "reduce_axis",
                         op = node.name(),
@@ -391,7 +286,7 @@ impl Executor<f32> for SimpleExecutor {
                     .entered();
                     reduce_axis_forward(graph, &self.values, *node_idx, op, *axis)?
                 }
-                TensorGraphNode::Gt => {
+                TensorGraphNode::Gt { .. } => {
                     let _span = trace_span!("gt", node = node_idx.index()).entered();
                     let ins = graph.inputs(*node_idx);
                     let a = self.values.get(&ins[0]).with_context(|| {
@@ -408,7 +303,7 @@ impl Executor<f32> for SimpleExecutor {
                     );
                     self.gt(a, b)
                 }
-                TensorGraphNode::Mask => {
+                TensorGraphNode::Mask { .. } => {
                     let _span = trace_span!("mask", node = node_idx.index()).entered();
                     let ins = graph.inputs(*node_idx);
                     let values = self.values.get(&ins[0]).with_context(|| {
@@ -479,14 +374,8 @@ fn matmul_forward<G>(
     let b = values
         .get(&b_idx)
         .context("Right operand value not computed for matmul")?;
-    let a_shape = graph
-        .shapes
-        .get(&a_idx)
-        .context("Shape missing for matmul left operand")?;
-    let b_shape = graph
-        .shapes
-        .get(&b_idx)
-        .context("Shape missing for matmul right operand")?;
+    let a_shape = graph.graph[a_idx].shape();
+    let b_shape = graph.graph[b_idx].shape();
     anyhow::ensure!(
         a_shape.len() == 2,
         "Matmul left operand must be 2D, got {}D",
@@ -544,10 +433,7 @@ fn transpose_forward<G>(
     let a = values
         .get(&a_idx)
         .context("Input value not computed for transpose")?;
-    let a_shape = graph
-        .shapes
-        .get(&a_idx)
-        .context("Shape missing for transpose input")?;
+    let a_shape = graph.graph[a_idx].shape();
 
     anyhow::ensure!(
         a_shape.len() == 2,
@@ -577,14 +463,8 @@ fn broadcast_axis_forward<G>(
     let in_val = values
         .get(&in_idx)
         .context("Input value not computed for broadcast_axis")?;
-    let in_shape = graph
-        .shapes
-        .get(&in_idx)
-        .context("Input shape missing for broadcast_axis")?;
-    let out_shape = graph
-        .shapes
-        .get(&node_idx)
-        .context("Output shape missing for broadcast_axis")?;
+    let in_shape = graph.graph[in_idx].shape();
+    let out_shape = graph.graph[node_idx].shape();
     let out_size: usize = out_shape.iter().product();
     let in_strides = rowmajor_strides(in_shape);
     let out_strides = rowmajor_strides(out_shape);
@@ -615,14 +495,8 @@ fn reduce_axis_forward<G>(
     let x = values
         .get(&in_idx)
         .context("Input value not computed for reduce_axis")?;
-    let in_shape = graph
-        .shapes
-        .get(&in_idx)
-        .context("Input shape missing for reduce_axis")?;
-    let out_shape = graph
-        .shapes
-        .get(&node_idx)
-        .context("Output shape missing for reduce_axis")?;
+    let in_shape = graph.graph[in_idx].shape();
+    let out_shape = graph.graph[node_idx].shape();
     let out_size: usize = out_shape.iter().product();
     let axis_size = in_shape[axis];
     let in_strides = rowmajor_strides(in_shape);

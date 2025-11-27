@@ -170,7 +170,6 @@ impl<D> TensorGraphNode<D> {
 pub struct TensorGraph<D, G = NoGrad> {
     pub graph: Graph<TensorGraphNode<D>, usize>,
     gradients: G,
-    _phantom: std::marker::PhantomData<G>,
 }
 
 impl<D> Default for TensorGraph<D, NoGrad> {
@@ -185,7 +184,6 @@ impl<D> TensorGraph<D, NoGrad> {
         Self {
             graph: Graph::new(),
             gradients: NoGrad,
-            _phantom: std::marker::PhantomData,
         }
     }
 }
@@ -673,7 +671,6 @@ impl TensorGraph<f32, NoGrad> {
                 param_to_grad,
                 gradient_nodes,
             },
-            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -728,7 +725,6 @@ impl TensorGraph<f32, WithGrad> {
         TensorGraph {
             graph: new_graph,
             gradients: NoGrad,
-            _phantom: std::marker::PhantomData,
         }
     }
 }

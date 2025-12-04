@@ -484,11 +484,11 @@ pub fn fusion_benches(c: &mut Criterion) {
             ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
-            
+
             // Build expression: exp -> log -> relu -> neg
             let expr = TensorExpr::from(a.clone()).exp().log().relu();
             let expr = -expr;
-            
+
             // Build graph with fusion enabled (when feature is on)
             #[cfg(feature = "fusion")]
             {
@@ -546,12 +546,12 @@ pub fn fusion_benches(c: &mut Criterion) {
             ));
             let shape = vec![n, n];
             let a = Constant::new(vec![0.5f32; n * n], shape.clone());
-            
+
             // Build expression: neg -> exp -> log -> relu -> exp -> log
             let expr = TensorExpr::from(a.clone());
             let expr = -expr;
             let expr = expr.exp().log().relu().exp().log();
-            
+
             // Build graph with fusion enabled (when feature is on)
             #[cfg(feature = "fusion")]
             {

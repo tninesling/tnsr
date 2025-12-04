@@ -270,7 +270,7 @@ impl TileGraph {
             )),
             Box::new(Expr::ThreadIdx(Dim::X)),
         );
-        
+
         builder.load_global_to_shared(tile_in, "input", global_tid.clone(), Expr::Const(0));
 
         match op {
@@ -297,7 +297,7 @@ impl TileGraph {
         // Allocate scalar registers (1 element per thread)
         let tile_in = builder.alloc_register(DType::F32, 1, 1);
         let mut current_tile = tile_in;
-        
+
         // Calculate global thread ID: blockIdx.x * blockDim.x + threadIdx.x
         let global_tid = Expr::Add(
             Box::new(Expr::Mul(
@@ -306,20 +306,20 @@ impl TileGraph {
             )),
             Box::new(Expr::ThreadIdx(Dim::X)),
         );
-        
+
         builder.load_global_to_shared(tile_in, "input", global_tid.clone(), Expr::Const(0));
 
         // Apply each operation in sequence
         for op in ops.iter() {
             let next_tile = builder.alloc_register(DType::F32, 1, 1);
-            
+
             match op {
                 tensor::UnaryOp::Neg => builder.neg(next_tile, current_tile),
                 tensor::UnaryOp::Exp => builder.exp(next_tile, current_tile),
                 tensor::UnaryOp::Log => builder.log(next_tile, current_tile),
                 tensor::UnaryOp::Relu => builder.relu(next_tile, current_tile),
             }
-            
+
             current_tile = next_tile;
         }
 
@@ -355,7 +355,7 @@ impl TileGraph {
             )),
             Box::new(Expr::ThreadIdx(Dim::X)),
         );
-        
+
         builder.load_global_to_shared(tile_a, "a", global_tid.clone(), Expr::Const(0));
         builder.load_global_to_shared(tile_b, "b", global_tid.clone(), Expr::Const(0));
 

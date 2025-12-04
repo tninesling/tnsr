@@ -63,7 +63,10 @@ impl Runtime {
                             Runtime::Cuda(executor)
                         }
                         Err(e) => {
-                            tracing::warn!("CUDA initialization failed: {}, falling back to CPU", e);
+                            tracing::warn!(
+                                "CUDA initialization failed: {}, falling back to CPU",
+                                e
+                            );
                             Runtime::Cpu(SimpleExecutor::new())
                         }
                     }

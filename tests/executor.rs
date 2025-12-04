@@ -907,7 +907,6 @@ fn fusion_forward_simple_chain() {
 #[test]
 #[cfg(feature = "fusion")]
 fn fusion_forward_longer_chain() {
-
     let mut runtime = create_runtime();
 
     // Test: x -> relu -> exp -> log
@@ -924,7 +923,7 @@ fn fusion_forward_longer_chain() {
 
     // Execute and verify result
     let result = runtime.execute(&graph, HashMap::new()).unwrap();
-    
+
     // relu(x) = x for positive x, then log(exp(x)) = x
     assert_approx_eq!(result, &x_data);
 }
@@ -1029,7 +1028,10 @@ fn fusion_gradient_relu_log_chain() {
     assert_eq!(grad.len(), 4);
 
     // d(log(relu(x)))/dx = (1/relu(x)) * (x > 0) = 1/x for x > 0
-    let expected: Vec<f32> = x_data.iter().map(|&v| if v > 0.0 { 1.0 / v } else { 0.0 }).collect();
+    let expected: Vec<f32> = x_data
+        .iter()
+        .map(|&v| if v > 0.0 { 1.0 / v } else { 0.0 })
+        .collect();
     assert_approx_eq!(grad, &expected);
 }
 
@@ -1086,7 +1088,10 @@ fn fusion_gradient_with_branching() {
 
     // Apply fusion - should not fuse anything due to branching
     let num_fused = graph.apply_fusion();
-    assert_eq!(num_fused, 0, "Should not have fused (exp has multiple consumers)");
+    assert_eq!(
+        num_fused, 0,
+        "Should not have fused (exp has multiple consumers)"
+    );
 
     // Add gradients and verify they still work
     let loss_node = *graph.toposort().last().unwrap();
@@ -1158,10 +1163,12 @@ fn fusion_gradient_relu_with_negatives() {
     let x_data = vec![-1.0, -0.5, 0.5, 1.0];
     let x = Parameter::new(x_data.clone(), vec![4]);
     let x_id = x.id();
-    
+
     // Add 1 to avoid log(0)
     let one = Constant::new(vec![1.0, 1.0, 1.0, 1.0], vec![4]);
-    let node = (TensorExpr::from(x).relu() + TensorExpr::from(one)).log().reduce_sum(0);
+    let node = (TensorExpr::from(x).relu() + TensorExpr::from(one))
+        .log()
+        .reduce_sum(0);
 
     let graph: TensorGraph<f32> = node.into();
 
@@ -1180,10 +1187,13 @@ fn fusion_gradient_relu_with_negatives() {
     assert_eq!(grad.len(), 4);
 
     // d(log(relu(x) + 1))/dx = (1/(relu(x) + 1)) * (x > 0)
-    let expected: Vec<f32> = x_data.iter().map(|&v| {
-        let relu_v = if v > 0.0 { v } else { 0.0 };
-        if v > 0.0 { 1.0 / (relu_v + 1.0) } else { 0.0 }
-    }).collect();
+    let expected: Vec<f32> = x_data
+        .iter()
+        .map(|&v| {
+            let relu_v = if v > 0.0 { v } else { 0.0 };
+            if v > 0.0 { 1.0 / (relu_v + 1.0) } else { 0.0 }
+        })
+        .collect();
     assert_approx_eq!(grad, &expected);
 }
 
@@ -1214,7 +1224,7 @@ fn fusion_gradient_comparison_with_unfused() {
     // Add gradients to both
     let loss_node_fused = *graph_fused.toposort().last().unwrap();
     let loss_node_unfused = *graph_unfused.toposort().last().unwrap();
-    
+
     let grad_graph_fused = graph_fused.with_gradients(loss_node_fused);
     let grad_graph_unfused = graph_unfused.with_gradients(loss_node_unfused);
 
@@ -1222,7 +1232,9 @@ fn fusion_gradient_comparison_with_unfused() {
     runtime.execute(&grad_graph_fused, HashMap::new()).unwrap();
     let grads_fused = runtime.get_gradients(&grad_graph_fused);
 
-    runtime.execute(&grad_graph_unfused, HashMap::new()).unwrap();
+    runtime
+        .execute(&grad_graph_unfused, HashMap::new())
+        .unwrap();
     let grads_unfused = runtime.get_gradients(&grad_graph_unfused);
 
     // Compare gradients
@@ -1269,7 +1281,7 @@ fn fusion_gradient_complex_composition() {
     // d(log(exp(a*b)))/db = d(a*b)/db = a
     let expected_a = vec![1.0, 2.0]; // b values
     let expected_b = vec![2.0, 3.0]; // a values
-    
+
     assert_approx_eq!(grad_a, &expected_a);
     assert_approx_eq!(grad_b, &expected_b);
 }
@@ -1284,8 +1296,8 @@ fn fusion_ptx_executor_simple_chain() {
     use tnsr::runtime::Backend;
 
     // Create runtime with explicit PTX backend
-    let mut runtime = Runtime::with_backend(Backend::Ptx)
-        .expect("Failed to initialize PTX runtime");
+    let mut runtime =
+        Runtime::with_backend(Backend::Ptx).expect("Failed to initialize PTX runtime");
 
     eprintln!("Using backend: {:?}", runtime.backend());
 
@@ -1332,7 +1344,11 @@ fn test_default_backend_cuda() {
     #[cfg(not(feature = "ptx"))]
     {
         use tnsr::runtime::Backend;
-        assert_eq!(backend, Backend::Cuda, "Should use CUDA backend when ptx feature is disabled");
+        assert_eq!(
+            backend,
+            Backend::Cuda,
+            "Should use CUDA backend when ptx feature is disabled"
+        );
     }
 }
 
@@ -1343,5 +1359,9 @@ fn test_default_backend_ptx() {
     let backend = runtime.backend();
     eprintln!("Default backend with ptx feature: {:?}", backend);
     use tnsr::runtime::Backend;
-    assert_eq!(backend, Backend::Ptx, "Should use PTX backend when ptx feature is enabled");
+    assert_eq!(
+        backend,
+        Backend::Ptx,
+        "Should use PTX backend when ptx feature is enabled"
+    );
 }

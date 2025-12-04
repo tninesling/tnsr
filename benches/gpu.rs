@@ -384,11 +384,11 @@ pub fn fusion_benches(c: &mut Criterion) {
             ));
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
-            
+
             // Build expression: exp -> log -> relu -> neg
             let expr = TensorExpr::from(a.clone()).exp().log().relu();
             let expr = -expr;
-            
+
             // Build graph with fusion enabled (when feature is on)
             #[cfg(feature = "fusion")]
             {
@@ -399,32 +399,25 @@ pub fn fusion_benches(c: &mut Criterion) {
 
                 {
                     let graph_cuda = Arc::clone(&graph);
-                    group.bench_function(
-                        BenchmarkId::new("cuda_fused", format!("{n}x{n}")),
-                        |b| {
-                            let mut exec = CudaExecutor::new();
-                            b.iter(|| {
-                                let _ = std::hint::black_box(
-                                    exec.execute(&*graph_cuda, Default::default()),
-                                );
-                            });
-                        },
-                    );
+                    group.bench_function(BenchmarkId::new("cuda_fused", format!("{n}x{n}")), |b| {
+                        let mut exec = CudaExecutor::new();
+                        b.iter(|| {
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_cuda, Default::default()),
+                            );
+                        });
+                    });
                 }
 
                 {
                     let graph_ptx = Arc::clone(&graph);
-                    group.bench_function(
-                        BenchmarkId::new("ptx_fused", format!("{n}x{n}")),
-                        |b| {
-                            let mut exec = PtxExecutor::new();
-                            b.iter(|| {
-                                let _ = std::hint::black_box(
-                                    exec.execute(&*graph_ptx, Default::default()),
-                                );
-                            });
-                        },
-                    );
+                    group.bench_function(BenchmarkId::new("ptx_fused", format!("{n}x{n}")), |b| {
+                        let mut exec = PtxExecutor::new();
+                        b.iter(|| {
+                            let _ =
+                                std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                        });
+                    });
                 }
             }
 
@@ -478,12 +471,12 @@ pub fn fusion_benches(c: &mut Criterion) {
             ));
             let shape = vec![n, n];
             let a = Constant::new(vec![0.5f32; n * n], shape.clone());
-            
+
             // Build expression: neg -> exp -> log -> relu -> exp -> log
             let expr = TensorExpr::from(a.clone());
             let expr = -expr;
             let expr = expr.exp().log().relu().exp().log();
-            
+
             // Build graph with fusion enabled (when feature is on)
             #[cfg(feature = "fusion")]
             {
@@ -494,32 +487,25 @@ pub fn fusion_benches(c: &mut Criterion) {
 
                 {
                     let graph_cuda = Arc::clone(&graph);
-                    group.bench_function(
-                        BenchmarkId::new("cuda_fused", format!("{n}x{n}")),
-                        |b| {
-                            let mut exec = CudaExecutor::new();
-                            b.iter(|| {
-                                let _ = std::hint::black_box(
-                                    exec.execute(&*graph_cuda, Default::default()),
-                                );
-                            });
-                        },
-                    );
+                    group.bench_function(BenchmarkId::new("cuda_fused", format!("{n}x{n}")), |b| {
+                        let mut exec = CudaExecutor::new();
+                        b.iter(|| {
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_cuda, Default::default()),
+                            );
+                        });
+                    });
                 }
 
                 {
                     let graph_ptx = Arc::clone(&graph);
-                    group.bench_function(
-                        BenchmarkId::new("ptx_fused", format!("{n}x{n}")),
-                        |b| {
-                            let mut exec = PtxExecutor::new();
-                            b.iter(|| {
-                                let _ = std::hint::black_box(
-                                    exec.execute(&*graph_ptx, Default::default()),
-                                );
-                            });
-                        },
-                    );
+                    group.bench_function(BenchmarkId::new("ptx_fused", format!("{n}x{n}")), |b| {
+                        let mut exec = PtxExecutor::new();
+                        b.iter(|| {
+                            let _ =
+                                std::hint::black_box(exec.execute(&*graph_ptx, Default::default()));
+                        });
+                    });
                 }
             }
 

@@ -693,23 +693,23 @@ impl TensorGraph<f32, NoGrad> {
                     // For fused unary operations, we compute gradients by decomposing
                     // into individual operations and applying the chain rule.
                     // For f(g(h(x))), grad_x = grad_out * f'(g(h(x))) * g'(h(x)) * h'(x)
-                    
+
                     if inputs.len() != 1 {
                         panic!("FusedUnary should have 1 input");
                     }
                     let input_x = inputs[0];
-                    
+
                     // Clone ops to avoid borrowing issues
                     let ops_clone = ops.clone();
 
                     // We need to reconstruct the intermediate values and compute gradients backward
                     // Start with grad_output and propagate backward through each operation
                     let mut current_grad = grad_output;
-                    
+
                     // We need the intermediate outputs to compute some gradients (e.g., exp, log)
                     // For now, we'll decompose the fused operation into individual nodes
                     // This is not optimal but ensures correctness
-                    
+
                     // Build intermediate nodes going forward
                     let mut intermediate_nodes = vec![input_x];
                     for op in ops_clone.iter() {
@@ -723,21 +723,23 @@ impl TensorGraph<f32, NoGrad> {
                         gradient_nodes.insert(intermediate);
                         intermediate_nodes.push(intermediate);
                     }
-                    
+
                     // Now compute gradients backward through the chain
                     for (i, op) in ops_clone.iter().enumerate().rev() {
                         let intermediate_output = intermediate_nodes[i + 1];
                         let intermediate_input = intermediate_nodes[i];
-                        
+
                         let grad_input = match op {
                             UnaryOp::Exp => {
                                 // d(exp(x))/dx = exp(x)
                                 let grad_shape = self.graph[current_grad].shape().clone();
-                                let intermediate_shape = self.graph[intermediate_output].shape().clone();
-                                
+                                let intermediate_shape =
+                                    self.graph[intermediate_output].shape().clone();
+
                                 let grad_expr = TensorExpr::node_ref(current_grad, grad_shape);
-                                let intermediate_expr = TensorExpr::node_ref(intermediate_output, intermediate_shape);
-                                
+                                let intermediate_expr =
+                                    TensorExpr::node_ref(intermediate_output, intermediate_shape);
+
                                 let grad_x_expr = grad_expr * intermediate_expr;
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes)
                             }
@@ -745,10 +747,11 @@ impl TensorGraph<f32, NoGrad> {
                                 // d(log(x))/dx = 1/x
                                 let grad_shape = self.graph[current_grad].shape().clone();
                                 let input_shape = self.graph[intermediate_input].shape().clone();
-                                
+
                                 let grad_expr = TensorExpr::node_ref(current_grad, grad_shape);
-                                let input_expr = TensorExpr::node_ref(intermediate_input, input_shape);
-                                
+                                let input_expr =
+                                    TensorExpr::node_ref(intermediate_input, input_shape);
+
                                 let grad_x_expr = grad_expr / input_expr;
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes)
                             }
@@ -764,20 +767,22 @@ impl TensorGraph<f32, NoGrad> {
                                 let grad_shape = self.graph[current_grad].shape().clone();
                                 let input_shape = self.graph[intermediate_input].shape().clone();
                                 let num_elements: usize = input_shape.iter().product();
-                                
+
                                 let grad_expr = TensorExpr::node_ref(current_grad, grad_shape);
-                                let input_expr = TensorExpr::node_ref(intermediate_input, input_shape.clone());
-                                let zero_expr = TensorExpr::constant(vec![0.0f32; num_elements], input_shape);
-                                
+                                let input_expr =
+                                    TensorExpr::node_ref(intermediate_input, input_shape.clone());
+                                let zero_expr =
+                                    TensorExpr::constant(vec![0.0f32; num_elements], input_shape);
+
                                 let condition_expr = input_expr.gt(zero_expr);
                                 let grad_x_expr = grad_expr.mask(condition_expr);
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes)
                             }
                         };
-                        
+
                         current_grad = grad_input;
                     }
-                    
+
                     // Accumulate the final gradient to the original input
                     self.accumulate_gradient(
                         &mut node_to_grad,

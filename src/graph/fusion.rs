@@ -212,7 +212,7 @@ impl<D, G> TensorGraph<D, G> {
         for chain in chains {
             // Get the shape from the end node
             let shape = self.graph[chain.end_node].shape().clone();
-            
+
             // Create a new FusedUnary node
             let fused_node = self.graph.add_node(TensorGraphNode::FusedUnary {
                 ops: chain.ops,

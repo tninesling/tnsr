@@ -54,7 +54,9 @@ use petgraph::graph::Graph;
 pub use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 
-use crate::tensor::{BinaryOp, ReduceOp, TensorExpr, UnaryOp};
+use crate::tensor::{BinaryOp, DType, ReduceOp, TensorExpr, UnaryOp};
+
+pub mod rewrite;
 
 /// Typestate marker for graphs without gradients.
 #[derive(Clone)]
@@ -208,6 +210,19 @@ impl<D, G> TensorGraph<D, G> {
             .sorted_by_key(|e| e.weight())
             .map(|e| e.source())
             .collect()
+    }
+
+    /// Lower a TensorExpr into the graph, optionally optimizing it first.
+    pub fn add_expr(&mut self, expr: &TensorExpr<D>, optimize: bool) -> NodeIndex
+    where
+        D: DType + Clone + Default + 'static,
+    {
+        if optimize {
+            let optimized = expr.optimize();
+            optimized.lower_to_graph(self)
+        } else {
+            expr.lower_to_graph(self)
+        }
     }
 }
 

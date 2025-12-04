@@ -252,5 +252,222 @@ pub fn benches(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches_group, benches);
+pub fn optimization_benches(c: &mut Criterion) {
+    let sizes: [usize; 2] = [32, 256];
+
+    // Benchmark: exp(log(x)) with and without optimization
+    {
+        let mut group = c.benchmark_group("optimize_exp_log");
+        for &n in &sizes {
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>()) as u64,
+            ));
+            let shape = vec![n, n];
+            let a = Constant::new(vec![1.5f32; n * n], shape.clone());
+
+            // Without optimization - exp(log(x))
+            {
+                let mut exec = SimpleExecutor::new();
+                let mut graph = tnsr::graph::TensorGraph::<f32>::new();
+                let expr = TensorExpr::from(a.clone()).log().exp();
+                expr.lower_to_graph(&mut graph);
+                let graph = Arc::new(graph);
+                let graph_clone = Arc::clone(&graph);
+
+                group.bench_with_input(
+                    BenchmarkId::new("unoptimized", format!("{n}x{n}")),
+                    &n,
+                    move |b, &_| {
+                        b.iter(|| {
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_clone, Default::default()),
+                            );
+                        });
+                    },
+                );
+            }
+
+            // With optimization - should simplify to x
+            {
+                let mut exec = SimpleExecutor::new();
+                let mut graph = tnsr::graph::TensorGraph::<f32>::new();
+                let expr = TensorExpr::from(a.clone()).log().exp();
+                graph.add_expr(&expr, true);
+                let graph = Arc::new(graph);
+                let graph_clone = Arc::clone(&graph);
+
+                group.bench_with_input(
+                    BenchmarkId::new("optimized", format!("{n}x{n}")),
+                    &n,
+                    move |b, &_| {
+                        b.iter(|| {
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_clone, Default::default()),
+                            );
+                        });
+                    },
+                );
+            }
+        }
+        group.finish();
+    }
+
+    // Benchmark: transpose(transpose(x)) with and without optimization
+    {
+        let mut group = c.benchmark_group("optimize_transpose_transpose");
+        for &n in &sizes {
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>()) as u64,
+            ));
+            let shape = vec![n, n];
+            let a = Constant::new(vec![1.0f32; n * n], shape.clone());
+
+            // Without optimization - transpose(transpose(x))
+            {
+                let mut exec = SimpleExecutor::new();
+                let mut graph = tnsr::graph::TensorGraph::<f32>::new();
+                let expr = TensorExpr::from(a.clone()).transpose().transpose();
+                expr.lower_to_graph(&mut graph);
+                let graph = Arc::new(graph);
+                let graph_clone = Arc::clone(&graph);
+
+                group.bench_with_input(
+                    BenchmarkId::new("unoptimized", format!("{n}x{n}")),
+                    &n,
+                    move |b, &_| {
+                        b.iter(|| {
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_clone, Default::default()),
+                            );
+                        });
+                    },
+                );
+            }
+
+            // With optimization - should simplify to x
+            {
+                let mut exec = SimpleExecutor::new();
+                let mut graph = tnsr::graph::TensorGraph::<f32>::new();
+                let expr = TensorExpr::from(a.clone()).transpose().transpose();
+                graph.add_expr(&expr, true);
+                let graph = Arc::new(graph);
+                let graph_clone = Arc::clone(&graph);
+
+                group.bench_with_input(
+                    BenchmarkId::new("optimized", format!("{n}x{n}")),
+                    &n,
+                    move |b, &_| {
+                        b.iter(|| {
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_clone, Default::default()),
+                            );
+                        });
+                    },
+                );
+            }
+        }
+        group.finish();
+    }
+
+    // Benchmark: -(-x) with and without optimization
+    {
+        let mut group = c.benchmark_group("optimize_double_neg");
+        for &n in &sizes {
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>()) as u64,
+            ));
+            let shape = vec![n, n];
+            let a = Constant::new(vec![1.0f32; n * n], shape.clone());
+
+            // Without optimization - -(-x)
+            {
+                let mut exec = SimpleExecutor::new();
+                let mut graph = tnsr::graph::TensorGraph::<f32>::new();
+                let expr = TensorExpr::from(a.clone());
+                let expr = -(-expr);
+                expr.lower_to_graph(&mut graph);
+                let graph = Arc::new(graph);
+                let graph_clone = Arc::clone(&graph);
+
+                group.bench_with_input(
+                    BenchmarkId::new("unoptimized", format!("{n}x{n}")),
+                    &n,
+                    move |b, &_| {
+                        b.iter(|| {
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_clone, Default::default()),
+                            );
+                        });
+                    },
+                );
+            }
+
+            // With optimization - should simplify to x
+            {
+                let mut exec = SimpleExecutor::new();
+                let mut graph = tnsr::graph::TensorGraph::<f32>::new();
+                let expr = TensorExpr::from(a.clone());
+                let expr = -(-expr);
+                graph.add_expr(&expr, true);
+                let graph = Arc::new(graph);
+                let graph_clone = Arc::clone(&graph);
+
+                group.bench_with_input(
+                    BenchmarkId::new("optimized", format!("{n}x{n}")),
+                    &n,
+                    move |b, &_| {
+                        b.iter(|| {
+                            let _ = std::hint::black_box(
+                                exec.execute(&*graph_clone, Default::default()),
+                            );
+                        });
+                    },
+                );
+            }
+        }
+        group.finish();
+    }
+
+    // Benchmark: Overhead of running optimization itself
+    {
+        let mut group = c.benchmark_group("optimization_overhead");
+        for &n in &sizes {
+            let shape = vec![n, n];
+            let a = Constant::new(vec![1.5f32; n * n], shape.clone());
+
+            // Measure time to optimize exp(log(x))
+            {
+                let expr = TensorExpr::from(a.clone()).log().exp();
+                group.bench_with_input(
+                    BenchmarkId::new("exp_log", format!("{n}x{n}")),
+                    &n,
+                    |b, &_| {
+                        b.iter(|| {
+                            let expr_clone = expr.clone();
+                            let _ = std::hint::black_box(expr_clone.optimize());
+                        });
+                    },
+                );
+            }
+
+            // Measure time to optimize transpose(transpose(x))
+            {
+                let expr = TensorExpr::from(a.clone()).transpose().transpose();
+                group.bench_with_input(
+                    BenchmarkId::new("transpose_transpose", format!("{n}x{n}")),
+                    &n,
+                    |b, &_| {
+                        b.iter(|| {
+                            let expr_clone = expr.clone();
+                            let _ = std::hint::black_box(expr_clone.optimize());
+                        });
+                    },
+                );
+            }
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(benches_group, benches, optimization_benches);
 criterion_main!(benches_group);

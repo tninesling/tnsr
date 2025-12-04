@@ -64,6 +64,34 @@ define_language! {
     }
 }
 
+/// Returns all rewrite rules for tensor optimization.
+pub fn make_rules() -> Vec<Rewrite<TensorOp, ()>> {
+    vec![
+        // Negation
+        rw!("double-neg"; "(neg (neg ?x))" => "?x"),
+        rw!("neg-sub"; "(neg (- ?x ?y))" => "(- ?y ?x)"),
+        rw!("add-neg"; "(+ ?x (neg ?y))" => "(- ?x ?y)"),
+        rw!("sub-neg"; "(- ?x (neg ?y))" => "(+ ?x ?y)"),
+        // Commutativity
+        rw!("comm-add"; "(+ ?a ?b)" => "(+ ?b ?a)"),
+        rw!("comm-mul"; "(* ?a ?b)" => "(* ?b ?a)"),
+        // Associativity
+        rw!("assoc-add"; "(+ ?a (+ ?b ?c))" => "(+ (+ ?a ?b) ?c)"),
+        rw!("assoc-mul"; "(* ?a (* ?b ?c))" => "(* (* ?a ?b) ?c)"),
+        // Distributivity
+        rw!("distrib-mul-add"; "(* ?a (+ ?b ?c))" => "(+ (* ?a ?b) (* ?a ?c))"),
+        rw!("factor-mul-add"; "(+ (* ?a ?b) (* ?a ?c))" => "(* ?a (+ ?b ?c))"),
+        // Exponential and logarithm
+        rw!("exp-log"; "(exp (log ?x))" => "?x"),
+        rw!("log-exp"; "(log (exp ?x))" => "?x"),
+        // Matrix
+        rw!("transpose-transpose"; "(transpose (transpose ?x))" => "?x"),
+        rw!("transpose-matmul"; 
+            "(transpose (matmul ?a ?b))" => 
+            "(matmul (transpose ?b) (transpose ?a))"),
+    ]
+}
+
 /// Configuration for the rewrite optimization process.
 #[derive(Clone, Debug)]
 pub struct RewriteConfig {
@@ -272,34 +300,6 @@ fn recexpr_to_expr<D: DType + Clone + Default + 'static>(rec: &RecExpr<TensorOp>
     let mut cache = HashMap::new();
     let root = Id::from(rec.as_ref().len() - 1);
     build(root, rec, &mut cache)
-}
-
-/// Returns all rewrite rules for tensor optimization.
-pub fn make_rules() -> Vec<Rewrite<TensorOp, ()>> {
-    vec![
-        // Negation
-        rw!("double-neg"; "(neg (neg ?x))" => "?x"),
-        rw!("neg-sub"; "(neg (- ?x ?y))" => "(- ?y ?x)"),
-        rw!("add-neg"; "(+ ?x (neg ?y))" => "(- ?x ?y)"),
-        rw!("sub-neg"; "(- ?x (neg ?y))" => "(+ ?x ?y)"),
-        // Commutativity
-        rw!("comm-add"; "(+ ?a ?b)" => "(+ ?b ?a)"),
-        rw!("comm-mul"; "(* ?a ?b)" => "(* ?b ?a)"),
-        // Associativity
-        rw!("assoc-add"; "(+ ?a (+ ?b ?c))" => "(+ (+ ?a ?b) ?c)"),
-        rw!("assoc-mul"; "(* ?a (* ?b ?c))" => "(* (* ?a ?b) ?c)"),
-        // Distributivity
-        rw!("distrib-mul-add"; "(* ?a (+ ?b ?c))" => "(+ (* ?a ?b) (* ?a ?c))"),
-        rw!("factor-mul-add"; "(+ (* ?a ?b) (* ?a ?c))" => "(* ?a (+ ?b ?c))"),
-        // Exponential and logarithm
-        rw!("exp-log"; "(exp (log ?x))" => "?x"),
-        rw!("log-exp"; "(log (exp ?x))" => "?x"),
-        // Matrix
-        rw!("transpose-transpose"; "(transpose (transpose ?x))" => "?x"),
-        rw!("transpose-matmul"; 
-            "(transpose (matmul ?a ?b))" => 
-            "(matmul (transpose ?b) (transpose ?a))"),
-    ]
 }
 
 /// Optimize a `TensorExpr` using e-graph rewrites.

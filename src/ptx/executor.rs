@@ -528,12 +528,10 @@ impl Executor<f32> for PtxExecutor {
     where
         TensorGraph<f32, G>: Clone,
     {
-        // Compile the graph on first execution
-        if self.module.is_none() {
-            // We need to clone here since compile_owned needs ownership
-            // This only happens once per graph
-            self.compile_owned(graph.clone())?;
-        }
+        // Always recompile for each graph execution
+        // This ensures we don't reuse cached modules from different graphs
+        self.values.clear();
+        self.compile_owned(graph.clone())?;
         self.execute_compiled(graph, inputs)
     }
 

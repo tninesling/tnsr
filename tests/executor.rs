@@ -1273,3 +1273,75 @@ fn fusion_gradient_complex_composition() {
     assert_approx_eq!(grad_a, &expected_a);
     assert_approx_eq!(grad_b, &expected_b);
 }
+
+// ============================================================================
+// PTX Executor Fusion Tests
+// ============================================================================
+
+#[test]
+#[cfg(all(feature = "fusion", feature = "cuda"))]
+fn fusion_ptx_executor_simple_chain() {
+    use tnsr::runtime::Backend;
+
+    // Create runtime with explicit PTX backend
+    let mut runtime = Runtime::with_backend(Backend::Ptx)
+        .expect("Failed to initialize PTX runtime");
+
+    eprintln!("Using backend: {:?}", runtime.backend());
+
+    // Test gradients through fused exp->log chain
+    let x = Parameter::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
+    let x_id = x.id();
+    let node = TensorExpr::from(x).exp().log().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion before adding gradients
+    let num_fused = graph.apply_fusion();
+    eprintln!("Fused {} chains", num_fused);
+    assert_eq!(num_fused, 1, "Should have fused one chain");
+
+    // Add gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    // Execute and verify gradients
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    // d(log(exp(x)))/dx = d(x)/dx = 1
+    let expected = vec![1.0, 1.0, 1.0, 1.0];
+    assert_approx_eq!(grad, &expected);
+
+    eprintln!("PTX fusion test passed!");
+}
+
+// ============================================================================
+// Backend Selection Tests
+// ============================================================================
+
+#[test]
+#[cfg(feature = "cuda")]
+fn test_default_backend_cuda() {
+    let runtime = create_runtime();
+    let backend = runtime.backend();
+    eprintln!("Default backend with cuda feature: {:?}", backend);
+    #[cfg(not(feature = "ptx"))]
+    {
+        use tnsr::runtime::Backend;
+        assert_eq!(backend, Backend::Cuda, "Should use CUDA backend when ptx feature is disabled");
+    }
+}
+
+#[test]
+#[cfg(all(feature = "cuda", feature = "ptx"))]
+fn test_default_backend_ptx() {
+    let runtime = create_runtime();
+    let backend = runtime.backend();
+    eprintln!("Default backend with ptx feature: {:?}", backend);
+    use tnsr::runtime::Backend;
+    assert_eq!(backend, Backend::Ptx, "Should use PTX backend when ptx feature is enabled");
+}

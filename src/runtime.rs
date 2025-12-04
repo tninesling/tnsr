@@ -43,11 +43,36 @@ pub enum Runtime {
 impl Runtime {
     /// Create a runtime with automatic backend selection.
     ///
-    /// Prefers CUDA if available, otherwise falls back to CPU.
+    /// When the `ptx` feature is enabled, prefers PTX JIT executor.
+    /// Otherwise, prefers static CUDA executor if available.
+    /// Falls back to CPU if CUDA initialization fails.
     pub fn new() -> Self {
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", feature = "ptx"))]
         {
-            // Try CUDA first, fall back to CPU if initialization fails
+            // PTX feature enabled: try PTX first, then CUDA, then CPU
+            match PtxExecutor::try_new() {
+                Ok(executor) => {
+                    tracing::info!("Runtime initialized with PTX JIT backend");
+                    Runtime::Ptx(executor)
+                }
+                Err(e) => {
+                    tracing::warn!("PTX initialization failed: {}, trying CUDA", e);
+                    match CudaExecutor::try_new() {
+                        Ok(executor) => {
+                            tracing::info!("Runtime initialized with CUDA backend");
+                            Runtime::Cuda(executor)
+                        }
+                        Err(e) => {
+                            tracing::warn!("CUDA initialization failed: {}, falling back to CPU", e);
+                            Runtime::Cpu(SimpleExecutor::new())
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(all(feature = "cuda", not(feature = "ptx")))]
+        {
+            // CUDA feature enabled but not PTX: try CUDA, then CPU
             match CudaExecutor::try_new() {
                 Ok(executor) => {
                     tracing::info!("Runtime initialized with CUDA backend");

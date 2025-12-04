@@ -1062,9 +1062,9 @@ fn lower_expr(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operan
         Expr::BlockIdx(dim) => {
             use crate::tile::Dim;
             let block_idx = match dim {
-                Dim::X => Operand::reg("%ctaid.x"),
-                Dim::Y => Operand::reg("%ctaid.y"),
-                Dim::Z => Operand::reg("%ctaid.z"),
+                Dim::X => super::instructions::BLOCK_ID.x.clone(),
+                Dim::Y => super::instructions::BLOCK_ID.y.clone(),
+                Dim::Z => super::instructions::BLOCK_ID.z.clone(),
             };
             // Convert from u32 to u64
             let result = func.add_u64_register();
@@ -1074,9 +1074,9 @@ fn lower_expr(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operan
         Expr::ThreadIdx(dim) => {
             use crate::tile::Dim;
             let thread_idx = match dim {
-                Dim::X => Operand::reg("%tid.x"),
-                Dim::Y => Operand::reg("%tid.y"),
-                Dim::Z => Operand::reg("%tid.z"),
+                Dim::X => super::instructions::THREAD_ID.x.clone(),
+                Dim::Y => super::instructions::THREAD_ID.y.clone(),
+                Dim::Z => super::instructions::THREAD_ID.z.clone(),
             };
             // Convert from u32 to u64
             let result = func.add_u64_register();
@@ -1086,10 +1086,11 @@ fn lower_expr(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operan
         Expr::BlockDim(dim) => {
             use crate::tile::Dim;
             let block_dim = match dim {
-                Dim::X => BLOCK_DIM_X.clone(),
-                Dim::Y => BLOCK_DIM_Y.clone(),
-                Dim::Z => BLOCK_DIM_Z.clone(),
+                Dim::X => super::instructions::BLOCK_DIM.x.clone(),
+                Dim::Y => super::instructions::BLOCK_DIM.y.clone(),
+                Dim::Z => super::instructions::BLOCK_DIM.z.clone(),
             };
+            // Convert from u32 to u64
             let result = func.add_u64_register();
             func.add_inst(Inst::convert_u64_u32(result.clone(), block_dim));
             result

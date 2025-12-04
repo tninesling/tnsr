@@ -231,10 +231,15 @@ impl<D, G> TensorGraph<D, G> {
 
             for (consumer, edge_weight) in end_consumers {
                 self.graph.add_edge(fused_node, consumer, edge_weight);
+                // Remove the old edge from end_node to consumer
+                if let Some(edge) = self.graph.find_edge(chain.end_node, consumer) {
+                    self.graph.remove_edge(edge);
+                }
             }
 
             // Remove all nodes in the chain
-            for &node in &chain.chain_nodes {
+            // We need to remove them in reverse order to avoid index issues
+            for &node in chain.chain_nodes.iter().rev() {
                 self.graph.remove_node(node);
             }
         }

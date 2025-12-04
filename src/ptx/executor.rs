@@ -175,6 +175,30 @@ impl PtxExecutor {
 
                     out
                 }
+                #[cfg(feature = "fusion")]
+                TensorGraphNode::FusedUnary { .. } => {
+                    let kernel_name = &ptx_graph.graph[*node_idx].name;
+
+                    let ins = graph.inputs(*node_idx);
+                    let input = self
+                        .values
+                        .get(&ins[0])
+                        .context("Missing input value for fused unary operation")?;
+
+                    let len = input.len();
+                    let stream = self.device.default_stream();
+                    let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+
+                    let f = module.load_function(kernel_name)?;
+                    let cfg = LaunchConfig::for_num_elems(len as u32);
+                    let mut launcher = stream.launch_builder(&f);
+                    launcher.arg(input);
+                    launcher.arg(&mut out);
+                    unsafe { launcher.launch(cfg) }
+                        .with_context(|| format!("CUDA {} kernel launch failed", kernel_name))?;
+
+                    out
+                }
                 TensorGraphNode::Binary { .. } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 

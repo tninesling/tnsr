@@ -1083,6 +1083,17 @@ fn lower_expr(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operan
             func.add_inst(Inst::convert_u64_u32(result.clone(), thread_idx));
             result
         }
+        Expr::BlockDim(dim) => {
+            use crate::tile::Dim;
+            let block_dim = match dim {
+                Dim::X => BLOCK_DIM_X.clone(),
+                Dim::Y => BLOCK_DIM_Y.clone(),
+                Dim::Z => BLOCK_DIM_Z.clone(),
+            };
+            let result = func.add_u64_register();
+            func.add_inst(Inst::convert_u64_u32(result.clone(), block_dim));
+            result
+        }
         Expr::Mul(a, b) => {
             let a_val = lower_expr(func, ctx, a);
             let b_val = lower_expr(func, ctx, b);

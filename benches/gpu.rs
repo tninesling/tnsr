@@ -369,5 +369,200 @@ pub fn benches(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches_group, benches);
+pub fn fusion_benches(c: &mut Criterion) {
+    let sizes: [usize; 4] = [32, 256, 512, 1024];
+
+    // Benchmark: Chain of unary operations (exp -> log -> relu -> neg)
+    // This is highly memory-bound and should benefit significantly from fusion.
+    // Without fusion: 4 kernel launches, 3 intermediate memory reads/writes
+    // With fusion: 1 kernel launch, no intermediate memory traffic
+    {
+        let mut group = c.benchmark_group("fusion_unary_chain");
+        for &n in &sizes {
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 2) as u64,
+            ));
+            let shape = vec![n, n];
+            let a = Constant::new(vec![1.0f32; n * n], shape.clone());
+            
+            // Build expression: exp -> log -> relu -> neg
+            let expr = TensorExpr::from(a.clone()).exp().log().relu();
+            let expr = -expr;
+            
+            // Build graph with fusion enabled (when feature is on)
+            #[cfg(feature = "fusion")]
+            {
+                let mut graph = TensorGraph::<f32>::new();
+                expr.lower_to_graph(&mut graph);
+                graph.apply_fusion();
+                let graph = Arc::new(graph);
+
+                {
+                    let graph_cuda = Arc::clone(&graph);
+                    group.bench_function(
+                        BenchmarkId::new("cuda_fused", format!("{n}x{n}")),
+                        |b| {
+                            let mut exec = CudaExecutor::new();
+                            b.iter(|| {
+                                let _ = std::hint::black_box(
+                                    exec.execute(&*graph_cuda, Default::default()),
+                                );
+                            });
+                        },
+                    );
+                }
+
+                {
+                    let graph_ptx = Arc::clone(&graph);
+                    group.bench_function(
+                        BenchmarkId::new("ptx_fused", format!("{n}x{n}")),
+                        |b| {
+                            let mut exec = PtxExecutor::new();
+                            b.iter(|| {
+                                let _ = std::hint::black_box(
+                                    exec.execute(&*graph_ptx, Default::default()),
+                                );
+                            });
+                        },
+                    );
+                }
+            }
+
+            // Build graph without fusion (baseline)
+            {
+                let mut graph = TensorGraph::<f32>::new();
+                expr.lower_to_graph(&mut graph);
+                let graph = Arc::new(graph);
+
+                {
+                    let graph_cuda = Arc::clone(&graph);
+                    group.bench_function(
+                        BenchmarkId::new("cuda_unfused", format!("{n}x{n}")),
+                        |b| {
+                            let mut exec = CudaExecutor::new();
+                            b.iter(|| {
+                                let _ = std::hint::black_box(
+                                    exec.execute(&*graph_cuda, Default::default()),
+                                );
+                            });
+                        },
+                    );
+                }
+
+                {
+                    let graph_ptx = Arc::clone(&graph);
+                    group.bench_function(
+                        BenchmarkId::new("ptx_unfused", format!("{n}x{n}")),
+                        |b| {
+                            let mut exec = PtxExecutor::new();
+                            b.iter(|| {
+                                let _ = std::hint::black_box(
+                                    exec.execute(&*graph_ptx, Default::default()),
+                                );
+                            });
+                        },
+                    );
+                }
+            }
+        }
+        group.finish();
+    }
+
+    // Benchmark: Longer chain (6 operations)
+    // Even more memory-bound, should show larger fusion benefits
+    {
+        let mut group = c.benchmark_group("fusion_long_chain");
+        for &n in &sizes {
+            group.throughput(Throughput::Bytes(
+                (n * n * std::mem::size_of::<f32>() * 2) as u64,
+            ));
+            let shape = vec![n, n];
+            let a = Constant::new(vec![0.5f32; n * n], shape.clone());
+            
+            // Build expression: neg -> exp -> log -> relu -> exp -> log
+            let expr = TensorExpr::from(a.clone());
+            let expr = -expr;
+            let expr = expr.exp().log().relu().exp().log();
+            
+            // Build graph with fusion enabled (when feature is on)
+            #[cfg(feature = "fusion")]
+            {
+                let mut graph = TensorGraph::<f32>::new();
+                expr.lower_to_graph(&mut graph);
+                graph.apply_fusion();
+                let graph = Arc::new(graph);
+
+                {
+                    let graph_cuda = Arc::clone(&graph);
+                    group.bench_function(
+                        BenchmarkId::new("cuda_fused", format!("{n}x{n}")),
+                        |b| {
+                            let mut exec = CudaExecutor::new();
+                            b.iter(|| {
+                                let _ = std::hint::black_box(
+                                    exec.execute(&*graph_cuda, Default::default()),
+                                );
+                            });
+                        },
+                    );
+                }
+
+                {
+                    let graph_ptx = Arc::clone(&graph);
+                    group.bench_function(
+                        BenchmarkId::new("ptx_fused", format!("{n}x{n}")),
+                        |b| {
+                            let mut exec = PtxExecutor::new();
+                            b.iter(|| {
+                                let _ = std::hint::black_box(
+                                    exec.execute(&*graph_ptx, Default::default()),
+                                );
+                            });
+                        },
+                    );
+                }
+            }
+
+            // Build graph without fusion (baseline)
+            {
+                let mut graph = TensorGraph::<f32>::new();
+                expr.lower_to_graph(&mut graph);
+                let graph = Arc::new(graph);
+
+                {
+                    let graph_cuda = Arc::clone(&graph);
+                    group.bench_function(
+                        BenchmarkId::new("cuda_unfused", format!("{n}x{n}")),
+                        |b| {
+                            let mut exec = CudaExecutor::new();
+                            b.iter(|| {
+                                let _ = std::hint::black_box(
+                                    exec.execute(&*graph_cuda, Default::default()),
+                                );
+                            });
+                        },
+                    );
+                }
+
+                {
+                    let graph_ptx = Arc::clone(&graph);
+                    group.bench_function(
+                        BenchmarkId::new("ptx_unfused", format!("{n}x{n}")),
+                        |b| {
+                            let mut exec = PtxExecutor::new();
+                            b.iter(|| {
+                                let _ = std::hint::black_box(
+                                    exec.execute(&*graph_ptx, Default::default()),
+                                );
+                            });
+                        },
+                    );
+                }
+            }
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(benches_group, benches, fusion_benches);
 criterion_main!(benches_group);

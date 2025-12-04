@@ -98,7 +98,6 @@ pub struct RewriteConfig {
     pub iter_limit: usize,
     pub node_limit: usize,
     pub time_limit_secs: f64,
-    pub verbose: bool,
 }
 
 impl Default for RewriteConfig {
@@ -107,7 +106,6 @@ impl Default for RewriteConfig {
             iter_limit: 10,
             node_limit: 10_000,
             time_limit_secs: 2.0,
-            verbose: false,
         }
     }
 }
@@ -309,9 +307,7 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
 ) -> TensorExpr<D> {
     let start = expr_to_recexpr(expr);
 
-    if config.verbose {
-        println!("Starting expression: {}", start);
-    }
+    tracing::debug!("Starting expression: {}", start);
 
     let runner = Runner::default()
         .with_iter_limit(config.iter_limit)
@@ -320,18 +316,14 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
         .with_expr(&start)
         .run(&make_rules());
 
-    if config.verbose {
-        println!("Iterations: {}", runner.iterations.len());
-        println!("E-graph size: {} nodes", runner.egraph.total_size());
-    }
+    tracing::debug!("Iterations: {}", runner.iterations.len());
+    tracing::debug!("E-graph size: {} nodes", runner.egraph.total_size());
 
     let extractor = Extractor::new(&runner.egraph, AstSize);
     let (best_cost, best) = extractor.find_best(runner.roots[0]);
 
-    if config.verbose {
-        println!("Best cost: {}", best_cost);
-        println!("Best expression: {}", best);
-    }
+    tracing::debug!("Best cost: {}", best_cost);
+    tracing::debug!("Best expression: {}", best);
 
     recexpr_to_expr(&best)
 }

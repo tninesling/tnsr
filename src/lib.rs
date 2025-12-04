@@ -243,6 +243,24 @@ impl Executor<f32> for SimpleExecutor {
                         tensor::UnaryOp::Relu => self.relu(x),
                     }
                 }
+                #[cfg(feature = "fusion")]
+                TensorGraphNode::FusedUnary { ops, .. } => {
+                    let inputs = graph.inputs(*node_idx);
+                    let x = self.values.get(&inputs[0]).with_context(|| {
+                        format!("Value for node {} not computed", inputs[0].index())
+                    })?;
+                    // Apply each unary operation in sequence
+                    let mut result = x.clone();
+                    for op in ops {
+                        result = match op {
+                            tensor::UnaryOp::Neg => self.neg(&result),
+                            tensor::UnaryOp::Exp => self.exp(&result),
+                            tensor::UnaryOp::Log => self.log(&result),
+                            tensor::UnaryOp::Relu => self.relu(&result),
+                        };
+                    }
+                    result
+                }
                 TensorGraphNode::Binary { op, .. } => {
                     let ins = graph.inputs(*node_idx);
                     let a = self.values.get(&ins[0]).with_context(|| {

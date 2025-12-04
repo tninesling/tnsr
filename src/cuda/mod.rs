@@ -360,6 +360,25 @@ impl Executor<f32> for CudaExecutor {
                         tensor::UnaryOp::Relu => self.relu(input),
                     }
                 }
+                #[cfg(feature = "fusion")]
+                TensorGraphNode::FusedUnary { ops, .. } => {
+                    let inputs = graph.inputs(*node_idx);
+                    let mut result = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing input value for fused unary operation")?
+                        .clone();
+                    // Apply each unary operation in sequence
+                    for op in ops {
+                        result = match op {
+                            tensor::UnaryOp::Neg => self.neg(&result),
+                            tensor::UnaryOp::Exp => self.exp(&result),
+                            tensor::UnaryOp::Log => self.log(&result),
+                            tensor::UnaryOp::Relu => self.relu(&result),
+                        };
+                    }
+                    result
+                }
                 TensorGraphNode::Binary { op, .. } => {
                     let ins = graph.inputs(*node_idx);
                     let lhs = self

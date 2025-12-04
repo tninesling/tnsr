@@ -209,6 +209,7 @@ pub enum Expr {
     Const(i64),
     Var(String),
     BlockIdx(Dim),
+    BlockDim(Dim),
     ThreadIdx(Dim),
     Mul(Box<Expr>, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),

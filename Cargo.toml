@@ -18,7 +18,11 @@ egg = "0.10.0"
 [features]
 default = ["parallel"]
 cuda = ["cudarc"]
+fusion = []
 parallel = ["rayon"]
+# Use PTX JIT executor (tiled) instead of static CUDA kernels
+# Only meaningful when cuda feature is enabled
+ptx = []
 
 [[bench]]
 name = "cpu"

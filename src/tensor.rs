@@ -98,7 +98,7 @@ impl<D: DType> Input<D> {
 }
 
 /// Element-wise unary operations on tensors.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     /// Negation: `-x`
     Neg,
@@ -782,7 +782,7 @@ impl<D: DType> TensorExpr<D> {
                 ExprKind::Unary { op, x } => {
                     let x_idx = lower_rec(x, g);
                     let node_idx = g.graph.add_node(TensorGraphNode::Unary {
-                        op: op.clone(),
+                        op: *op,
                         shape: expr.shape().clone(),
                     });
                     g.graph.add_edge(x_idx, node_idx, 0);

@@ -175,6 +175,30 @@ impl PtxExecutor {
 
                     out
                 }
+                #[cfg(feature = "fusion")]
+                TensorGraphNode::FusedUnary { .. } => {
+                    let kernel_name = &ptx_graph.graph[*node_idx].name;
+
+                    let ins = graph.inputs(*node_idx);
+                    let input = self
+                        .values
+                        .get(&ins[0])
+                        .context("Missing input value for fused unary operation")?;
+
+                    let len = input.len();
+                    let stream = self.device.default_stream();
+                    let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+
+                    let f = module.load_function(kernel_name)?;
+                    let cfg = LaunchConfig::for_num_elems(len as u32);
+                    let mut launcher = stream.launch_builder(&f);
+                    launcher.arg(input);
+                    launcher.arg(&mut out);
+                    unsafe { launcher.launch(cfg) }
+                        .with_context(|| format!("CUDA {} kernel launch failed", kernel_name))?;
+
+                    out
+                }
                 TensorGraphNode::Binary { .. } => {
                     let kernel_name = &ptx_graph.graph[*node_idx].name;
 
@@ -504,12 +528,10 @@ impl Executor<f32> for PtxExecutor {
     where
         TensorGraph<f32, G>: Clone,
     {
-        // Compile the graph on first execution
-        if self.module.is_none() {
-            // We need to clone here since compile_owned needs ownership
-            // This only happens once per graph
-            self.compile_owned(graph.clone())?;
-        }
+        // Always recompile for each graph execution
+        // This ensures we don't reuse cached modules from different graphs
+        self.values.clear();
+        self.compile_owned(graph.clone())?;
         self.execute_compiled(graph, inputs)
     }
 

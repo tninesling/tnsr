@@ -867,3 +867,501 @@ fn gradient_relu_detailed() {
         );
     }
 }
+
+// ============================================================================
+// Fusion Integration Tests
+// ============================================================================
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_forward_simple_chain() {
+    use tnsr::graph::fusion::FusionAnalyzer;
+
+    let mut runtime = create_runtime();
+
+    // Test: x -> exp -> log
+    // Without fusion: exp(x) then log(exp(x))
+    // With fusion: should be single fused op
+    // Result should be the same: log(exp(x)) = x (for positive x)
+    let x_data = vec![1.0, 2.0, 3.0, 4.0];
+    let x = Constant::new(x_data.clone(), vec![4]);
+    let node = TensorExpr::from(x).exp().log();
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Verify chain exists before fusion
+    let analyzer = FusionAnalyzer::new(&graph);
+    let chains = analyzer.find_fusible_chains();
+    assert_eq!(chains.len(), 1, "Should find one fusible chain");
+    assert_eq!(chains[0].len(), 2, "Chain should have 2 ops");
+
+    // Apply fusion
+    let num_fused = graph.apply_fusion();
+    assert_eq!(num_fused, 1, "Should have fused one chain");
+
+    // Execute and verify result
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+    assert_approx_eq!(result, &x_data); // log(exp(x)) ≈ x
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_forward_longer_chain() {
+    let mut runtime = create_runtime();
+
+    // Test: x -> relu -> exp -> log
+    // More complex chain to ensure multiple operations fuse correctly
+    let x_data = vec![1.0, 2.0, 3.0, 4.0];
+    let x = Constant::new(x_data.clone(), vec![4]);
+    let node = TensorExpr::from(x).relu().exp().log();
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion
+    let num_fused = graph.apply_fusion();
+    assert_eq!(num_fused, 1, "Should have fused one chain");
+
+    // Execute and verify result
+    let result = runtime.execute(&graph, HashMap::new()).unwrap();
+
+    // relu(x) = x for positive x, then log(exp(x)) = x
+    assert_approx_eq!(result, &x_data);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_gradient_simple_chain() {
+    let mut runtime = create_runtime();
+
+    // Test gradients through fused exp->log chain
+    // f(x) = sum(log(exp(x))) = sum(x)
+    // df/dx = 1 for all elements
+    let x = Parameter::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
+    let x_id = x.id();
+    let node = TensorExpr::from(x).exp().log().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion before adding gradients
+    let num_fused = graph.apply_fusion();
+    assert_eq!(num_fused, 1, "Should have fused one chain");
+
+    // Add gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    // Execute and verify gradients
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    // d(log(exp(x)))/dx = d(x)/dx = 1
+    let expected = vec![1.0, 1.0, 1.0, 1.0];
+    assert_approx_eq!(grad, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_gradient_exp_chain() {
+    let mut runtime = create_runtime();
+
+    // Test gradients through fused neg->exp chain
+    // f(x) = sum(exp(-x))
+    // df/dx = -exp(-x)
+    let x_data = vec![1.0, 2.0, 3.0, 4.0];
+    let x = Parameter::new(x_data.clone(), vec![4]);
+    let x_id = x.id();
+    let node = (-TensorExpr::from(x)).exp().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion
+    let num_fused = graph.apply_fusion();
+    assert_eq!(num_fused, 1, "Should have fused one chain");
+
+    // Add gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    // Execute and verify gradients
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    // d(exp(-x))/dx = -exp(-x)
+    let expected: Vec<f32> = x_data.iter().map(|&v| -((-v).exp())).collect();
+    assert_approx_eq!(grad, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_gradient_relu_log_chain() {
+    let mut runtime = create_runtime();
+
+    // Test gradients through fused relu->log chain
+    // f(x) = sum(log(relu(x)))
+    // df/dx = 1/x for x > 0, undefined for x <= 0
+    let x_data = vec![1.0, 2.0, 3.0, 4.0];
+    let x = Parameter::new(x_data.clone(), vec![4]);
+    let x_id = x.id();
+    let node = TensorExpr::from(x).relu().log().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion
+    let num_fused = graph.apply_fusion();
+    assert_eq!(num_fused, 1, "Should have fused one chain");
+
+    // Add gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    // Execute and verify gradients
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    // d(log(relu(x)))/dx = (1/relu(x)) * (x > 0) = 1/x for x > 0
+    let expected: Vec<f32> = x_data
+        .iter()
+        .map(|&v| if v > 0.0 { 1.0 / v } else { 0.0 })
+        .collect();
+    assert_approx_eq!(grad, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_gradient_long_chain() {
+    let mut runtime = create_runtime();
+
+    // Test gradients through longer fused chain: neg->exp->log
+    // f(x) = sum(log(exp(-x))) = sum(-x)
+    // df/dx = -1 for all elements
+    let x = Parameter::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
+    let x_id = x.id();
+    let node = (-TensorExpr::from(x)).exp().log().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion
+    let num_fused = graph.apply_fusion();
+    assert_eq!(num_fused, 1, "Should have fused one chain");
+
+    // Add gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    // Execute and verify gradients
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    // d(log(exp(-x)))/dx = d(-x)/dx = -1
+    let expected = vec![-1.0, -1.0, -1.0, -1.0];
+    assert_approx_eq!(grad, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_gradient_with_branching() {
+    let mut runtime = create_runtime();
+
+    // Test: x -> exp -> (log, relu)
+    // The exp node has two consumers, so it should NOT be fused
+    // Verify gradients still work correctly
+    let x = Parameter::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
+    let x_id = x.id();
+    let exp_x = TensorExpr::from(x).exp();
+    let log_exp = exp_x.clone().log();
+    let relu_exp = exp_x.relu();
+    let node = (log_exp + relu_exp).reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion - should not fuse anything due to branching
+    let num_fused = graph.apply_fusion();
+    assert_eq!(
+        num_fused, 0,
+        "Should not have fused (exp has multiple consumers)"
+    );
+
+    // Add gradients and verify they still work
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    // Verify all gradients are finite (actual values depend on the computation)
+    for &val in grad.iter() {
+        assert!(val.is_finite(), "Gradient should be finite");
+    }
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_gradient_multiple_parameters() {
+    let mut runtime = create_runtime();
+
+    // Test: y = sum(log(exp(a))) + sum(log(exp(b)))
+    // Two independent fusible chains, ensure both get correct gradients
+    // df/da = 1, df/db = 1
+    let a = Parameter::new(vec![1.0, 2.0], vec![2]);
+    let a_id = a.id();
+    let b = Parameter::new(vec![3.0, 4.0], vec![2]);
+    let b_id = b.id();
+
+    let chain_a = TensorExpr::from(a).exp().log().reduce_sum(0);
+    let chain_b = TensorExpr::from(b).exp().log().reduce_sum(0);
+    let node = chain_a + chain_b;
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion - should fuse both chains
+    let num_fused = graph.apply_fusion();
+    assert_eq!(num_fused, 2, "Should have fused two chains");
+
+    // Add gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    // Execute and verify gradients
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad_a = grads.get(&a_id).expect("Parameter A gradient missing");
+    let grad_b = grads.get(&b_id).expect("Parameter B gradient missing");
+
+    assert_eq!(grad_a.len(), 2);
+    assert_eq!(grad_b.len(), 2);
+
+    // Both should have gradient of 1
+    let expected = vec![1.0, 1.0];
+    assert_approx_eq!(grad_a, &expected);
+    assert_approx_eq!(grad_b, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_gradient_relu_with_negatives() {
+    let mut runtime = create_runtime();
+
+    // Test gradients with relu in fused chain on negative values
+    // f(x) = sum(log(relu(x) + 1)) where x has negative values
+    // This tests that intermediate relu values are correctly available to log gradient
+    let x_data = vec![-1.0, -0.5, 0.5, 1.0];
+    let x = Parameter::new(x_data.clone(), vec![4]);
+    let x_id = x.id();
+
+    // Add 1 to avoid log(0)
+    let one = Constant::new(vec![1.0, 1.0, 1.0, 1.0], vec![4]);
+    let node = (TensorExpr::from(x).relu() + TensorExpr::from(one))
+        .log()
+        .reduce_sum(0);
+
+    let graph: TensorGraph<f32> = node.into();
+
+    // Note: relu alone won't form a chain with log because of the + operation
+    // But if we have a pure relu->log chain, it would fuse
+
+    // Add gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    // Execute and verify gradients
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    // d(log(relu(x) + 1))/dx = (1/(relu(x) + 1)) * (x > 0)
+    let expected: Vec<f32> = x_data
+        .iter()
+        .map(|&v| {
+            let relu_v = if v > 0.0 { v } else { 0.0 };
+            if v > 0.0 { 1.0 / (relu_v + 1.0) } else { 0.0 }
+        })
+        .collect();
+    assert_approx_eq!(grad, &expected);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_gradient_comparison_with_unfused() {
+    let mut runtime = create_runtime();
+
+    // Test: Compare gradients from fused vs unfused graphs
+    // They should produce identical results
+    let x_data = vec![1.0, 2.0, 3.0, 4.0];
+    let x1 = Parameter::new(x_data.clone(), vec![4]);
+    let x1_id = x1.id();
+    let x2 = Parameter::new(x_data.clone(), vec![4]);
+    let x2_id = x2.id();
+
+    // Build two identical graphs
+    let node1 = TensorExpr::from(x1).exp().log().reduce_sum(0);
+    let node2 = TensorExpr::from(x2).exp().log().reduce_sum(0);
+
+    let mut graph_fused: TensorGraph<f32> = node1.into();
+    let graph_unfused: TensorGraph<f32> = node2.into();
+
+    // Apply fusion to first graph only
+    let num_fused = graph_fused.apply_fusion();
+    assert_eq!(num_fused, 1, "Should have fused one chain");
+
+    // Add gradients to both
+    let loss_node_fused = *graph_fused.toposort().last().unwrap();
+    let loss_node_unfused = *graph_unfused.toposort().last().unwrap();
+
+    let grad_graph_fused = graph_fused.with_gradients(loss_node_fused);
+    let grad_graph_unfused = graph_unfused.with_gradients(loss_node_unfused);
+
+    // Execute both
+    runtime.execute(&grad_graph_fused, HashMap::new()).unwrap();
+    let grads_fused = runtime.get_gradients(&grad_graph_fused);
+
+    runtime
+        .execute(&grad_graph_unfused, HashMap::new())
+        .unwrap();
+    let grads_unfused = runtime.get_gradients(&grad_graph_unfused);
+
+    // Compare gradients
+    let grad_fused = grads_fused.get(&x1_id).expect("Fused gradient missing");
+    let grad_unfused = grads_unfused.get(&x2_id).expect("Unfused gradient missing");
+
+    assert_eq!(grad_fused.len(), grad_unfused.len());
+    assert_approx_eq!(grad_fused, grad_unfused);
+}
+
+#[test]
+#[cfg(feature = "fusion")]
+fn fusion_gradient_complex_composition() {
+    let mut runtime = create_runtime();
+
+    // Test: (a * b) -> exp -> log where a and b are parameters
+    // The binary op prevents fusion, but we want to test fusion after it
+    let a = Parameter::new(vec![2.0, 3.0], vec![2]);
+    let a_id = a.id();
+    let b = Parameter::new(vec![1.0, 2.0], vec![2]);
+    let b_id = b.id();
+
+    let prod = TensorExpr::from(a) * TensorExpr::from(b);
+    let node = prod.exp().log().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion - should fuse exp->log
+    let num_fused = graph.apply_fusion();
+    assert_eq!(num_fused, 1, "Should have fused exp->log chain");
+
+    // Add gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    // Execute and verify gradients
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad_a = grads.get(&a_id).expect("Parameter A gradient missing");
+    let grad_b = grads.get(&b_id).expect("Parameter B gradient missing");
+
+    // d(log(exp(a*b)))/da = d(a*b)/da = b
+    // d(log(exp(a*b)))/db = d(a*b)/db = a
+    let expected_a = vec![1.0, 2.0]; // b values
+    let expected_b = vec![2.0, 3.0]; // a values
+
+    assert_approx_eq!(grad_a, &expected_a);
+    assert_approx_eq!(grad_b, &expected_b);
+}
+
+// ============================================================================
+// PTX Executor Fusion Tests
+// ============================================================================
+
+#[test]
+#[cfg(all(feature = "fusion", feature = "cuda"))]
+fn fusion_ptx_executor_simple_chain() {
+    use tnsr::runtime::Backend;
+
+    // Create runtime with explicit PTX backend
+    let mut runtime =
+        Runtime::with_backend(Backend::Ptx).expect("Failed to initialize PTX runtime");
+
+    eprintln!("Using backend: {:?}", runtime.backend());
+
+    // Test gradients through fused exp->log chain
+    let x = Parameter::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
+    let x_id = x.id();
+    let node = TensorExpr::from(x).exp().log().reduce_sum(0);
+
+    let mut graph: TensorGraph<f32> = node.into();
+
+    // Apply fusion before adding gradients
+    let num_fused = graph.apply_fusion();
+    eprintln!("Fused {} chains", num_fused);
+    assert_eq!(num_fused, 1, "Should have fused one chain");
+
+    // Add gradients
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    // Execute and verify gradients
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let grads = runtime.get_gradients(&grad_graph);
+
+    let grad = grads.get(&x_id).expect("Parameter gradient missing");
+    assert_eq!(grad.len(), 4);
+
+    // d(log(exp(x)))/dx = d(x)/dx = 1
+    let expected = vec![1.0, 1.0, 1.0, 1.0];
+    assert_approx_eq!(grad, &expected);
+
+    eprintln!("PTX fusion test passed!");
+}
+
+// ============================================================================
+// Backend Selection Tests
+// ============================================================================
+
+#[test]
+#[cfg(feature = "cuda")]
+fn test_default_backend_cuda() {
+    let runtime = create_runtime();
+    let backend = runtime.backend();
+    eprintln!("Default backend with cuda feature: {:?}", backend);
+    #[cfg(not(feature = "ptx"))]
+    {
+        use tnsr::runtime::Backend;
+        assert_eq!(
+            backend,
+            Backend::Cuda,
+            "Should use CUDA backend when ptx feature is disabled"
+        );
+    }
+}
+
+#[test]
+#[cfg(all(feature = "cuda", feature = "ptx"))]
+fn test_default_backend_ptx() {
+    let runtime = create_runtime();
+    let backend = runtime.backend();
+    eprintln!("Default backend with ptx feature: {:?}", backend);
+    use tnsr::runtime::Backend;
+    assert_eq!(
+        backend,
+        Backend::Ptx,
+        "Should use PTX backend when ptx feature is enabled"
+    );
+}

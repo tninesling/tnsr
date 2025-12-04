@@ -98,7 +98,7 @@ impl<D: DType> Input<D> {
 }
 
 /// Element-wise unary operations on tensors.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     /// Negation: `-x`
     Neg,

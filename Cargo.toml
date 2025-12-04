@@ -18,6 +18,7 @@ egg = "0.10.0"
 [features]
 default = ["parallel"]
 cuda = ["cudarc"]
+fusion = []
 parallel = ["rayon"]
 
 [[bench]]

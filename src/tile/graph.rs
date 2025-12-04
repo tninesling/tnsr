@@ -60,6 +60,8 @@ impl TileGraph {
             TensorGraphNode::Input { name, .. } => Self::lower_input(name, shape),
             TensorGraphNode::Parameter { id, data, .. } => Self::lower_parameter(id, data, shape),
             TensorGraphNode::Unary { op, .. } => Self::lower_unary(op, shape),
+            #[cfg(feature = "fusion")]
+            TensorGraphNode::FusedUnary { ops, .. } => Self::lower_fused_unary(&ops, shape),
             TensorGraphNode::Binary { op, .. } => Self::lower_binary(op, shape),
             TensorGraphNode::MatMul { .. } => {
                 let _m = shape[0];
@@ -272,6 +274,49 @@ impl TileGraph {
         }
 
         builder.store("output", tile_out, offset, Expr::Const(0));
+
+        builder.finish()
+    }
+
+    #[allow(dead_code)]
+    #[cfg(feature = "fusion")]
+    fn lower_fused_unary(ops: &[tensor::UnaryOp], shape: &[usize]) -> TileIR {
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("fused_unary");
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+
+        let total_elements: usize = shape.iter().product();
+        
+        // Allocate registers for input and intermediate results
+        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+        let mut current_tile = tile_in;
+        
+        // Each thread processes one element using thread index
+        let offset: Expr = Expr::ThreadIdx(Dim::X);
+        builder.load_global_to_shared(tile_in, "input", offset.clone(), Expr::Const(0));
+
+        // Apply each operation in sequence
+        for (i, op) in ops.iter().enumerate() {
+            let next_tile = if i == ops.len() - 1 {
+                // Last operation writes to output register
+                builder.alloc_register(DType::F32, total_elements, 1)
+            } else {
+                // Intermediate results need temporary registers
+                builder.alloc_register(DType::F32, total_elements, 1)
+            };
+            
+            match op {
+                tensor::UnaryOp::Neg => builder.neg(next_tile, current_tile),
+                tensor::UnaryOp::Exp => builder.exp(next_tile, current_tile),
+                tensor::UnaryOp::Log => builder.log(next_tile, current_tile),
+                tensor::UnaryOp::Relu => builder.relu(next_tile, current_tile),
+            }
+            
+            current_tile = next_tile;
+        }
+
+        builder.store("output", current_tile, offset, Expr::Const(0));
 
         builder.finish()
     }

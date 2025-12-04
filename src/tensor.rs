@@ -703,6 +703,22 @@ impl<D: DType> TensorExpr<D> {
 }
 
 impl<D: DType> TensorExpr<D> {
+    /// Optimize this expression using e-graph rewrites.
+    pub fn optimize(&self) -> Self
+    where
+        D: Clone + Default + 'static,
+    {
+        crate::graph::rewrite::optimize_expr(self, crate::graph::rewrite::RewriteConfig::default())
+    }
+
+    /// Optimize this expression with custom configuration.
+    pub fn optimize_with(&self, config: crate::graph::rewrite::RewriteConfig) -> Self
+    where
+        D: Clone + Default + 'static,
+    {
+        crate::graph::rewrite::optimize_expr(self, config)
+    }
+
     pub fn lower_to_graph<G>(&self, graph: &mut graph::TensorGraph<D, G>) -> NodeIndex {
         fn lower_rec<D: DType, G>(
             expr: &TensorExpr<D>,

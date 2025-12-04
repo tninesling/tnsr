@@ -1,4 +1,39 @@
 //! Graph rewriting using e-graphs for optimization.
+//!
+//! # Usage
+//!
+//! ```rust
+//! use tnsr::tensor::{Parameter, TensorExpr};
+//! use tnsr::graph::rewrite::RewriteConfig;
+//!
+//! let x = Parameter::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2]);
+//! let expr: TensorExpr<f32> = x.into();
+//!
+//! // Complex expression that can be simplified
+//! let complex = expr.transpose().transpose();
+//!
+//! // Optimize using default config
+//! let optimized = complex.optimize();
+//!
+//! // Or with custom config
+//! let config = RewriteConfig { iter_limit: 20, ..Default::default() };
+//! let optimized = complex.optimize_with(config);
+//! ```
+//!
+//! # Integration with TensorGraph
+//!
+//! ```rust
+//! use tnsr::tensor::{Parameter, TensorExpr};
+//! use tnsr::graph::TensorGraph;
+//!
+//! let x = Parameter::new(vec![1.0f32], vec![1]);
+//! let expr: TensorExpr<f32> = x.into();
+//! let expr = expr.log().exp(); // Will be optimized to just x
+//!
+//! let mut graph = TensorGraph::new();
+//! // Optimize before lowering to graph
+//! graph.add_expr(&expr, true);
+//! ```
 
 use crate::tensor::{BinaryOp, DType, ExprKind, ReduceOp, TensorExpr, UnaryOp};
 use egg::{
@@ -379,5 +414,29 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_integration_with_graph() {
+        use crate::graph::TensorGraph;
+
+        let x = Parameter::new(vec![1.0f32], vec![1]);
+        let expr: TensorExpr<f32> = x.into();
+        let expr = expr.log().exp();
+
+        let mut graph = TensorGraph::new();
+        let _idx = graph.add_expr(&expr, true);
+
+        assert!(!graph.is_empty());
+    }
+
+    #[test]
+    fn test_optimize_method() {
+        let x = Parameter::new(vec![2.0f32, 3.0, 4.0, 5.0], vec![2, 2]);
+        let x_id = x.id();
+        let expr: TensorExpr<f32> = x.into();
+        let complex = expr.transpose().transpose();
+        let optimized = complex.optimize();
+        assert!(matches!(optimized.kind(), ExprKind::Parameter { id, .. } if *id == x_id));
     }
 }

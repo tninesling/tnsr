@@ -829,14 +829,14 @@ impl TensorGraph<f32, NoGrad> {
     }
 }
 
-impl TensorGraph<f32, WithGrad> {
+impl<D: crate::tensor::DType> TensorGraph<D, WithGrad> {
     /// Access gradient metadata for graphs with gradients.
     pub fn gradient_metadata(&self) -> &WithGrad {
         &self.gradients
     }
 
     /// Convert a graph with gradients back to an inference-only graph by removing gradient nodes.
-    pub fn without_gradients(self) -> TensorGraph<f32, NoGrad> {
+    pub fn without_gradients(self) -> TensorGraph<D, NoGrad> {
         let gradient_nodes = &self.gradients.gradient_nodes;
         let new_graph = self.graph.filter_map_owned(
             |node_idx, node| {
@@ -866,8 +866,8 @@ impl<D, G> Index<NodeIndex> for TensorGraph<D, G> {
     }
 }
 
-impl From<TensorExpr<f32>> for TensorGraph<f32, NoGrad> {
-    fn from(expr: TensorExpr<f32>) -> Self {
+impl<D: crate::tensor::DType> From<TensorExpr<D>> for TensorGraph<D, NoGrad> {
+    fn from(expr: TensorExpr<D>) -> Self {
         let mut graph = TensorGraph::new();
         let _ = expr.lower_to_graph(&mut graph);
         graph

@@ -77,7 +77,7 @@ fn test_f16_transcendental() {
     let result = executor.execute(&y.into(), inputs).unwrap();
 
     // Expected: [e^0, e^1, e^2] = [1.0, 2.718..., 7.389...]
-    assert_close(&result, &[1.0, 2.71828, 7.38906], 0.01);
+    assert_close(&result, &[1.0, std::f32::consts::E, 7.38906], 0.01);
 }
 
 #[test]

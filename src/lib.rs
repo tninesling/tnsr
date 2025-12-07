@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use num_traits::Float;
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
@@ -129,88 +130,100 @@ pub trait Executor<D> {
 /// let result = executor.execute(&graph, inputs).unwrap();
 /// assert_eq!(result.len(), 6);
 /// ```
-#[derive(Default)]
-pub struct SimpleExecutor {
-    values: HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+pub struct SimpleExecutor<D = f32> {
+    values: HashMap<petgraph::graph::NodeIndex, Vec<D>>,
 }
 
-impl SimpleExecutor {
+impl<D> SimpleExecutor<D> {
     /// Create a new CPU executor.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            values: HashMap::new(),
+        }
     }
 
     /// Retrieve the computed value for a specific graph node.
     ///
     /// Only available after execution has completed.
     /// Useful for debugging intermediate values.
-    pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<&Vec<f32>> {
+    pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<&Vec<D>> {
         self.values.get(&node_idx)
     }
+}
 
-    fn neg(&self, x: &[f32]) -> Vec<f32> {
+impl<D> Default for SimpleExecutor<D> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<D: Float + Send + Sync> SimpleExecutor<D> {
+    fn neg(&self, x: &[D]) -> Vec<D> {
         let _span = trace_span!("neg").entered();
-        get_iter(x).map(|v| -v).collect()
+        get_iter(x).map(|&v| -v).collect()
     }
 
-    fn exp(&self, x: &[f32]) -> Vec<f32> {
+    fn exp(&self, x: &[D]) -> Vec<D> {
         let _span = trace_span!("exp").entered();
-        get_iter(x).copied().map(f32::exp).collect()
+        get_iter(x).copied().map(Float::exp).collect()
     }
 
-    fn log(&self, x: &[f32]) -> Vec<f32> {
+    fn log(&self, x: &[D]) -> Vec<D> {
         let _span = trace_span!("log").entered();
-        get_iter(x).copied().map(f32::ln).collect()
+        get_iter(x).copied().map(Float::ln).collect()
     }
 
-    fn relu(&self, x: &[f32]) -> Vec<f32> {
+    fn relu(&self, x: &[D]) -> Vec<D> {
         let _span = trace_span!("relu").entered();
-        get_iter(x).map(|v| v.max(0.0)).collect()
+        get_iter(x).map(|&v| v.max(D::zero())).collect()
     }
 
-    fn add(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+    fn add(&self, a: &[D], b: &[D]) -> Vec<D> {
         let _span = trace_span!("add").entered();
-        get_iter(a).zip(get_iter(b)).map(|(x, y)| x + y).collect()
+        get_iter(a).zip(get_iter(b)).map(|(&x, &y)| x + y).collect()
     }
 
-    fn sub(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+    fn sub(&self, a: &[D], b: &[D]) -> Vec<D> {
         let _span = trace_span!("sub").entered();
-        get_iter(a).zip(get_iter(b)).map(|(x, y)| x - y).collect()
+        get_iter(a).zip(get_iter(b)).map(|(&x, &y)| x - y).collect()
     }
 
-    fn mul(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+    fn mul(&self, a: &[D], b: &[D]) -> Vec<D> {
         let _span = trace_span!("mul").entered();
-        get_iter(a).zip(get_iter(b)).map(|(x, y)| x * y).collect()
+        get_iter(a).zip(get_iter(b)).map(|(&x, &y)| x * y).collect()
     }
 
-    fn div(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+    fn div(&self, a: &[D], b: &[D]) -> Vec<D> {
         let _span = trace_span!("div").entered();
-        get_iter(a).zip(get_iter(b)).map(|(x, y)| x / y).collect()
+        get_iter(a).zip(get_iter(b)).map(|(&x, &y)| x / y).collect()
     }
 
-    fn gt(&self, a: &[f32], b: &[f32]) -> Vec<f32> {
+    fn gt(&self, a: &[D], b: &[D]) -> Vec<D> {
         let _span = trace_span!("gt").entered();
         get_iter(a)
             .zip(get_iter(b))
-            .map(|(x, y)| if x > y { 1.0 } else { 0.0 })
+            .map(|(&x, &y)| if x > y { D::one() } else { D::zero() })
             .collect()
     }
 
-    fn mask(&self, values: &[f32], condition: &[f32]) -> Vec<f32> {
+    fn mask(&self, values: &[D], condition: &[D]) -> Vec<D> {
         let _span = trace_span!("mask").entered();
         get_iter(values)
             .zip(get_iter(condition))
-            .map(|(v, c)| if *c != 0.0 { *v } else { 0.0 })
+            .map(|(&v, &c)| if c != D::zero() { v } else { D::zero() })
             .collect()
     }
 }
 
-impl Executor<f32> for SimpleExecutor {
+impl<D> Executor<D> for SimpleExecutor<D>
+where
+    D: Float + Send + Sync,
+{
     fn execute<G>(
         &mut self,
-        graph: &TensorGraph<f32, G>,
-        inputs: HashMap<String, Vec<f32>>,
-    ) -> Result<Vec<f32>> {
+        graph: &TensorGraph<D, G>,
+        inputs: HashMap<String, Vec<D>>,
+    ) -> Result<Vec<D>> {
         let order = graph.toposort();
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
@@ -351,7 +364,7 @@ impl Executor<f32> for SimpleExecutor {
         Ok(out.clone())
     }
 
-    fn get_gradients(&self, graph: &TensorGraph<f32, WithGrad>) -> HashMap<usize, Vec<f32>> {
+    fn get_gradients(&self, graph: &TensorGraph<D, WithGrad>) -> HashMap<usize, Vec<D>> {
         let mut result = HashMap::new();
 
         // Iterate through all parameters in the gradient metadata
@@ -378,11 +391,14 @@ fn rowmajor_strides(shape: &[usize]) -> Vec<usize> {
     s
 }
 
-fn matmul_forward<G>(
-    graph: &TensorGraph<f32, G>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+fn matmul_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Vec<D>>,
     node_idx: petgraph::graph::NodeIndex,
-) -> Result<Vec<f32>> {
+) -> Result<Vec<D>>
+where
+    D: Float + Send + Sync,
+{
     let inputs_idx = graph.inputs(node_idx);
     let a_idx = inputs_idx[0];
     let b_idx = inputs_idx[1];
@@ -413,12 +429,12 @@ fn matmul_forward<G>(
         use rayon::prelude::*;
 
         if m >= parallel_config::MATMUL_THRESHOLD {
-            let mut out = vec![0.0f32; m * n];
+            let mut out = vec![D::zero(); m * n];
             out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
                 for j in 0..n {
-                    let mut sum = 0.0f32;
+                    let mut sum = D::zero();
                     for p in 0..k {
-                        sum += a[i * k + p] * b[p * n + j];
+                        sum = sum + a[i * k + p] * b[p * n + j];
                     }
                     row[j] = sum;
                 }
@@ -428,12 +444,12 @@ fn matmul_forward<G>(
     }
 
     // Sequential fallback
-    let mut out = vec![0.0f32; m * n];
+    let mut out = vec![D::zero(); m * n];
     for i in 0..m {
         for j in 0..n {
-            let mut sum = 0.0f32;
+            let mut sum = D::zero();
             for p in 0..k {
-                sum += a[i * k + p] * b[p * n + j];
+                sum = sum + a[i * k + p] * b[p * n + j];
             }
             out[i * n + j] = sum;
         }
@@ -441,11 +457,14 @@ fn matmul_forward<G>(
     Ok(out)
 }
 
-fn transpose_forward<G>(
-    graph: &TensorGraph<f32, G>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+fn transpose_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Vec<D>>,
     node_idx: petgraph::graph::NodeIndex,
-) -> Result<Vec<f32>> {
+) -> Result<Vec<D>>
+where
+    D: Float,
+{
     let inputs_idx = graph.inputs(node_idx);
     let a_idx = inputs_idx[0];
     let a = values
@@ -460,7 +479,7 @@ fn transpose_forward<G>(
     );
 
     let (m, n) = (a_shape[0], a_shape[1]);
-    let mut out = vec![0.0f32; m * n];
+    let mut out = vec![D::zero(); m * n];
 
     for i in 0..m {
         for j in 0..n {
@@ -471,12 +490,15 @@ fn transpose_forward<G>(
     Ok(out)
 }
 
-fn broadcast_axis_forward<G>(
-    graph: &TensorGraph<f32, G>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+fn broadcast_axis_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Vec<D>>,
     node_idx: petgraph::graph::NodeIndex,
     axis: usize,
-) -> Result<Vec<f32>> {
+) -> Result<Vec<D>>
+where
+    D: Float,
+{
     let in_idx = graph.inputs(node_idx)[0];
     let in_val = values
         .get(&in_idx)
@@ -487,7 +509,7 @@ fn broadcast_axis_forward<G>(
     let in_strides = rowmajor_strides(in_shape);
     let out_strides = rowmajor_strides(out_shape);
 
-    let mut out = vec![0.0f32; out_size];
+    let mut out = vec![D::zero(); out_size];
     for (out_idx, out_elem) in out.iter_mut().enumerate() {
         let mut in_linear = 0usize;
         let mut rem = out_idx;
@@ -502,13 +524,16 @@ fn broadcast_axis_forward<G>(
     Ok(out)
 }
 
-fn reduce_axis_forward<G>(
-    graph: &TensorGraph<f32, G>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<f32>>,
+fn reduce_axis_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Vec<D>>,
     node_idx: petgraph::graph::NodeIndex,
     op: &tensor::ReduceOp,
     axis: usize,
-) -> Result<Vec<f32>> {
+) -> Result<Vec<D>>
+where
+    D: Float,
+{
     let in_idx = graph.inputs(node_idx)[0];
     let x = values
         .get(&in_idx)
@@ -521,8 +546,8 @@ fn reduce_axis_forward<G>(
     let out_strides = rowmajor_strides(out_shape);
 
     let mut out = match op {
-        tensor::ReduceOp::Max => vec![f32::NEG_INFINITY; out_size],
-        _ => vec![0.0f32; out_size],
+        tensor::ReduceOp::Max => vec![D::neg_infinity(); out_size],
+        _ => vec![D::zero(); out_size],
     };
 
     let total: usize = in_shape.iter().product();
@@ -537,10 +562,10 @@ fn reduce_axis_forward<G>(
         }
         match op {
             tensor::ReduceOp::Sum => {
-                out[out_linear] += val;
+                out[out_linear] = out[out_linear] + val;
             }
             tensor::ReduceOp::Mean => {
-                out[out_linear] += val / axis_size as f32;
+                out[out_linear] = out[out_linear] + val / D::from(axis_size).unwrap();
             }
             tensor::ReduceOp::Max => {
                 out[out_linear] = out[out_linear].max(val);

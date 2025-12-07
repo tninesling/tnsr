@@ -14,6 +14,8 @@ tracing-subscriber = "0.3.18"
 cudarc = { version = "0.17.3", features = ["cuda-12090"], optional = true }
 rayon = { version = "1.11", optional = true }
 egg = "0.10.0"
+half = { version = "2.4", features = ["num-traits"] }
+num-traits = "0.2"
 
 [features]
 default = ["parallel"]

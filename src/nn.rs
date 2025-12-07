@@ -49,12 +49,15 @@ pub fn constant_f32(data: Vec<f32>, shape: Shape) -> Constant<f32> {
 }
 
 /// Rectified linear unit activation: `max(0, x)`.
-pub fn relu(x: impl Into<TensorExpr<f32>>) -> TensorExpr<f32> {
+pub fn relu<D: DType + Default + 'static>(x: impl Into<TensorExpr<D>>) -> TensorExpr<D> {
     x.into().relu()
 }
 
 /// Numerically stable log-sum-exp reduction along an axis.
-pub fn reduce_logsumexp_simple(x: impl Into<TensorExpr<f32>>, axis: usize) -> TensorExpr<f32> {
+pub fn reduce_logsumexp_simple<D: DType + Default + 'static>(
+    x: impl Into<TensorExpr<D>>,
+    axis: usize,
+) -> TensorExpr<D> {
     // Numerically stable-ish log-sum-exp without needing broadcast of per-row max
     let x = x.into();
     let m = x.clone().reduce_max(axis);
@@ -66,17 +69,17 @@ pub fn reduce_logsumexp_simple(x: impl Into<TensorExpr<f32>>, axis: usize) -> Te
 }
 
 /// Cross-entropy loss for one-hot labels with logit inputs (no softmax).
-pub fn cross_entropy_one_hot_logits(
-    logits: impl Into<TensorExpr<f32>>,
-    labels_one_hot: impl Into<TensorExpr<f32>>,
+pub fn cross_entropy_one_hot_logits<D: DType + Default + 'static>(
+    logits: impl Into<TensorExpr<D>>,
+    labels_one_hot: impl Into<TensorExpr<D>>,
     class_axis: usize,
-) -> TensorExpr<f32> {
+) -> TensorExpr<D> {
     // logsumexp over class axis
     let logits = logits.into();
     let lse = reduce_logsumexp_simple(logits.clone(), class_axis);
 
     // sum over classes of labels * logits -> per-example selected logit
-    let picked = (logits.clone() * labels_one_hot).reduce_sum(class_axis);
+    let picked = (logits.clone() * labels_one_hot.into()).reduce_sum(class_axis);
 
     // per-example nll = lse - picked
     let nll = lse - picked;
@@ -180,9 +183,9 @@ mod tests {
         let x = constant_f32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
         let w = constant_f32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![3, 2]);
 
-        let node = linear::<f32>(x, w, Option::<Constant<f32>>::None);
+        let node = linear(x, w, Option::<Constant<f32>>::None);
 
-        let mut graph = TensorGraph::new();
+        let mut graph: TensorGraph<f32> = TensorGraph::new();
         node.lower_to_graph(&mut graph);
 
         let mut exec = SimpleExecutor::new();
@@ -214,9 +217,9 @@ mod tests {
         let w = constant_f32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![3, 2]);
         let b = constant_f32(vec![10.0, -1.0], vec![1, 2]);
 
-        let node = linear::<f32>(x, w, Some(b));
+        let node = linear(x, w, Some(b));
 
-        let mut graph = TensorGraph::new();
+        let mut graph: TensorGraph<f32> = TensorGraph::new();
         node.lower_to_graph(&mut graph);
 
         let mut exec = SimpleExecutor::new();
@@ -247,7 +250,7 @@ mod tests {
         // one-hot for classes [0, 1]
         let labels = constant_f32(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], vec![2, 3]);
         let loss = cross_entropy_one_hot_logits(logits, labels, 1);
-        let mut g = TensorGraph::new();
+        let mut g: TensorGraph<f32> = TensorGraph::new();
         loss.lower_to_graph(&mut g);
         let mut exec = SimpleExecutor::new();
         let out = exec.execute(&g, Default::default()).unwrap();

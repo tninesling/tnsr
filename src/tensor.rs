@@ -9,9 +9,9 @@ static PARAM_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Marker trait for supported data types in tensor operations.
 pub trait DType: Clone {}
-impl DType for f32 {}
-impl DType for f64 {}
-impl DType for i32 {}
+
+// Blanket implementation for all Clone types
+impl<T: Clone> DType for T {}
 
 /// Type alias for tensor shapes represented as dimension vectors.
 pub type Shape = Vec<usize>;

@@ -437,7 +437,7 @@ pub fn optimization_benches(c: &mut Criterion) {
 
             // Measure time to optimize exp(log(x))
             {
-                let expr = TensorExpr::from(a.clone()).log().exp();
+                let expr = TensorExpr::<f32>::from(a.clone()).log().exp();
                 group.bench_with_input(
                     BenchmarkId::new("exp_log", format!("{n}x{n}")),
                     &n,
@@ -452,7 +452,7 @@ pub fn optimization_benches(c: &mut Criterion) {
 
             // Measure time to optimize transpose(transpose(x))
             {
-                let expr = TensorExpr::from(a.clone()).transpose().transpose();
+                let expr = TensorExpr::<f32>::from(a.clone()).transpose().transpose();
                 group.bench_with_input(
                     BenchmarkId::new("transpose_transpose", format!("{n}x{n}")),
                     &n,

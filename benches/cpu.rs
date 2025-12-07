@@ -18,7 +18,7 @@ pub fn benches(c: &mut Criterion) {
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-            let expr = -TensorExpr::<f32>::from(a.clone());
+            let expr = -TensorExpr::from(a.clone());
             expr.lower_to_graph(&mut graph);
             let graph = Arc::new(graph);
 
@@ -48,7 +48,7 @@ pub fn benches(c: &mut Criterion) {
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-            let expr = TensorExpr::<f32>::from(a.clone()).exp();
+            let expr = TensorExpr::from(a.clone()).exp();
             expr.lower_to_graph(&mut graph);
             let graph = Arc::new(graph);
 
@@ -78,7 +78,7 @@ pub fn benches(c: &mut Criterion) {
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-            let expr = TensorExpr::<f32>::from(a.clone()).log();
+            let expr = TensorExpr::from(a.clone()).log();
             expr.lower_to_graph(&mut graph);
             let graph = Arc::new(graph);
 
@@ -108,7 +108,7 @@ pub fn benches(c: &mut Criterion) {
             let shape = vec![n, n];
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-            let expr = TensorExpr::<f32>::from(a.clone()).relu();
+            let expr = TensorExpr::from(a.clone()).relu();
             expr.lower_to_graph(&mut graph);
             let graph = Arc::new(graph);
 
@@ -139,7 +139,7 @@ pub fn benches(c: &mut Criterion) {
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let b = Constant::new(vec![0.5f32; n * n], shape.clone());
             let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-            let expr = TensorExpr::<f32>::from(a.clone()) + TensorExpr::<f32>::from(b.clone());
+            let expr = TensorExpr::from(a.clone()) + TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
             let graph = Arc::new(graph);
 
@@ -170,7 +170,7 @@ pub fn benches(c: &mut Criterion) {
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let b = Constant::new(vec![0.5f32; n * n], shape.clone());
             let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-            let expr = TensorExpr::<f32>::from(a.clone()) - TensorExpr::<f32>::from(b.clone());
+            let expr = TensorExpr::from(a.clone()) - TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
             let graph = Arc::new(graph);
 
@@ -201,7 +201,7 @@ pub fn benches(c: &mut Criterion) {
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let b = Constant::new(vec![0.5f32; n * n], shape.clone());
             let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-            let expr = TensorExpr::<f32>::from(a.clone()) * TensorExpr::<f32>::from(b.clone());
+            let expr = TensorExpr::from(a.clone()) * TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
             let graph = Arc::new(graph);
 
@@ -232,7 +232,7 @@ pub fn benches(c: &mut Criterion) {
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
             let b = Constant::new(vec![0.5f32; n * n], shape.clone());
             let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-            let expr = TensorExpr::<f32>::from(a.clone()) / TensorExpr::<f32>::from(b.clone());
+            let expr = TensorExpr::from(a.clone()) / TensorExpr::from(b.clone());
             expr.lower_to_graph(&mut graph);
             let graph = Arc::new(graph);
 
@@ -269,7 +269,7 @@ pub fn optimization_benches(c: &mut Criterion) {
             {
                 let mut exec = SimpleExecutor::new();
                 let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-                let expr = TensorExpr::<f32>::from(a.clone()).log().exp();
+                let expr = TensorExpr::from(a.clone()).log().exp();
                 expr.lower_to_graph(&mut graph);
                 let graph = Arc::new(graph);
                 let graph_clone = Arc::clone(&graph);
@@ -291,7 +291,7 @@ pub fn optimization_benches(c: &mut Criterion) {
             {
                 let mut exec = SimpleExecutor::new();
                 let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-                let expr = TensorExpr::<f32>::from(a.clone()).log().exp();
+                let expr = TensorExpr::from(a.clone()).log().exp();
                 graph.add_expr(&expr, true);
                 let graph = Arc::new(graph);
                 let graph_clone = Arc::clone(&graph);
@@ -326,7 +326,7 @@ pub fn optimization_benches(c: &mut Criterion) {
             {
                 let mut exec = SimpleExecutor::new();
                 let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-                let expr = TensorExpr::<f32>::from(a.clone()).transpose().transpose();
+                let expr = TensorExpr::from(a.clone()).transpose().transpose();
                 expr.lower_to_graph(&mut graph);
                 let graph = Arc::new(graph);
                 let graph_clone = Arc::clone(&graph);
@@ -348,7 +348,7 @@ pub fn optimization_benches(c: &mut Criterion) {
             {
                 let mut exec = SimpleExecutor::new();
                 let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-                let expr = TensorExpr::<f32>::from(a.clone()).transpose().transpose();
+                let expr = TensorExpr::from(a.clone()).transpose().transpose();
                 graph.add_expr(&expr, true);
                 let graph = Arc::new(graph);
                 let graph_clone = Arc::clone(&graph);
@@ -383,7 +383,7 @@ pub fn optimization_benches(c: &mut Criterion) {
             {
                 let mut exec = SimpleExecutor::new();
                 let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-                let expr = TensorExpr::<f32>::from(a.clone());
+                let expr = TensorExpr::from(a.clone());
                 let expr = -(-expr);
                 expr.lower_to_graph(&mut graph);
                 let graph = Arc::new(graph);
@@ -406,7 +406,7 @@ pub fn optimization_benches(c: &mut Criterion) {
             {
                 let mut exec = SimpleExecutor::new();
                 let mut graph = tnsr::graph::TensorGraph::<f32>::new();
-                let expr = TensorExpr::<f32>::from(a.clone());
+                let expr = TensorExpr::from(a.clone());
                 let expr = -(-expr);
                 graph.add_expr(&expr, true);
                 let graph = Arc::new(graph);
@@ -486,7 +486,7 @@ pub fn fusion_benches(c: &mut Criterion) {
             let a = Constant::new(vec![1.0f32; n * n], shape.clone());
 
             // Build expression: exp -> log -> relu -> neg
-            let expr = TensorExpr::<f32>::from(a.clone()).exp().log().relu();
+            let expr = TensorExpr::from(a.clone()).exp().log().relu();
             let expr = -expr;
 
             // Build graph with fusion enabled (when feature is on)
@@ -548,7 +548,7 @@ pub fn fusion_benches(c: &mut Criterion) {
             let a = Constant::new(vec![0.5f32; n * n], shape.clone());
 
             // Build expression: neg -> exp -> log -> relu -> exp -> log
-            let expr = TensorExpr::<f32>::from(a.clone());
+            let expr = TensorExpr::from(a.clone());
             let expr = -expr;
             let expr = expr.exp().log().relu().exp().log();
 

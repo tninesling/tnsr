@@ -24,7 +24,10 @@ impl SGD {
     /// # Panics
     ///
     /// Panics if gradient size does not match parameter size.
-    pub fn step<G>(&self, graph: &TensorGraph<f32, G>, grads: &HashMap<usize, Vec<f32>>) {
+    pub fn step<D, G>(&self, graph: &TensorGraph<D, G>, grads: &HashMap<usize, Vec<D>>)
+    where
+        D: num_traits::Float,
+    {
         let mut updated: HashSet<usize> = HashSet::new();
         for node in graph.graph.node_weights() {
             if let TensorGraphNode::Parameter { id, data, .. } = node {
@@ -38,8 +41,9 @@ impl SGD {
                         grad.len(),
                         "gradient size does not match parameter size"
                     );
+                    let lr_d = D::from(self.lr).unwrap();
                     for (wi, &gi) in w.iter_mut().zip(grad.iter()) {
-                        *wi -= self.lr * gi;
+                        *wi = *wi - lr_d * gi;
                     }
                     updated.insert(*id);
                 }

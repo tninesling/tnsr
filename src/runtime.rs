@@ -29,18 +29,20 @@ pub enum Backend {
 /// Wraps either a CPU or GPU executor and provides a single consistent interface.
 /// Create with [`Runtime::new`] for automatic backend selection, or use
 /// [`Runtime::with_backend`] to explicitly choose a backend.
-pub enum Runtime {
+///
+/// Note: GPU backends (CUDA/PTX) currently only support f32.
+pub enum Runtime<D = f32> {
     /// CPU-based executor
-    Cpu(SimpleExecutor),
-    /// GPU-based executor (only available with `cuda` feature)
+    Cpu(SimpleExecutor<D>),
+    /// GPU-based executor (only available with `cuda` feature, f32 only)
     #[cfg(feature = "cuda")]
     Cuda(CudaExecutor),
-    /// PTX JIT executor (only available with `cuda` feature)
+    /// PTX JIT executor (only available with `cuda` feature, f32 only)
     #[cfg(feature = "cuda")]
     Ptx(PtxExecutor),
 }
 
-impl Runtime {
+impl Runtime<f32> {
     /// Create a runtime with automatic backend selection.
     ///
     /// When the `ptx` feature is enabled, prefers PTX JIT executor.
@@ -111,7 +113,12 @@ impl Runtime {
             }
         }
     }
+}
 
+impl<D> Runtime<D>
+where
+    D: num_traits::Float + Send + Sync + 'static,
+{
     /// Returns the backend currently in use by this runtime.
     pub fn backend(&self) -> Backend {
         match self {
@@ -141,48 +148,68 @@ impl Runtime {
     }
 
     /// Get the computed value for a specific node after execution.
-    pub fn get_value(&self, node_idx: NodeIndex) -> Option<Vec<f32>> {
+    ///
+    /// Note: For GPU backends, this always returns f32 values.
+    /// For CPU backend, returns values of type D.
+    pub fn get_value(&self, node_idx: NodeIndex) -> Option<Vec<D>> {
         match self {
             Runtime::Cpu(executor) => executor.get_value(node_idx).cloned(),
             #[cfg(feature = "cuda")]
-            Runtime::Cuda(executor) => executor.get_value(node_idx),
+            Runtime::Cuda(_executor) => {
+                // GPU backends only support f32, so we can't return D
+                // This will fail to compile if D != f32
+                unimplemented!("GPU get_value only supports f32, use Runtime<f32>")
+            }
             #[cfg(feature = "cuda")]
-            Runtime::Ptx(executor) => executor.get_value(node_idx),
+            Runtime::Ptx(_executor) => {
+                unimplemented!("GPU get_value only supports f32, use Runtime<f32>")
+            }
         }
     }
 }
 
-impl Default for Runtime {
+impl Default for Runtime<f32> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Executor<f32> for Runtime {
+impl<D> Executor<D> for Runtime<D>
+where
+    D: num_traits::Float + Send + Sync + 'static,
+{
     fn execute<G>(
         &mut self,
-        graph: &TensorGraph<f32, G>,
-        inputs: HashMap<String, Vec<f32>>,
-    ) -> Result<Vec<f32>>
+        graph: &TensorGraph<D, G>,
+        inputs: HashMap<String, Vec<D>>,
+    ) -> Result<Vec<D>>
     where
-        TensorGraph<f32, G>: Clone,
+        TensorGraph<D, G>: Clone,
     {
         match self {
             Runtime::Cpu(executor) => executor.execute(graph, inputs),
             #[cfg(feature = "cuda")]
-            Runtime::Cuda(executor) => executor.execute(graph, inputs),
+            Runtime::Cuda(_executor) => {
+                unimplemented!("GPU execution only supports f32, use Runtime<f32>")
+            }
             #[cfg(feature = "cuda")]
-            Runtime::Ptx(executor) => executor.execute(graph, inputs),
+            Runtime::Ptx(_executor) => {
+                unimplemented!("GPU execution only supports f32, use Runtime<f32>")
+            }
         }
     }
 
-    fn get_gradients(&self, graph: &TensorGraph<f32, WithGrad>) -> HashMap<usize, Vec<f32>> {
+    fn get_gradients(&self, graph: &TensorGraph<D, WithGrad>) -> HashMap<usize, Vec<D>> {
         match self {
             Runtime::Cpu(executor) => executor.get_gradients(graph),
             #[cfg(feature = "cuda")]
-            Runtime::Cuda(executor) => executor.get_gradients(graph),
+            Runtime::Cuda(_executor) => {
+                unimplemented!("GPU gradients only support f32, use Runtime<f32>")
+            }
             #[cfg(feature = "cuda")]
-            Runtime::Ptx(executor) => executor.get_gradients(graph),
+            Runtime::Ptx(_executor) => {
+                unimplemented!("GPU gradients only support f32, use Runtime<f32>")
+            }
         }
     }
 }

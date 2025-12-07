@@ -251,7 +251,7 @@ impl<D, G> TensorGraph<D, G> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tensor::{Constant, TensorExpr};
+    use crate::tensor::TensorExpr;
 
     #[test]
     fn test_find_simple_chain() {

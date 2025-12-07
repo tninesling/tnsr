@@ -129,7 +129,7 @@ fn test_dtype_comparison() {
     let result_f32 = exec_f32.execute(&y_f32.into(), inputs_f32).unwrap();
     
     // f16
-    let x_f16 = TensorExpr::<f16>::input("x", vec![4]);
+    let x_f16 = TensorExpr::input("x", vec![4]);
     let y_f16 = x_f16.exp();
     let mut exec_f16 = SimpleExecutor::<f16>::new();
     let mut inputs_f16 = HashMap::new();
@@ -137,7 +137,7 @@ fn test_dtype_comparison() {
     let result_f16 = exec_f16.execute(&y_f16.into(), inputs_f16).unwrap();
     
     // bf16
-    let x_bf16 = TensorExpr::<bf16>::input("x", vec![4]);
+    let x_bf16 = TensorExpr::input("x", vec![4]);
     let y_bf16 = x_bf16.exp();
     let mut exec_bf16 = SimpleExecutor::<bf16>::new();
     let mut inputs_bf16 = HashMap::new();

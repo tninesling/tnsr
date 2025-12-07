@@ -1,7 +1,9 @@
 use std::time::Instant;
 
 use clap::Parser;
+use half::{bf16, f16};
 use mnist::MnistBuilder;
+use num_traits::Float;
 use rand::prelude::*;
 use tnsr::nn;
 use tnsr::nn::Model;
@@ -91,33 +93,39 @@ struct Args {
     lr: f32,
     #[arg(long, default_value_t = 42)]
     seed: u64,
+    /// Datatype: f32, f16, or bf16
+    #[arg(long, default_value = "f32")]
+    dtype: String,
 }
 
-fn one_hot(labels: &[u8], num_classes: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; labels.len() * num_classes];
+fn one_hot<D: Float>(labels: &[u8], num_classes: usize) -> Vec<D> {
+    let mut out = vec![D::zero(); labels.len() * num_classes];
     for (i, &y) in labels.iter().enumerate() {
-        out[i * num_classes + (y as usize)] = 1.0;
+        out[i * num_classes + (y as usize)] = D::one();
     }
     out
 }
 
-fn xavier_init(rng: &mut StdRng, fan_in: usize, fan_out: usize) -> Vec<f32> {
+fn xavier_init<D: Float>(rng: &mut StdRng, fan_in: usize, fan_out: usize) -> Vec<D> {
     let limit = (6.0f32).sqrt() / ((fan_in + fan_out) as f32).sqrt();
     (0..fan_in * fan_out)
-        .map(|_| rng.random_range(-limit..limit))
+        .map(|_| D::from(rng.random_range(-limit..limit)).unwrap())
         .collect()
 }
 
-fn build_mlp_model(
+fn build_mlp_model<D>(
     batch: usize,
-    w1: &Parameter<f32>,
-    b1: &Parameter<f32>,
-    w2: &Parameter<f32>,
-    b2: &Parameter<f32>,
-) -> Model<f32> {
+    w1: &Parameter<D>,
+    b1: &Parameter<D>,
+    w2: &Parameter<D>,
+    b2: &Parameter<D>,
+) -> Model<D>
+where
+    D: tnsr::tensor::DType + Default + 'static,
+{
     // Inputs
-    let images = Input::<f32>::new("images", vec![batch, 784]);
-    let labels = Input::<f32>::new("labels", vec![batch, 10]);
+    let images = Input::new("images", vec![batch, 784]);
+    let labels = Input::new("labels", vec![batch, 10]);
 
     // Forward: h = relu(images @ w1 + b1), logits = h @ w2 + b2
     let h = nn::relu(nn::linear(images.clone(), w1.clone(), Some(b1.clone())));
@@ -164,34 +172,57 @@ fn main() {
     drop(_enter);
     println!("MNIST dataset loaded.");
 
-    // Convert training images from u8 to f32 and normalize to [0, 1]
-    let train_images: Vec<f32> = mnist_data
+    // Dispatch based on dtype
+    match args.dtype.as_str() {
+        "f32" => run_mnist::<f32>(&args, &mnist_data, &mut rng),
+        "f16" => run_mnist::<f16>(&args, &mnist_data, &mut rng),
+        "bf16" => run_mnist::<bf16>(&args, &mnist_data, &mut rng),
+        _ => {
+            eprintln!("Unknown dtype '{}'. Use f32, f16, or bf16", args.dtype);
+            std::process::exit(1);
+        }
+    }
+
+    println!("\nTraining completed. Flushing chrome trace...");
+    drop(guard);
+    println!("Chrome trace written to mnist_trace.json");
+    println!("Open chrome://tracing in Chrome browser and load the trace file to visualize timing");
+}
+
+fn run_mnist<D>(args: &Args, mnist_data: &mnist::Mnist, rng: &mut StdRng)
+where
+    D: tnsr::tensor::DType + Float + Default + Send + Sync + 'static,
+{
+    println!("Running with dtype: {}", std::any::type_name::<D>());
+
+    // Convert training images from u8 to D and normalize to [0, 1]
+    let train_images: Vec<D> = mnist_data
         .trn_img
         .iter()
-        .map(|&x| x as f32 / 255.0)
+        .map(|&x| D::from(x as f32 / 255.0).unwrap())
         .collect();
-    let train_labels_raw: Vec<u8> = mnist_data.trn_lbl;
+    let train_labels_raw: Vec<u8> = mnist_data.trn_lbl.clone();
     let n_train = train_labels_raw.len();
     assert_eq!(n_train * 784, train_images.len());
-    let train_labels_oh = one_hot(&train_labels_raw, 10);
+    let train_labels_oh = one_hot::<D>(&train_labels_raw, 10);
     println!("Training samples: {n_train}");
 
-    // Convert test images from u8 to f32 and normalize to [0, 1]
-    let test_images: Vec<f32> = mnist_data
+    // Convert test images from u8 to D and normalize to [0, 1]
+    let test_images: Vec<D> = mnist_data
         .tst_img
         .iter()
-        .map(|&x| x as f32 / 255.0)
+        .map(|&x| D::from(x as f32 / 255.0).unwrap())
         .collect();
-    let test_labels_raw: Vec<u8> = mnist_data.tst_lbl;
+    let test_labels_raw: Vec<u8> = mnist_data.tst_lbl.clone();
     let n_test = test_labels_raw.len();
     assert_eq!(n_test * 784, test_images.len());
     println!("Test samples: {n_test}");
 
     println!("Building computation graph...");
-    let w1 = Parameter::new(xavier_init(&mut rng, 784, 128), vec![784, 128]);
-    let b1 = Parameter::new(vec![0.0f32; 128], vec![1, 128]);
-    let w2 = Parameter::new(xavier_init(&mut rng, 128, 10), vec![128, 10]);
-    let b2 = Parameter::new(vec![0.0f32; 10], vec![1, 10]);
+    let w1 = Parameter::new(xavier_init(rng, 784, 128), vec![784, 128]);
+    let b1 = Parameter::new(vec![D::zero(); 128], vec![1, 128]);
+    let w2 = Parameter::new(xavier_init(rng, 128, 10), vec![128, 10]);
+    let b2 = Parameter::new(vec![D::zero(); 10], vec![1, 10]);
     let model = build_mlp_model(args.batch_size, &w1, &b1, &w2, &b2);
     let logits_idx = model.get_output("logits").expect("logits output");
     let loss_idx = model.loss().expect("loss node");
@@ -199,7 +230,7 @@ fn main() {
     // Augment graph with gradient computation nodes (consumes the graph)
     let grad_graph = model.into_graph().with_gradients(loss_idx);
     let opt = SGD::new(args.lr);
-    let mut runtime = Runtime::new();
+    let mut runtime = Runtime::Cpu(tnsr::SimpleExecutor::new());
     println!("Using backend: {:?}", runtime.backend());
 
     // Training loop
@@ -222,8 +253,8 @@ fn main() {
         {
             // Shuffle indices
             let mut indices: Vec<usize> = (0..n_train).collect();
-            indices.shuffle(&mut rng);
-            let mut epoch_loss = 0.0f32;
+            indices.shuffle(rng);
+            let mut epoch_loss = D::zero();
             let mut steps = 0usize;
 
             for b in 0..batches_per_epoch {
@@ -243,8 +274,8 @@ fn main() {
                 );
                 let _bg = batch_span.enter();
                 // Collect batch
-                let mut x = vec![0.0f32; args.batch_size * 784];
-                let mut y = vec![0.0f32; args.batch_size * 10];
+                let mut x = vec![D::zero(); args.batch_size * 784];
+                let mut y = vec![D::zero(); args.batch_size * 10];
                 for (i, idx) in (start..end).enumerate() {
                     let j = indices[idx];
                     let src_x = &train_images[j * 784..(j + 1) * 784];
@@ -254,7 +285,6 @@ fn main() {
                     let dst_y = &mut y[i * 10..(i + 1) * 10];
                     dst_y.copy_from_slice(src_y);
                 }
-                // For last batch if bs < batch_size, pad remaining already zeros; network ignores extra rows statistically; or we could rebuild graphs but we keep it simple.
 
                 let mut inputs = std::collections::HashMap::new();
                 inputs.insert("images".to_string(), x);
@@ -267,7 +297,7 @@ fn main() {
                 if steps.is_multiple_of(50)
                     && let Some(&lv) = loss_value.first()
                 {
-                    epoch_loss += lv;
+                    epoch_loss = epoch_loss + lv;
                 }
                 let opt_span = tracing::span!(tracing::Level::TRACE, "optimizer_step");
                 let _og = opt_span.enter();
@@ -275,15 +305,18 @@ fn main() {
                 drop(_og);
                 steps += 1;
             }
+            let avg_loss_f32 = (epoch_loss / D::from(steps.max(1) as f32 / 50.0).unwrap())
+                .to_f32()
+                .unwrap_or(0.0);
             println!(
                 "epoch {} avg loss ~ {:.4}, execution time {:.2}",
                 epoch + 1,
-                epoch_loss.max(1e-8) / (steps.max(1) as f32 / 50.0),
+                avg_loss_f32,
                 epoch_start.elapsed().as_secs_f32()
             );
         }
 
-        // Evaluate on current epoch (use borrowed grad_graph for now)
+        // Evaluate on current epoch
         let test_batches = n_test.div_ceil(args.batch_size);
         let eval_span = tracing::span!(
             tracing::Level::INFO,
@@ -309,19 +342,18 @@ fn main() {
                 end = end
             );
             let _ib = infer_span.enter();
-            let mut x = vec![0.0f32; args.batch_size * 784];
+            let mut x = vec![D::zero(); args.batch_size * 784];
             for (i, j) in (start..end).enumerate() {
                 let src = &test_images[j * 784..(j + 1) * 784];
                 let dst = &mut x[i * 784..(i + 1) * 784];
                 dst.copy_from_slice(src);
             }
-            // Dummy labels input (graph expects labels but we don't need loss for inference)
-            let dummy_labels = vec![0.0f32; args.batch_size * 10];
+            // Dummy labels input
+            let dummy_labels = vec![D::zero(); args.batch_size * 10];
             let mut inputs = std::collections::HashMap::new();
             inputs.insert("images".to_string(), x);
             inputs.insert("labels".to_string(), dummy_labels);
 
-            // Forward pass through the gradient graph (still has gradients during training)
             runtime.execute(&grad_graph, inputs).unwrap();
             let logits = runtime.get_value(logits_idx).unwrap();
 
@@ -330,8 +362,7 @@ fn main() {
                 let pred = row
                     .iter()
                     .enumerate()
-                    .filter(|(_, v)| !v.is_nan())
-                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(idx, _)| idx)
                     .unwrap_or(0);
                 if pred as u8 == test_labels_raw[start + i] {
@@ -342,17 +373,11 @@ fn main() {
         }
         let acc = correct as f32 / seen as f32;
         println!("test accuracy: {:.2}% ({}/{})", acc * 100.0, correct, seen);
-        println!(
-            "evaluation time {:.2}s",
-            training_start.elapsed().as_secs_f32()
-        );
+        println!("total time {:.2}s", training_start.elapsed().as_secs_f32());
     }
 
-    // Convert training graph to inference-only graph (strip gradients)
-    // This consumes the grad_graph and returns an owned NoGrad graph
+    // Final inference graph evaluation
     let infer_graph = grad_graph.without_gradients();
-
-    // Final evaluation using inference-only graph
     println!("\nFinal evaluation using inference-only graph...");
     let final_eval_span = tracing::span!(tracing::Level::INFO, "final_evaluation");
     let _fev = final_eval_span.enter();
@@ -366,18 +391,17 @@ fn main() {
         if bs == 0 {
             continue;
         }
-        let mut x = vec![0.0f32; args.batch_size * 784];
+        let mut x = vec![D::zero(); args.batch_size * 784];
         for (i, j) in (start..end).enumerate() {
             let src = &test_images[j * 784..(j + 1) * 784];
             let dst = &mut x[i * 784..(i + 1) * 784];
             dst.copy_from_slice(src);
         }
-        let dummy_labels = vec![0.0f32; args.batch_size * 10];
+        let dummy_labels = vec![D::zero(); args.batch_size * 10];
         let mut inputs = std::collections::HashMap::new();
         inputs.insert("images".to_string(), x);
         inputs.insert("labels".to_string(), dummy_labels);
 
-        // Use the inference graph (no gradient computation overhead)
         runtime.execute(&infer_graph, inputs).unwrap();
         let logits = runtime.get_value(logits_idx).unwrap();
 
@@ -386,8 +410,7 @@ fn main() {
             let pred = row
                 .iter()
                 .enumerate()
-                .filter(|(_, v)| !v.is_nan())
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(idx, _)| idx)
                 .unwrap_or(0);
             if pred as u8 == test_labels_raw[start + i] {
@@ -403,12 +426,4 @@ fn main() {
         correct,
         seen
     );
-    drop(_fev);
-
-    println!("Training completed. Flushing chrome trace...");
-
-    // Explicitly flush the tracing guard to ensure all spans are written
-    drop(guard);
-    println!("Chrome trace written to mnist_trace.json");
-    println!("Open chrome://tracing in Chrome browser and load the trace file to visualize timing");
 }

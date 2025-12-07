@@ -215,7 +215,7 @@ impl<D: Float + Send + Sync> SimpleExecutor<D> {
     }
 }
 
-impl<D> Executor<D> for SimpleExecutor<D> 
+impl<D> Executor<D> for SimpleExecutor<D>
 where
     D: Float + Send + Sync,
 {

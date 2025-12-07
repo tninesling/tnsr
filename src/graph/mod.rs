@@ -606,8 +606,7 @@ where
                             let grad_out_shape = self.graph[grad_output].shape().clone();
                             let target_size = input_shape[*axis];
 
-                            let grad_out_expr =
-                                TensorExpr::node_ref(grad_output, grad_out_shape);
+                            let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
 
                             // grad_x = broadcast(grad_output, axis)
                             let grad_x_expr = grad_out_expr.broadcast_axis(*axis, target_size);
@@ -631,8 +630,7 @@ where
                             let axis_size = input_shape[*axis];
                             let target_size = axis_size;
 
-                            let grad_out_expr =
-                                TensorExpr::node_ref(grad_output, grad_out_shape);
+                            let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
 
                             // Broadcast gradient back to input shape
                             let grad_broadcast_expr =
@@ -774,8 +772,10 @@ where
                                 let grad_expr = TensorExpr::node_ref(current_grad, grad_shape);
                                 let input_expr =
                                     TensorExpr::node_ref(intermediate_input, input_shape.clone());
-                                let zero_expr =
-                                    TensorExpr::constant(vec![D::zero(); num_elements], input_shape);
+                                let zero_expr = TensorExpr::constant(
+                                    vec![D::zero(); num_elements],
+                                    input_shape,
+                                );
 
                                 let condition_expr = input_expr.gt(zero_expr);
                                 let grad_x_expr = grad_expr.mask(condition_expr);

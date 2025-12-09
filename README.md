@@ -2,14 +2,51 @@
 
 A tensor library, written in Rust.
 
-## Modules
+# Overview
 
-- `nn` - Common neural network layers and operations.
-- `runtime` - Runtime for executing graphs of tensor operations.
-- `tensor` - Frontend tensor type and operations.
-- `tile` - Tile-based intermediate representation and builder.
-- `ptx` - PTX IR for CUDA kernels.
-- `cuda` - CUDA backend with static PTX kernels.
+Tensors are core to modern ML. To train a model, you describe a computation which operates on tensors. In `tnsr`, you build a tensor from constants, inputs, and trainable parameters. These can be added, subtracted, etc to build up a tensor expression. Tensor expressions can be evaluated directly, but they are often compiled into kernels that take advantage of specialized hardware.
+
+The `tnsr` runtime can execute a tensor expression in a few different ways:
+1. It can execute the expression directly using naive implementations of each operation on CPU.
+2. It can execute the expression with statically-provided CUDA kernels on GPU.
+3. It can JIT-compile the expression to PTX kernels, which are then executed on GPU.
+
+
+## Computation as a graph
+
+The first step to compiling the expression is lowering it into a computation graph. Each node in the graph represents an operation (e.g. addition, multiplication) or a tensor (e.g. input, constant). The edges represent the flow of data between nodes. A graph can be optimized by combining or reordering nodes to improve performance.
+
+## Autograd
+
+A good autograd engine is the heart of any good tensor framework.
+
+One way to do automatic differentiation is to implement explicit forward and backward calculations for each operation. In the forward pass, we calculate the output of each node given its inputs. In the backward pass, we calculate the gradients of each input given the gradient of the output. This applies the chain rule of calculus to propagate gradients back through the graph.
+
+In `tnsr`, the gradient computations are appended to the computation graph as additional nodes. This reduces the API surface of the executor implementations, which means the gradient definitions do not need to repeated for each hardware platform.
+
+## Graph rewrites
+
+The first step to optimizing a computation graph is to apply graph rewrites. These are transformations that replace subgraphs with more efficient equivalents. For example, you could rewrite the pattern `A + 0` to just `A`, since adding zero does not change the value.
+
+## Operator fusion
+
+After rewriting the graph, we can apply operator fusion. This combines multiple operations into a single kernel. For example, the sequence of operations `A + B + C` can be fused into a single kernel that computes the sum of three tensors in one pass. This helps reduce memory bandwidth because the fused computation keeps the intermediate results in registers instead of writing them back to memory.
+
+## Tile representation
+
+For GPU hardware targets, we take advantage of tiling to improve memory access patterns. Tiling breaks down large tensor operations into smaller blocks (tiles) that fit into the faster shared memory of the GPU. This allows threads within a block to cooperate and share data, reducing the number of global memory accesses. It also allows coalesced memory accesses, which improves bandwidth utilization. The smallest primitive is a register tile, which corresponds to the size of a warp. The 16x16 register tile comes directly from the [ThunderKittens] project, which provides high-performance C++ templates for CUDA kernels.
+
+# Comparison to candle
+
+HuggingFace's [candle] is a library focused on inference. It uses C++ implementations of CUDA kernels for GPU execution. In `candle`, each tensor operation is fallible and thus returns a `Result`. This means that instead of writing `a + b + c`, you need to propagate errors with `((a + b)? + c)?`.
+
+The `Tensor` operations in `tnsr` are infallible because they simply build an expression tree.
+
+# Comparison to burn
+
+Burn aims to encode more information about tensors in the type system. A `burn::Tensor` is parameterized by its backend and its rank. In `tnsr`, the tensor operations are hardware-agnostic, since they just describe a computation. The backend execution is handled separately by the runtime, which discovers available hardware features and can schedule across heterogeneous devices.
+
+# Development
 
 ## CUDA Support
 
@@ -28,5 +65,8 @@ Benchmarks are defined in `benches/` using `criterion`. To run the benchmarks:
 ## Tracing
 
 Trace spans are collected using the `tracing` crate. To get a JSON dump of
-Chrome-compatible trace events, use `runtime::init_chrome_tracing` at the
+Chrome-compatible trace events, use `tnsr::init_chrome_tracing` at the
 start of your program. The resulting trace file can be loaded in Perfetto.
+
+[candle]: https://github.com/huggingface/candle
+[ThunderKittens]: https://github.com/HazyResearch/ThunderKittens

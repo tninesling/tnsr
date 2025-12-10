@@ -6,110 +6,120 @@ use super::instructions::*;
 use super::types::*;
 
 #[derive(Clone, Debug)]
-pub struct Label {
-    pub name: String,
-    pub body: Vec<Inst>,
+pub struct Label<'a> {
+    pub name: &'a str,
+    pub body: bumpalo::collections::Vec<'a, Inst<'a>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct Function {
-    pub name: String,
-    pub params: Vec<(String, Type)>,
-    pub body: Vec<Inst>,
-    pub labels: Vec<Label>,
-    pub predicate_registers: Vec<String>,
-    pub f32_registers: Vec<String>,
-    pub i32_registers: Vec<String>,
-    pub i64_registers: Vec<String>,
-    pub shared_memory: Vec<(String, usize)>,
+pub struct Function<'a> {
+    pub name: &'a str,
+    pub params: bumpalo::collections::Vec<'a, (&'a str, Type)>,
+    pub body: bumpalo::collections::Vec<'a, Inst<'a>>,
+    pub labels: bumpalo::collections::Vec<'a, Label<'a>>,
+    pub predicate_registers: bumpalo::collections::Vec<'a, &'a str>,
+    pub f32_registers: bumpalo::collections::Vec<'a, &'a str>,
+    pub i32_registers: bumpalo::collections::Vec<'a, &'a str>,
+    pub i64_registers: bumpalo::collections::Vec<'a, &'a str>,
+    pub shared_memory: bumpalo::collections::Vec<'a, (&'a str, usize)>,
+    pub arena: &'a bumpalo::Bump,
 }
 
-impl Function {
-    pub fn new(name: &str) -> Self {
+impl<'a> Function<'a> {
+    pub fn new(name: &'a str, arena: &'a bumpalo::Bump) -> Self {
         Self {
-            name: name.to_string(),
-            params: Vec::new(),
-            body: Vec::new(),
-            labels: Vec::new(),
-            predicate_registers: Vec::new(),
-            f32_registers: Vec::new(),
-            i32_registers: Vec::new(),
-            i64_registers: Vec::new(),
-            shared_memory: Vec::new(),
+            name,
+            params: bumpalo::collections::Vec::new_in(arena),
+            body: bumpalo::collections::Vec::new_in(arena),
+            labels: bumpalo::collections::Vec::new_in(arena),
+            predicate_registers: bumpalo::collections::Vec::new_in(arena),
+            f32_registers: bumpalo::collections::Vec::new_in(arena),
+            i32_registers: bumpalo::collections::Vec::new_in(arena),
+            i64_registers: bumpalo::collections::Vec::new_in(arena),
+            shared_memory: bumpalo::collections::Vec::new_in(arena),
+            arena,
         }
     }
 
-    pub fn add_inst(&mut self, inst: Inst) {
+    pub fn add_inst(&mut self, inst: Inst<'a>) {
         self.body.push(inst);
     }
 
-    pub fn add_param_u64(&mut self, name: &str) -> Operand<U64> {
-        self.params.push((name.to_string(), Type::U64));
+    pub fn add_param_u64(&mut self, name: &'a str) -> Operand<'a, U64> {
+        self.params.push((name, Type::U64));
         Operand::addr(name)
     }
 
-    pub fn add_label(&mut self, label: Label) {
+    pub fn add_label(&mut self, label: Label<'a>) {
         self.labels.push(label);
     }
 
-    pub fn add_predicate_register(&mut self) -> Operand<Pred> {
+    pub fn add_predicate_register(&mut self) -> Operand<'a, Pred> {
         let idx = self.predicate_registers.len();
-        let name = format!("%p{}", idx);
-        self.predicate_registers.push(name.clone());
-        Operand::pred(&name)
+        let name = bumpalo::format!(in self.arena, "%p{}", idx);
+        let name_str = name.into_bump_str();
+        self.predicate_registers.push(name_str);
+        Operand::pred(name_str)
     }
 
-    pub fn add_f32_register(&mut self) -> Operand<F32> {
+    pub fn add_f32_register(&mut self) -> Operand<'a, F32> {
         let idx = self.f32_registers.len();
-        let name = format!("%f{}", idx);
-        self.f32_registers.push(name.clone());
-        Operand::reg(&name)
+        let name = bumpalo::format!(in self.arena, "%f{}", idx);
+        let name_str = name.into_bump_str();
+        self.f32_registers.push(name_str);
+        Operand::reg(name_str)
     }
 
-    pub fn add_i32_register(&mut self) -> Operand<I32> {
+    pub fn add_i32_register(&mut self) -> Operand<'a, I32> {
         let idx = self.i32_registers.len();
-        let name = format!("%r{}", idx);
-        self.i32_registers.push(name.clone());
-        Operand::reg(&name)
+        let name = bumpalo::format!(in self.arena, "%r{}", idx);
+        let name_str = name.into_bump_str();
+        self.i32_registers.push(name_str);
+        Operand::reg(name_str)
     }
 
-    pub fn add_u32_register(&mut self) -> Operand<U32> {
+    pub fn add_u32_register(&mut self) -> Operand<'a, U32> {
         let idx = self.i32_registers.len();
-        let name = format!("%r{}", idx);
-        self.i32_registers.push(name.clone());
-        Operand::reg(&name)
+        let name = bumpalo::format!(in self.arena, "%r{}", idx);
+        let name_str = name.into_bump_str();
+        self.i32_registers.push(name_str);
+        Operand::reg(name_str)
     }
 
-    pub fn add_i64_register(&mut self) -> Operand<I64> {
+    pub fn add_i64_register(&mut self) -> Operand<'a, I64> {
         let idx = self.i64_registers.len();
-        let name = format!("%rd{}", idx);
-        self.i64_registers.push(name.clone());
-        Operand::reg(&name)
+        let name = bumpalo::format!(in self.arena, "%rd{}", idx);
+        let name_str = name.into_bump_str();
+        self.i64_registers.push(name_str);
+        Operand::reg(name_str)
     }
 
-    pub fn add_u64_register(&mut self) -> Operand<U64> {
+    pub fn add_u64_register(&mut self) -> Operand<'a, U64> {
         let idx = self.i64_registers.len();
-        let name = format!("%rd{}", idx);
-        self.i64_registers.push(name.clone());
-        Operand::reg(&name)
+        let name = bumpalo::format!(in self.arena, "%rd{}", idx);
+        let name_str = name.into_bump_str();
+        self.i64_registers.push(name_str);
+        Operand::reg(name_str)
     }
 
-    pub fn add_b64_register(&mut self) -> Operand<B64> {
+    pub fn add_b64_register(&mut self) -> Operand<'a, B64> {
         let idx = self.i64_registers.len();
-        let name = format!("%rd{}", idx);
-        self.i64_registers.push(name.clone());
-        Operand::reg(&name)
+        let name = bumpalo::format!(in self.arena, "%rd{}", idx);
+        let name_str = name.into_bump_str();
+        self.i64_registers.push(name_str);
+        Operand::reg(name_str)
     }
 
-    pub fn add_b32_register(&mut self) -> Operand<B32> {
+    pub fn add_b32_register(&mut self) -> Operand<'a, B32> {
         let idx = self.i32_registers.len();
-        let name = format!("%r{}", idx);
-        self.i32_registers.push(name.clone());
-        Operand::reg(&name)
+        let name = bumpalo::format!(in self.arena, "%r{}", idx);
+        let name_str = name.into_bump_str();
+        self.i32_registers.push(name_str);
+        Operand::reg(name_str)
     }
 
-    pub fn add_shared_memory(&mut self, name: &str, size: usize) {
-        self.shared_memory.push((name.to_string(), size));
+    pub fn add_shared_memory(&mut self, name: &'a str, size: usize) {
+        self.shared_memory.push((name, size));
     }
 
     /// Add a parameter, load it, and convert to global address in one call
@@ -118,7 +128,7 @@ impl Function {
     /// - Adding a u64 parameter
     /// - Loading it into a register
     /// - Converting to a global address
-    pub fn add_global_ptr_param(&mut self, name: &str) -> Operand<U64> {
+    pub fn add_global_ptr_param(&mut self, name: &'a str) -> Operand<'a, U64> {
         let param = self.add_param_u64(name);
         let ptr = self.add_u64_register();
         self.add_inst(Inst::LdParamU64 {
@@ -136,7 +146,7 @@ impl Function {
     /// Add a u64 parameter and load it into a register
     ///
     /// Use this for scalar values like lengths, not pointers.
-    pub fn add_u64_param_value(&mut self, name: &str) -> Operand<U64> {
+    pub fn add_u64_param_value(&mut self, name: &'a str) -> Operand<'a, U64> {
         let param = self.add_param_u64(name);
         let reg = self.add_u64_register();
         self.add_inst(Inst::LdParamU64 {
@@ -151,18 +161,22 @@ impl Function {
     /// This allows executing a closure that adds instructions to the function body,
     /// then extracting those instructions as a separate Vec.
     /// Useful for building loop bodies or conditionally including instruction sequences.
-    pub fn capture_instructions<F, R>(&mut self, f: F) -> (R, Vec<Inst>)
+    pub fn capture_instructions<F, R>(
+        &mut self,
+        f: F,
+    ) -> (R, bumpalo::collections::Vec<'a, Inst<'a>>)
     where
         F: FnOnce(&mut Self) -> R,
     {
         let body_len_before = self.body.len();
         let result = f(self);
-        let instructions = self.body.split_off(body_len_before);
+        let mut instructions = bumpalo::collections::Vec::new_in(self.arena);
+        instructions.extend(self.body.drain(body_len_before..));
         (result, instructions)
     }
 }
 
-impl fmt::Display for Function {
+impl<'a> fmt::Display for Function<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.params.is_empty() {
             writeln!(f, ".visible .entry {}() {{", self.name)?;
@@ -224,21 +238,21 @@ impl fmt::Display for Function {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Module {
-    pub functions: Vec<Function>,
+pub struct Module<'a> {
+    pub functions: Vec<Function<'a>>,
 }
 
-impl Module {
+impl<'a> Module<'a> {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn add_function(&mut self, func: Function) {
+    pub fn add_function(&mut self, func: Function<'a>) {
         self.functions.push(func);
     }
 }
 
-impl fmt::Display for Module {
+impl<'a> fmt::Display for Module<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, ".version 8.0")?;
         writeln!(f, ".target sm_80")?;
@@ -282,7 +296,7 @@ impl fmt::Display for VecWidth {
     }
 }
 
-impl<T: PtxType> fmt::Display for Operand<T> {
+impl<'a, T: PtxType> fmt::Display for Operand<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Operand::Reg(name, _) => write!(f, "{name}"),
@@ -296,7 +310,7 @@ impl<T: PtxType> fmt::Display for Operand<T> {
     }
 }
 
-impl<DstT: PtxType, SrcT: PtxType> fmt::Display for ConvertInst<DstT, SrcT> {
+impl<'a, DstT: PtxType, SrcT: PtxType> fmt::Display for ConvertInst<'a, DstT, SrcT> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -309,7 +323,7 @@ impl<DstT: PtxType, SrcT: PtxType> fmt::Display for ConvertInst<DstT, SrcT> {
     }
 }
 
-impl<T: PtxType> fmt::Display for FmaInst<T> {
+impl<'a, T: PtxType> fmt::Display for FmaInst<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -323,127 +337,127 @@ impl<T: PtxType> fmt::Display for FmaInst<T> {
     }
 }
 
-impl fmt::Display for AddInst<I32> {
+impl<'a> fmt::Display for AddInst<'a, I32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "add.s32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for AddInst<I64> {
+impl<'a> fmt::Display for AddInst<'a, I64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "add.s64 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for AddInst<U64> {
+impl<'a> fmt::Display for AddInst<'a, U64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "add.u64 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for MulInst<I32> {
+impl<'a> fmt::Display for MulInst<'a, I32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "mul.lo.s32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for MulInst<U64> {
+impl<'a> fmt::Display for MulInst<'a, U64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "mul.lo.u64 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for MulInst<F32> {
+impl<'a> fmt::Display for MulInst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "mul.f32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for MaxInst<F32> {
+impl<'a> fmt::Display for MaxInst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "max.f32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for NegInst<F32> {
+impl<'a> fmt::Display for NegInst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "neg.f32 {}, {};", self.dst, self.src)
     }
 }
 
-impl fmt::Display for Ex2Inst<F32> {
+impl<'a> fmt::Display for Ex2Inst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ex2.approx.f32 {}, {};", self.dst, self.src)
     }
 }
 
-impl fmt::Display for Lg2Inst<F32> {
+impl<'a> fmt::Display for Lg2Inst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "lg2.approx.f32 {}, {};", self.dst, self.src)
     }
 }
 
-impl fmt::Display for AddInst<F32> {
+impl<'a> fmt::Display for AddInst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "add.f32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for SubInst<U64> {
+impl<'a> fmt::Display for SubInst<'a, U64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "sub.u64 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for SubInst<F32> {
+impl<'a> fmt::Display for SubInst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "sub.f32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for DivInst<U64> {
+impl<'a> fmt::Display for DivInst<'a, U64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "div.u64 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for DivInst<F32> {
+impl<'a> fmt::Display for DivInst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "div.approx.f32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for ShiftLeftInst<B64, U64> {
+impl<'a> fmt::Display for ShiftLeftInst<'a, B64, U64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "shl.b64 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for ShiftLeftInst<U64, U64> {
+impl<'a> fmt::Display for ShiftLeftInst<'a, U64, U64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "shl.b64 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for ShiftLeftInst<I32, I32> {
+impl<'a> fmt::Display for ShiftLeftInst<'a, I32, I32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "shl.b32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for ShiftRightInst<I32, I32> {
+impl<'a> fmt::Display for ShiftRightInst<'a, I32, I32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "shr.s32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for AndInst<I32> {
+impl<'a> fmt::Display for AndInst<'a, I32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "and.b32 {}, {}, {};", self.dst, self.a, self.b)
     }
 }
 
-impl fmt::Display for SetpInst<U64> {
+impl<'a> fmt::Display for SetpInst<'a, U64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let op_str = match self.op {
             CompareOp::Ge => "ge",
@@ -456,7 +470,7 @@ impl fmt::Display for SetpInst<U64> {
     }
 }
 
-impl fmt::Display for SetpInst<I32> {
+impl<'a> fmt::Display for SetpInst<'a, I32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let op_str = match self.op {
             CompareOp::Ge => "ge",
@@ -469,7 +483,7 @@ impl fmt::Display for SetpInst<I32> {
     }
 }
 
-impl fmt::Display for SetpInst<F32> {
+impl<'a> fmt::Display for SetpInst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let op_str = match self.op {
             CompareOp::Ge => "ge",
@@ -482,7 +496,7 @@ impl fmt::Display for SetpInst<F32> {
     }
 }
 
-impl fmt::Display for SelpInst<F32> {
+impl<'a> fmt::Display for SelpInst<'a, F32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -492,7 +506,7 @@ impl fmt::Display for SelpInst<F32> {
     }
 }
 
-impl fmt::Display for SelpInst<U64> {
+impl<'a> fmt::Display for SelpInst<'a, U64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -502,7 +516,7 @@ impl fmt::Display for SelpInst<U64> {
     }
 }
 
-impl fmt::Display for Inst {
+impl<'a> fmt::Display for Inst<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Inst::ConvertU64U32(inst) => write!(f, "{inst}"),

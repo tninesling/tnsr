@@ -7,64 +7,89 @@ use crate::tile::{Expr, TileGraph, TileIR, TileVar};
 use petgraph::Graph;
 
 pub struct PtxGraph {
-    pub graph: Graph<Function, usize>,
+    pub graph: Graph<Function<'static>, usize>,
+    // Arena is kept alive for the lifetime of PtxGraph
+    // All string data referenced by Functions is allocated from this arena
+    #[allow(dead_code)]
+    arena: bumpalo::Bump,
 }
 
 impl From<TileGraph> for PtxGraph {
     fn from(tile_graph: TileGraph) -> Self {
-        Self {
-            graph: tile_graph.graph.map_owned(
-                |node_idx, tile_ir| {
-                    // Convert TileIR to Function
-                    let mut func: Function = tile_ir.into();
-                    // Make the kernel name unique by appending the node index
-                    func.name = format!("{}_{}", func.name, node_idx.index());
-                    func
-                },
-                |_, weight| weight,
-            ),
-        }
+        // Create a single arena for all functions in the graph
+        let arena = bumpalo::Bump::new();
+
+        // We need to convert each TileIR into a Function with arena-allocated strings.
+        // This is tricky because we need the arena to outlive the conversion.
+        // We'll use unsafe to extend the lifetime to 'static since we know the arena
+        // will live as long as the PtxGraph.
+
+        let graph = tile_graph.graph.map_owned(
+            |node_idx, tile_ir| {
+                // Get a reference to the arena with 'static lifetime
+                // SAFETY: The arena is stored in PtxGraph and will outlive all Functions
+                let arena_ref: &'static bumpalo::Bump =
+                    unsafe { &*(&arena as *const bumpalo::Bump) };
+
+                tile_ir_to_function(tile_ir, arena_ref, node_idx.index())
+            },
+            |_, weight| weight,
+        );
+
+        Self { graph, arena }
     }
 }
 
-impl From<TileIR> for Function {
-    fn from(tile_ir: TileIR) -> Self {
-        let mut func = Function::new(&tile_ir.kernel_name);
+fn tile_ir_to_function<'a>(
+    tile_ir: TileIR,
+    arena: &'a bumpalo::Bump,
+    node_index: usize,
+) -> Function<'a> {
+    // Allocate kernel name in arena with node index suffix for uniqueness
+    let kernel_name = bumpalo::format!(in arena, "{}_{}", tile_ir.kernel_name, node_index);
+    let kernel_name_str = kernel_name.into_bump_str();
 
-        // Create lowering context to track tile variable mappings
-        let mut ctx = LoweringContext::new();
+    let mut func = Function::new(kernel_name_str, arena);
 
-        // Add parameters as u64 pointers and store their loaded addresses
-        for param in &tile_ir.params {
-            // All parameters are pointers, so they're u64 in PTX
-            let ptr = func.add_global_ptr_param(&param.name);
-            ctx.param_ptrs.insert(param.name.clone(), ptr);
-        }
+    // Create lowering context to track tile variable mappings
+    let mut ctx = LoweringContext::new(arena);
 
-        // Allocate shared memory if needed
-        if tile_ir.shared_mem_bytes > 0 {
-            func.add_shared_memory("shared", tile_ir.shared_mem_bytes);
-        }
+    // Add parameters as u64 pointers and store their loaded addresses
+    for param in &tile_ir.params {
+        // Allocate parameter name in arena
+        let param_name = bumpalo::format!(in arena, "{}", param.name).into_bump_str();
 
-        // Convert body statements to PTX instructions
-        lower_block(&mut func, &mut ctx, &tile_ir.body);
-
-        // Add return instruction
-        func.add_inst(super::instructions::Inst::Ret);
-
-        func
+        // All parameters are pointers, so they're u64 in PTX
+        let ptr = func.add_global_ptr_param(param_name);
+        ctx.param_ptrs.insert(param.name.clone(), ptr);
     }
+
+    // Allocate shared memory if needed
+    if tile_ir.shared_mem_bytes > 0 {
+        let shared_name = arena.alloc_str("shared");
+        func.add_shared_memory(shared_name, tile_ir.shared_mem_bytes);
+    }
+
+    // Convert body statements to PTX instructions
+    lower_block(&mut func, &mut ctx, &tile_ir.body);
+
+    // Add return instruction
+    func.add_inst(super::instructions::Inst::Ret);
+
+    func
 }
 
-struct LoweringContext {
+struct LoweringContext<'a> {
+    /// Arena for allocating strings (labels, etc.)
+    arena: &'a bumpalo::Bump,
     /// Maps TileVar to PTX register operands (for scalar/simple cases)
-    tile_to_reg: HashMap<TileVar, Operand<F32>>,
+    tile_to_reg: HashMap<TileVar, Operand<'a, F32>>,
     /// Tracks allocated shared memory base pointers
-    shared_mem_ptrs: HashMap<TileVar, Operand<U64>>,
+    shared_mem_ptrs: HashMap<TileVar, Operand<'a, U64>>,
     /// Tracks loaded parameter pointers (global addresses)
-    param_ptrs: HashMap<String, Operand<U64>>,
+    param_ptrs: HashMap<String, Operand<'a, U64>>,
     /// Maps loop variable names to their i32 register operands
-    loop_vars: HashMap<String, Operand<I32>>,
+    loop_vars: HashMap<String, Operand<'a, I32>>,
     /// Current offset into shared memory for allocation
     shared_mem_offset: usize,
     /// Maps TileVar to its dimensions (rows, cols)
@@ -75,9 +100,10 @@ struct LoweringContext {
     label_counter: usize,
 }
 
-impl LoweringContext {
-    fn new() -> Self {
+impl<'a> LoweringContext<'a> {
+    fn new(arena: &'a bumpalo::Bump) -> Self {
         Self {
+            arena,
             tile_to_reg: HashMap::new(),
             shared_mem_ptrs: HashMap::new(),
             param_ptrs: HashMap::new(),
@@ -89,7 +115,7 @@ impl LoweringContext {
         }
     }
 
-    fn get_or_alloc_reg(&mut self, func: &mut Function, var: TileVar) -> Operand<F32> {
+    fn get_or_alloc_reg(&mut self, func: &mut Function<'a>, var: TileVar) -> Operand<'a, F32> {
         if let Some(reg) = self.tile_to_reg.get(&var) {
             reg.clone()
         } else {
@@ -109,13 +135,21 @@ fn dtype_to_ptx_type(dtype: crate::tile::DType) -> super::types::Type {
     }
 }
 
-fn lower_block(func: &mut Function, ctx: &mut LoweringContext, block: &crate::tile::Block) {
+fn lower_block<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    block: &crate::tile::Block,
+) {
     for stmt in &block.stmts {
         lower_stmt(func, ctx, stmt);
     }
 }
 
-fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile::Stmt) {
+fn lower_stmt<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    stmt: &crate::tile::Stmt,
+) {
     use crate::tile::Stmt;
 
     match stmt {
@@ -434,11 +468,14 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             ));
 
             // Loop start label
-            let loop_start = format!("matmul_loop_start_{}", ctx.label_counter);
-            let loop_end = format!("matmul_loop_end_{}", ctx.label_counter);
+            let loop_start =
+                bumpalo::format!(in ctx.arena, "matmul_loop_start_{}", ctx.label_counter)
+                    .into_bump_str();
+            let loop_end = bumpalo::format!(in ctx.arena, "matmul_loop_end_{}", ctx.label_counter)
+                .into_bump_str();
             ctx.label_counter += 1;
 
-            func.add_inst(Inst::Label(loop_start.clone()));
+            func.add_inst(Inst::Label(loop_start));
 
             // Check loop condition: setp.ge sets pred when k >= tile_k (exit condition)
             let exit_pred = func.add_predicate_register();
@@ -450,7 +487,7 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             )));
             func.add_inst(Inst::Bra {
                 condition: exit_pred,
-                target: loop_end.clone(),
+                target: loop_end,
             });
 
             // Loop body:
@@ -979,12 +1016,15 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             ctx.loop_vars.insert(loop_var.clone(), loop_counter.clone());
 
             // Create labels
-            let loop_start_label = format!("loop_start_{}", loop_var);
-            let loop_body_label = format!("loop_body_{}", loop_var);
-            let loop_end_label = format!("loop_end_{}", loop_var);
+            let loop_start_label =
+                bumpalo::format!(in ctx.arena, "loop_start_{}", loop_var).into_bump_str();
+            let loop_body_label =
+                bumpalo::format!(in ctx.arena, "loop_body_{}", loop_var).into_bump_str();
+            let loop_end_label =
+                bumpalo::format!(in ctx.arena, "loop_end_{}", loop_var).into_bump_str();
 
             // Loop start label
-            func.add_inst(Inst::Label(loop_start_label.clone()));
+            func.add_inst(Inst::Label(loop_start_label));
 
             // Check loop condition: if counter < end, continue to body
             let end_val = lower_expr_i32(func, ctx, end);
@@ -998,12 +1038,12 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
             // Branch to body if counter < end
             func.add_inst(Inst::Bra {
                 condition: pred,
-                target: loop_body_label.clone(),
+                target: loop_body_label,
             });
 
             // Otherwise fall through to end
             func.add_inst(Inst::BraUni {
-                target: loop_end_label.clone(),
+                target: loop_end_label,
             });
 
             // Loop body label
@@ -1041,7 +1081,11 @@ fn lower_stmt(func: &mut Function, ctx: &mut LoweringContext, stmt: &crate::tile
 }
 
 /// Lower an expression to a U64 operand (for address calculations)
-fn lower_expr(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operand<U64> {
+fn lower_expr<'a>(
+    func: &mut Function<'a>,
+    ctx: &LoweringContext<'a>,
+    expr: &Expr,
+) -> Operand<'a, U64> {
     match expr {
         Expr::Const(val) => Operand::imm_u64(*val as u64),
         Expr::Var(name) => {
@@ -1056,7 +1100,8 @@ fn lower_expr(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operan
                 result
             } else {
                 // Variable reference - would need to be tracked in context
-                Operand::reg(format!("%{}", name))
+                let reg_name = bumpalo::format!(in ctx.arena, "%{}", name).into_bump_str();
+                Operand::reg(reg_name)
             }
         }
         Expr::BlockIdx(dim) => {
@@ -1113,7 +1158,11 @@ fn lower_expr(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operan
 }
 
 /// Lower an expression to an I32 operand (for loop counters)
-fn lower_expr_i32(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Operand<I32> {
+fn lower_expr_i32<'a>(
+    func: &mut Function<'a>,
+    ctx: &LoweringContext<'a>,
+    expr: &Expr,
+) -> Operand<'a, I32> {
     match expr {
         Expr::Const(val) => Operand::imm_i32(*val as i32),
         Expr::Var(name) => {
@@ -1121,7 +1170,8 @@ fn lower_expr_i32(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Op
             if let Some(loop_var) = ctx.loop_vars.get(name) {
                 loop_var.clone()
             } else {
-                Operand::reg(format!("%{}", name))
+                let reg_name = bumpalo::format!(in ctx.arena, "%{}", name).into_bump_str();
+                Operand::reg(reg_name)
             }
         }
         _ => {
@@ -1138,6 +1188,18 @@ fn lower_expr_i32(func: &mut Function, ctx: &LoweringContext, expr: &Expr) -> Op
 mod tests {
     use super::*;
     use crate::tile::{Block, DType, KernelParam, MemorySpace, Stmt, TileIR};
+
+    // Helper function to convert TileIR to Function for testing
+    // Returns arena wrapped in Box to ensure stable address
+    fn tile_ir_into_function(tile_ir: TileIR) -> (Box<bumpalo::Bump>, Function<'static>) {
+        let arena = Box::new(bumpalo::Bump::new());
+        // SAFETY: We're using 'static lifetime and keeping the arena alive via Box
+        // The arena address is stable since it's heap-allocated
+        let arena_ref: &'static bumpalo::Bump =
+            unsafe { &*(arena.as_ref() as *const bumpalo::Bump) };
+        let func = tile_ir_to_function(tile_ir, arena_ref, 0);
+        (arena, func)
+    }
 
     #[test]
     fn test_basic_add_lowering() {
@@ -1179,7 +1241,7 @@ mod tests {
         };
 
         // Convert to PTX
-        let func: Function = tile_ir.into();
+        let (_arena, func) = tile_ir_into_function(tile_ir);
 
         // Check that we have the right number of f32 registers
         assert_eq!(func.f32_registers.len(), 3);
@@ -1269,7 +1331,7 @@ mod tests {
             },
         };
 
-        let func: Function = tile_ir.into();
+        let (_arena, func) = tile_ir_into_function(tile_ir);
 
         // Count instruction types
         let add_count = func
@@ -1323,7 +1385,7 @@ mod tests {
             },
         };
 
-        let func: Function = tile_ir.into();
+        let (_arena, func) = tile_ir_into_function(tile_ir);
 
         // Relu is implemented as max(0, x)
         let has_max = func.body.iter().any(|inst| matches!(inst, Inst::MaxF32(_)));
@@ -1371,7 +1433,7 @@ mod tests {
             },
         };
 
-        let func: Function = tile_ir.into();
+        let (_arena, func) = tile_ir_into_function(tile_ir);
 
         // Exp uses ex2 (2^x), Log uses lg2 (log2(x))
         let has_ex2 = func.body.iter().any(|inst| matches!(inst, Inst::Ex2F32(_)));
@@ -1398,7 +1460,7 @@ mod tests {
             },
         };
 
-        let func: Function = tile_ir.into();
+        let (_arena, func) = tile_ir_into_function(tile_ir);
 
         // Check that shared memory was allocated
         assert_eq!(func.shared_memory.len(), 1);
@@ -1420,7 +1482,7 @@ mod tests {
             },
         };
 
-        let func: Function = tile_ir.into();
+        let (_arena, func) = tile_ir_into_function(tile_ir);
 
         let has_barrier = func
             .body
@@ -1467,7 +1529,7 @@ mod tests {
             },
         };
 
-        let func: Function = tile_ir.into();
+        let (_arena, func) = tile_ir_into_function(tile_ir);
 
         // Gt uses setp and selp
         let has_setp = func
@@ -1511,7 +1573,7 @@ mod tests {
             },
         };
 
-        let func: Function = tile_ir.into();
+        let (_arena, func) = tile_ir_into_function(tile_ir);
 
         // This should not panic
         let ptx_str = format!("{}", func);
@@ -1622,7 +1684,7 @@ mod tests {
             },
         };
 
-        let func: Function = tile_ir.into();
+        let (_arena, func) = tile_ir_into_function(tile_ir);
 
         // Verify the function has all expected components
         assert_eq!(func.params.len(), 4);

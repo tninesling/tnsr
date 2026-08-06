@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use num_traits::Float;
@@ -17,8 +18,8 @@ pub mod tile;
 
 pub use runtime::{Backend, Runtime};
 
-use crate::alloc::AllocStats;
-use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
+use crate::alloc::{AllocStats, BufferPool};
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad, liveness};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use tracing::trace_span;
@@ -29,6 +30,11 @@ use tracing_subscriber::prelude::*;
 pub type SliceIter<'a, T> = rayon::iter::MinLen<rayon::slice::Iter<'a, T>>;
 #[cfg(not(feature = "parallel"))]
 pub type SliceIter<'a, T> = std::slice::Iter<'a, T>;
+
+#[cfg(feature = "parallel")]
+pub type SliceIterMut<'a, T> = rayon::iter::MinLen<rayon::slice::IterMut<'a, T>>;
+#[cfg(not(feature = "parallel"))]
+pub type SliceIterMut<'a, T> = std::slice::IterMut<'a, T>;
 
 #[cfg(feature = "parallel")]
 mod parallel_config {
@@ -132,8 +138,39 @@ pub trait Executor<D> {
 /// let result = executor.execute(&graph, inputs).unwrap();
 /// assert_eq!(result.len(), 6);
 /// ```
+/// A node value held by an executor.
+///
+/// Computed intermediates are [`Value::Owned`] buffers sourced from the
+/// executor's [`BufferPool`] and returned to it once liveness analysis shows
+/// they are dead. Graph- and caller-owned data is referenced without copying.
+enum Value<D> {
+    /// Computed intermediate; returned to the buffer pool once dead.
+    Owned(Vec<D>),
+    /// Constant data shared with the graph.
+    Constant(Arc<Vec<D>>),
+    /// Parameter data shared with the graph (and the optimizer).
+    Parameter(Arc<Mutex<Vec<D>>>),
+}
+
+impl<D> Value<D> {
+    /// Run `f` with the value's elements.
+    fn with<R>(&self, f: impl FnOnce(&[D]) -> R) -> R {
+        match self {
+            Value::Owned(buf) => f(buf),
+            Value::Constant(data) => f(data),
+            Value::Parameter(data) => f(&data.lock().unwrap()),
+        }
+    }
+
+    /// Number of elements in the value.
+    fn len(&self) -> usize {
+        self.with(|v| v.len())
+    }
+}
+
 pub struct SimpleExecutor<D = f32> {
-    values: HashMap<petgraph::graph::NodeIndex, Vec<D>>,
+    values: HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: BufferPool<D>,
     stats: AllocStats,
 }
 
@@ -142,16 +179,22 @@ impl<D> SimpleExecutor<D> {
     pub fn new() -> Self {
         Self {
             values: HashMap::new(),
+            pool: BufferPool::default(),
             stats: AllocStats::default(),
         }
     }
 
     /// Retrieve the computed value for a specific graph node.
     ///
-    /// Only available after execution has completed.
-    /// Useful for debugging intermediate values.
-    pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<&Vec<D>> {
-        self.values.get(&node_idx)
+    /// Only pinned values (sinks such as the execution output and gradient
+    /// nodes) are guaranteed to remain available after execution;
+    /// intermediate values are released once their last consumer has
+    /// executed. Useful for debugging.
+    pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<Vec<D>>
+    where
+        D: Clone,
+    {
+        self.values.get(&node_idx).map(|v| v.with(|s| s.to_vec()))
     }
 
     /// Memory allocation statistics gathered during execution.
@@ -170,60 +213,62 @@ impl<D> Default for SimpleExecutor<D> {
 }
 
 impl<D: Float + Send + Sync> SimpleExecutor<D> {
-    fn neg(&self, x: &[D]) -> Vec<D> {
-        let _span = trace_span!("neg").entered();
-        get_iter(x).map(|&v| -v).collect()
+    fn apply_unary(op: &tensor::UnaryOp, v: D) -> D {
+        match op {
+            tensor::UnaryOp::Neg => -v,
+            tensor::UnaryOp::Exp => v.exp(),
+            tensor::UnaryOp::Log => v.ln(),
+            tensor::UnaryOp::Relu => v.max(D::zero()),
+        }
     }
 
-    fn exp(&self, x: &[D]) -> Vec<D> {
-        let _span = trace_span!("exp").entered();
-        get_iter(x).copied().map(Float::exp).collect()
+    fn apply_binary(op: &tensor::BinaryOp, x: D, y: D) -> D {
+        match op {
+            tensor::BinaryOp::Add => x + y,
+            tensor::BinaryOp::Sub => x - y,
+            tensor::BinaryOp::Mul => x * y,
+            tensor::BinaryOp::Div => x / y,
+        }
     }
 
-    fn log(&self, x: &[D]) -> Vec<D> {
-        let _span = trace_span!("log").entered();
-        get_iter(x).copied().map(Float::ln).collect()
+    /// Apply a unary op elementwise, writing into `out`.
+    fn unary(&self, op: &tensor::UnaryOp, x: &[D], out: &mut [D]) {
+        let _span = trace_span!("unary", op = ?op).entered();
+        get_iter_mut(out)
+            .zip(get_iter(x))
+            .for_each(|(o, &v)| *o = Self::apply_unary(op, v));
     }
 
-    fn relu(&self, x: &[D]) -> Vec<D> {
-        let _span = trace_span!("relu").entered();
-        get_iter(x).map(|&v| v.max(D::zero())).collect()
+    /// Apply a unary op elementwise in place (used for fused op sequences).
+    #[cfg(feature = "fusion")]
+    fn unary_inplace(&self, op: &tensor::UnaryOp, buf: &mut [D]) {
+        let _span = trace_span!("unary_inplace", op = ?op).entered();
+        get_iter_mut(buf).for_each(|v| *v = Self::apply_unary(op, *v));
     }
 
-    fn add(&self, a: &[D], b: &[D]) -> Vec<D> {
-        let _span = trace_span!("add").entered();
-        get_iter(a).zip(get_iter(b)).map(|(&x, &y)| x + y).collect()
-    }
-
-    fn sub(&self, a: &[D], b: &[D]) -> Vec<D> {
-        let _span = trace_span!("sub").entered();
-        get_iter(a).zip(get_iter(b)).map(|(&x, &y)| x - y).collect()
-    }
-
-    fn mul(&self, a: &[D], b: &[D]) -> Vec<D> {
-        let _span = trace_span!("mul").entered();
-        get_iter(a).zip(get_iter(b)).map(|(&x, &y)| x * y).collect()
-    }
-
-    fn div(&self, a: &[D], b: &[D]) -> Vec<D> {
-        let _span = trace_span!("div").entered();
-        get_iter(a).zip(get_iter(b)).map(|(&x, &y)| x / y).collect()
-    }
-
-    fn gt(&self, a: &[D], b: &[D]) -> Vec<D> {
-        let _span = trace_span!("gt").entered();
-        get_iter(a)
+    /// Apply a binary op elementwise, writing into `out`.
+    fn binary(&self, op: &tensor::BinaryOp, a: &[D], b: &[D], out: &mut [D]) {
+        let _span = trace_span!("binary", op = ?op).entered();
+        get_iter_mut(out)
+            .zip(get_iter(a))
             .zip(get_iter(b))
-            .map(|(&x, &y)| if x > y { D::one() } else { D::zero() })
-            .collect()
+            .for_each(|((o, &x), &y)| *o = Self::apply_binary(op, x, y));
     }
 
-    fn mask(&self, values: &[D], condition: &[D]) -> Vec<D> {
+    fn gt(&self, a: &[D], b: &[D], out: &mut [D]) {
+        let _span = trace_span!("gt").entered();
+        get_iter_mut(out)
+            .zip(get_iter(a))
+            .zip(get_iter(b))
+            .for_each(|((o, &x), &y)| *o = if x > y { D::one() } else { D::zero() });
+    }
+
+    fn mask(&self, values: &[D], condition: &[D], out: &mut [D]) {
         let _span = trace_span!("mask").entered();
-        get_iter(values)
+        get_iter_mut(out)
+            .zip(get_iter(values))
             .zip(get_iter(condition))
-            .map(|(&v, &c)| if c != D::zero() { v } else { D::zero() })
-            .collect()
+            .for_each(|((o, &v), &c)| *o = if c != D::zero() { v } else { D::zero() });
     }
 }
 
@@ -234,45 +279,48 @@ where
     fn execute<G>(
         &mut self,
         graph: &TensorGraph<D, G>,
-        inputs: HashMap<String, Vec<D>>,
+        mut inputs: HashMap<String, Vec<D>>,
     ) -> Result<Vec<D>> {
         let order = graph.toposort();
-        // Values from prior executions are still live until overwritten.
-        let mut live_bytes: usize = self
-            .values
-            .values()
-            .map(|v| std::mem::size_of_val(v.as_slice()))
-            .sum();
-        for node_idx in order.iter() {
+        let liveness = liveness::analyze(graph, &order);
+
+        // Return buffers held by prior executions to the pool.
+        for (_, value) in self.values.drain() {
+            if let Value::Owned(buf) = value {
+                self.pool.give(buf);
+            }
+        }
+        let mut live_bytes = 0usize;
+
+        for (pos, node_idx) in order.iter().enumerate() {
             let node = &graph[*node_idx];
             let result = match node {
                 TensorGraphNode::Constant { data, .. } => {
                     let _span = trace_span!("constant", node = node_idx.index()).entered();
-                    data.as_ref().clone()
+                    Value::Constant(data.clone())
                 }
                 TensorGraphNode::Input { name, .. } => {
                     let _span =
                         trace_span!("input", node = node_idx.index(), name = name).entered();
-                    inputs
-                        .get::<str>(name)
-                        .with_context(|| format!("Input '{}' not found", name))?
-                        .clone()
+                    // Input nodes are deduplicated by name at lowering time,
+                    // so each input is moved (not copied) exactly once.
+                    let data = inputs
+                        .remove(*name)
+                        .with_context(|| format!("Input '{}' not found", name))?;
+                    Value::Owned(data)
                 }
                 TensorGraphNode::Parameter { data, .. } => {
                     let _span = trace_span!("parameter", node = node_idx.index()).entered();
-                    data.lock().unwrap().clone()
+                    Value::Parameter(data.clone())
                 }
                 TensorGraphNode::Unary { op, .. } => {
                     let inputs = graph.inputs(*node_idx);
                     let x = self.values.get(&inputs[0]).with_context(|| {
                         format!("Value for node {} not computed", inputs[0].index())
                     })?;
-                    match op {
-                        tensor::UnaryOp::Neg => self.neg(x),
-                        tensor::UnaryOp::Exp => self.exp(x),
-                        tensor::UnaryOp::Log => self.log(x),
-                        tensor::UnaryOp::Relu => self.relu(x),
-                    }
+                    let mut out = self.pool.take(x.len());
+                    x.with(|x| self.unary(op, x, &mut out));
+                    Value::Owned(out)
                 }
                 #[cfg(feature = "fusion")]
                 TensorGraphNode::FusedUnary { ops, .. } => {
@@ -280,17 +328,13 @@ where
                     let x = self.values.get(&inputs[0]).with_context(|| {
                         format!("Value for node {} not computed", inputs[0].index())
                     })?;
-                    // Apply each unary operation in sequence
-                    let mut result = x.clone();
+                    // Apply each unary operation in sequence, in place.
+                    let mut out = self.pool.take(x.len());
+                    x.with(|x| out.copy_from_slice(x));
                     for op in ops {
-                        result = match op {
-                            tensor::UnaryOp::Neg => self.neg(&result),
-                            tensor::UnaryOp::Exp => self.exp(&result),
-                            tensor::UnaryOp::Log => self.log(&result),
-                            tensor::UnaryOp::Relu => self.relu(&result),
-                        };
+                        self.unary_inplace(op, &mut out);
                     }
-                    result
+                    Value::Owned(out)
                 }
                 TensorGraphNode::Binary { op, .. } => {
                     let ins = graph.inputs(*node_idx);
@@ -306,24 +350,37 @@ where
                         a.len(),
                         b.len()
                     );
-                    match op {
-                        tensor::BinaryOp::Add => self.add(a, b),
-                        tensor::BinaryOp::Sub => self.sub(a, b),
-                        tensor::BinaryOp::Mul => self.mul(a, b),
-                        tensor::BinaryOp::Div => self.div(a, b),
-                    }
+                    let mut out = self.pool.take(a.len());
+                    a.with(|a| b.with(|b| self.binary(op, a, b, &mut out)));
+                    Value::Owned(out)
                 }
                 TensorGraphNode::MatMul { .. } => {
                     let _span = trace_span!("matmul", node = node_idx.index()).entered();
-                    matmul_forward(graph, &self.values, *node_idx)?
+                    Value::Owned(matmul_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                    )?)
                 }
                 TensorGraphNode::Transpose { .. } => {
                     let _span = trace_span!("transpose", node = node_idx.index()).entered();
-                    transpose_forward(graph, &self.values, *node_idx)?
+                    Value::Owned(transpose_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                    )?)
                 }
                 TensorGraphNode::BroadcastAxis { axis, .. } => {
                     let _span = trace_span!("broadcast_axis", node = node_idx.index()).entered();
-                    broadcast_axis_forward(graph, &self.values, *node_idx, *axis)?
+                    Value::Owned(broadcast_axis_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                        *axis,
+                    )?)
                 }
                 TensorGraphNode::ReduceAxis { op, axis, .. } => {
                     let _span = trace_span!(
@@ -333,7 +390,14 @@ where
                         node = node_idx.index()
                     )
                     .entered();
-                    reduce_axis_forward(graph, &self.values, *node_idx, op, *axis)?
+                    Value::Owned(reduce_axis_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                        op,
+                        *axis,
+                    )?)
                 }
                 TensorGraphNode::Gt { .. } => {
                     let _span = trace_span!("gt", node = node_idx.index()).entered();
@@ -350,7 +414,9 @@ where
                         a.len(),
                         b.len()
                     );
-                    self.gt(a, b)
+                    let mut out = self.pool.take(a.len());
+                    a.with(|a| b.with(|b| self.gt(a, b, &mut out)));
+                    Value::Owned(out)
                 }
                 TensorGraphNode::Mask { .. } => {
                     let _span = trace_span!("mask", node = node_idx.index()).entered();
@@ -367,23 +433,42 @@ where
                         values.len(),
                         condition.len()
                     );
-                    self.mask(values, condition)
+                    let mut out = self.pool.take(values.len());
+                    values.with(|v| condition.with(|c| self.mask(v, c, &mut out)));
+                    Value::Owned(out)
                 }
             };
-            let bytes = std::mem::size_of_val(result.as_slice());
-            if let Some(old) = self.values.insert(*node_idx, result) {
-                live_bytes -= std::mem::size_of_val(old.as_slice());
-            }
+            let bytes = result.len() * std::mem::size_of::<D>();
+            self.values.insert(*node_idx, result);
             live_bytes += bytes;
-            self.stats.record_alloc(bytes);
             self.stats.record_live(live_bytes);
+
+            // Release values whose last use was this node.
+            for &dead in liveness.free_after(pos) {
+                if let Some(value) = self.values.remove(&dead) {
+                    live_bytes -= value.len() * std::mem::size_of::<D>();
+                    if let Value::Owned(buf) = value {
+                        self.pool.give(buf);
+                    }
+                }
+            }
         }
+
+        // Sync cumulative pool counters into the public stats.
+        let pool_stats = self.pool.stats();
+        self.stats.bytes_allocated = pool_stats.fresh_bytes;
+        self.stats.buffers_allocated = pool_stats.misses;
+        self.stats.pool_hits = pool_stats.hits;
+        self.stats.pool_misses = pool_stats.misses;
         tracing::debug!(
             bytes_allocated = self.stats.bytes_allocated,
             buffers_allocated = self.stats.buffers_allocated,
             peak_live_bytes = self.stats.peak_live_bytes,
+            pool_hits = self.stats.pool_hits,
+            pool_misses = self.stats.pool_misses,
             "execute memory stats"
         );
+
         let last_node = order
             .last()
             .context("Graph is empty, no nodes to execute")?;
@@ -391,7 +476,7 @@ where
             .values
             .get(last_node)
             .context("Output value not computed")?;
-        Ok(out.clone())
+        Ok(out.with(|v| v.to_vec()))
     }
 
     fn get_gradients(&self, graph: &TensorGraph<D, WithGrad>) -> HashMap<usize, Vec<D>> {
@@ -401,7 +486,7 @@ where
         for (param_id, grad_node_idx) in &graph.gradient_metadata().param_to_grad {
             // Look up the gradient value from our computed values
             if let Some(grad_value) = self.values.get(grad_node_idx) {
-                result.insert(*param_id, grad_value.clone());
+                result.insert(*param_id, grad_value.with(|v| v.to_vec()));
             }
         }
 
@@ -423,7 +508,8 @@ fn rowmajor_strides(shape: &[usize]) -> Vec<usize> {
 
 fn matmul_forward<D, G>(
     graph: &TensorGraph<D, G>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<D>>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
     node_idx: petgraph::graph::NodeIndex,
 ) -> Result<Vec<D>>
 where
@@ -432,10 +518,10 @@ where
     let inputs_idx = graph.inputs(node_idx);
     let a_idx = inputs_idx[0];
     let b_idx = inputs_idx[1];
-    let a = values
+    let a_val = values
         .get(&a_idx)
         .context("Left operand value not computed for matmul")?;
-    let b = values
+    let b_val = values
         .get(&b_idx)
         .context("Right operand value not computed for matmul")?;
     let a_shape = graph.graph[a_idx].shape();
@@ -454,42 +540,42 @@ where
     let k = a_shape[1];
     let n = b_shape[1];
 
-    #[cfg(feature = "parallel")]
-    {
-        use rayon::prelude::*;
+    let mut out = pool.take(m * n);
+    a_val.with(|a| {
+        b_val.with(|b| {
+            #[cfg(feature = "parallel")]
+            if m >= parallel_config::MATMUL_THRESHOLD {
+                out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+                    for j in 0..n {
+                        let mut sum = D::zero();
+                        for p in 0..k {
+                            sum = sum + a[i * k + p] * b[p * n + j];
+                        }
+                        row[j] = sum;
+                    }
+                });
+                return;
+            }
 
-        if m >= parallel_config::MATMUL_THRESHOLD {
-            let mut out = vec![D::zero(); m * n];
-            out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+            // Sequential fallback
+            for i in 0..m {
                 for j in 0..n {
                     let mut sum = D::zero();
                     for p in 0..k {
                         sum = sum + a[i * k + p] * b[p * n + j];
                     }
-                    row[j] = sum;
+                    out[i * n + j] = sum;
                 }
-            });
-            return Ok(out);
-        }
-    }
-
-    // Sequential fallback
-    let mut out = vec![D::zero(); m * n];
-    for i in 0..m {
-        for j in 0..n {
-            let mut sum = D::zero();
-            for p in 0..k {
-                sum = sum + a[i * k + p] * b[p * n + j];
             }
-            out[i * n + j] = sum;
-        }
-    }
+        })
+    });
     Ok(out)
 }
 
 fn transpose_forward<D, G>(
     graph: &TensorGraph<D, G>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<D>>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
     node_idx: petgraph::graph::NodeIndex,
 ) -> Result<Vec<D>>
 where
@@ -497,7 +583,7 @@ where
 {
     let inputs_idx = graph.inputs(node_idx);
     let a_idx = inputs_idx[0];
-    let a = values
+    let a_val = values
         .get(&a_idx)
         .context("Input value not computed for transpose")?;
     let a_shape = graph.graph[a_idx].shape();
@@ -509,20 +595,22 @@ where
     );
 
     let (m, n) = (a_shape[0], a_shape[1]);
-    let mut out = vec![D::zero(); m * n];
-
-    for i in 0..m {
-        for j in 0..n {
-            out[j * m + i] = a[i * n + j];
+    let mut out = pool.take(m * n);
+    a_val.with(|a| {
+        for i in 0..m {
+            for j in 0..n {
+                out[j * m + i] = a[i * n + j];
+            }
         }
-    }
+    });
 
     Ok(out)
 }
 
 fn broadcast_axis_forward<D, G>(
     graph: &TensorGraph<D, G>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<D>>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
     node_idx: petgraph::graph::NodeIndex,
     axis: usize,
 ) -> Result<Vec<D>>
@@ -539,24 +627,27 @@ where
     let in_strides = rowmajor_strides(in_shape);
     let out_strides = rowmajor_strides(out_shape);
 
-    let mut out = vec![D::zero(); out_size];
-    for (out_idx, out_elem) in out.iter_mut().enumerate() {
-        let mut in_linear = 0usize;
-        let mut rem = out_idx;
-        for (dim, &stride) in out_strides.iter().enumerate() {
-            let coord = rem / stride;
-            rem %= stride;
-            let in_coord = if dim == axis { 0 } else { coord };
-            in_linear += in_coord * in_strides[dim];
+    let mut out = pool.take(out_size);
+    in_val.with(|in_val| {
+        for (out_idx, out_elem) in out.iter_mut().enumerate() {
+            let mut in_linear = 0usize;
+            let mut rem = out_idx;
+            for (dim, &stride) in out_strides.iter().enumerate() {
+                let coord = rem / stride;
+                rem %= stride;
+                let in_coord = if dim == axis { 0 } else { coord };
+                in_linear += in_coord * in_strides[dim];
+            }
+            *out_elem = in_val[in_linear];
         }
-        *out_elem = in_val[in_linear];
-    }
+    });
     Ok(out)
 }
 
 fn reduce_axis_forward<D, G>(
     graph: &TensorGraph<D, G>,
-    values: &HashMap<petgraph::graph::NodeIndex, Vec<D>>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
     node_idx: petgraph::graph::NodeIndex,
     op: &tensor::ReduceOp,
     axis: usize,
@@ -575,33 +666,37 @@ where
     let in_strides = rowmajor_strides(in_shape);
     let out_strides = rowmajor_strides(out_shape);
 
-    let mut out = match op {
-        tensor::ReduceOp::Max => vec![D::neg_infinity(); out_size],
-        _ => vec![D::zero(); out_size],
-    };
-
-    let total: usize = in_shape.iter().product();
-    for (idx, &val) in x.iter().enumerate().take(total) {
-        let mut rem = idx;
-        let mut out_linear = 0usize;
-        for (dim, &stride) in in_strides.iter().enumerate() {
-            let coord = rem / stride;
-            rem %= stride;
-            let out_coord = if dim == axis { 0 } else { coord };
-            out_linear += out_coord * out_strides[dim];
-        }
-        match op {
-            tensor::ReduceOp::Sum => {
-                out[out_linear] = out[out_linear] + val;
-            }
-            tensor::ReduceOp::Mean => {
-                out[out_linear] = out[out_linear] + val / D::from(axis_size).unwrap();
-            }
-            tensor::ReduceOp::Max => {
-                out[out_linear] = out[out_linear].max(val);
-            }
-        }
+    // Pooled buffers hold stale data, so initialize every element.
+    let mut out = pool.take(out_size);
+    match op {
+        tensor::ReduceOp::Max => out.fill(D::neg_infinity()),
+        _ => out.fill(D::zero()),
     }
+
+    x.with(|x| {
+        let total: usize = in_shape.iter().product();
+        for (idx, &val) in x.iter().enumerate().take(total) {
+            let mut rem = idx;
+            let mut out_linear = 0usize;
+            for (dim, &stride) in in_strides.iter().enumerate() {
+                let coord = rem / stride;
+                rem %= stride;
+                let out_coord = if dim == axis { 0 } else { coord };
+                out_linear += out_coord * out_strides[dim];
+            }
+            match op {
+                tensor::ReduceOp::Sum => {
+                    out[out_linear] = out[out_linear] + val;
+                }
+                tensor::ReduceOp::Mean => {
+                    out[out_linear] = out[out_linear] + val / D::from(axis_size).unwrap();
+                }
+                tensor::ReduceOp::Max => {
+                    out[out_linear] = out[out_linear].max(val);
+                }
+            }
+        }
+    });
     Ok(out)
 }
 
@@ -623,4 +718,26 @@ pub fn get_iter<T: Sync>(slice: &[T]) -> SliceIter<'_, T> {
 #[cfg(not(feature = "parallel"))]
 pub fn get_iter<T>(slice: &[T]) -> SliceIter<'_, T> {
     slice.iter()
+}
+
+/// Get a mutable iterator over a slice, parallel if the `parallel` feature is
+/// enabled.
+///
+/// Automatically uses parallel iteration for large slices when compiled with
+/// the `parallel` feature, falling back to sequential iteration otherwise.
+#[cfg(feature = "parallel")]
+pub fn get_iter_mut<T: Send>(slice: &mut [T]) -> SliceIterMut<'_, T> {
+    slice
+        .par_iter_mut()
+        .with_min_len(parallel_config::ELEMENTWISE_THRESHOLD)
+}
+
+/// Get a mutable iterator over a slice, parallel if the `parallel` feature is
+/// enabled.
+///
+/// Automatically uses parallel iteration for large slices when compiled with
+/// the `parallel` feature, falling back to sequential iteration otherwise.
+#[cfg(not(feature = "parallel"))]
+pub fn get_iter_mut<T>(slice: &mut [T]) -> SliceIterMut<'_, T> {
+    slice.iter_mut()
 }

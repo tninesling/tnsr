@@ -153,7 +153,7 @@ where
     /// For CPU backend, returns values of type D.
     pub fn get_value(&self, node_idx: NodeIndex) -> Option<Vec<D>> {
         match self {
-            Runtime::Cpu(executor) => executor.get_value(node_idx).cloned(),
+            Runtime::Cpu(executor) => executor.get_value(node_idx),
             #[cfg(feature = "cuda")]
             Runtime::Cuda(_executor) => {
                 // GPU backends only support f32, so we can't return D

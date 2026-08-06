@@ -7,8 +7,15 @@
 //! Execution proceeds in topological order. A node's *last use* is the
 //! topo-order position of its last consumer; once execution passes that
 //! position, the node's value is dead and its buffer may be reused. Nodes in
-//! the pin set (the execution output and, for training graphs, gradient
-//! accumulation nodes) are never released during execution.
+//! the pin set are never released during execution.
+//!
+//! The pin set is every sink (node with no outgoing edges). Sinks exactly
+//! cover the execution output and, for training graphs, every gradient
+//! accumulation node read by [`Executor::get_gradients`], so no inspection of
+//! the graph's typestate is required. Dead-branch ends are pinned too;
+//! skipping dead nodes entirely is a separate follow-up.
+//!
+//! [`Executor::get_gradients`]: crate::Executor::get_gradients
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,7 +23,7 @@ use petgraph::Direction;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 
-use super::{TensorGraph, WithGrad};
+use super::TensorGraph;
 
 /// Liveness analysis result for a single execution of a graph.
 ///
@@ -57,40 +64,30 @@ impl Liveness {
     }
 }
 
-/// Analyze an inference graph, pinning only the execution output.
+/// Analyze a graph for a single execution in the given topological order.
 ///
-/// For graphs with gradients, use [`analyze_training`] so that gradient
-/// accumulation nodes are pinned as well.
+/// Pins every sink node: the execution output and, for training graphs, all
+/// gradient accumulation nodes.
 pub fn analyze<D, G>(graph: &TensorGraph<D, G>, order: &[NodeIndex]) -> Liveness {
-    analyze_with_pins(graph, order, HashSet::new())
-}
-
-/// Analyze a training graph, pinning the execution output and every gradient
-/// accumulation node read by [`Executor::get_gradients`].
-///
-/// [`Executor::get_gradients`]: crate::Executor::get_gradients
-pub fn analyze_training<D: crate::tensor::DType>(
-    graph: &TensorGraph<D, WithGrad>,
-    order: &[NodeIndex],
-) -> Liveness {
-    let pins = graph
-        .gradient_metadata()
-        .param_to_grad
-        .values()
+    let pinned = order
+        .iter()
+        .filter(|&&idx| {
+            graph
+                .graph
+                .edges_directed(idx, Direction::Outgoing)
+                .next()
+                .is_none()
+        })
         .copied()
         .collect();
-    analyze_with_pins(graph, order, pins)
+    analyze_with_pins(graph, order, pinned)
 }
 
 fn analyze_with_pins<D, G>(
     graph: &TensorGraph<D, G>,
     order: &[NodeIndex],
-    mut pinned: HashSet<NodeIndex>,
+    pinned: HashSet<NodeIndex>,
 ) -> Liveness {
-    if let Some(&output) = order.last() {
-        pinned.insert(output);
-    }
-
     let position: HashMap<NodeIndex, usize> = order
         .iter()
         .enumerate()
@@ -125,7 +122,7 @@ fn analyze_with_pins<D, G>(
 
 #[cfg(test)]
 mod tests {
-    use super::{Liveness, analyze, analyze_training};
+    use super::{Liveness, analyze};
     use crate::graph::{TensorGraph, TensorGraphNode};
     use crate::tensor::{Parameter, TensorExpr, UnaryOp};
     use petgraph::graph::NodeIndex;
@@ -271,7 +268,7 @@ mod tests {
 
         let order = graph.toposort();
         let pos = positions(&order);
-        let liveness = analyze_training(&graph, &order);
+        let liveness = analyze(&graph, &order);
 
         // The gradient accumulation node for w is pinned.
         let grad_node = graph.gradient_metadata().param_to_grad[&w_id];

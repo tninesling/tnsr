@@ -12,6 +12,17 @@ use tracing::trace_span;
 
 static PTX: &str = include_str!("kernels.ptx");
 
+enum ConvKind {
+    Forward,
+    Transpose,
+    BackwardWeight,
+}
+
+enum PoolKind {
+    Forward,
+    Backward,
+}
+
 pub struct CudaExecutor {
     device: Arc<CudaContext>,
     module: Arc<CudaModule>,
@@ -352,6 +363,297 @@ impl CudaExecutor {
                 self.pool.get_mut().give(buf);
             }
         }
+    }
+
+    fn conv_host_fallback<G>(
+        &mut self,
+        graph: &TensorGraph<f32, G>,
+        node_idx: petgraph::graph::NodeIndex,
+        stride: usize,
+        padding: usize,
+        kind: ConvKind,
+    ) -> Result<CudaSlice<f32>> {
+        let stream = self.device.default_stream();
+        let inputs_idx = graph.inputs(node_idx);
+
+        // Copy inputs from device to host
+        let mut host_inputs: Vec<Vec<f32>> = Vec::new();
+        for &idx in &inputs_idx {
+            let dev = self
+                .values
+                .get(&idx)
+                .with_context(|| format!("Missing input {:?} for conv host fallback", idx))?;
+            let mut host = vec![0.0f32; dev.len()];
+            stream
+                .memcpy_dtoh(dev, &mut host)
+                .context("Failed to copy conv input from device")?;
+            host_inputs.push(host);
+        }
+
+        let out_shape = graph.graph[node_idx].shape();
+        let out_len: usize = out_shape.iter().product();
+        let mut out_host = vec![0.0f32; out_len];
+
+        match kind {
+            ConvKind::Forward => {
+                let input = &host_inputs[0];
+                let weight = &host_inputs[1];
+                let in_shape = graph.graph[inputs_idx[0]].shape();
+                let w_shape = graph.graph[inputs_idx[1]].shape();
+                let n = in_shape[0];
+                let c_in = in_shape[1];
+                let h = in_shape[2];
+                let w = in_shape[3];
+                let c_out = w_shape[0];
+                let kh = w_shape[2];
+                let kw = w_shape[3];
+                let h_out = out_shape[2];
+                let w_out = out_shape[3];
+
+                for on in 0..n {
+                    for oc in 0..c_out {
+                        for ohi in 0..h_out {
+                            for owi in 0..w_out {
+                                let mut sum = 0.0f32;
+                                for ic in 0..c_in {
+                                    for khi in 0..kh {
+                                        let ih_raw = ohi * stride + khi;
+                                        if ih_raw >= padding && ih_raw - padding < h {
+                                            let ih = ih_raw - padding;
+                                            for kwi in 0..kw {
+                                                let iw_raw = owi * stride + kwi;
+                                                if iw_raw >= padding && iw_raw - padding < w {
+                                                    let iw = iw_raw - padding;
+                                                    let in_val =
+                                                        input[((on * c_in + ic) * h + ih) * w + iw];
+                                                    let w_val = weight
+                                                        [((oc * c_in + ic) * kh + khi) * kw + kwi];
+                                                    sum += in_val * w_val;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                out_host[((on * c_out + oc) * h_out + ohi) * w_out + owi] = sum;
+                            }
+                        }
+                    }
+                }
+            }
+            ConvKind::Transpose => {
+                let grad = &host_inputs[0];
+                let weight = &host_inputs[1];
+                let grad_shape = graph.graph[inputs_idx[0]].shape();
+                let w_shape = graph.graph[inputs_idx[1]].shape();
+                let n = out_shape[0];
+                let c_in = out_shape[1];
+                let h = out_shape[2];
+                let w = out_shape[3];
+                let c_out = w_shape[0];
+                let kh = w_shape[2];
+                let kw = w_shape[3];
+                let h_out = grad_shape[2];
+                let w_out = grad_shape[3];
+
+                for on in 0..n {
+                    for oc in 0..c_out {
+                        for ohi in 0..h_out {
+                            for owi in 0..w_out {
+                                let g = grad[((on * c_out + oc) * h_out + ohi) * w_out + owi];
+                                for ic in 0..c_in {
+                                    for khi in 0..kh {
+                                        let ih_raw = ohi * stride + khi;
+                                        if ih_raw >= padding && ih_raw - padding < h {
+                                            let ih = ih_raw - padding;
+                                            for kwi in 0..kw {
+                                                let iw_raw = owi * stride + kwi;
+                                                if iw_raw >= padding && iw_raw - padding < w {
+                                                    let iw = iw_raw - padding;
+                                                    let w_val = weight
+                                                        [((oc * c_in + ic) * kh + khi) * kw + kwi];
+                                                    out_host
+                                                        [((on * c_in + ic) * h + ih) * w + iw] +=
+                                                        g * w_val;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ConvKind::BackwardWeight => {
+                let input = &host_inputs[0];
+                let grad = &host_inputs[1];
+                let in_shape = graph.graph[inputs_idx[0]].shape();
+                let grad_shape = graph.graph[inputs_idx[1]].shape();
+                let n = in_shape[0];
+                let c_in = in_shape[1];
+                let h = in_shape[2];
+                let w = in_shape[3];
+                let c_out = out_shape[0];
+                let kh = out_shape[2];
+                let kw = out_shape[3];
+                let h_out = grad_shape[2];
+                let w_out = grad_shape[3];
+
+                for on in 0..n {
+                    for oc in 0..c_out {
+                        for ohi in 0..h_out {
+                            for owi in 0..w_out {
+                                let g = grad[((on * c_out + oc) * h_out + ohi) * w_out + owi];
+                                for ic in 0..c_in {
+                                    for khi in 0..kh {
+                                        let ih_raw = ohi * stride + khi;
+                                        if ih_raw >= padding && ih_raw - padding < h {
+                                            let ih = ih_raw - padding;
+                                            for kwi in 0..kw {
+                                                let iw_raw = owi * stride + kwi;
+                                                if iw_raw >= padding && iw_raw - padding < w {
+                                                    let iw = iw_raw - padding;
+                                                    let in_val =
+                                                        input[((on * c_in + ic) * h + ih) * w + iw];
+                                                    out_host[((oc * c_in + ic) * kh + khi) * kw
+                                                        + kwi] += g * in_val;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Copy result back to device
+        let mut out = stream
+            .alloc_zeros::<f32>(out_len)
+            .context("Failed to allocate CUDA memory for conv host fallback output")?;
+        stream
+            .memcpy_htod(&out_host, &mut out)
+            .context("Failed to copy conv output to device")?;
+        Ok(out)
+    }
+
+    fn maxpool_host_fallback<G>(
+        &mut self,
+        graph: &TensorGraph<f32, G>,
+        node_idx: petgraph::graph::NodeIndex,
+        kernel_size: usize,
+        stride: usize,
+        kind: PoolKind,
+    ) -> Result<CudaSlice<f32>> {
+        let stream = self.device.default_stream();
+        let inputs_idx = graph.inputs(node_idx);
+
+        // Copy inputs from device to host
+        let mut host_inputs: Vec<Vec<f32>> = Vec::new();
+        for &idx in &inputs_idx {
+            let dev = self
+                .values
+                .get(&idx)
+                .with_context(|| format!("Missing input {:?} for maxpool host fallback", idx))?;
+            let mut host = vec![0.0f32; dev.len()];
+            stream
+                .memcpy_dtoh(dev, &mut host)
+                .context("Failed to copy maxpool input from device")?;
+            host_inputs.push(host);
+        }
+
+        let out_shape = graph.graph[node_idx].shape();
+        let out_len: usize = out_shape.iter().product();
+        let mut out_host = vec![0.0f32; out_len];
+
+        match kind {
+            PoolKind::Forward => {
+                let x = &host_inputs[0];
+                let in_shape = graph.graph[inputs_idx[0]].shape();
+                let n = in_shape[0];
+                let c = in_shape[1];
+                let h = in_shape[2];
+                let w = in_shape[3];
+                let h_out = out_shape[2];
+                let w_out = out_shape[3];
+
+                for on in 0..n {
+                    for oc in 0..c {
+                        for ohi in 0..h_out {
+                            for owi in 0..w_out {
+                                let mut max_val = f32::NEG_INFINITY;
+                                for khi in 0..kernel_size {
+                                    let ih = ohi * stride + khi;
+                                    if ih < h {
+                                        for kwi in 0..kernel_size {
+                                            let iw = owi * stride + kwi;
+                                            if iw < w {
+                                                let val = x[((on * c + oc) * h + ih) * w + iw];
+                                                if val > max_val {
+                                                    max_val = val;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                out_host[((on * c + oc) * h_out + ohi) * w_out + owi] = max_val;
+                            }
+                        }
+                    }
+                }
+            }
+            PoolKind::Backward => {
+                let input = &host_inputs[0];
+                let output = &host_inputs[1];
+                let grad = &host_inputs[2];
+                let in_shape = graph.graph[inputs_idx[0]].shape();
+                let pool_out_shape = graph.graph[inputs_idx[1]].shape();
+                let n = in_shape[0];
+                let c = in_shape[1];
+                let h = in_shape[2];
+                let w = in_shape[3];
+                let h_out = pool_out_shape[2];
+                let w_out = pool_out_shape[3];
+
+                for on in 0..n {
+                    for oc in 0..c {
+                        for ohi in 0..h_out {
+                            for owi in 0..w_out {
+                                let o_val = output[((on * c + oc) * h_out + ohi) * w_out + owi];
+                                let g = grad[((on * c + oc) * h_out + ohi) * w_out + owi];
+                                for khi in 0..kernel_size {
+                                    let ih = ohi * stride + khi;
+                                    if ih < h {
+                                        for kwi in 0..kernel_size {
+                                            let iw = owi * stride + kwi;
+                                            if iw < w {
+                                                let in_val =
+                                                    input[((on * c + oc) * h + ih) * w + iw];
+                                                if in_val == o_val {
+                                                    out_host[((on * c + oc) * h + ih) * w + iw] +=
+                                                        g;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Copy result back to device
+        let mut out = stream
+            .alloc_zeros::<f32>(out_len)
+            .context("Failed to allocate CUDA memory for maxpool host fallback output")?;
+        stream
+            .memcpy_htod(&out_host, &mut out)
+            .context("Failed to copy maxpool output to device")?;
+        Ok(out)
     }
 }
 
@@ -727,6 +1029,67 @@ impl Executor<f32> for CudaExecutor {
                         .get(&ins[1])
                         .context("Missing condition for Mask")?;
                     self.mask(values, condition)
+                }
+                TensorGraphNode::Conv2d {
+                    stride, padding, ..
+                } => {
+                    self.conv_host_fallback(graph, *node_idx, *stride, *padding, ConvKind::Forward)?
+                }
+                TensorGraphNode::ConvTranspose2d {
+                    stride, padding, ..
+                } => self.conv_host_fallback(
+                    graph,
+                    *node_idx,
+                    *stride,
+                    *padding,
+                    ConvKind::Transpose,
+                )?,
+                TensorGraphNode::Conv2dBackwardWeight {
+                    stride, padding, ..
+                } => self.conv_host_fallback(
+                    graph,
+                    *node_idx,
+                    *stride,
+                    *padding,
+                    ConvKind::BackwardWeight,
+                )?,
+                TensorGraphNode::MaxPool2d {
+                    kernel_size,
+                    stride,
+                    ..
+                } => self.maxpool_host_fallback(
+                    graph,
+                    *node_idx,
+                    *kernel_size,
+                    *stride,
+                    PoolKind::Forward,
+                )?,
+                TensorGraphNode::MaxPool2dBackward {
+                    kernel_size,
+                    stride,
+                    ..
+                } => self.maxpool_host_fallback(
+                    graph,
+                    *node_idx,
+                    *kernel_size,
+                    *stride,
+                    PoolKind::Backward,
+                )?,
+                TensorGraphNode::Flatten { .. } => {
+                    let in_idx = graph.inputs(*node_idx)[0];
+                    let input = self
+                        .values
+                        .get(&in_idx)
+                        .context("Missing input value for flatten")?;
+                    let stream = self.device.default_stream();
+                    let len = input.len();
+                    let mut out = stream
+                        .alloc_zeros::<f32>(len)
+                        .context("Failed to allocate CUDA memory for flatten output")?;
+                    stream
+                        .memcpy_dtod(input, &mut out)
+                        .context("Failed to copy flatten data device-to-device")?;
+                    out
                 }
             };
             let bytes = result.len() * std::mem::size_of::<f32>();

@@ -9,7 +9,7 @@ use tnsr::nn;
 use tnsr::nn::Model;
 use tnsr::optimizer::Adam;
 use tnsr::optimizer::SGD;
-use tnsr::tensor::{Input, Parameter};
+use tnsr::tensor::{Input, Parameter, TensorExpr};
 use tnsr::{Executor, Runtime};
 
 /// MNIST dataset downloader and loader utilities
@@ -100,6 +100,9 @@ struct Args {
     /// Optimizer: sgd or adam
     #[arg(long, default_value = "sgd")]
     optimizer: String,
+    /// Model architecture: mlp or lenet
+    #[arg(long, default_value = "mlp")]
+    model: String,
 }
 
 fn one_hot<D: Float>(labels: &[u8], num_classes: usize) -> Vec<D> {
@@ -151,6 +154,64 @@ where
     model
 }
 
+/// LeNet-5 style CNN.
+///
+/// conv(1->6, 5x5, pad 2) -> relu -> maxpool(2x2) ->
+/// conv(6->16, 5x5, pad 0) -> relu -> maxpool(2x2) -> flatten ->
+/// fc(400->120) -> relu -> fc(120->84) -> relu -> fc(84->10).
+#[allow(clippy::too_many_arguments)]
+fn build_lenet_model<D>(
+    batch: usize,
+    conv1_w: &Parameter<D>,
+    conv2_w: &Parameter<D>,
+    fc1_w: &Parameter<D>,
+    fc1_b: &Parameter<D>,
+    fc2_w: &Parameter<D>,
+    fc2_b: &Parameter<D>,
+    fc3_w: &Parameter<D>,
+    fc3_b: &Parameter<D>,
+) -> Model<D>
+where
+    D: tnsr::tensor::DType + Default + 'static,
+{
+    // Images arrive as a flat [batch, 784] buffer; interpret as [N, 1, 28, 28].
+    let images = Input::new("images", vec![batch, 1, 28, 28]);
+    let labels = Input::new("labels", vec![batch, 10]);
+
+    // Conv1: 1->6, 5x5, stride 1, pad 2 -> [N, 6, 28, 28]
+    let c1 = nn::relu(nn::conv2d(
+        images.clone(),
+        conv1_w.clone(),
+        1,
+        2,
+        None::<TensorExpr<D>>,
+    ));
+    // MaxPool 2x2 stride 2 -> [N, 6, 14, 14]
+    let p1 = nn::max_pool2d(c1, 2, 2);
+
+    // Conv2: 6->16, 5x5, stride 1, pad 0 -> [N, 16, 10, 10]
+    let c2 = nn::relu(nn::conv2d(p1, conv2_w.clone(), 1, 0, None::<TensorExpr<D>>));
+    // MaxPool 2x2 stride 2 -> [N, 16, 5, 5]
+    let p2 = nn::max_pool2d(c2, 2, 2);
+
+    // Flatten -> [N, 400]
+    let flat = nn::flatten(p2);
+
+    // Fully connected head.
+    let h1 = nn::relu(nn::linear(flat, fc1_w.clone(), Some(fc1_b.clone())));
+    let h2 = nn::relu(nn::linear(h1, fc2_w.clone(), Some(fc2_b.clone())));
+    let logits = nn::linear(h2, fc3_w.clone(), Some(fc3_b.clone()));
+
+    let loss = nn::cross_entropy_one_hot_logits(logits.clone(), labels, 1);
+
+    let mut model = Model::new();
+    model.add_output("logits", logits);
+    model.add_output("loss", loss.clone());
+    model.set_loss(loss);
+
+    model
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -185,6 +246,12 @@ fn main() {
     // Validate optimizer choice
     if !matches!(args.optimizer.as_str(), "sgd" | "adam") {
         eprintln!("Unknown optimizer '{}'. Use sgd or adam", args.optimizer);
+        std::process::exit(1);
+    }
+
+    // Validate model choice
+    if !matches!(args.model.as_str(), "mlp" | "lenet") {
+        eprintln!("Unknown model '{}'. Use mlp or lenet", args.model);
         std::process::exit(1);
     }
 
@@ -245,11 +312,37 @@ where
     println!("Test samples: {n_test}");
 
     println!("Building computation graph...");
-    let w1 = Parameter::new(xavier_init(rng, 784, 128), vec![784, 128]);
-    let b1 = Parameter::new(vec![D::zero(); 128], vec![1, 128]);
-    let w2 = Parameter::new(xavier_init(rng, 128, 10), vec![128, 10]);
-    let b2 = Parameter::new(vec![D::zero(); 10], vec![1, 10]);
-    let model = build_mlp_model(args.batch_size, &w1, &b1, &w2, &b2);
+    let model = match args.model.as_str() {
+        "lenet" => {
+            let conv1_w = Parameter::new(xavier_init(rng, 25, 6), vec![6, 1, 5, 5]);
+            let conv2_w = Parameter::new(xavier_init(rng, 150, 16), vec![16, 6, 5, 5]);
+            let fc1_w = Parameter::new(xavier_init(rng, 400, 120), vec![400, 120]);
+            let fc1_b = Parameter::new(vec![D::zero(); 120], vec![1, 120]);
+            let fc2_w = Parameter::new(xavier_init(rng, 120, 84), vec![120, 84]);
+            let fc2_b = Parameter::new(vec![D::zero(); 84], vec![1, 84]);
+            let fc3_w = Parameter::new(xavier_init(rng, 84, 10), vec![84, 10]);
+            let fc3_b = Parameter::new(vec![D::zero(); 10], vec![1, 10]);
+            build_lenet_model(
+                args.batch_size,
+                &conv1_w,
+                &conv2_w,
+                &fc1_w,
+                &fc1_b,
+                &fc2_w,
+                &fc2_b,
+                &fc3_w,
+                &fc3_b,
+            )
+        }
+        _ => {
+            let w1 = Parameter::new(xavier_init(rng, 784, 128), vec![784, 128]);
+            let b1 = Parameter::new(vec![D::zero(); 128], vec![1, 128]);
+            let w2 = Parameter::new(xavier_init(rng, 128, 10), vec![128, 10]);
+            let b2 = Parameter::new(vec![D::zero(); 10], vec![1, 10]);
+            build_mlp_model(args.batch_size, &w1, &b1, &w2, &b2)
+        }
+    };
+    println!("Using model: {}", args.model);
     let logits_idx = model.get_output("logits").expect("logits output");
     let loss_idx = model.loss().expect("loss node");
 

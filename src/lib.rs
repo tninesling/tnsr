@@ -476,6 +476,87 @@ where
                     values.with_pair(condition, |v, c| self.mask(v, c, &mut out));
                     Value::Owned(out)
                 }
+                TensorGraphNode::Conv2d {
+                    stride, padding, ..
+                } => {
+                    let _span = trace_span!("conv2d", node = node_idx.index()).entered();
+                    Value::Owned(conv2d_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                        *stride,
+                        *padding,
+                    )?)
+                }
+                TensorGraphNode::ConvTranspose2d {
+                    stride, padding, ..
+                } => {
+                    let _span = trace_span!("conv_transpose_2d", node = node_idx.index()).entered();
+                    Value::Owned(conv_transpose_2d_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                        *stride,
+                        *padding,
+                    )?)
+                }
+                TensorGraphNode::Conv2dBackwardWeight {
+                    stride, padding, ..
+                } => {
+                    let _span =
+                        trace_span!("conv2d_backward_weight", node = node_idx.index()).entered();
+                    Value::Owned(conv2d_backward_weight_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                        *stride,
+                        *padding,
+                    )?)
+                }
+                TensorGraphNode::MaxPool2d {
+                    kernel_size,
+                    stride,
+                    ..
+                } => {
+                    let _span = trace_span!("max_pool2d", node = node_idx.index()).entered();
+                    Value::Owned(max_pool2d_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                        *kernel_size,
+                        *stride,
+                    )?)
+                }
+                TensorGraphNode::MaxPool2dBackward {
+                    kernel_size,
+                    stride,
+                    ..
+                } => {
+                    let _span =
+                        trace_span!("max_pool2d_backward", node = node_idx.index()).entered();
+                    Value::Owned(max_pool2d_backward_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                        *kernel_size,
+                        *stride,
+                    )?)
+                }
+                TensorGraphNode::Flatten { .. } => {
+                    let _span = trace_span!("flatten", node = node_idx.index()).entered();
+                    let ins = graph.inputs(*node_idx);
+                    let x = self.values.get(&ins[0]).with_context(|| {
+                        format!("Value for node {} not computed", ins[0].index())
+                    })?;
+                    let mut out = self.pool.take(x.len());
+                    x.with(|v| out.copy_from_slice(v));
+                    Value::Owned(out)
+                }
             };
             let bytes = result.len() * std::mem::size_of::<D>();
             self.values.insert(*node_idx, result);
@@ -601,6 +682,353 @@ where
                 out[i * n + j] = sum;
             }
         }
+    });
+    Ok(out)
+}
+
+fn conv2d_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+    stride: usize,
+    padding: usize,
+) -> Result<Vec<D>>
+where
+    D: Float + Send + Sync,
+{
+    let inputs_idx = graph.inputs(node_idx);
+    let input_idx = inputs_idx[0];
+    let weight_idx = inputs_idx[1];
+    let input_val = values
+        .get(&input_idx)
+        .context("Input value not computed for conv2d")?;
+    let weight_val = values
+        .get(&weight_idx)
+        .context("Weight value not computed for conv2d")?;
+    let in_shape = graph.graph[input_idx].shape();
+    let w_shape = graph.graph[weight_idx].shape();
+    let out_shape = graph.graph[node_idx].shape();
+
+    let n = in_shape[0];
+    let c_in = in_shape[1];
+    let h = in_shape[2];
+    let w = in_shape[3];
+    let c_out = w_shape[0];
+    let kh = w_shape[2];
+    let kw = w_shape[3];
+    let h_out = out_shape[2];
+    let w_out = out_shape[3];
+
+    let mut out = pool.take(out_shape.iter().product());
+    out.fill(D::zero());
+
+    input_val.with(|input| {
+        weight_val.with(|weight| {
+            for on in 0..n {
+                for oc in 0..c_out {
+                    for ohi in 0..h_out {
+                        for owi in 0..w_out {
+                            let mut sum = D::zero();
+                            for ic in 0..c_in {
+                                for khi in 0..kh {
+                                    let ih_raw = ohi * stride + khi;
+                                    if ih_raw >= padding && ih_raw - padding < h {
+                                        let ih = ih_raw - padding;
+                                        for kwi in 0..kw {
+                                            let iw_raw = owi * stride + kwi;
+                                            if iw_raw >= padding && iw_raw - padding < w {
+                                                let iw = iw_raw - padding;
+                                                let in_val =
+                                                    input[((on * c_in + ic) * h + ih) * w + iw];
+                                                let w_val = weight
+                                                    [((oc * c_in + ic) * kh + khi) * kw + kwi];
+                                                sum = sum + in_val * w_val;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            out[((on * c_out + oc) * h_out + ohi) * w_out + owi] = sum;
+                        }
+                    }
+                }
+            }
+        })
+    });
+    Ok(out)
+}
+
+fn conv_transpose_2d_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+    stride: usize,
+    padding: usize,
+) -> Result<Vec<D>>
+where
+    D: Float + Send + Sync,
+{
+    let inputs_idx = graph.inputs(node_idx);
+    let grad_idx = inputs_idx[0];
+    let weight_idx = inputs_idx[1];
+    let grad_val = values
+        .get(&grad_idx)
+        .context("Grad output value not computed for conv_transpose_2d")?;
+    let weight_val = values
+        .get(&weight_idx)
+        .context("Weight value not computed for conv_transpose_2d")?;
+    let grad_shape = graph.graph[grad_idx].shape();
+    let w_shape = graph.graph[weight_idx].shape();
+    let out_shape = graph.graph[node_idx].shape();
+
+    let n = out_shape[0];
+    let c_in = out_shape[1];
+    let h = out_shape[2];
+    let w = out_shape[3];
+    let c_out = w_shape[0];
+    let kh = w_shape[2];
+    let kw = w_shape[3];
+    let h_out = grad_shape[2];
+    let w_out = grad_shape[3];
+
+    let mut out = pool.take(out_shape.iter().product());
+    out.fill(D::zero());
+
+    grad_val.with(|grad| {
+        weight_val.with(|weight| {
+            for on in 0..n {
+                for oc in 0..c_out {
+                    for ohi in 0..h_out {
+                        for owi in 0..w_out {
+                            let g = grad[((on * c_out + oc) * h_out + ohi) * w_out + owi];
+                            for ic in 0..c_in {
+                                for khi in 0..kh {
+                                    let ih_raw = ohi * stride + khi;
+                                    if ih_raw >= padding && ih_raw - padding < h {
+                                        let ih = ih_raw - padding;
+                                        for kwi in 0..kw {
+                                            let iw_raw = owi * stride + kwi;
+                                            if iw_raw >= padding && iw_raw - padding < w {
+                                                let iw = iw_raw - padding;
+                                                let w_val = weight
+                                                    [((oc * c_in + ic) * kh + khi) * kw + kwi];
+                                                out[((on * c_in + ic) * h + ih) * w + iw] = out
+                                                    [((on * c_in + ic) * h + ih) * w + iw]
+                                                    + g * w_val;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    });
+    Ok(out)
+}
+
+fn conv2d_backward_weight_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+    stride: usize,
+    padding: usize,
+) -> Result<Vec<D>>
+where
+    D: Float + Send + Sync,
+{
+    let inputs_idx = graph.inputs(node_idx);
+    let input_idx = inputs_idx[0];
+    let grad_idx = inputs_idx[1];
+    let input_val = values
+        .get(&input_idx)
+        .context("Input value not computed for conv2d_backward_weight")?;
+    let grad_val = values
+        .get(&grad_idx)
+        .context("Grad output value not computed for conv2d_backward_weight")?;
+    let in_shape = graph.graph[input_idx].shape();
+    let grad_shape = graph.graph[grad_idx].shape();
+    let out_shape = graph.graph[node_idx].shape();
+
+    let n = in_shape[0];
+    let c_in = in_shape[1];
+    let h = in_shape[2];
+    let w = in_shape[3];
+    let c_out = out_shape[0];
+    let kh = out_shape[2];
+    let kw = out_shape[3];
+    let h_out = grad_shape[2];
+    let w_out = grad_shape[3];
+
+    let mut out = pool.take(out_shape.iter().product());
+    out.fill(D::zero());
+
+    input_val.with(|input| {
+        grad_val.with(|grad| {
+            for on in 0..n {
+                for oc in 0..c_out {
+                    for ohi in 0..h_out {
+                        for owi in 0..w_out {
+                            let g = grad[((on * c_out + oc) * h_out + ohi) * w_out + owi];
+                            for ic in 0..c_in {
+                                for khi in 0..kh {
+                                    let ih_raw = ohi * stride + khi;
+                                    if ih_raw >= padding && ih_raw - padding < h {
+                                        let ih = ih_raw - padding;
+                                        for kwi in 0..kw {
+                                            let iw_raw = owi * stride + kwi;
+                                            if iw_raw >= padding && iw_raw - padding < w {
+                                                let iw = iw_raw - padding;
+                                                let in_val =
+                                                    input[((on * c_in + ic) * h + ih) * w + iw];
+                                                out[((oc * c_in + ic) * kh + khi) * kw + kwi] = out
+                                                    [((oc * c_in + ic) * kh + khi) * kw + kwi]
+                                                    + g * in_val;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    });
+    Ok(out)
+}
+
+fn max_pool2d_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+    kernel_size: usize,
+    stride: usize,
+) -> Result<Vec<D>>
+where
+    D: Float + Send + Sync,
+{
+    let inputs_idx = graph.inputs(node_idx);
+    let x_idx = inputs_idx[0];
+    let x_val = values
+        .get(&x_idx)
+        .context("Input value not computed for max_pool2d")?;
+    let in_shape = graph.graph[x_idx].shape();
+    let out_shape = graph.graph[node_idx].shape();
+
+    let n = in_shape[0];
+    let c = in_shape[1];
+    let h = in_shape[2];
+    let w = in_shape[3];
+    let h_out = out_shape[2];
+    let w_out = out_shape[3];
+
+    let mut out = pool.take(out_shape.iter().product());
+
+    x_val.with(|x| {
+        for on in 0..n {
+            for oc in 0..c {
+                for ohi in 0..h_out {
+                    for owi in 0..w_out {
+                        let mut max_val = D::neg_infinity();
+                        for khi in 0..kernel_size {
+                            let ih = ohi * stride + khi;
+                            if ih < h {
+                                for kwi in 0..kernel_size {
+                                    let iw = owi * stride + kwi;
+                                    if iw < w {
+                                        let val = x[((on * c + oc) * h + ih) * w + iw];
+                                        max_val = max_val.max(val);
+                                    }
+                                }
+                            }
+                        }
+                        out[((on * c + oc) * h_out + ohi) * w_out + owi] = max_val;
+                    }
+                }
+            }
+        }
+    });
+    Ok(out)
+}
+
+fn max_pool2d_backward_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+    kernel_size: usize,
+    stride: usize,
+) -> Result<Vec<D>>
+where
+    D: Float + Send + Sync,
+{
+    let inputs_idx = graph.inputs(node_idx);
+    let input_idx = inputs_idx[0];
+    let output_idx = inputs_idx[1];
+    let grad_idx = inputs_idx[2];
+    let input_val = values
+        .get(&input_idx)
+        .context("Input value not computed for max_pool2d_backward")?;
+    let output_val = values
+        .get(&output_idx)
+        .context("Output value not computed for max_pool2d_backward")?;
+    let grad_val = values
+        .get(&grad_idx)
+        .context("Grad output value not computed for max_pool2d_backward")?;
+    let in_shape = graph.graph[input_idx].shape();
+    let out_shape = graph.graph[output_idx].shape();
+    let grad_shape = graph.graph[grad_idx].shape();
+
+    let n = in_shape[0];
+    let c = in_shape[1];
+    let h = in_shape[2];
+    let w = in_shape[3];
+    let h_out = out_shape[2];
+    let w_out = out_shape[3];
+
+    assert_eq!(out_shape, grad_shape);
+
+    let mut out = pool.take(in_shape.iter().product());
+    out.fill(D::zero());
+
+    input_val.with(|input| {
+        output_val.with(|output| {
+            grad_val.with(|grad| {
+                for on in 0..n {
+                    for oc in 0..c {
+                        for ohi in 0..h_out {
+                            for owi in 0..w_out {
+                                let o_val = output[((on * c + oc) * h_out + ohi) * w_out + owi];
+                                let g = grad[((on * c + oc) * h_out + ohi) * w_out + owi];
+                                for khi in 0..kernel_size {
+                                    let ih = ohi * stride + khi;
+                                    if ih < h {
+                                        for kwi in 0..kernel_size {
+                                            let iw = owi * stride + kwi;
+                                            if iw < w {
+                                                let in_val =
+                                                    input[((on * c + oc) * h + ih) * w + iw];
+                                                if in_val == o_val {
+                                                    out[((on * c + oc) * h + ih) * w + iw] =
+                                                        out[((on * c + oc) * h + ih) * w + iw] + g;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        })
     });
     Ok(out)
 }

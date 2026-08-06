@@ -125,6 +125,34 @@ pub enum TensorGraphNode<D> {
     Mask {
         shape: crate::tensor::Shape,
     },
+    Conv2d {
+        stride: usize,
+        padding: usize,
+        shape: crate::tensor::Shape,
+    },
+    ConvTranspose2d {
+        stride: usize,
+        padding: usize,
+        shape: crate::tensor::Shape,
+    },
+    Conv2dBackwardWeight {
+        stride: usize,
+        padding: usize,
+        shape: crate::tensor::Shape,
+    },
+    MaxPool2d {
+        kernel_size: usize,
+        stride: usize,
+        shape: crate::tensor::Shape,
+    },
+    MaxPool2dBackward {
+        kernel_size: usize,
+        stride: usize,
+        shape: crate::tensor::Shape,
+    },
+    Flatten {
+        shape: crate::tensor::Shape,
+    },
 }
 
 impl<D> TensorGraphNode<D> {
@@ -157,6 +185,12 @@ impl<D> TensorGraphNode<D> {
             },
             TensorGraphNode::Gt { .. } => "Gt",
             TensorGraphNode::Mask { .. } => "Mask",
+            TensorGraphNode::Conv2d { .. } => "Conv2d",
+            TensorGraphNode::ConvTranspose2d { .. } => "ConvTranspose2d",
+            TensorGraphNode::Conv2dBackwardWeight { .. } => "Conv2dBackwardWeight",
+            TensorGraphNode::MaxPool2d { .. } => "MaxPool2d",
+            TensorGraphNode::MaxPool2dBackward { .. } => "MaxPool2dBackward",
+            TensorGraphNode::Flatten { .. } => "Flatten",
         }
     }
 
@@ -175,6 +209,12 @@ impl<D> TensorGraphNode<D> {
             TensorGraphNode::ReduceAxis { shape, .. } => shape,
             TensorGraphNode::Gt { shape } => shape,
             TensorGraphNode::Mask { shape } => shape,
+            TensorGraphNode::Conv2d { shape, .. } => shape,
+            TensorGraphNode::ConvTranspose2d { shape, .. } => shape,
+            TensorGraphNode::Conv2dBackwardWeight { shape, .. } => shape,
+            TensorGraphNode::MaxPool2d { shape, .. } => shape,
+            TensorGraphNode::MaxPool2dBackward { shape, .. } => shape,
+            TensorGraphNode::Flatten { shape } => shape,
         }
     }
 }
@@ -683,6 +723,133 @@ where
                         &mut gradient_nodes,
                         input_x,
                         grad_x,
+                    );
+                }
+                TensorGraphNode::Conv2d {
+                    stride, padding, ..
+                } => {
+                    let stride = *stride;
+                    let padding = *padding;
+                    if inputs.len() != 2 {
+                        panic!("Conv2d should have 2 inputs");
+                    }
+                    let input_idx = inputs[0];
+                    let weight_idx = inputs[1];
+
+                    // A node's gradient has the same shape as its forward output.
+                    // Use that shape rather than the accumulated gradient node's
+                    // metadata, which upstream ops like Flatten may have reshaped.
+                    let grad_out_shape = self.graph[node_idx].shape().clone();
+                    let input_shape = self.graph[input_idx].shape().clone();
+                    let weight_shape = self.graph[weight_idx].shape().clone();
+
+                    let grad_out_expr =
+                        crate::tensor::TensorExpr::node_ref(grad_output, grad_out_shape.clone());
+                    let weight_expr =
+                        crate::tensor::TensorExpr::node_ref(weight_idx, weight_shape.clone());
+                    let input_expr =
+                        crate::tensor::TensorExpr::node_ref(input_idx, input_shape.clone());
+
+                    // grad_input = conv_transpose_2d(grad_output, weight, input_shape)
+                    let grad_input_expr = crate::tensor::TensorExpr::conv_transpose_2d(
+                        grad_out_expr.clone(),
+                        weight_expr,
+                        input_shape,
+                        stride,
+                        padding,
+                    );
+                    let grad_input =
+                        self.lower_gradient_expr(&grad_input_expr, &mut gradient_nodes);
+
+                    // grad_weight = conv2d_backward_weight(input, grad_output, weight_shape)
+                    let grad_weight_expr = crate::tensor::TensorExpr::conv2d_backward_weight(
+                        input_expr,
+                        grad_out_expr,
+                        weight_shape,
+                        stride,
+                        padding,
+                    );
+                    let grad_weight =
+                        self.lower_gradient_expr(&grad_weight_expr, &mut gradient_nodes);
+
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_idx,
+                        grad_input,
+                    );
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        weight_idx,
+                        grad_weight,
+                    );
+                }
+                TensorGraphNode::ConvTranspose2d { .. }
+                | TensorGraphNode::Conv2dBackwardWeight { .. }
+                | TensorGraphNode::MaxPool2dBackward { .. } => {
+                    // These are only created during gradient computation; they
+                    // don't need gradients of their own.
+                }
+                TensorGraphNode::MaxPool2d {
+                    kernel_size,
+                    stride,
+                    ..
+                } => {
+                    let kernel_size = *kernel_size;
+                    let stride = *stride;
+                    if inputs.len() != 1 {
+                        panic!("MaxPool2d should have 1 input");
+                    }
+                    let input_idx = inputs[0];
+
+                    // Gradient shape matches this node's forward output shape.
+                    let grad_out_shape = self.graph[node_idx].shape().clone();
+                    let input_shape = self.graph[input_idx].shape().clone();
+                    let output_shape = self.graph[node_idx].shape().clone();
+
+                    let grad_out_expr =
+                        crate::tensor::TensorExpr::node_ref(grad_output, grad_out_shape.clone());
+                    let input_expr =
+                        crate::tensor::TensorExpr::node_ref(input_idx, input_shape.clone());
+                    let output_expr = crate::tensor::TensorExpr::node_ref(node_idx, output_shape);
+
+                    let grad_input_expr = crate::tensor::TensorExpr::max_pool2d_backward(
+                        input_expr,
+                        output_expr,
+                        grad_out_expr,
+                        input_shape,
+                        kernel_size,
+                        stride,
+                    );
+                    let grad_input =
+                        self.lower_gradient_expr(&grad_input_expr, &mut gradient_nodes);
+
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_idx,
+                        grad_input,
+                    );
+                }
+                TensorGraphNode::Flatten { .. } => {
+                    // Flatten only reshapes, so the gradient is the incoming
+                    // gradient reshaped back to the input's original shape.
+                    if inputs.len() != 1 {
+                        panic!("Flatten should have 1 input");
+                    }
+                    let input_idx = inputs[0];
+                    let input_shape = self.graph[input_idx].shape().clone();
+                    let grad_out_shape = self.graph[node_idx].shape().clone();
+                    let grad_out_expr =
+                        crate::tensor::TensorExpr::node_ref(grad_output, grad_out_shape);
+                    let grad_in_expr = grad_out_expr.reshape(input_shape);
+                    let grad_in = self.lower_gradient_expr(&grad_in_expr, &mut gradient_nodes);
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_idx,
+                        grad_in,
                     );
                 }
                 TensorGraphNode::Gt { .. } | TensorGraphNode::Mask { .. } => {

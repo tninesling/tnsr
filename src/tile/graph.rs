@@ -88,6 +88,14 @@ impl TileGraph {
             }
             TensorGraphNode::Gt { .. } => Self::lower_gt(shape),
             TensorGraphNode::Mask { .. } => Self::lower_mask(shape),
+            TensorGraphNode::Conv2d { .. }
+            | TensorGraphNode::ConvTranspose2d { .. }
+            | TensorGraphNode::Conv2dBackwardWeight { .. }
+            | TensorGraphNode::MaxPool2d { .. }
+            | TensorGraphNode::MaxPool2dBackward { .. }
+            | TensorGraphNode::Flatten { .. } => {
+                unimplemented!("Convolution and pooling ops not yet supported in tile IR backend")
+            }
         }
     }
 

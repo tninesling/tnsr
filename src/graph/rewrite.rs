@@ -177,6 +177,46 @@ fn expr_to_recexpr<D: DType>(expr: &TensorExpr<D>) -> RecExpr<TensorOp> {
                 let c_id = build_rec(condition, rec);
                 rec.add(TensorOp::Mask([v_id, c_id]))
             }
+            ExprKind::Conv2d { input, weight, .. } => {
+                let _ = build_rec(input, rec);
+                let _ = build_rec(weight, rec);
+                rec.add(TensorOp::Sym("Conv2d".into()))
+            }
+            ExprKind::ConvTranspose2d {
+                grad_output,
+                weight,
+                ..
+            } => {
+                let _ = build_rec(grad_output, rec);
+                let _ = build_rec(weight, rec);
+                rec.add(TensorOp::Sym("ConvTranspose2d".into()))
+            }
+            ExprKind::Conv2dBackwardWeight {
+                input, grad_output, ..
+            } => {
+                let _ = build_rec(input, rec);
+                let _ = build_rec(grad_output, rec);
+                rec.add(TensorOp::Sym("Conv2dBackwardWeight".into()))
+            }
+            ExprKind::MaxPool2d { x, .. } => {
+                let _ = build_rec(x, rec);
+                rec.add(TensorOp::Sym("MaxPool2d".into()))
+            }
+            ExprKind::MaxPool2dBackward {
+                input,
+                output,
+                grad_output,
+                ..
+            } => {
+                let _ = build_rec(input, rec);
+                let _ = build_rec(output, rec);
+                let _ = build_rec(grad_output, rec);
+                rec.add(TensorOp::Sym("MaxPool2dBackward".into()))
+            }
+            ExprKind::Flatten { x } => {
+                let _ = build_rec(x, rec);
+                rec.add(TensorOp::Sym("Flatten".into()))
+            }
         }
     }
 

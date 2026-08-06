@@ -227,6 +227,23 @@ impl<D: DType> TensorExpr<D> {
             ExprKind::ReduceAxis { x, .. } => vec![x],
             ExprKind::Gt { a, b } => vec![a, b],
             ExprKind::Mask { values, condition } => vec![values, condition],
+            ExprKind::Conv2d { input, weight, .. } => vec![input, weight],
+            ExprKind::ConvTranspose2d {
+                grad_output,
+                weight,
+                ..
+            } => vec![grad_output, weight],
+            ExprKind::Conv2dBackwardWeight {
+                input, grad_output, ..
+            } => vec![input, grad_output],
+            ExprKind::MaxPool2d { x, .. } => vec![x],
+            ExprKind::MaxPool2dBackward {
+                input,
+                output,
+                grad_output,
+                ..
+            } => vec![input, output, grad_output],
+            ExprKind::Flatten { x } => vec![x],
             ExprKind::NodeRef { .. }
             | ExprKind::Constant { .. }
             | ExprKind::Input { .. }
@@ -291,6 +308,45 @@ pub enum ExprKind<D: DType> {
     Mask {
         values: TensorExpr<D>,
         condition: TensorExpr<D>,
+    },
+    /// 2D convolution: input [N, C_in, H, W] * weight [C_out, C_in, kH, kW] -> [N, C_out, H_out, W_out]
+    Conv2d {
+        input: TensorExpr<D>,
+        weight: TensorExpr<D>,
+        stride: usize,
+        padding: usize,
+    },
+    /// Transposed 2D convolution (backward w.r.t. input).
+    ConvTranspose2d {
+        grad_output: TensorExpr<D>,
+        weight: TensorExpr<D>,
+        stride: usize,
+        padding: usize,
+    },
+    /// Convolution backward w.r.t. weight.
+    Conv2dBackwardWeight {
+        input: TensorExpr<D>,
+        grad_output: TensorExpr<D>,
+        stride: usize,
+        padding: usize,
+    },
+    /// 2D max pooling: input [N, C, H, W] -> [N, C, H_out, W_out]
+    MaxPool2d {
+        x: TensorExpr<D>,
+        kernel_size: usize,
+        stride: usize,
+    },
+    /// Backward for max pooling: scatters grad to max elements.
+    MaxPool2dBackward {
+        input: TensorExpr<D>,
+        output: TensorExpr<D>,
+        grad_output: TensorExpr<D>,
+        kernel_size: usize,
+        stride: usize,
+    },
+    /// Flatten: reshape [N, C, H, W] -> [N, C*H*W]. Data is unchanged.
+    Flatten {
+        x: TensorExpr<D>,
     },
 }
 
@@ -400,6 +456,166 @@ impl<D: DType> TensorExpr<D> {
         Self(Arc::new(ExprNode {
             shape,
             kind: ExprKind::MatMul { a: self, b: rhs },
+        }))
+    }
+
+    /// 2D convolution. Input [N, C_in, H, W], weight [C_out, C_in, kH, kW].
+    /// Output [N, C_out, H_out, W_out] where H_out = (H + 2*padding - kH) / stride + 1.
+    pub fn conv2d(self, weight: impl Into<TensorExpr<D>>, stride: usize, padding: usize) -> Self
+    where
+        D: 'static,
+    {
+        let weight = weight.into();
+        let in_shape = self.shape().clone();
+        let w_shape = weight.shape().clone();
+        assert_eq!(
+            in_shape.len(),
+            4,
+            "Conv2d input must be 4D [N, C_in, H, W], got {in_shape:?}"
+        );
+        assert_eq!(
+            w_shape.len(),
+            4,
+            "Conv2d weight must be 4D [C_out, C_in, kH, kW], got {w_shape:?}"
+        );
+        assert_eq!(
+            in_shape[1], w_shape[1],
+            "Conv2d channel mismatch: input has {} channels, weight expects {}",
+            in_shape[1], w_shape[1]
+        );
+        let h_out = (in_shape[2] + 2 * padding - w_shape[2]) / stride + 1;
+        let w_out = (in_shape[3] + 2 * padding - w_shape[3]) / stride + 1;
+        let shape = vec![in_shape[0], w_shape[0], h_out, w_out];
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Conv2d {
+                input: self,
+                weight,
+                stride,
+                padding,
+            },
+        }))
+    }
+
+    pub(crate) fn conv_transpose_2d(
+        grad_output: impl Into<TensorExpr<D>>,
+        weight: impl Into<TensorExpr<D>>,
+        input_shape: Shape,
+        stride: usize,
+        padding: usize,
+    ) -> Self
+    where
+        D: 'static,
+    {
+        Self(Arc::new(ExprNode {
+            shape: input_shape,
+            kind: ExprKind::ConvTranspose2d {
+                grad_output: grad_output.into(),
+                weight: weight.into(),
+                stride,
+                padding,
+            },
+        }))
+    }
+
+    pub(crate) fn conv2d_backward_weight(
+        input: impl Into<TensorExpr<D>>,
+        grad_output: impl Into<TensorExpr<D>>,
+        weight_shape: Shape,
+        stride: usize,
+        padding: usize,
+    ) -> Self
+    where
+        D: 'static,
+    {
+        Self(Arc::new(ExprNode {
+            shape: weight_shape,
+            kind: ExprKind::Conv2dBackwardWeight {
+                input: input.into(),
+                grad_output: grad_output.into(),
+                stride,
+                padding,
+            },
+        }))
+    }
+
+    /// 2D max pooling. Input [N, C, H, W]. Output [N, C, H_out, W_out].
+    pub fn max_pool2d(self, kernel_size: usize, stride: usize) -> Self
+    where
+        D: 'static,
+    {
+        let in_shape = self.shape().clone();
+        assert_eq!(
+            in_shape.len(),
+            4,
+            "MaxPool2d input must be 4D [N, C, H, W], got {in_shape:?}"
+        );
+        let h_out = (in_shape[2] - kernel_size) / stride + 1;
+        let w_out = (in_shape[3] - kernel_size) / stride + 1;
+        let shape = vec![in_shape[0], in_shape[1], h_out, w_out];
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::MaxPool2d {
+                x: self,
+                kernel_size,
+                stride,
+            },
+        }))
+    }
+
+    pub(crate) fn max_pool2d_backward(
+        input: impl Into<TensorExpr<D>>,
+        output: impl Into<TensorExpr<D>>,
+        grad_output: impl Into<TensorExpr<D>>,
+        input_shape: Shape,
+        kernel_size: usize,
+        stride: usize,
+    ) -> Self
+    where
+        D: 'static,
+    {
+        Self(Arc::new(ExprNode {
+            shape: input_shape,
+            kind: ExprKind::MaxPool2dBackward {
+                input: input.into(),
+                output: output.into(),
+                grad_output: grad_output.into(),
+                kernel_size,
+                stride,
+            },
+        }))
+    }
+
+    /// Reshape to an arbitrary shape without changing the underlying data
+    /// layout. Used internally (e.g. for the Flatten backward pass) where the
+    /// element count is preserved but the rank differs.
+    pub(crate) fn reshape(self, shape: Shape) -> Self
+    where
+        D: 'static,
+    {
+        debug_assert_eq!(
+            self.shape().iter().product::<usize>(),
+            shape.iter().product::<usize>(),
+            "reshape must preserve element count"
+        );
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Flatten { x: self },
+        }))
+    }
+
+    /// Flatten a tensor to 2D [N, rest]. Data unchanged.
+    pub fn flatten(self) -> Self
+    where
+        D: 'static,
+    {
+        let in_shape = self.shape().clone();
+        assert!(!in_shape.is_empty(), "Flatten requires at least 1D tensor");
+        let rest: usize = in_shape[1..].iter().product();
+        let shape = vec![in_shape[0], rest];
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Flatten { x: self },
         }))
     }
 
@@ -863,6 +1079,99 @@ impl<D: DType> TensorExpr<D> {
                     });
                     g.graph.add_edge(values_idx, node_idx, 0);
                     g.graph.add_edge(condition_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::Conv2d {
+                    input,
+                    weight,
+                    stride,
+                    padding,
+                } => {
+                    let input_idx = lower_rec(input, g);
+                    let weight_idx = lower_rec(weight, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Conv2d {
+                        stride: *stride,
+                        padding: *padding,
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(input_idx, node_idx, 0);
+                    g.graph.add_edge(weight_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::ConvTranspose2d {
+                    grad_output,
+                    weight,
+                    stride,
+                    padding,
+                } => {
+                    let grad_idx = lower_rec(grad_output, g);
+                    let weight_idx = lower_rec(weight, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::ConvTranspose2d {
+                        stride: *stride,
+                        padding: *padding,
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(grad_idx, node_idx, 0);
+                    g.graph.add_edge(weight_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::Conv2dBackwardWeight {
+                    input,
+                    grad_output,
+                    stride,
+                    padding,
+                } => {
+                    let input_idx = lower_rec(input, g);
+                    let grad_idx = lower_rec(grad_output, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Conv2dBackwardWeight {
+                        stride: *stride,
+                        padding: *padding,
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(input_idx, node_idx, 0);
+                    g.graph.add_edge(grad_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::MaxPool2d {
+                    x,
+                    kernel_size,
+                    stride,
+                } => {
+                    let x_idx = lower_rec(x, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::MaxPool2d {
+                        kernel_size: *kernel_size,
+                        stride: *stride,
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(x_idx, node_idx, 0);
+                    node_idx
+                }
+                ExprKind::MaxPool2dBackward {
+                    input,
+                    output,
+                    grad_output,
+                    kernel_size,
+                    stride,
+                } => {
+                    let input_idx = lower_rec(input, g);
+                    let output_idx = lower_rec(output, g);
+                    let grad_idx = lower_rec(grad_output, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::MaxPool2dBackward {
+                        kernel_size: *kernel_size,
+                        stride: *stride,
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(input_idx, node_idx, 0);
+                    g.graph.add_edge(output_idx, node_idx, 1);
+                    g.graph.add_edge(grad_idx, node_idx, 2);
+                    node_idx
+                }
+                ExprKind::Flatten { x } => {
+                    let x_idx = lower_rec(x, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Flatten {
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
             }

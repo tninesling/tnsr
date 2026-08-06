@@ -53,6 +53,36 @@ pub fn relu<D: DType + Default + 'static>(x: impl Into<TensorExpr<D>>) -> Tensor
     x.into().relu()
 }
 
+pub fn conv2d<D: DType + Default + 'static>(
+    x: impl Into<TensorExpr<D>>,
+    weight: impl Into<TensorExpr<D>>,
+    stride: usize,
+    padding: usize,
+    bias: Option<impl Into<TensorExpr<D>>>,
+) -> TensorExpr<D> {
+    let conv = x.into().conv2d(weight, stride, padding);
+    match bias {
+        Some(b) => {
+            let bias = b.into();
+            let conv_shape = conv.shape().to_vec();
+            conv + bias.broadcast(conv_shape)
+        }
+        None => conv,
+    }
+}
+
+pub fn max_pool2d<D: DType + Default + 'static>(
+    x: impl Into<TensorExpr<D>>,
+    kernel_size: usize,
+    stride: usize,
+) -> TensorExpr<D> {
+    x.into().max_pool2d(kernel_size, stride)
+}
+
+pub fn flatten<D: DType + Default + 'static>(x: impl Into<TensorExpr<D>>) -> TensorExpr<D> {
+    x.into().flatten()
+}
+
 /// Numerically stable log-sum-exp reduction along an axis.
 pub fn reduce_logsumexp_simple<D: DType + Default + 'static>(
     x: impl Into<TensorExpr<D>>,

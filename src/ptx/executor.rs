@@ -515,6 +515,16 @@ impl PtxExecutor {
 
                     out
                 }
+                TensorGraphNode::Conv2d { .. }
+                | TensorGraphNode::ConvTranspose2d { .. }
+                | TensorGraphNode::Conv2dBackwardWeight { .. }
+                | TensorGraphNode::MaxPool2d { .. }
+                | TensorGraphNode::MaxPool2dBackward { .. }
+                | TensorGraphNode::Flatten { .. } => {
+                    anyhow::bail!(
+                        "Convolution and pooling ops are not yet supported by the PTX backend. Use the CUDA (static kernels) or CPU backend instead."
+                    )
+                }
             };
 
             let bytes = result.len() * std::mem::size_of::<f32>();

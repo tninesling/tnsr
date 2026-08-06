@@ -1,4 +1,5 @@
 use crate::Executor;
+use crate::alloc::AllocStats;
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
 use crate::tensor;
 use anyhow::{Context as _, Result, anyhow};
@@ -14,6 +15,7 @@ pub struct CudaExecutor {
     device: Arc<CudaContext>,
     module: Arc<CudaModule>,
     values: HashMap<petgraph::graph::NodeIndex, CudaSlice<f32>>,
+    stats: AllocStats,
 }
 
 impl Default for CudaExecutor {
@@ -43,6 +45,7 @@ impl CudaExecutor {
             device,
             module,
             values: HashMap::new(),
+            stats: AllocStats::default(),
         })
     }
 
@@ -307,6 +310,14 @@ impl CudaExecutor {
             host_vec
         })
     }
+
+    /// Memory allocation statistics gathered during execution.
+    ///
+    /// Counters are cumulative across executions; call
+    /// [`AllocStats::reset`] to start fresh.
+    pub fn stats(&self) -> &AllocStats {
+        &self.stats
+    }
 }
 
 impl Executor<f32> for CudaExecutor {
@@ -316,6 +327,12 @@ impl Executor<f32> for CudaExecutor {
         inputs: HashMap<String, Vec<f32>>,
     ) -> Result<Vec<f32>> {
         let order = graph.toposort();
+        // Values from prior executions are still live until overwritten.
+        let mut live_bytes: usize = self
+            .values
+            .values()
+            .map(|v| v.len() * std::mem::size_of::<f32>())
+            .sum();
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
             let result = match node {
@@ -686,8 +703,20 @@ impl Executor<f32> for CudaExecutor {
                     self.mask(values, condition)
                 }
             };
-            self.values.insert(*node_idx, result);
+            let bytes = result.len() * std::mem::size_of::<f32>();
+            if let Some(old) = self.values.insert(*node_idx, result) {
+                live_bytes -= old.len() * std::mem::size_of::<f32>();
+            }
+            live_bytes += bytes;
+            self.stats.record_alloc(bytes);
+            self.stats.record_live(live_bytes);
         }
+        tracing::debug!(
+            bytes_allocated = self.stats.bytes_allocated,
+            buffers_allocated = self.stats.buffers_allocated,
+            peak_live_bytes = self.stats.peak_live_bytes,
+            "execute memory stats"
+        );
 
         let last_node_idx = order.last().context("Graph is empty")?;
         let out_device = self

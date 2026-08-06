@@ -155,14 +155,25 @@ where
         match self {
             Runtime::Cpu(executor) => executor.get_value(node_idx).cloned(),
             #[cfg(feature = "cuda")]
-            Runtime::Cuda(_executor) => {
-                // GPU backends only support f32, so we can't return D
-                // This will fail to compile if D != f32
-                unimplemented!("GPU get_value only supports f32, use Runtime<f32>")
+            Runtime::Cuda(executor) => {
+                use std::any::TypeId;
+                if TypeId::of::<D>() == TypeId::of::<f32>() {
+                    executor
+                        .get_value(node_idx)
+                        // Safety: D is f32 at runtime, so the transmute is a no-op.
+                        .map(|v| unsafe { std::mem::transmute::<Vec<f32>, Vec<D>>(v) })
+                } else {
+                    None
+                }
             }
             #[cfg(feature = "cuda")]
             Runtime::Ptx(_executor) => {
-                unimplemented!("GPU get_value only supports f32, use Runtime<f32>")
+                use std::any::TypeId;
+                if TypeId::of::<D>() == TypeId::of::<f32>() {
+                    unimplemented!("PTX get_value not yet implemented")
+                } else {
+                    None
+                }
             }
         }
     }
@@ -185,16 +196,32 @@ where
     ) -> Result<Vec<D>>
     where
         TensorGraph<D, G>: Clone,
+        TensorGraph<f32, G>: Clone,
     {
         match self {
             Runtime::Cpu(executor) => executor.execute(graph, inputs),
             #[cfg(feature = "cuda")]
-            Runtime::Cuda(_executor) => {
-                unimplemented!("GPU execution only supports f32, use Runtime<f32>")
+            Runtime::Cuda(executor) => {
+                use std::any::TypeId;
+                if TypeId::of::<D>() == TypeId::of::<f32>() {
+                    // Safety: D is f32 at runtime, so transmute is a no-op.
+                    let graph = unsafe {
+                        &*(graph as *const TensorGraph<D, G> as *const TensorGraph<f32, G>)
+                    };
+                    let inputs = unsafe {
+                        std::mem::transmute::<HashMap<String, Vec<D>>, HashMap<String, Vec<f32>>>(
+                            inputs,
+                        )
+                    };
+                    let result = executor.execute(graph, inputs);
+                    unsafe { std::mem::transmute::<Result<Vec<f32>>, Result<Vec<D>>>(result) }
+                } else {
+                    anyhow::bail!("CUDA backend only supports f32")
+                }
             }
             #[cfg(feature = "cuda")]
             Runtime::Ptx(_executor) => {
-                unimplemented!("GPU execution only supports f32, use Runtime<f32>")
+                anyhow::bail!("PTX backend not yet supported through Runtime")
             }
         }
     }
@@ -203,12 +230,27 @@ where
         match self {
             Runtime::Cpu(executor) => executor.get_gradients(graph),
             #[cfg(feature = "cuda")]
-            Runtime::Cuda(_executor) => {
-                unimplemented!("GPU gradients only support f32, use Runtime<f32>")
+            Runtime::Cuda(executor) => {
+                use std::any::TypeId;
+                if TypeId::of::<D>() == TypeId::of::<f32>() {
+                    // Safety: D is f32 at runtime, so transmute is a no-op.
+                    let graph = unsafe {
+                        &*(graph as *const TensorGraph<D, WithGrad>
+                            as *const TensorGraph<f32, WithGrad>)
+                    };
+                    let result = executor.get_gradients(graph);
+                    unsafe {
+                        std::mem::transmute::<HashMap<usize, Vec<f32>>, HashMap<usize, Vec<D>>>(
+                            result,
+                        )
+                    }
+                } else {
+                    HashMap::new()
+                }
             }
             #[cfg(feature = "cuda")]
             Runtime::Ptx(_executor) => {
-                unimplemented!("GPU gradients only support f32, use Runtime<f32>")
+                unimplemented!("PTX gradients not yet implemented")
             }
         }
     }

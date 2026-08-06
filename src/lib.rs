@@ -86,7 +86,8 @@ pub trait Executor<D> {
         inputs: HashMap<String, Vec<D>>,
     ) -> Result<Vec<D>>
     where
-        TensorGraph<D, G>: Clone;
+        TensorGraph<D, G>: Clone,
+        TensorGraph<f32, G>: Clone;
 
     /// Retrieve computed gradients for parameters.
     ///

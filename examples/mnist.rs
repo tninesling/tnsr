@@ -7,6 +7,7 @@ use num_traits::Float;
 use rand::prelude::*;
 use tnsr::nn;
 use tnsr::nn::Model;
+use tnsr::optimizer::Adam;
 use tnsr::optimizer::SGD;
 use tnsr::tensor::{Input, Parameter};
 use tnsr::{Executor, Runtime};
@@ -96,6 +97,9 @@ struct Args {
     /// Datatype: f32, f16, or bf16
     #[arg(long, default_value = "f32")]
     dtype: String,
+    /// Optimizer: sgd or adam
+    #[arg(long, default_value = "sgd")]
+    optimizer: String,
 }
 
 fn one_hot<D: Float>(labels: &[u8], num_classes: usize) -> Vec<D> {
@@ -104,6 +108,12 @@ fn one_hot<D: Float>(labels: &[u8], num_classes: usize) -> Vec<D> {
         out[i * num_classes + (y as usize)] = D::one();
     }
     out
+}
+
+/// Enum wrapping the available optimizers so the training loop can be shared.
+enum Opt<D: num_traits::Float> {
+    Sgd(SGD),
+    Adam(Adam<D>),
 }
 
 fn xavier_init<D: Float>(rng: &mut StdRng, fan_in: usize, fan_out: usize) -> Vec<D> {
@@ -172,11 +182,27 @@ fn main() {
     drop(_enter);
     println!("MNIST dataset loaded.");
 
+    // Validate optimizer choice
+    if !matches!(args.optimizer.as_str(), "sgd" | "adam") {
+        eprintln!("Unknown optimizer '{}'. Use sgd or adam", args.optimizer);
+        std::process::exit(1);
+    }
+
     // Dispatch based on dtype
     match args.dtype.as_str() {
-        "f32" => run_mnist::<f32>(&args, &mnist_data, &mut rng),
-        "f16" => run_mnist::<f16>(&args, &mnist_data, &mut rng),
-        "bf16" => run_mnist::<bf16>(&args, &mnist_data, &mut rng),
+        "f32" => run_mnist::<f32>(&args, &mnist_data, &mut rng, Runtime::new()),
+        "f16" => run_mnist::<f16>(
+            &args,
+            &mnist_data,
+            &mut rng,
+            Runtime::Cpu(tnsr::SimpleExecutor::new()),
+        ),
+        "bf16" => run_mnist::<bf16>(
+            &args,
+            &mnist_data,
+            &mut rng,
+            Runtime::Cpu(tnsr::SimpleExecutor::new()),
+        ),
         _ => {
             eprintln!("Unknown dtype '{}'. Use f32, f16, or bf16", args.dtype);
             std::process::exit(1);
@@ -189,7 +215,7 @@ fn main() {
     println!("Open chrome://tracing in Chrome browser and load the trace file to visualize timing");
 }
 
-fn run_mnist<D>(args: &Args, mnist_data: &mnist::Mnist, rng: &mut StdRng)
+fn run_mnist<D>(args: &Args, mnist_data: &mnist::Mnist, rng: &mut StdRng, mut runtime: Runtime<D>)
 where
     D: tnsr::tensor::DType + Float + Default + Send + Sync + 'static,
 {
@@ -229,8 +255,11 @@ where
 
     // Augment graph with gradient computation nodes (consumes the graph)
     let grad_graph = model.into_graph().with_gradients(loss_idx);
-    let opt = SGD::new(args.lr);
-    let mut runtime = Runtime::Cpu(tnsr::SimpleExecutor::new());
+    let mut opt = match args.optimizer.as_str() {
+        "adam" => Opt::Adam(Adam::new(args.lr)),
+        _ => Opt::Sgd(SGD::new(args.lr)),
+    };
+    println!("Using optimizer: {}", args.optimizer);
     println!("Using backend: {:?}", runtime.backend());
 
     // Training loop
@@ -301,7 +330,10 @@ where
                 }
                 let opt_span = tracing::span!(tracing::Level::TRACE, "optimizer_step");
                 let _og = opt_span.enter();
-                opt.step(&grad_graph, &grads);
+                match &mut opt {
+                    Opt::Sgd(o) => o.step(&grad_graph, &grads),
+                    Opt::Adam(o) => o.step(&grad_graph, &grads),
+                }
                 drop(_og);
                 steps += 1;
             }

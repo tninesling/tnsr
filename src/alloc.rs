@@ -27,17 +27,20 @@ pub struct AllocStats {
 }
 
 impl AllocStats {
-    /// Record the allocation of a single buffer of `bytes`.
-    // Used by the CUDA executor, which does not have a buffer pool yet.
-    #[allow(dead_code)]
-    pub(crate) fn record_alloc(&mut self, bytes: usize) {
-        self.bytes_allocated += bytes;
-        self.buffers_allocated += 1;
-    }
-
     /// Record the current live byte total, updating the peak.
     pub(crate) fn record_live(&mut self, live_bytes: usize) {
         self.peak_live_bytes = self.peak_live_bytes.max(live_bytes);
+    }
+
+    /// Return live-memory counters combined with current pool counters.
+    pub(crate) fn with_pool_stats(&self, pool: PoolStats) -> Self {
+        Self {
+            bytes_allocated: pool.fresh_bytes,
+            buffers_allocated: pool.misses,
+            peak_live_bytes: self.peak_live_bytes,
+            pool_hits: pool.hits,
+            pool_misses: pool.misses,
+        }
     }
 
     /// Reset all counters to zero.
@@ -55,15 +58,13 @@ impl AllocStats {
 /// Reused buffers contain stale data; callers must fully overwrite them.
 #[derive(Debug)]
 pub struct BufferPool<D> {
-    free: HashMap<usize, Vec<Vec<D>>>,
-    stats: PoolStats,
+    inner: ExactSizePool<Vec<D>>,
 }
 
 impl<D> Default for BufferPool<D> {
     fn default() -> Self {
         Self {
-            free: HashMap::new(),
-            stats: PoolStats::default(),
+            inner: ExactSizePool::default(),
         }
     }
 }
@@ -79,6 +80,60 @@ pub struct PoolStats {
     pub fresh_bytes: usize,
 }
 
+/// Backend-agnostic exact-size buffer cache.
+///
+/// Allocation is supplied by the caller, so the same pool supports host
+/// vectors, CUDA device allocations, and future storage backends.
+#[derive(Debug)]
+struct ExactSizePool<B> {
+    free: HashMap<usize, Vec<B>>,
+    stats: PoolStats,
+}
+
+impl<B> Default for ExactSizePool<B> {
+    fn default() -> Self {
+        Self {
+            free: HashMap::new(),
+            stats: PoolStats::default(),
+        }
+    }
+}
+
+impl<B> ExactSizePool<B> {
+    fn take_or_try_with<E>(
+        &mut self,
+        len: usize,
+        bytes: usize,
+        allocate: impl FnOnce() -> Result<B, E>,
+    ) -> Result<B, E> {
+        if let Some(buf) = self.free.get_mut(&len).and_then(Vec::pop) {
+            self.stats.hits += 1;
+            Ok(buf)
+        } else {
+            let buf = allocate()?;
+            self.stats.misses += 1;
+            self.stats.fresh_bytes += bytes;
+            Ok(buf)
+        }
+    }
+
+    fn give(&mut self, len: usize, buf: B) {
+        self.free.entry(len).or_default().push(buf);
+    }
+
+    fn stats(&self) -> PoolStats {
+        self.stats
+    }
+
+    fn reset_stats(&mut self) {
+        self.stats = PoolStats::default();
+    }
+
+    fn clear(&mut self) {
+        self.free.clear();
+    }
+}
+
 impl<D> BufferPool<D> {
     /// Take a buffer of exactly `len` elements, reusing a pooled buffer when
     /// possible.
@@ -86,23 +141,72 @@ impl<D> BufferPool<D> {
     where
         D: num_traits::Float,
     {
-        if let Some(buf) = self.free.get_mut(&len).and_then(Vec::pop) {
-            self.stats.hits += 1;
-            buf
-        } else {
-            self.stats.misses += 1;
-            self.stats.fresh_bytes += len * std::mem::size_of::<D>();
-            vec![D::zero(); len]
-        }
+        self.inner
+            .take_or_try_with(len, len * std::mem::size_of::<D>(), || {
+                Ok::<_, std::convert::Infallible>(vec![D::zero(); len])
+            })
+            .unwrap()
     }
 
     /// Return a buffer to the pool for future reuse.
     pub fn give(&mut self, buf: Vec<D>) {
-        self.free.entry(buf.len()).or_default().push(buf);
+        self.inner.give(buf.len(), buf);
     }
 
     /// Cumulative reuse counters for this pool.
     pub fn stats(&self) -> PoolStats {
-        self.stats
+        self.inner.stats()
+    }
+
+    /// Reset cumulative reuse counters without discarding cached buffers.
+    pub fn reset_stats(&mut self) {
+        self.inner.reset_stats();
+    }
+
+    /// Discard every cached buffer.
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+}
+
+/// Reusable CUDA buffer store, bucketed by exact element count.
+#[cfg(feature = "cuda")]
+#[derive(Debug, Default)]
+pub struct CudaBufferPool {
+    inner: ExactSizePool<cudarc::driver::CudaSlice<f32>>,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaBufferPool {
+    /// Take a device buffer of exactly `len` elements.
+    pub fn take(
+        &mut self,
+        stream: &std::sync::Arc<cudarc::driver::CudaStream>,
+        len: usize,
+    ) -> anyhow::Result<cudarc::driver::CudaSlice<f32>> {
+        self.inner
+            .take_or_try_with(len, len * std::mem::size_of::<f32>(), || {
+                stream.alloc_zeros::<f32>(len).map_err(anyhow::Error::from)
+            })
+    }
+
+    /// Return a device buffer to the pool for reuse on the same stream.
+    pub fn give(&mut self, buf: cudarc::driver::CudaSlice<f32>) {
+        self.inner.give(buf.len(), buf);
+    }
+
+    /// Cumulative reuse counters for this pool.
+    pub fn stats(&self) -> PoolStats {
+        self.inner.stats()
+    }
+
+    /// Reset cumulative reuse counters without discarding cached buffers.
+    pub fn reset_stats(&mut self) {
+        self.inner.reset_stats();
+    }
+
+    /// Discard every cached device buffer.
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 }

@@ -2,7 +2,7 @@
 
 Tracking issue: [#37 Implement memory allocator for tensors](https://github.com/tninesling/tnsr/issues/37)
 
-Status: approved design, not yet implemented.
+Status: implemented for CPU, static CUDA, and PTX executors.
 
 ## Background
 
@@ -21,6 +21,11 @@ Three new pieces, then mechanical executor changes:
 1. **Liveness analysis** (`src/graph/liveness.rs`): computed per `execute()` call, O(V+E).
 2. **Buffer pool** (`src/alloc.rs`): size-bucketed reuse, one per executor.
 3. **Pooled buffer handle**: `Arc`-based; dropping returns the buffer to the pool.
+
+The final implementation keeps executor-owned buffers directly in the value
+map and returns them to the pool at liveness boundaries. This avoids the
+locking and reference-counting overhead of an `Arc`-based pooled handle while
+preserving the same lifetime semantics.
 
 After toposort, compute each node's last-use position. When execution passes a
 node's last use, its buffer returns to the pool and can be handed out for the
@@ -170,7 +175,7 @@ Each PR is green on `cargo nextest run`, `cargo clippy --all-targets
 
 ## Open design decisions
 
-1. `get_value` on intermediates becomes unreliable (they are freed). Proposal: a
-   `retain_values` debug flag rather than keeping everything alive by default.
-2. Exact-size buckets vs power-of-two: exact-size is simpler and optimal for
-   training loops; revisit only if fragmentation appears.
+1. `get_value` returns `None` for released intermediates. A future
+   `retain_values` debug flag can opt back into retaining all values if needed.
+2. Pools use exact-size buckets, which match repeated training workloads.
+   Power-of-two bucketing remains a follow-up if fragmentation is observed.

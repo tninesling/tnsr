@@ -32,6 +32,14 @@ The first step to optimizing a computation graph is to apply graph rewrites. The
 
 After rewriting the graph, we can apply operator fusion. This combines multiple operations into a single kernel. For example, the sequence of operations `A + B + C` can be fused into a single kernel that computes the sum of three tensors in one pass. This helps reduce memory bandwidth because the fused computation keeps the intermediate results in registers instead of writing them back to memory.
 
+## Memory reuse
+
+CPU, CUDA, and PTX executors perform liveness analysis on every execution and
+return dead intermediate buffers to exact-size pools. Outputs and gradients
+remain available until the next execution; gradients can be returned earlier
+with `release_gradients`. Consequently, `get_value` is only guaranteed for
+pinned output and gradient nodes after execution.
+
 ## Tile representation
 
 For GPU hardware targets, we take advantage of tiling to improve memory access patterns. Tiling breaks down large tensor operations into smaller blocks (tiles) that fit into the faster shared memory of the GPU. This allows threads within a block to cooperate and share data, reducing the number of global memory accesses. It also allows coalesced memory accesses, which improves bandwidth utilization. The smallest primitive is a register tile, which corresponds to the size of a warp. The 16x16 register tile comes directly from the [ThunderKittens] project, which provides high-performance C++ templates for CUDA kernels.

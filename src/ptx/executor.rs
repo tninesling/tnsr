@@ -1,11 +1,13 @@
 use super::{Module, PtxGraph};
 use crate::Executor;
-use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
+use crate::alloc::{AllocStats, CudaBufferPool};
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad, liveness};
 use crate::tile::TileGraph;
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use petgraph::visit::IntoNodeReferences;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -15,6 +17,8 @@ pub struct PtxExecutor {
     device: Arc<CudaContext>,
     module: Option<Arc<CudaModule>>,
     values: HashMap<petgraph::graph::NodeIndex, CudaSlice<f32>>,
+    pool: RefCell<CudaBufferPool>,
+    stats: AllocStats,
     /// Stores the PtxGraph to access kernel names during execution
     ptx_graph: Option<PtxGraph>,
 }
@@ -40,8 +44,41 @@ impl PtxExecutor {
             device,
             module: None,
             values: HashMap::new(),
+            pool: RefCell::new(CudaBufferPool::default()),
+            stats: AllocStats::default(),
             ptx_graph: None,
         })
+    }
+
+    fn take_buffer(&self, len: usize) -> Result<CudaSlice<f32>> {
+        self.pool
+            .borrow_mut()
+            .take(&self.device.default_stream(), len)
+    }
+
+    /// Memory allocation statistics gathered during execution.
+    pub fn stats(&self) -> &AllocStats {
+        &self.stats
+    }
+
+    /// Reset allocation counters without discarding pooled device buffers.
+    pub fn reset_stats(&mut self) {
+        self.stats.reset();
+        self.pool.get_mut().reset_stats();
+    }
+
+    /// Discard cached device buffers to release VRAM held by the executor.
+    pub fn clear_pool(&mut self) {
+        self.pool.get_mut().clear();
+    }
+
+    /// Release pinned gradient buffers before the next execution.
+    pub fn release_gradients(&mut self, graph: &TensorGraph<f32, WithGrad>) {
+        for grad_node in graph.gradient_metadata().param_to_grad.values() {
+            if let Some(buf) = self.values.remove(grad_node) {
+                self.pool.get_mut().give(buf);
+            }
+        }
     }
 
     /// Compile an owned TensorGraph to PTX without cloning during lowering.
@@ -106,19 +143,19 @@ impl PtxExecutor {
             .as_ref()
             .context("No PTX graph available. Call compile() first.")?;
 
-        // Clear values from previous execution
-        self.values.clear();
-
         let order = graph.toposort();
+        let liveness = liveness::analyze(graph, &order);
+        for (_, value) in self.values.drain() {
+            self.pool.get_mut().give(value);
+        }
+        let mut live_bytes = 0usize;
 
-        for node_idx in order.iter() {
+        for (pos, node_idx) in order.iter().enumerate() {
             let node = &graph[*node_idx];
             let result = match node {
                 TensorGraphNode::Constant { data, .. } => {
                     let stream = self.device.default_stream();
-                    let mut device_data = stream
-                        .alloc_zeros::<f32>(data.len())
-                        .context("Failed to allocate CUDA memory for constant")?;
+                    let mut device_data = self.take_buffer(data.len())?;
                     stream
                         .memcpy_htod(data.as_slice(), &mut device_data)
                         .context("Failed to copy constant to CUDA device")?;
@@ -127,14 +164,11 @@ impl PtxExecutor {
                 TensorGraphNode::Input { name, .. } => {
                     let val = inputs
                         .get::<str>(name)
-                        .with_context(|| format!("Input '{}' not found", name))?
-                        .clone();
+                        .with_context(|| format!("Input '{}' not found", name))?;
                     let stream = self.device.default_stream();
-                    let mut device_data = stream
-                        .alloc_zeros::<f32>(val.len())
-                        .context("Failed to allocate CUDA memory for input")?;
+                    let mut device_data = self.take_buffer(val.len())?;
                     stream
-                        .memcpy_htod(&val, &mut device_data)
+                        .memcpy_htod(val.as_slice(), &mut device_data)
                         .context("Failed to copy input to CUDA device")?;
                     device_data
                 }
@@ -144,9 +178,7 @@ impl PtxExecutor {
                         .lock()
                         .map_err(|e| anyhow!("Failed to lock parameter data: {}", e))?;
                     let stream = self.device.default_stream();
-                    let mut device_data = stream
-                        .alloc_zeros::<f32>(v.len())
-                        .context("Failed to allocate CUDA memory for parameter")?;
+                    let mut device_data = self.take_buffer(v.len())?;
                     stream
                         .memcpy_htod(v.as_slice(), &mut device_data)
                         .context("Failed to copy parameter to CUDA device")?;
@@ -163,7 +195,7 @@ impl PtxExecutor {
 
                     let len = input.len();
                     let stream = self.device.default_stream();
-                    let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+                    let mut out = self.take_buffer(len)?;
 
                     let f = module.load_function(kernel_name)?;
                     let cfg = LaunchConfig::for_num_elems(len as u32);
@@ -187,7 +219,7 @@ impl PtxExecutor {
 
                     let len = input.len();
                     let stream = self.device.default_stream();
-                    let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+                    let mut out = self.take_buffer(len)?;
 
                     let f = module.load_function(kernel_name)?;
                     let cfg = LaunchConfig::for_num_elems(len as u32);
@@ -214,7 +246,7 @@ impl PtxExecutor {
 
                     let len = lhs.len();
                     let stream = self.device.default_stream();
-                    let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+                    let mut out = self.take_buffer(len)?;
 
                     let f = module.load_function(kernel_name)?;
                     let cfg = LaunchConfig::for_num_elems(len as u32);
@@ -242,7 +274,7 @@ impl PtxExecutor {
 
                     let len = lhs.len();
                     let stream = self.device.default_stream();
-                    let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+                    let mut out = self.take_buffer(len)?;
 
                     let f = module.load_function(kernel_name)?;
                     let cfg = LaunchConfig::for_num_elems(len as u32);
@@ -270,7 +302,7 @@ impl PtxExecutor {
 
                     let len = values.len();
                     let stream = self.device.default_stream();
-                    let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+                    let mut out = self.take_buffer(len)?;
 
                     let f = module.load_function(kernel_name)?;
                     let cfg = LaunchConfig::for_num_elems(len as u32);
@@ -333,10 +365,10 @@ impl PtxExecutor {
                     let stream = self.device.default_stream();
 
                     // Allocate padded matrices (zero-initialized)
-                    let mut a_padded = stream.alloc_zeros::<f32>(m_padded * k_padded).unwrap();
-                    stream.synchronize().unwrap();
-                    let mut b_padded = stream.alloc_zeros::<f32>(k_padded * n_padded).unwrap();
-                    stream.synchronize().unwrap();
+                    let mut a_padded = self.take_buffer(m_padded * k_padded)?;
+                    stream.memset_zeros(&mut a_padded)?;
+                    let mut b_padded = self.take_buffer(k_padded * n_padded)?;
+                    stream.memset_zeros(&mut b_padded)?;
 
                     // Copy original data into padded matrices (row by row to handle padding)
                     for i in 0..m {
@@ -362,7 +394,7 @@ impl PtxExecutor {
                     }
 
                     // Allocate padded output
-                    let mut out_padded = stream.alloc_zeros::<f32>(m_padded * n_padded).unwrap();
+                    let mut out_padded = self.take_buffer(m_padded * n_padded)?;
 
                     let f = module.load_function(kernel_name)?;
 
@@ -385,14 +417,12 @@ impl PtxExecutor {
                     // Extract the unpadded result from the padded output
                     let out_len = m * n;
 
-                    // IMPORTANT: Drop input padded buffers BEFORE allocating output
-                    // This prevents CUDA's allocator from reusing their memory
-                    drop(a_padded);
-                    drop(b_padded);
-                    stream.synchronize().unwrap();
+                    // The same stream orders reuse after the matmul launch.
+                    self.pool.borrow_mut().give(a_padded);
+                    self.pool.borrow_mut().give(b_padded);
 
                     // Allocate final output buffer
-                    let mut out = stream.alloc_zeros::<f32>(out_len).unwrap();
+                    let mut out = self.take_buffer(out_len)?;
 
                     // Copy unpadded rows from out_padded to out (device-to-device)
                     for i in 0..m {
@@ -406,9 +436,7 @@ impl PtxExecutor {
                             .unwrap();
                     }
 
-                    // Drop output padded buffer after copying
-                    drop(out_padded);
-                    stream.synchronize().unwrap();
+                    self.pool.borrow_mut().give(out_padded);
 
                     out
                 }
@@ -426,7 +454,7 @@ impl PtxExecutor {
                     let out_len: usize = out_shape.iter().product();
 
                     let stream = self.device.default_stream();
-                    let mut out = stream.alloc_zeros::<f32>(out_len).unwrap();
+                    let mut out = self.take_buffer(out_len)?;
 
                     let f = module.load_function(kernel_name)?;
                     let cfg = LaunchConfig::for_num_elems(out_len as u32);
@@ -452,7 +480,7 @@ impl PtxExecutor {
                     let out_len: usize = out_shape.iter().product();
 
                     let stream = self.device.default_stream();
-                    let mut out = stream.alloc_zeros::<f32>(out_len).unwrap();
+                    let mut out = self.take_buffer(out_len)?;
 
                     let f = module.load_function(kernel_name)?;
                     let cfg = LaunchConfig::for_num_elems(out_len as u32);
@@ -475,7 +503,7 @@ impl PtxExecutor {
 
                     let len = input.len();
                     let stream = self.device.default_stream();
-                    let mut out = unsafe { stream.alloc::<f32>(len).unwrap() };
+                    let mut out = self.take_buffer(len)?;
 
                     let f = module.load_function(kernel_name)?;
                     let cfg = LaunchConfig::for_num_elems(len as u32);
@@ -489,8 +517,20 @@ impl PtxExecutor {
                 }
             };
 
+            let bytes = result.len() * std::mem::size_of::<f32>();
             self.values.insert(*node_idx, result);
+            live_bytes += bytes;
+            self.stats.record_live(live_bytes);
+
+            for &dead in liveness.free_after(pos) {
+                if let Some(value) = self.values.remove(&dead) {
+                    live_bytes -= value.len() * std::mem::size_of::<f32>();
+                    self.pool.get_mut().give(value);
+                }
+            }
         }
+
+        self.stats = self.stats.with_pool_stats(self.pool.get_mut().stats());
 
         let last_node_idx = order.last().context("Graph is empty")?;
         let out_device = self

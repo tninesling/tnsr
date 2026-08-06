@@ -99,6 +99,10 @@ pub trait Executor<D> {
 
     /// Retrieve computed gradients for parameters.
     ///
+    /// Gradient buffers remain available until the next call to
+    /// [`Executor::execute`]. Concrete executors may also provide an explicit
+    /// `release_gradients` method to return them to their buffer pool sooner.
+    ///
     /// # Arguments
     ///
     /// * `graph` - The computation graph with gradient metadata
@@ -167,6 +171,17 @@ impl<D> Value<D> {
     fn len(&self) -> usize {
         self.with(|v| v.len())
     }
+
+    /// Run `f` with two values without locking the same parameter twice.
+    fn with_pair<R>(&self, other: &Self, f: impl FnOnce(&[D], &[D]) -> R) -> R {
+        match (self, other) {
+            (Value::Parameter(a), Value::Parameter(b)) if Arc::ptr_eq(a, b) => {
+                let data = a.lock().unwrap();
+                f(&data, &data)
+            }
+            _ => self.with(|a| other.with(|b| f(a, b))),
+        }
+    }
 }
 
 pub struct SimpleExecutor<D = f32> {
@@ -201,9 +216,32 @@ impl<D> SimpleExecutor<D> {
     /// Memory allocation statistics gathered during execution.
     ///
     /// Counters are cumulative across executions; call
-    /// [`AllocStats::reset`] to start fresh.
+    /// [`SimpleExecutor::reset_stats`] to start fresh.
     pub fn stats(&self) -> &AllocStats {
         &self.stats
+    }
+
+    /// Reset allocation counters without discarding pooled buffers.
+    pub fn reset_stats(&mut self) {
+        self.stats.reset();
+        self.pool.reset_stats();
+    }
+
+    /// Discard cached buffers to release memory held by the executor.
+    pub fn clear_pool(&mut self) {
+        self.pool.clear();
+    }
+
+    /// Release pinned gradient buffers before the next execution.
+    pub fn release_gradients(&mut self, graph: &TensorGraph<D, WithGrad>)
+    where
+        D: Clone,
+    {
+        for grad_node in graph.gradient_metadata().param_to_grad.values() {
+            if let Some(Value::Owned(buf)) = self.values.remove(grad_node) {
+                self.pool.give(buf);
+            }
+        }
     }
 }
 
@@ -352,7 +390,7 @@ where
                         b.len()
                     );
                     let mut out = self.pool.take(a.len());
-                    a.with(|a| b.with(|b| self.binary(op, a, b, &mut out)));
+                    a.with_pair(b, |a, b| self.binary(op, a, b, &mut out));
                     Value::Owned(out)
                 }
                 TensorGraphNode::MatMul { .. } => {
@@ -416,7 +454,7 @@ where
                         b.len()
                     );
                     let mut out = self.pool.take(a.len());
-                    a.with(|a| b.with(|b| self.gt(a, b, &mut out)));
+                    a.with_pair(b, |a, b| self.gt(a, b, &mut out));
                     Value::Owned(out)
                 }
                 TensorGraphNode::Mask { .. } => {
@@ -435,7 +473,7 @@ where
                         condition.len()
                     );
                     let mut out = self.pool.take(values.len());
-                    values.with(|v| condition.with(|c| self.mask(v, c, &mut out)));
+                    values.with_pair(condition, |v, c| self.mask(v, c, &mut out));
                     Value::Owned(out)
                 }
             };
@@ -456,11 +494,7 @@ where
         }
 
         // Sync cumulative pool counters into the public stats.
-        let pool_stats = self.pool.stats();
-        self.stats.bytes_allocated = pool_stats.fresh_bytes;
-        self.stats.buffers_allocated = pool_stats.misses;
-        self.stats.pool_hits = pool_stats.hits;
-        self.stats.pool_misses = pool_stats.misses;
+        self.stats = self.stats.with_pool_stats(self.pool.stats());
         tracing::debug!(
             bytes_allocated = self.stats.bytes_allocated,
             buffers_allocated = self.stats.buffers_allocated,
@@ -542,33 +576,31 @@ where
     let n = b_shape[1];
 
     let mut out = pool.take(m * n);
-    a_val.with(|a| {
-        b_val.with(|b| {
-            #[cfg(feature = "parallel")]
-            if m >= parallel_config::MATMUL_THRESHOLD {
-                out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
-                    for j in 0..n {
-                        let mut sum = D::zero();
-                        for p in 0..k {
-                            sum = sum + a[i * k + p] * b[p * n + j];
-                        }
-                        row[j] = sum;
-                    }
-                });
-                return;
-            }
-
-            // Sequential fallback
-            for i in 0..m {
+    a_val.with_pair(b_val, |a, b| {
+        #[cfg(feature = "parallel")]
+        if m >= parallel_config::MATMUL_THRESHOLD {
+            out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
                 for j in 0..n {
                     let mut sum = D::zero();
                     for p in 0..k {
                         sum = sum + a[i * k + p] * b[p * n + j];
                     }
-                    out[i * n + j] = sum;
+                    row[j] = sum;
                 }
+            });
+            return;
+        }
+
+        // Sequential fallback
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = D::zero();
+                for p in 0..k {
+                    sum = sum + a[i * k + p] * b[p * n + j];
+                }
+                out[i * n + j] = sum;
             }
-        })
+        }
     });
     Ok(out)
 }

@@ -1,10 +1,11 @@
 use crate::Executor;
-use crate::alloc::AllocStats;
-use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
+use crate::alloc::{AllocStats, CudaBufferPool};
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad, liveness};
 use crate::tensor;
 use anyhow::{Context as _, Result, anyhow};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::trace_span;
@@ -15,6 +16,7 @@ pub struct CudaExecutor {
     device: Arc<CudaContext>,
     module: Arc<CudaModule>,
     values: HashMap<petgraph::graph::NodeIndex, CudaSlice<f32>>,
+    pool: RefCell<CudaBufferPool>,
     stats: AllocStats,
 }
 
@@ -45,8 +47,21 @@ impl CudaExecutor {
             device,
             module,
             values: HashMap::new(),
+            pool: RefCell::new(CudaBufferPool::default()),
             stats: AllocStats::default(),
         })
+    }
+
+    fn take_buffer(&self, len: usize) -> CudaSlice<f32> {
+        self.pool
+            .borrow_mut()
+            .take(&self.device.default_stream(), len)
+            .expect("Failed to allocate CUDA output buffer")
+    }
+
+    #[cfg(feature = "fusion")]
+    fn give_buffer(&self, buf: CudaSlice<f32>) {
+        self.pool.borrow_mut().give(buf);
     }
 
     fn neg(&self, input: &CudaSlice<f32>) -> CudaSlice<f32> {
@@ -54,7 +69,7 @@ impl CudaExecutor {
         let len = input.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("neg").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -71,7 +86,7 @@ impl CudaExecutor {
         let len = input.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("exp").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -88,7 +103,7 @@ impl CudaExecutor {
         let len = input.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("log").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -105,7 +120,7 @@ impl CudaExecutor {
         let len = input.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("relu").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -123,7 +138,7 @@ impl CudaExecutor {
         let len = lhs.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("add").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -143,7 +158,7 @@ impl CudaExecutor {
         let len = lhs.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("sub").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -163,7 +178,7 @@ impl CudaExecutor {
         let len = lhs.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("mul").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -183,7 +198,7 @@ impl CudaExecutor {
         let len = lhs.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("div").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -203,7 +218,7 @@ impl CudaExecutor {
         let len = lhs.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("gt").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -227,7 +242,7 @@ impl CudaExecutor {
         let len = values.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("mask").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let mut launcher = stream.launch_builder(&f);
@@ -252,7 +267,7 @@ impl CudaExecutor {
         let _span = trace_span!("matmul").entered();
         let stream = self.device.default_stream();
 
-        let mut out = stream.alloc_zeros::<f32>(m * n).unwrap();
+        let mut out = self.take_buffer(m * n);
 
         let f = self
             .module
@@ -283,7 +298,7 @@ impl CudaExecutor {
         let len = input.len();
         let len_u64 = len as u64;
         let stream = self.device.default_stream();
-        let mut out = stream.alloc_zeros::<f32>(len).unwrap();
+        let mut out = self.take_buffer(len);
         let f = self.module.load_function("transpose_2d").unwrap();
         let cfg = LaunchConfig::for_num_elems(len as u32);
         let rows_u64 = rows as u64;
@@ -314,9 +329,29 @@ impl CudaExecutor {
     /// Memory allocation statistics gathered during execution.
     ///
     /// Counters are cumulative across executions; call
-    /// [`AllocStats::reset`] to start fresh.
+    /// [`CudaExecutor::reset_stats`] to start fresh.
     pub fn stats(&self) -> &AllocStats {
         &self.stats
+    }
+
+    /// Reset allocation counters without discarding pooled device buffers.
+    pub fn reset_stats(&mut self) {
+        self.stats.reset();
+        self.pool.get_mut().reset_stats();
+    }
+
+    /// Discard cached device buffers to release VRAM held by the executor.
+    pub fn clear_pool(&mut self) {
+        self.pool.get_mut().clear();
+    }
+
+    /// Release pinned gradient buffers before the next execution.
+    pub fn release_gradients(&mut self, graph: &TensorGraph<f32, WithGrad>) {
+        for grad_node in graph.gradient_metadata().param_to_grad.values() {
+            if let Some(buf) = self.values.remove(grad_node) {
+                self.pool.get_mut().give(buf);
+            }
+        }
     }
 }
 
@@ -327,22 +362,19 @@ impl Executor<f32> for CudaExecutor {
         inputs: HashMap<String, Vec<f32>>,
     ) -> Result<Vec<f32>> {
         let order = graph.toposort();
-        // Values from prior executions are still live until overwritten.
-        let mut live_bytes: usize = self
-            .values
-            .values()
-            .map(|v| v.len() * std::mem::size_of::<f32>())
-            .sum();
-        for node_idx in order.iter() {
+        let liveness = liveness::analyze(graph, &order);
+        for (_, value) in self.values.drain() {
+            self.pool.get_mut().give(value);
+        }
+        let mut live_bytes = 0usize;
+        for (pos, node_idx) in order.iter().enumerate() {
             let node = &graph[*node_idx];
             let result = match node {
                 TensorGraphNode::Constant { data, .. } => {
                     let _span = trace_span!("constant", node = node_idx.index(), size = data.len())
                         .entered();
                     let stream = self.device.default_stream();
-                    let mut device_data = stream
-                        .alloc_zeros::<f32>(data.len())
-                        .context("Failed to allocate CUDA memory for constant")?;
+                    let mut device_data = self.take_buffer(data.len());
                     stream
                         .memcpy_htod(data.as_slice(), &mut device_data)
                         .context("Failed to copy constant to CUDA device")?;
@@ -353,14 +385,11 @@ impl Executor<f32> for CudaExecutor {
                         trace_span!("input", node = node_idx.index(), name = name).entered();
                     let val = inputs
                         .get::<str>(name)
-                        .with_context(|| format!("Input '{}' not found", name))?
-                        .clone();
+                        .with_context(|| format!("Input '{}' not found", name))?;
                     let stream = self.device.default_stream();
-                    let mut device_data = stream
-                        .alloc_zeros::<f32>(val.len())
-                        .context("Failed to allocate CUDA memory for input")?;
+                    let mut device_data = self.take_buffer(val.len());
                     stream
-                        .memcpy_htod(&val, &mut device_data)
+                        .memcpy_htod(val.as_slice(), &mut device_data)
                         .context("Failed to copy input to CUDA device")?;
                     device_data
                 }
@@ -380,21 +409,24 @@ impl Executor<f32> for CudaExecutor {
                 #[cfg(feature = "fusion")]
                 TensorGraphNode::FusedUnary { ops, .. } => {
                     let inputs = graph.inputs(*node_idx);
-                    let mut result = self
+                    let input = self
                         .values
                         .get(&inputs[0])
-                        .context("Missing input value for fused unary operation")?
-                        .clone();
-                    // Apply each unary operation in sequence
+                        .context("Missing input value for fused unary operation")?;
+                    let mut result = None;
                     for op in ops {
-                        result = match op {
-                            tensor::UnaryOp::Neg => self.neg(&result),
-                            tensor::UnaryOp::Exp => self.exp(&result),
-                            tensor::UnaryOp::Log => self.log(&result),
-                            tensor::UnaryOp::Relu => self.relu(&result),
+                        let source = result.as_ref().unwrap_or(input);
+                        let next = match op {
+                            tensor::UnaryOp::Neg => self.neg(source),
+                            tensor::UnaryOp::Exp => self.exp(source),
+                            tensor::UnaryOp::Log => self.log(source),
+                            tensor::UnaryOp::Relu => self.relu(source),
                         };
+                        if let Some(previous) = result.replace(next) {
+                            self.give_buffer(previous);
+                        }
                     }
-                    result
+                    result.context("Fused unary operation has no operators")?
                 }
                 TensorGraphNode::Binary { op, .. } => {
                     let ins = graph.inputs(*node_idx);
@@ -457,9 +489,7 @@ impl Executor<f32> for CudaExecutor {
                     let _span =
                         trace_span!("parameter", node = node_idx.index(), size = v.len()).entered();
                     let stream = self.device.default_stream();
-                    let mut device_data = stream
-                        .alloc_zeros::<f32>(v.len())
-                        .context("Failed to allocate CUDA memory for parameter")?;
+                    let mut device_data = self.take_buffer(v.len());
                     stream
                         .memcpy_htod(v.as_slice(), &mut device_data)
                         .context("Failed to copy parameter to CUDA device")?;
@@ -511,9 +541,7 @@ impl Executor<f32> for CudaExecutor {
                         }
                     }
 
-                    let mut out = stream
-                        .alloc_zeros::<f32>(out_size)
-                        .context("Failed to allocate CUDA memory for broadcast output")?;
+                    let mut out = self.take_buffer(out_size);
 
                     // Upload shape and strides to device
                     let mut out_shape_device = stream
@@ -599,9 +627,7 @@ impl Executor<f32> for CudaExecutor {
                         out_strides[i] = out_strides[i + 1] * out_shape[i + 1];
                     }
 
-                    let mut out_device = stream
-                        .alloc_zeros::<f32>(out_len)
-                        .context("Failed to allocate CUDA memory for reduce output")?;
+                    let mut out_device = self.take_buffer(out_len);
 
                     // Upload shapes and strides to device
                     let mut in_shape_device = stream
@@ -704,17 +730,24 @@ impl Executor<f32> for CudaExecutor {
                 }
             };
             let bytes = result.len() * std::mem::size_of::<f32>();
-            if let Some(old) = self.values.insert(*node_idx, result) {
-                live_bytes -= old.len() * std::mem::size_of::<f32>();
-            }
+            self.values.insert(*node_idx, result);
             live_bytes += bytes;
-            self.stats.record_alloc(bytes);
             self.stats.record_live(live_bytes);
+
+            for &dead in liveness.free_after(pos) {
+                if let Some(value) = self.values.remove(&dead) {
+                    live_bytes -= value.len() * std::mem::size_of::<f32>();
+                    self.pool.get_mut().give(value);
+                }
+            }
         }
+        self.stats = self.stats.with_pool_stats(self.pool.get_mut().stats());
         tracing::debug!(
             bytes_allocated = self.stats.bytes_allocated,
             buffers_allocated = self.stats.buffers_allocated,
             peak_live_bytes = self.stats.peak_live_bytes,
+            pool_hits = self.stats.pool_hits,
+            pool_misses = self.stats.pool_misses,
             "execute memory stats"
         );
 

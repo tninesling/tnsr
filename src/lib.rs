@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use num_traits::Float;
 
+pub mod alloc;
 #[cfg(feature = "cuda")]
 pub mod cuda;
 pub mod graph;
@@ -16,6 +17,7 @@ pub mod tile;
 
 pub use runtime::{Backend, Runtime};
 
+use crate::alloc::AllocStats;
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -132,6 +134,7 @@ pub trait Executor<D> {
 /// ```
 pub struct SimpleExecutor<D = f32> {
     values: HashMap<petgraph::graph::NodeIndex, Vec<D>>,
+    stats: AllocStats,
 }
 
 impl<D> SimpleExecutor<D> {
@@ -139,6 +142,7 @@ impl<D> SimpleExecutor<D> {
     pub fn new() -> Self {
         Self {
             values: HashMap::new(),
+            stats: AllocStats::default(),
         }
     }
 
@@ -148,6 +152,14 @@ impl<D> SimpleExecutor<D> {
     /// Useful for debugging intermediate values.
     pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<&Vec<D>> {
         self.values.get(&node_idx)
+    }
+
+    /// Memory allocation statistics gathered during execution.
+    ///
+    /// Counters are cumulative across executions; call
+    /// [`AllocStats::reset`] to start fresh.
+    pub fn stats(&self) -> &AllocStats {
+        &self.stats
     }
 }
 
@@ -225,6 +237,12 @@ where
         inputs: HashMap<String, Vec<D>>,
     ) -> Result<Vec<D>> {
         let order = graph.toposort();
+        // Values from prior executions are still live until overwritten.
+        let mut live_bytes: usize = self
+            .values
+            .values()
+            .map(|v| std::mem::size_of_val(v.as_slice()))
+            .sum();
         for node_idx in order.iter() {
             let node = &graph[*node_idx];
             let result = match node {
@@ -352,8 +370,20 @@ where
                     self.mask(values, condition)
                 }
             };
-            self.values.insert(*node_idx, result);
+            let bytes = std::mem::size_of_val(result.as_slice());
+            if let Some(old) = self.values.insert(*node_idx, result) {
+                live_bytes -= std::mem::size_of_val(old.as_slice());
+            }
+            live_bytes += bytes;
+            self.stats.record_alloc(bytes);
+            self.stats.record_live(live_bytes);
         }
+        tracing::debug!(
+            bytes_allocated = self.stats.bytes_allocated,
+            buffers_allocated = self.stats.buffers_allocated,
+            peak_live_bytes = self.stats.peak_live_bytes,
+            "execute memory stats"
+        );
         let last_node = order
             .last()
             .context("Graph is empty, no nodes to execute")?;

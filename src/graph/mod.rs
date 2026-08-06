@@ -57,6 +57,7 @@ use petgraph::visit::EdgeRef;
 use crate::tensor::{BinaryOp, DType, ReduceOp, TensorExpr, UnaryOp};
 
 pub mod fusion;
+pub mod liveness;
 pub mod rewrite;
 
 /// Typestate marker for graphs without gradients.

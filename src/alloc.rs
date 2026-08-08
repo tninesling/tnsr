@@ -186,7 +186,11 @@ impl CudaBufferPool {
     ) -> anyhow::Result<cudarc::driver::CudaSlice<f32>> {
         self.inner
             .take_or_try_with(len, len * std::mem::size_of::<f32>(), || {
-                stream.alloc_zeros::<f32>(len).map_err(anyhow::Error::from)
+                if len == 0 {
+                    stream.null::<f32>().map_err(anyhow::Error::from)
+                } else {
+                    stream.alloc_zeros::<f32>(len).map_err(anyhow::Error::from)
+                }
             })
     }
 

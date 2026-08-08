@@ -252,6 +252,40 @@ impl<D: DType> TensorExpr<D> {
     }
 }
 
+/// Generates small, shape-valid pointwise expressions suitable for fuzz testing.
+impl<'a> arbitrary::Arbitrary<'a> for TensorExpr<f32> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        fn generate(
+            u: &mut arbitrary::Unstructured<'_>,
+            shape: &Shape,
+            depth: usize,
+        ) -> arbitrary::Result<TensorExpr<f32>> {
+            if depth == 0 {
+                let name = if u.arbitrary::<bool>()? { "x" } else { "y" };
+                return Ok(TensorExpr::input(name, shape.clone()));
+            }
+
+            let next_depth = depth - 1;
+            match u.int_in_range(0u8..=6)? {
+                0 => Ok(TensorExpr::input("x", shape.clone())),
+                1 => Ok(TensorExpr::input("y", shape.clone())),
+                2 => Ok(-generate(u, shape, next_depth)?),
+                3 => Ok(generate(u, shape, next_depth)?.relu()),
+                4 => Ok(generate(u, shape, next_depth)? + generate(u, shape, next_depth)?),
+                5 => Ok(generate(u, shape, next_depth)? - generate(u, shape, next_depth)?),
+                _ => Ok(generate(u, shape, next_depth)? * generate(u, shape, next_depth)?),
+            }
+        }
+
+        let rank = u.int_in_range(1usize..=3)?;
+        let shape = (0..rank)
+            .map(|_| u.int_in_range(1usize..=4))
+            .collect::<arbitrary::Result<Shape>>()?;
+        let depth = u.int_in_range(0usize..=5)?;
+        generate(u, &shape, depth)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ExprNode<D: DType> {
     shape: Shape,

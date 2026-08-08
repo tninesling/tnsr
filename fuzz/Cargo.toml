@@ -1,0 +1,20 @@
+[package]
+name = "tnsr-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = "1.4"
+libfuzzer-sys = "0.4"
+tnsr = { path = "..", default-features = false }
+
+[[bin]]
+name = "tensor_expressions"
+path = "fuzz_targets/tensor_expressions.rs"
+test = false
+doc = false
+bench = false

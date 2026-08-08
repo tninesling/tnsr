@@ -7,6 +7,7 @@ use num_traits::Float;
 pub mod alloc;
 #[cfg(feature = "cuda")]
 pub mod cuda;
+pub mod data;
 pub mod graph;
 pub mod nn;
 pub mod optimizer;

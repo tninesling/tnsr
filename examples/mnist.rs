@@ -4,7 +4,10 @@ use clap::Parser;
 use half::{bf16, f16};
 use mnist::MnistBuilder;
 use num_traits::Float;
+use petgraph::graph::NodeIndex;
 use rand::prelude::*;
+use tnsr::data::DataLoader;
+use tnsr::graph::TensorGraph;
 use tnsr::nn;
 use tnsr::nn::Model;
 use tnsr::optimizer::Adam;
@@ -282,6 +285,54 @@ fn main() {
     println!("Open chrome://tracing in Chrome browser and load the trace file to visualize timing");
 }
 
+/// Run `graph` over the test set and return (correct, seen) for argmax accuracy.
+fn evaluate<D, G>(
+    runtime: &mut Runtime<D>,
+    graph: &TensorGraph<D, G>,
+    loader: &mut DataLoader<D>,
+    labels: &[u8],
+    logits_idx: NodeIndex,
+) -> (usize, usize)
+where
+    D: Float + Default + Send + Sync + 'static,
+    TensorGraph<D, G>: Clone,
+    TensorGraph<f32, G>: Clone,
+{
+    let mut correct = 0usize;
+    let mut seen = 0usize;
+    for (b, batch) in loader
+        .iter()
+        .expect("test data loader misconfigured")
+        .enumerate()
+    {
+        let infer_span = tracing::span!(
+            tracing::Level::TRACE,
+            "infer_batch",
+            idx = b,
+            bs = batch.len()
+        );
+        let _ib = infer_span.enter();
+        let indices = batch.indices().to_vec();
+        runtime.execute(graph, batch.into_inputs()).unwrap();
+        let logits = runtime.get_value(logits_idx).unwrap();
+
+        for (i, &sample) in indices.iter().enumerate() {
+            let row = &logits[i * 10..(i + 1) * 10];
+            let pred = row
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+            if pred as u8 == labels[sample] {
+                correct += 1;
+            }
+        }
+        seen += indices.len();
+    }
+    (correct, seen)
+}
+
 fn run_mnist<D>(args: &Args, mnist_data: &mnist::Mnist, rng: &mut StdRng, mut runtime: Runtime<D>)
 where
     D: tnsr::tensor::DType + Float + Default + Send + Sync + 'static,
@@ -355,6 +406,21 @@ where
     println!("Using optimizer: {}", args.optimizer);
     println!("Using backend: {:?}", runtime.backend());
 
+    // Data loaders handle shuffling, slicing, and padding batches. The test
+    // loader fills the labels input with zeros since evaluation only reads
+    // logits.
+    let mut train_loader = DataLoader::new(n_train)
+        .with("images", &train_images, 784)
+        .with("labels", &train_labels_oh, 10)
+        .batch_size(args.batch_size)
+        .shuffle(args.seed)
+        .pad_last();
+    let mut test_loader = DataLoader::new(n_test)
+        .with("images", &test_images, 784)
+        .with_fill("labels", 10, D::zero())
+        .batch_size(args.batch_size)
+        .pad_last();
+
     // Training loop
     println!("Starting training for {} epochs...", args.epochs);
     let batches_per_epoch = n_train.div_ceil(args.batch_size);
@@ -373,47 +439,20 @@ where
 
         // Training phase
         {
-            // Shuffle indices
-            let mut indices: Vec<usize> = (0..n_train).collect();
-            indices.shuffle(rng);
             let mut epoch_loss = D::zero();
             let mut steps = 0usize;
 
-            for b in 0..batches_per_epoch {
-                let start = b * args.batch_size;
-                let end = ((b + 1) * args.batch_size).min(n_train);
-                let bs = end - start;
-                if bs == 0 {
-                    continue;
-                }
-                let batch_span = tracing::span!(
-                    tracing::Level::TRACE,
-                    "batch",
-                    idx = b,
-                    bs = bs,
-                    start = start,
-                    end = end
-                );
+            for (b, batch) in train_loader
+                .iter()
+                .expect("training data loader misconfigured")
+                .enumerate()
+            {
+                let batch_span =
+                    tracing::span!(tracing::Level::TRACE, "batch", idx = b, bs = batch.len());
                 let _bg = batch_span.enter();
-                // Collect batch
-                let mut x = vec![D::zero(); args.batch_size * 784];
-                let mut y = vec![D::zero(); args.batch_size * 10];
-                for (i, idx) in (start..end).enumerate() {
-                    let j = indices[idx];
-                    let src_x = &train_images[j * 784..(j + 1) * 784];
-                    let dst_x = &mut x[i * 784..(i + 1) * 784];
-                    dst_x.copy_from_slice(src_x);
-                    let src_y = &train_labels_oh[j * 10..(j + 1) * 10];
-                    let dst_y = &mut y[i * 10..(i + 1) * 10];
-                    dst_y.copy_from_slice(src_y);
-                }
-
-                let mut inputs = std::collections::HashMap::new();
-                inputs.insert("images".to_string(), x);
-                inputs.insert("labels".to_string(), y);
 
                 // Forward pass computes both loss and gradients
-                let loss_value = runtime.execute(&grad_graph, inputs.clone()).unwrap();
+                let loss_value = runtime.execute(&grad_graph, batch.into_inputs()).unwrap();
                 let grads = runtime.get_gradients(&grad_graph);
 
                 if steps.is_multiple_of(50)
@@ -442,60 +481,19 @@ where
         }
 
         // Evaluate on current epoch
-        let test_batches = n_test.div_ceil(args.batch_size);
         let eval_span = tracing::span!(
             tracing::Level::INFO,
             "evaluate",
-            test_batches = test_batches
+            test_batches = n_test.div_ceil(args.batch_size)
         );
         let _ev = eval_span.enter();
-        let mut correct = 0usize;
-        let mut seen = 0usize;
-        for b in 0..test_batches {
-            let start = b * args.batch_size;
-            let end = ((b + 1) * args.batch_size).min(n_test);
-            let bs = end - start;
-            if bs == 0 {
-                continue;
-            }
-            let infer_span = tracing::span!(
-                tracing::Level::TRACE,
-                "infer_batch",
-                idx = b,
-                bs = bs,
-                start = start,
-                end = end
-            );
-            let _ib = infer_span.enter();
-            let mut x = vec![D::zero(); args.batch_size * 784];
-            for (i, j) in (start..end).enumerate() {
-                let src = &test_images[j * 784..(j + 1) * 784];
-                let dst = &mut x[i * 784..(i + 1) * 784];
-                dst.copy_from_slice(src);
-            }
-            // Dummy labels input
-            let dummy_labels = vec![D::zero(); args.batch_size * 10];
-            let mut inputs = std::collections::HashMap::new();
-            inputs.insert("images".to_string(), x);
-            inputs.insert("labels".to_string(), dummy_labels);
-
-            runtime.execute(&grad_graph, inputs).unwrap();
-            let logits = runtime.get_value(logits_idx).unwrap();
-
-            for i in 0..bs {
-                let row = &logits[i * 10..(i + 1) * 10];
-                let pred = row
-                    .iter()
-                    .enumerate()
-                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(0);
-                if pred as u8 == test_labels_raw[start + i] {
-                    correct += 1;
-                }
-            }
-            seen += bs;
-        }
+        let (correct, seen) = evaluate(
+            &mut runtime,
+            &grad_graph,
+            &mut test_loader,
+            &test_labels_raw,
+            logits_idx,
+        );
         let acc = correct as f32 / seen as f32;
         println!("test accuracy: {:.2}% ({}/{})", acc * 100.0, correct, seen);
         println!("total time {:.2}s", training_start.elapsed().as_secs_f32());
@@ -506,44 +504,13 @@ where
     println!("\nFinal evaluation using inference-only graph...");
     let final_eval_span = tracing::span!(tracing::Level::INFO, "final_evaluation");
     let _fev = final_eval_span.enter();
-    let mut correct = 0usize;
-    let mut seen = 0usize;
-    let test_batches = n_test.div_ceil(args.batch_size);
-    for b in 0..test_batches {
-        let start = b * args.batch_size;
-        let end = ((b + 1) * args.batch_size).min(n_test);
-        let bs = end - start;
-        if bs == 0 {
-            continue;
-        }
-        let mut x = vec![D::zero(); args.batch_size * 784];
-        for (i, j) in (start..end).enumerate() {
-            let src = &test_images[j * 784..(j + 1) * 784];
-            let dst = &mut x[i * 784..(i + 1) * 784];
-            dst.copy_from_slice(src);
-        }
-        let dummy_labels = vec![D::zero(); args.batch_size * 10];
-        let mut inputs = std::collections::HashMap::new();
-        inputs.insert("images".to_string(), x);
-        inputs.insert("labels".to_string(), dummy_labels);
-
-        runtime.execute(&infer_graph, inputs).unwrap();
-        let logits = runtime.get_value(logits_idx).unwrap();
-
-        for i in 0..bs {
-            let row = &logits[i * 10..(i + 1) * 10];
-            let pred = row
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(idx, _)| idx)
-                .unwrap_or(0);
-            if pred as u8 == test_labels_raw[start + i] {
-                correct += 1;
-            }
-        }
-        seen += bs;
-    }
+    let (correct, seen) = evaluate(
+        &mut runtime,
+        &infer_graph,
+        &mut test_loader,
+        &test_labels_raw,
+        logits_idx,
+    );
     let final_acc = correct as f32 / seen as f32;
     println!(
         "Final test accuracy (inference graph): {:.2}% ({}/{})",

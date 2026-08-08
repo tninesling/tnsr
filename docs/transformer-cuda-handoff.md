@@ -36,42 +36,50 @@ transformer implementation:
   host.
 - Zero-length CUDA buffers use cudarc null slices.
 
-## Important validation gap
+## CUDA validation outcome
 
 The development machine has an AMD GPU (`1002:1114`, kernel driver `amdgpu`),
 not an NVIDIA GPU. It has no `libcuda`, `nvidia-smi`, CUDA toolkit, or `ptxas`.
 
-Consequently:
+Consequently, the original implementation had only been compile-checked before
+this handoff. It has now been validated on an NVIDIA GeForce RTX 4080 with
+driver 580.65.06 (CUDA 13.0):
 
-- Rust CUDA code was compiled but not executed on a GPU.
-- The new hand-written `permute` PTX was reviewed textually but was not assembled
-  by `ptxas` or JIT-loaded by an NVIDIA driver.
-- CUDA integration tests skip only when CUDA device initialization is
-  unavailable. PTX module-load failures are treated as test failures.
+- The static PTX module loads and all CUDA kernels required by the transformer
+  execute successfully.
+- Reshape, rank-three permutation, two-sided batched-matmul broadcasting,
+  causal attention, and transformer forward/backward execution match CPU
+  references.
+- GPU validation exposed a middle-axis reduction metadata bug. CUDA reduction
+  kernels consume compact rank-minus-one output strides, but the executor had
+  uploaded full-rank strides. The executor now uploads the expected compact
+  strides, fixing transformer bias gradients and all non-final-axis reductions.
+- CUDA integration tests still skip only when CUDA device initialization is
+  unavailable. Set `TNSR_REQUIRE_CUDA=1` to make unavailable hardware an error.
 
-The first task on an NVIDIA machine should be:
+The focused hardware validation command is:
 
 ```bash
 TNSR_REQUIRE_CUDA=1 cargo test --features cuda --test cuda_transformer -- --nocapture
 ```
 
-`TNSR_REQUIRE_CUDA=1` is essential: it prevents the tests from passing by
-skipping unavailable CUDA hardware.
+`TNSR_REQUIRE_CUDA=1` prevents the tests from passing by skipping unavailable
+CUDA hardware.
 
 ## Verification completed
 
-The following passed locally:
+The following pass after NVIDIA validation:
 
 ```bash
-cargo nextest run --no-fail-fast
-cargo check --all-features
+TNSR_REQUIRE_CUDA=1 cargo nextest run --features cuda
+cargo check --features cuda
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all --check
-cargo test --features cuda --test cuda_transformer
+TNSR_REQUIRE_CUDA=1 cargo test --features cuda --test cuda_transformer -- --nocapture
 ```
 
-The default suite ran 122 tests. The four CUDA transformer tests compiled and
-skipped because `libcuda` was unavailable.
+The CUDA-enabled suite ran 140 tests with 140 passing and none skipped. The six
+focused CUDA transformer tests all executed on the GPU.
 
 ## CUDA test coverage
 
@@ -80,6 +88,8 @@ executor for:
 
 - Reshape followed by rank-three permutation.
 - Broadcasted batched matmul.
+- Two-sided multi-axis batched matmul broadcasting.
+- Middle-axis reduction used by transformer bias gradients.
 - Causal scaled dot-product attention.
 - Tiny transformer forward execution and backward gradients for every
   parameter.
@@ -98,20 +108,10 @@ executor for:
 
 ## Recommended next steps
 
-1. Run the required CUDA test command above on an NVIDIA GPU.
-2. If module loading fails, validate `src/cuda/kernels.ptx` with `ptxas` and fix
-   the `permute` entry before changing Rust launch code.
-3. Run the complete CUDA suite:
-
-```bash
-TNSR_REQUIRE_CUDA=1 cargo nextest run --features cuda
-```
-
-4. Compare transformer CPU and CUDA results on larger shapes and add cases for
-   two-sided multi-axis batch broadcasting.
-5. Benchmark the one-launch-per-batch matmul approach. Replace it with a single
+1. Compare transformer CPU and CUDA results on larger shapes.
+2. Benchmark the one-launch-per-batch matmul approach. Replace it with a single
    batched kernel or cuBLAS only if launch overhead is material.
-6. Consider checking in CUDA source and a reproducible PTX generation command;
+3. Consider checking in CUDA source and a reproducible PTX generation command;
    the repository currently treats static PTX as source of truth.
 
 ## Known limitations

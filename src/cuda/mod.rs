@@ -1221,9 +1221,14 @@ impl Executor<f32> for CudaExecutor {
                         in_strides[i] = in_strides[i + 1] * in_shape[i + 1];
                     }
 
-                    let mut out_strides = vec![1usize; out_shape.len()];
-                    for i in (0..out_shape.len().saturating_sub(1)).rev() {
-                        out_strides[i] = out_strides[i + 1] * out_shape[i + 1];
+                    let compact_out_shape: Vec<usize> = out_shape
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, &dimension)| (index != *axis).then_some(dimension))
+                        .collect();
+                    let mut out_strides = vec![1usize; compact_out_shape.len()];
+                    for i in (0..compact_out_shape.len().saturating_sub(1)).rev() {
+                        out_strides[i] = out_strides[i + 1] * compact_out_shape[i + 1];
                     }
 
                     let mut out_device = self.take_buffer(out_len);

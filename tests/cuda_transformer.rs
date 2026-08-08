@@ -115,6 +115,42 @@ fn cuda_broadcasted_batched_matmul_matches_expected() {
 }
 
 #[test]
+fn cuda_two_sided_batched_matmul_broadcast_matches_cpu() {
+    let Some(mut cuda) = cuda_executor() else {
+        return;
+    };
+    let left = TensorExpr::constant(
+        (1..=12).map(|value| value as f32 / 10.0).collect(),
+        vec![2, 1, 2, 3],
+    );
+    let right = TensorExpr::constant(
+        (1..=18).map(|value| value as f32 / 20.0).collect(),
+        vec![1, 3, 3, 2],
+    );
+    let graph: TensorGraph<f32> = left.matmul(right).into();
+
+    let expected = execute_cpu(&graph);
+    let actual = cuda.execute(&graph, HashMap::new()).unwrap();
+    assert_close(&actual, &expected, 1e-5);
+}
+
+#[test]
+fn cuda_middle_axis_reduction_matches_expected() {
+    let Some(mut cuda) = cuda_executor() else {
+        return;
+    };
+    let expression = TensorExpr::constant(
+        vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0],
+        vec![2, 2, 2],
+    )
+    .reduce_axis_sum(1);
+    let graph: TensorGraph<f32> = expression.into();
+
+    let actual = cuda.execute(&graph, HashMap::new()).unwrap();
+    assert_close(&actual, &[3.0, 30.0, 7.0, 70.0], 0.0);
+}
+
+#[test]
 fn cuda_causal_sdpa_matches_reference() {
     let Some(mut cuda) = cuda_executor() else {
         return;

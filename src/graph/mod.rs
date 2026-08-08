@@ -108,6 +108,13 @@ pub enum TensorGraphNode<D> {
     Transpose {
         shape: crate::tensor::Shape,
     },
+    Reshape {
+        shape: crate::tensor::Shape,
+    },
+    Permute {
+        axes: Vec<usize>,
+        shape: crate::tensor::Shape,
+    },
     BroadcastAxis {
         axis: usize,
         shape: crate::tensor::Shape,
@@ -177,6 +184,8 @@ impl<D> TensorGraphNode<D> {
             },
             TensorGraphNode::MatMul { .. } => "MatMul",
             TensorGraphNode::Transpose { .. } => "Transpose",
+            TensorGraphNode::Reshape { .. } => "Reshape",
+            TensorGraphNode::Permute { .. } => "Permute",
             TensorGraphNode::BroadcastAxis { .. } => "BroadcastAxis",
             TensorGraphNode::ReduceAxis { op, .. } => match op {
                 ReduceOp::Sum => "ReduceAxisSum",
@@ -205,6 +214,8 @@ impl<D> TensorGraphNode<D> {
             TensorGraphNode::Binary { shape, .. } => shape,
             TensorGraphNode::MatMul { shape } => shape,
             TensorGraphNode::Transpose { shape } => shape,
+            TensorGraphNode::Reshape { shape } => shape,
+            TensorGraphNode::Permute { shape, .. } => shape,
             TensorGraphNode::BroadcastAxis { shape, .. } => shape,
             TensorGraphNode::ReduceAxis { shape, .. } => shape,
             TensorGraphNode::Gt { shape } => shape,
@@ -302,6 +313,32 @@ where
         }
 
         node_idx
+    }
+
+    fn reduce_gradient_to_shape(
+        mut gradient: TensorExpr<D>,
+        target_shape: crate::tensor::Shape,
+    ) -> TensorExpr<D> {
+        let gradient_shape = gradient.shape().clone();
+        assert!(
+            target_shape.len() <= gradient_shape.len(),
+            "Cannot reduce gradient shape {gradient_shape:?} to {target_shape:?}"
+        );
+        let rank_difference = gradient_shape.len() - target_shape.len();
+        for axis in 0..gradient_shape.len() {
+            let target_dimension = if axis < rank_difference {
+                1
+            } else {
+                target_shape[axis - rank_difference]
+            };
+            if target_dimension == 1 && gradient.shape()[axis] != 1 {
+                gradient = gradient.reduce_axis_sum(axis);
+            }
+        }
+        if gradient.shape() != &target_shape {
+            gradient = gradient.reshape(target_shape);
+        }
+        gradient
     }
 
     /// Create a new graph with gradient computation nodes for automatic differentiation.
@@ -579,17 +616,27 @@ where
                     let input_b_shape = self.graph[input_b].shape().clone();
 
                     let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
-                    let input_a_expr = TensorExpr::node_ref(input_a, input_a_shape);
-                    let input_b_expr = TensorExpr::node_ref(input_b, input_b_shape);
+                    let input_a_expr = TensorExpr::node_ref(input_a, input_a_shape.clone());
+                    let input_b_expr = TensorExpr::node_ref(input_b, input_b_shape.clone());
 
                     // grad_a = grad_output @ B^T
-                    let grad_a_expr = grad_out_expr
-                        .clone()
-                        .matmul(input_b_expr.clone().transpose());
+                    let b_rank = input_b_shape.len();
+                    let grad_a_expr = Self::reduce_gradient_to_shape(
+                        grad_out_expr
+                            .clone()
+                            .matmul(input_b_expr.swap_axes(b_rank - 2, b_rank - 1)),
+                        input_a_shape.clone(),
+                    );
                     let grad_a = self.lower_gradient_expr(&grad_a_expr, &mut gradient_nodes);
 
                     // grad_b = A^T @ grad_output
-                    let grad_b_expr = input_a_expr.transpose().matmul(grad_out_expr);
+                    let a_rank = input_a_shape.len();
+                    let grad_b_expr = Self::reduce_gradient_to_shape(
+                        input_a_expr
+                            .swap_axes(a_rank - 2, a_rank - 1)
+                            .matmul(grad_out_expr),
+                        input_b_shape,
+                    );
                     let grad_b = self.lower_gradient_expr(&grad_b_expr, &mut gradient_nodes);
 
                     self.accumulate_gradient(
@@ -632,6 +679,43 @@ where
                         &mut gradient_nodes,
                         input_a,
                         grad_a,
+                    );
+                }
+                TensorGraphNode::Reshape { .. } => {
+                    if inputs.len() != 1 {
+                        panic!("Reshape should have 1 input");
+                    }
+                    let input_idx = inputs[0];
+                    let input_shape = self.graph[input_idx].shape().clone();
+                    let grad_out_shape = self.graph[node_idx].shape().clone();
+                    let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
+                    let grad_in_expr = grad_out_expr.reshape(input_shape);
+                    let grad_in = self.lower_gradient_expr(&grad_in_expr, &mut gradient_nodes);
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_idx,
+                        grad_in,
+                    );
+                }
+                TensorGraphNode::Permute { axes, .. } => {
+                    if inputs.len() != 1 {
+                        panic!("Permute should have 1 input");
+                    }
+                    let input_idx = inputs[0];
+                    let mut inverse = vec![0; axes.len()];
+                    for (output_axis, &input_axis) in axes.iter().enumerate() {
+                        inverse[input_axis] = output_axis;
+                    }
+                    let grad_out_shape = self.graph[node_idx].shape().clone();
+                    let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
+                    let grad_in_expr = grad_out_expr.permute(inverse);
+                    let grad_in = self.lower_gradient_expr(&grad_in_expr, &mut gradient_nodes);
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input_idx,
+                        grad_in,
                     );
                 }
                 TensorGraphNode::ReduceAxis { op, axis, .. } => {
@@ -965,6 +1049,23 @@ where
             }
         }
 
+        // Liveness pins sink nodes. A gradient shared with another backward
+        // branch is not a sink, so give that parameter a dedicated sink view.
+        for grad_node in param_to_grad.values_mut() {
+            if self
+                .graph
+                .edges_directed(*grad_node, petgraph::Direction::Outgoing)
+                .next()
+                .is_some()
+            {
+                let shape = self.graph[*grad_node].shape().clone();
+                let sink = self.graph.add_node(TensorGraphNode::Reshape { shape });
+                self.graph.add_edge(*grad_node, sink, 0);
+                gradient_nodes.insert(sink);
+                *grad_node = sink;
+            }
+        }
+
         TensorGraph {
             graph: self.graph,
             gradients: WithGrad {
@@ -1276,17 +1377,17 @@ mod tests {
             "Parameter B should have gradient"
         );
 
-        // Should have created transpose nodes for MatMul gradients
-        let transpose_count = grad_graph
+        // Batched matmul gradients swap the final two axes through permutation.
+        let permutation_count = grad_graph
             .graph
             .node_indices()
-            .filter(|&idx| matches!(grad_graph[idx], TensorGraphNode::Transpose { .. }))
+            .filter(|&idx| matches!(grad_graph[idx], TensorGraphNode::Permute { .. }))
             .count();
 
         assert!(
-            transpose_count >= 2,
-            "Expected at least 2 Transpose nodes for MatMul gradient (A^T and B^T), got {}",
-            transpose_count
+            permutation_count >= 2,
+            "Expected at least 2 Permute nodes for MatMul gradient axis swaps, got {}",
+            permutation_count
         );
     }
 

@@ -32,7 +32,7 @@ pub fn broadcast_output_shape(a: &Shape, b: &Shape) -> Shape {
             b[i - (max_len - b.len())]
         };
         if ai == bi || ai == 1 || bi == 1 {
-            out.push(ai.max(bi));
+            out.push(if ai == 1 { bi } else { ai });
         } else {
             panic!(
                 "Cannot broadcast shapes {:?} and {:?}: dim mismatch {} vs {} at axis {} (from right)",
@@ -223,6 +223,8 @@ impl<D: DType> TensorExpr<D> {
             ExprKind::Binary { a, b, .. } => vec![a, b],
             ExprKind::MatMul { a, b } => vec![a, b],
             ExprKind::Transpose { x } => vec![x],
+            ExprKind::Reshape { x } => vec![x],
+            ExprKind::Permute { x, .. } => vec![x],
             ExprKind::BroadcastAxis { x, .. } => vec![x],
             ExprKind::ReduceAxis { x, .. } => vec![x],
             ExprKind::Gt { a, b } => vec![a, b],
@@ -332,6 +334,13 @@ pub enum ExprKind<D: DType> {
     },
     Transpose {
         x: TensorExpr<D>,
+    },
+    Reshape {
+        x: TensorExpr<D>,
+    },
+    Permute {
+        x: TensorExpr<D>,
+        axes: Vec<usize>,
     },
     /// Greater than comparison
     Gt {
@@ -480,13 +489,19 @@ impl<D: DType> TensorExpr<D> {
         let rhs = rhs.into();
         let lshape = self.shape().clone();
         let rshape = rhs.shape().clone();
-        if lshape.len() != 2 || rshape.len() != 2 {
-            panic!("MatMul only supports 2D tensors for now");
-        }
-        if lshape[1] != rshape[0] {
+        assert!(
+            lshape.len() >= 2 && rshape.len() >= 2,
+            "MatMul requires tensors with rank >= 2, got {lshape:?} and {rshape:?}"
+        );
+        if lshape[lshape.len() - 1] != rshape[rshape.len() - 2] {
             panic!("MatMul inner dimensions must match: got {lshape:?} and {rshape:?}");
         }
-        let shape = vec![lshape[0], rshape[1]];
+        let mut shape = broadcast_output_shape(
+            &lshape[..lshape.len() - 2].to_vec(),
+            &rshape[..rshape.len() - 2].to_vec(),
+        );
+        shape.push(lshape[lshape.len() - 2]);
+        shape.push(rshape[rshape.len() - 1]);
         Self(Arc::new(ExprNode {
             shape,
             kind: ExprKind::MatMul { a: self, b: rhs },
@@ -620,21 +635,16 @@ impl<D: DType> TensorExpr<D> {
         }))
     }
 
-    /// Reshape to an arbitrary shape without changing the underlying data
-    /// layout. Used internally (e.g. for the Flatten backward pass) where the
-    /// element count is preserved but the rank differs.
-    pub(crate) fn reshape(self, shape: Shape) -> Self
-    where
-        D: 'static,
-    {
-        debug_assert_eq!(
+    /// Reshape without changing the underlying row-major data layout.
+    pub fn reshape(self, shape: Shape) -> Self {
+        assert_eq!(
             self.shape().iter().product::<usize>(),
             shape.iter().product::<usize>(),
             "reshape must preserve element count"
         );
         Self(Arc::new(ExprNode {
             shape,
-            kind: ExprKind::Flatten { x: self },
+            kind: ExprKind::Reshape { x: self },
         }))
     }
 
@@ -653,10 +663,7 @@ impl<D: DType> TensorExpr<D> {
         }))
     }
 
-    pub fn broadcast(self, to: Shape) -> Self
-    where
-        D: 'static + Clone,
-    {
+    pub fn broadcast(self, to: Shape) -> Self {
         // Validate broadcasting compatibility
         let in_shape = self.shape().to_vec(); // Clone the shape to avoid borrowing issues
         if in_shape.len() > to.len() {
@@ -682,11 +689,7 @@ impl<D: DType> TensorExpr<D> {
             padded_shape.extend_from_slice(&current_shape);
             current_shape = padded_shape;
 
-            // Update the expression's shape to match the new rank
-            result = Self(Arc::new(ExprNode {
-                shape: current_shape.clone(),
-                kind: result.0.kind.clone(),
-            }));
+            result = result.reshape(current_shape.clone());
         }
 
         // Broadcast each axis that differs
@@ -706,10 +709,7 @@ impl<D: DType> TensorExpr<D> {
         result
     }
 
-    pub fn broadcast_axis(self, axis: usize, target_size: usize) -> Self
-    where
-        D: 'static,
-    {
+    pub fn broadcast_axis(self, axis: usize, target_size: usize) -> Self {
         let rank = self.shape().len();
         assert!(axis < rank, "broadcast axis out of bounds");
         assert_eq!(
@@ -841,6 +841,39 @@ impl<D: DType> TensorExpr<D> {
             shape: out_shape,
             kind: ExprKind::Transpose { x: self },
         }))
+    }
+
+    /// Reorder dimensions according to `axes`.
+    pub fn permute(self, axes: Vec<usize>) -> Self {
+        let shape = self.shape().clone();
+        assert_eq!(
+            axes.len(),
+            shape.len(),
+            "Permutation rank mismatch: got {} axes for {}D tensor",
+            axes.len(),
+            shape.len()
+        );
+        let mut seen = vec![false; axes.len()];
+        for &axis in &axes {
+            assert!(axis < axes.len(), "Permutation axis {axis} out of bounds");
+            assert!(!seen[axis], "Permutation contains duplicate axis {axis}");
+            seen[axis] = true;
+        }
+        let out_shape = axes.iter().map(|&axis| shape[axis]).collect();
+        Self(Arc::new(ExprNode {
+            shape: out_shape,
+            kind: ExprKind::Permute { x: self, axes },
+        }))
+    }
+
+    /// Swap two dimensions.
+    pub fn swap_axes(self, axis_a: usize, axis_b: usize) -> Self {
+        let rank = self.shape().len();
+        assert!(axis_a < rank, "swap axis {axis_a} out of bounds");
+        assert!(axis_b < rank, "swap axis {axis_b} out of bounds");
+        let mut axes: Vec<usize> = (0..rank).collect();
+        axes.swap(axis_a, axis_b);
+        self.permute(axes)
     }
 }
 
@@ -1039,17 +1072,16 @@ impl<D: DType> TensorExpr<D> {
                     node_idx
                 }
                 ExprKind::Binary { op, a, b } => {
-                    let a_idx = lower_rec(a, g);
-                    let b_idx = lower_rec(b, g);
-                    if a.shape() != expr.shape() || b.shape() != expr.shape() {
-                        panic!(
-                            "Binary op requires matching shapes. Use .broadcast() explicitly.\n\
-                                 Left shape: {:?}, Right shape: {:?}, Output shape: {:?}",
-                            a.shape(),
-                            b.shape(),
-                            expr.shape()
-                        );
-                    }
+                    let a_idx = if a.shape() == expr.shape() {
+                        lower_rec(a, g)
+                    } else {
+                        lower_rec(&a.clone().broadcast(expr.shape().clone()), g)
+                    };
+                    let b_idx = if b.shape() == expr.shape() {
+                        lower_rec(b, g)
+                    } else {
+                        lower_rec(&b.clone().broadcast(expr.shape().clone()), g)
+                    };
                     let node_idx = g.graph.add_node(TensorGraphNode::Binary {
                         op: op.clone(),
                         shape: expr.shape().clone(),
@@ -1095,9 +1127,34 @@ impl<D: DType> TensorExpr<D> {
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
+                ExprKind::Reshape { x } => {
+                    let x_idx = lower_rec(x, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Reshape {
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(x_idx, node_idx, 0);
+                    node_idx
+                }
+                ExprKind::Permute { x, axes } => {
+                    let x_idx = lower_rec(x, g);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Permute {
+                        axes: axes.clone(),
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(x_idx, node_idx, 0);
+                    node_idx
+                }
                 ExprKind::Gt { a, b } => {
-                    let a_idx = lower_rec(a, g);
-                    let b_idx = lower_rec(b, g);
+                    let a_idx = if a.shape() == expr.shape() {
+                        lower_rec(a, g)
+                    } else {
+                        lower_rec(&a.clone().broadcast(expr.shape().clone()), g)
+                    };
+                    let b_idx = if b.shape() == expr.shape() {
+                        lower_rec(b, g)
+                    } else {
+                        lower_rec(&b.clone().broadcast(expr.shape().clone()), g)
+                    };
                     let node_idx = g.graph.add_node(TensorGraphNode::Gt {
                         shape: expr.shape().clone(),
                     });
@@ -1106,8 +1163,16 @@ impl<D: DType> TensorExpr<D> {
                     node_idx
                 }
                 ExprKind::Mask { values, condition } => {
-                    let values_idx = lower_rec(values, g);
-                    let condition_idx = lower_rec(condition, g);
+                    let values_idx = if values.shape() == expr.shape() {
+                        lower_rec(values, g)
+                    } else {
+                        lower_rec(&values.clone().broadcast(expr.shape().clone()), g)
+                    };
+                    let condition_idx = if condition.shape() == expr.shape() {
+                        lower_rec(condition, g)
+                    } else {
+                        lower_rec(&condition.clone().broadcast(expr.shape().clone()), g)
+                    };
                     let node_idx = g.graph.add_node(TensorGraphNode::Mask {
                         shape: expr.shape().clone(),
                     });

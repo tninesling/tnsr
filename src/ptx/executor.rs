@@ -520,9 +520,11 @@ impl PtxExecutor {
                 | TensorGraphNode::Conv2dBackwardWeight { .. }
                 | TensorGraphNode::MaxPool2d { .. }
                 | TensorGraphNode::MaxPool2dBackward { .. }
-                | TensorGraphNode::Flatten { .. } => {
+                | TensorGraphNode::Flatten { .. }
+                | TensorGraphNode::Reshape { .. }
+                | TensorGraphNode::Permute { .. } => {
                     anyhow::bail!(
-                        "Convolution and pooling ops are not yet supported by the PTX backend. Use the CUDA (static kernels) or CPU backend instead."
+                        "Operation is not yet supported by the PTX backend. Use the CUDA (static kernels) or CPU backend instead."
                     )
                 }
             };

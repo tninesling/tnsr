@@ -1006,6 +1006,24 @@ impl Executor<f32> for CudaExecutor {
                     let cols = in_shape[1];
                     self.transpose(input, rows, cols)
                 }
+                TensorGraphNode::Reshape { .. } => {
+                    let in_idx = graph.inputs(*node_idx)[0];
+                    let input = self
+                        .values
+                        .get(&in_idx)
+                        .context("Missing input value for reshape")?;
+                    let stream = self.device.default_stream();
+                    let mut out = stream
+                        .alloc_zeros::<f32>(input.len())
+                        .context("Failed to allocate CUDA memory for reshape output")?;
+                    stream
+                        .memcpy_dtod(input, &mut out)
+                        .context("Failed to copy reshape data device-to-device")?;
+                    out
+                }
+                TensorGraphNode::Permute { .. } => {
+                    anyhow::bail!("Permute is not yet supported by the CUDA backend")
+                }
                 TensorGraphNode::Gt { .. } => {
                     let ins = graph.inputs(*node_idx);
                     let lhs = self

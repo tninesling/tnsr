@@ -412,6 +412,26 @@ where
                         *node_idx,
                     )?)
                 }
+                TensorGraphNode::Reshape { .. } => {
+                    let _span = trace_span!("reshape", node = node_idx.index()).entered();
+                    let ins = graph.inputs(*node_idx);
+                    let x = self.values.get(&ins[0]).with_context(|| {
+                        format!("Value for node {} not computed", ins[0].index())
+                    })?;
+                    let mut out = self.pool.take(x.len());
+                    x.with(|v| out.copy_from_slice(v));
+                    Value::Owned(out)
+                }
+                TensorGraphNode::Permute { axes, .. } => {
+                    let _span = trace_span!("permute", node = node_idx.index()).entered();
+                    Value::Owned(permute_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                        axes,
+                    )?)
+                }
                 TensorGraphNode::BroadcastAxis { axis, .. } => {
                     let _span = trace_span!("broadcast_axis", node = node_idx.index()).entered();
                     Value::Owned(broadcast_axis_forward(
@@ -644,23 +664,26 @@ where
     let a_shape = graph.graph[a_idx].shape();
     let b_shape = graph.graph[b_idx].shape();
     anyhow::ensure!(
-        a_shape.len() == 2,
-        "Matmul left operand must be 2D, got {}D",
-        a_shape.len()
-    );
-    anyhow::ensure!(
-        b_shape.len() == 2,
-        "Matmul right operand must be 2D, got {}D",
+        a_shape.len() >= 2 && b_shape.len() >= 2,
+        "Matmul operands must have rank >= 2, got {}D and {}D",
+        a_shape.len(),
         b_shape.len()
     );
-    let m = a_shape[0];
-    let k = a_shape[1];
-    let n = b_shape[1];
+    let m = a_shape[a_shape.len() - 2];
+    let k = a_shape[a_shape.len() - 1];
+    let n = b_shape[b_shape.len() - 1];
+    anyhow::ensure!(
+        k == b_shape[b_shape.len() - 2],
+        "Matmul inner dimensions must match: {a_shape:?} and {b_shape:?}"
+    );
+    let out_shape = graph.graph[node_idx].shape();
+    let out_batch_shape = &out_shape[..out_shape.len() - 2];
+    let batch_count: usize = out_batch_shape.iter().product();
 
-    let mut out = pool.take(m * n);
+    let mut out = pool.take(batch_count * m * n);
     a_val.with_pair(b_val, |a, b| {
         #[cfg(feature = "parallel")]
-        if m >= parallel_config::MATMUL_THRESHOLD {
+        if batch_count == 1 && m >= parallel_config::MATMUL_THRESHOLD {
             out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
                 for j in 0..n {
                     let mut sum = D::zero();
@@ -673,18 +696,64 @@ where
             return;
         }
 
-        // Sequential fallback
-        for i in 0..m {
-            for j in 0..n {
-                let mut sum = D::zero();
-                for p in 0..k {
-                    sum = sum + a[i * k + p] * b[p * n + j];
+        let a_batch_shape = &a_shape[..a_shape.len() - 2];
+        let b_batch_shape = &b_shape[..b_shape.len() - 2];
+        let out_batch_strides = rowmajor_strides(out_batch_shape);
+        let a_batch_strides = rowmajor_strides(a_batch_shape);
+        let b_batch_strides = rowmajor_strides(b_batch_shape);
+        for batch in 0..batch_count {
+            let a_batch = broadcast_batch_index(
+                batch,
+                out_batch_shape,
+                &out_batch_strides,
+                a_batch_shape,
+                &a_batch_strides,
+            );
+            let b_batch = broadcast_batch_index(
+                batch,
+                out_batch_shape,
+                &out_batch_strides,
+                b_batch_shape,
+                &b_batch_strides,
+            );
+            let a_offset = a_batch * m * k;
+            let b_offset = b_batch * k * n;
+            let out_offset = batch * m * n;
+            for i in 0..m {
+                for j in 0..n {
+                    let mut sum = D::zero();
+                    for p in 0..k {
+                        sum = sum + a[a_offset + i * k + p] * b[b_offset + p * n + j];
+                    }
+                    out[out_offset + i * n + j] = sum;
                 }
-                out[i * n + j] = sum;
             }
         }
     });
     Ok(out)
+}
+
+fn broadcast_batch_index(
+    output_index: usize,
+    output_shape: &[usize],
+    output_strides: &[usize],
+    input_shape: &[usize],
+    input_strides: &[usize],
+) -> usize {
+    let rank_difference = output_shape.len() - input_shape.len();
+    let mut input_index = 0;
+    let mut remainder = output_index;
+    for (axis, &stride) in output_strides.iter().enumerate() {
+        let coordinate = remainder / stride;
+        remainder %= stride;
+        if axis >= rank_difference {
+            let input_axis = axis - rank_difference;
+            if input_shape[input_axis] != 1 {
+                input_index += coordinate * input_strides[input_axis];
+            }
+        }
+    }
+    input_index
 }
 
 fn conv2d_forward<D, G>(
@@ -1045,27 +1114,45 @@ where
 {
     let inputs_idx = graph.inputs(node_idx);
     let a_idx = inputs_idx[0];
-    let a_val = values
-        .get(&a_idx)
-        .context("Input value not computed for transpose")?;
-    let a_shape = graph.graph[a_idx].shape();
+    let rank = graph.graph[a_idx].shape().len();
+    anyhow::ensure!(rank >= 2, "Transpose requires rank >= 2, got {rank}D");
+    let mut axes: Vec<usize> = (0..rank).collect();
+    axes.swap(rank - 2, rank - 1);
+    permute_forward(graph, values, pool, node_idx, &axes)
+}
 
-    anyhow::ensure!(
-        a_shape.len() == 2,
-        "Transpose currently only supports 2D matrices, got {}D",
-        a_shape.len()
-    );
-
-    let (m, n) = (a_shape[0], a_shape[1]);
-    let mut out = pool.take(m * n);
-    a_val.with(|a| {
-        for i in 0..m {
-            for j in 0..n {
-                out[j * m + i] = a[i * n + j];
+fn permute_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+    axes: &[usize],
+) -> Result<Vec<D>>
+where
+    D: Float,
+{
+    let input_idx = graph.inputs(node_idx)[0];
+    let input = values
+        .get(&input_idx)
+        .context("Input value not computed for permute")?;
+    let input_shape = graph.graph[input_idx].shape();
+    let output_shape = graph.graph[node_idx].shape();
+    let input_strides = rowmajor_strides(input_shape);
+    let output_strides = rowmajor_strides(output_shape);
+    let output_size: usize = output_shape.iter().product();
+    let mut out = pool.take(output_size);
+    input.with(|input| {
+        for (output_index, output) in out.iter_mut().enumerate() {
+            let mut remainder = output_index;
+            let mut input_index = 0;
+            for (output_axis, &stride) in output_strides.iter().enumerate() {
+                let coordinate = remainder / stride;
+                remainder %= stride;
+                input_index += coordinate * input_strides[axes[output_axis]];
             }
+            *output = input[input_index];
         }
     });
-
     Ok(out)
 }
 

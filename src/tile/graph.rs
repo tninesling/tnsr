@@ -64,6 +64,10 @@ impl TileGraph {
             TensorGraphNode::FusedUnary { ops, .. } => Self::lower_fused_unary(&ops, shape),
             TensorGraphNode::Binary { op, .. } => Self::lower_binary(op, shape),
             TensorGraphNode::MatMul { .. } => {
+                assert!(
+                    shape.len() == 2 && input_shapes.iter().all(|input| input.len() == 2),
+                    "batched matmul is not yet supported in tile IR lowering"
+                );
                 let _m = shape[0];
                 let n = shape[1];
                 let k = input_shapes[0][1];
@@ -93,8 +97,10 @@ impl TileGraph {
             | TensorGraphNode::Conv2dBackwardWeight { .. }
             | TensorGraphNode::MaxPool2d { .. }
             | TensorGraphNode::MaxPool2dBackward { .. }
-            | TensorGraphNode::Flatten { .. } => {
-                unimplemented!("Convolution and pooling ops not yet supported in tile IR backend")
+            | TensorGraphNode::Flatten { .. }
+            | TensorGraphNode::Reshape { .. }
+            | TensorGraphNode::Permute { .. } => {
+                unimplemented!("operation not yet supported in tile IR backend")
             }
         }
     }

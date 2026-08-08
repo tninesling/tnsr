@@ -40,6 +40,7 @@ use egg::{
     AstSize, Extractor, Id, RecExpr, Rewrite, Runner, Symbol, define_language, rewrite as rw,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
 define_language! {
     /// Tensor operation language for e-graph rewrites.
@@ -56,12 +57,25 @@ define_language! {
         "relu" = Relu(Id),
         "matmul" = MatMul([Id; 2]),
         "transpose" = Transpose(Id),
-        "broadcast" = BroadcastAxis([Id; 2]),
+        "reshape" = Reshape(Box<[Id]>),
+        "permute" = Permute(Box<[Id]>),
+        "broadcast" = BroadcastAxis([Id; 3]),
         "reduce_sum" = ReduceSum([Id; 2]),
         "reduce_mean" = ReduceMean([Id; 2]),
         "gt" = Gt([Id; 2]),
         "mask" = Mask([Id; 2]),
     }
+}
+
+fn leaf_symbol<D: DType>(expr: &TensorExpr<D>) -> Option<Symbol> {
+    let name = match expr.kind() {
+        ExprKind::Constant { data } => format!("const_{:p}", Arc::as_ptr(data)),
+        ExprKind::Parameter { id, .. } => format!("param_{id}"),
+        ExprKind::Input { name } => format!("input_{name}"),
+        ExprKind::NodeRef { idx } => format!("node_{}", idx.index()),
+        _ => return None,
+    };
+    Some(name.into())
 }
 
 /// Returns all rewrite rules for tensor optimization.
@@ -114,14 +128,10 @@ impl Default for RewriteConfig {
 fn expr_to_recexpr<D: DType>(expr: &TensorExpr<D>) -> RecExpr<TensorOp> {
     fn build_rec<D: DType>(expr: &TensorExpr<D>, rec: &mut RecExpr<TensorOp>) -> Id {
         match expr.kind() {
-            ExprKind::Constant { .. } => rec.add(TensorOp::Sym("const".into())),
-            ExprKind::Parameter { id, .. } => {
-                rec.add(TensorOp::Sym(format!("param_{}", id).into()))
-            }
-            ExprKind::Input { name, .. } => rec.add(TensorOp::Sym((*name).into())),
-            ExprKind::NodeRef { idx, .. } => {
-                rec.add(TensorOp::Sym(format!("node_{}", idx.index()).into()))
-            }
+            ExprKind::Constant { .. }
+            | ExprKind::Parameter { .. }
+            | ExprKind::Input { .. }
+            | ExprKind::NodeRef { .. } => rec.add(TensorOp::Sym(leaf_symbol(expr).unwrap())),
             ExprKind::Binary { op, a, b } => {
                 let a_id = build_rec(a, rec);
                 let b_id = build_rec(b, rec);
@@ -152,10 +162,27 @@ fn expr_to_recexpr<D: DType>(expr: &TensorExpr<D>) -> RecExpr<TensorOp> {
                 let x_id = build_rec(x, rec);
                 rec.add(TensorOp::Transpose(x_id))
             }
+            ExprKind::Reshape { x } => {
+                let mut children = Vec::with_capacity(expr.shape().len() + 1);
+                children.push(build_rec(x, rec));
+                children.extend(
+                    expr.shape()
+                        .iter()
+                        .map(|&dim| rec.add(TensorOp::Num(dim as i32))),
+                );
+                rec.add(TensorOp::Reshape(children.into_boxed_slice()))
+            }
+            ExprKind::Permute { x, axes } => {
+                let mut children = Vec::with_capacity(axes.len() + 1);
+                children.push(build_rec(x, rec));
+                children.extend(axes.iter().map(|&axis| rec.add(TensorOp::Num(axis as i32))));
+                rec.add(TensorOp::Permute(children.into_boxed_slice()))
+            }
             ExprKind::BroadcastAxis { x, axis } => {
                 let x_id = build_rec(x, rec);
                 let axis_id = rec.add(TensorOp::Num(*axis as i32));
-                rec.add(TensorOp::BroadcastAxis([x_id, axis_id]))
+                let size_id = rec.add(TensorOp::Num(expr.shape()[*axis] as i32));
+                rec.add(TensorOp::BroadcastAxis([x_id, axis_id, size_id]))
             }
             ExprKind::ReduceAxis { op, x, axis } => {
                 let x_id = build_rec(x, rec);
@@ -226,11 +253,25 @@ fn expr_to_recexpr<D: DType>(expr: &TensorExpr<D>) -> RecExpr<TensorOp> {
 }
 
 /// Convert an e-graph `RecExpr` back to a `TensorExpr`.
-fn recexpr_to_expr<D: DType + Clone + Default + 'static>(rec: &RecExpr<TensorOp>) -> TensorExpr<D> {
+fn recexpr_to_expr<D: DType + Clone + Default + 'static>(
+    rec: &RecExpr<TensorOp>,
+    original: &TensorExpr<D>,
+) -> TensorExpr<D> {
+    fn collect_leaves<D: DType>(expr: &TensorExpr<D>, leaves: &mut HashMap<Symbol, TensorExpr<D>>) {
+        if let Some(symbol) = leaf_symbol(expr) {
+            leaves.insert(symbol, expr.clone());
+        } else {
+            for child in expr.children() {
+                collect_leaves(child, leaves);
+            }
+        }
+    }
+
     fn build<D: DType + Clone + Default + 'static>(
         id: Id,
         rec: &RecExpr<TensorOp>,
         cache: &mut HashMap<Id, TensorExpr<D>>,
+        leaves: &HashMap<Symbol, TensorExpr<D>>,
     ) -> TensorExpr<D> {
         if let Some(expr) = cache.get(&id) {
             return expr.clone();
@@ -238,73 +279,89 @@ fn recexpr_to_expr<D: DType + Clone + Default + 'static>(rec: &RecExpr<TensorOp>
 
         let node = &rec[id];
         let expr = match node {
-            TensorOp::Sym(s) => {
-                if s.as_str().starts_with("param_") {
-                    let id_str = s.as_str().strip_prefix("param_").unwrap();
-                    let param_id: usize = id_str.parse().unwrap_or(0);
-                    TensorExpr::parameter_with_id(param_id, vec![D::default()], vec![1])
-                } else if s.as_str() == "const" {
-                    TensorExpr::constant(vec![D::default()], vec![1])
-                } else {
-                    TensorExpr::input(s.as_str(), vec![1])
-                }
-            }
+            TensorOp::Sym(s) => leaves
+                .get(s)
+                .unwrap_or_else(|| panic!("rewrite introduced unknown tensor leaf {s}"))
+                .clone(),
             TensorOp::Num(_n) => TensorExpr::constant(vec![D::default()], vec![1]),
             TensorOp::Add([a, b]) => {
-                let a_expr = build(*a, rec, cache);
-                let b_expr = build(*b, rec, cache);
+                let a_expr = build(*a, rec, cache, leaves);
+                let b_expr = build(*b, rec, cache, leaves);
                 a_expr + b_expr
             }
             TensorOp::Sub([a, b]) => {
-                let a_expr = build(*a, rec, cache);
-                let b_expr = build(*b, rec, cache);
+                let a_expr = build(*a, rec, cache, leaves);
+                let b_expr = build(*b, rec, cache, leaves);
                 a_expr - b_expr
             }
             TensorOp::Mul([a, b]) => {
-                let a_expr = build(*a, rec, cache);
-                let b_expr = build(*b, rec, cache);
+                let a_expr = build(*a, rec, cache, leaves);
+                let b_expr = build(*b, rec, cache, leaves);
                 a_expr * b_expr
             }
             TensorOp::Div([a, b]) => {
-                let a_expr = build(*a, rec, cache);
-                let b_expr = build(*b, rec, cache);
+                let a_expr = build(*a, rec, cache, leaves);
+                let b_expr = build(*b, rec, cache, leaves);
                 a_expr / b_expr
             }
             TensorOp::Neg(x) => {
-                let x_expr = build(*x, rec, cache);
+                let x_expr = build(*x, rec, cache, leaves);
                 -x_expr
             }
             TensorOp::Exp(x) => {
-                let x_expr = build(*x, rec, cache);
+                let x_expr = build(*x, rec, cache, leaves);
                 x_expr.exp()
             }
             TensorOp::Log(x) => {
-                let x_expr = build(*x, rec, cache);
+                let x_expr = build(*x, rec, cache, leaves);
                 x_expr.log()
             }
             TensorOp::Relu(x) => {
-                let x_expr = build(*x, rec, cache);
+                let x_expr = build(*x, rec, cache, leaves);
                 x_expr.relu()
             }
             TensorOp::MatMul([a, b]) => {
-                let a_expr = build(*a, rec, cache);
-                let b_expr = build(*b, rec, cache);
+                let a_expr = build(*a, rec, cache, leaves);
+                let b_expr = build(*b, rec, cache, leaves);
                 a_expr.matmul(b_expr)
             }
             TensorOp::Transpose(x) => {
-                let x_expr = build(*x, rec, cache);
+                let x_expr = build(*x, rec, cache, leaves);
                 x_expr.transpose()
             }
-            TensorOp::BroadcastAxis([x, axis]) => {
-                let x_expr = build(*x, rec, cache);
-                if let TensorOp::Num(axis_val) = &rec[*axis] {
-                    x_expr.broadcast_axis(*axis_val as usize, 2)
-                } else {
-                    x_expr
+            TensorOp::Reshape(children) => {
+                let x_expr = build(children[0], rec, cache, leaves);
+                let shape = children[1..]
+                    .iter()
+                    .map(|id| match rec[*id] {
+                        TensorOp::Num(dim) => dim as usize,
+                        _ => panic!("reshape dimensions must be integers"),
+                    })
+                    .collect();
+                x_expr.reshape(shape)
+            }
+            TensorOp::Permute(children) => {
+                let x_expr = build(children[0], rec, cache, leaves);
+                let axes = children[1..]
+                    .iter()
+                    .map(|id| match rec[*id] {
+                        TensorOp::Num(axis) => axis as usize,
+                        _ => panic!("permutation axes must be integers"),
+                    })
+                    .collect();
+                x_expr.permute(axes)
+            }
+            TensorOp::BroadcastAxis([x, axis, size]) => {
+                let x_expr = build(*x, rec, cache, leaves);
+                match (&rec[*axis], &rec[*size]) {
+                    (TensorOp::Num(axis), TensorOp::Num(size)) => {
+                        x_expr.broadcast_axis(*axis as usize, *size as usize)
+                    }
+                    _ => panic!("broadcast axis and size must be integers"),
                 }
             }
             TensorOp::ReduceSum([x, axis]) => {
-                let x_expr = build(*x, rec, cache);
+                let x_expr = build(*x, rec, cache, leaves);
                 if let TensorOp::Num(axis_val) = &rec[*axis] {
                     x_expr.reduce_sum(*axis_val as usize)
                 } else {
@@ -312,7 +369,7 @@ fn recexpr_to_expr<D: DType + Clone + Default + 'static>(rec: &RecExpr<TensorOp>
                 }
             }
             TensorOp::ReduceMean([x, axis]) => {
-                let x_expr = build(*x, rec, cache);
+                let x_expr = build(*x, rec, cache, leaves);
                 if let TensorOp::Num(axis_val) = &rec[*axis] {
                     x_expr.reduce_mean(*axis_val as usize)
                 } else {
@@ -320,13 +377,13 @@ fn recexpr_to_expr<D: DType + Clone + Default + 'static>(rec: &RecExpr<TensorOp>
                 }
             }
             TensorOp::Gt([a, b]) => {
-                let a_expr = build(*a, rec, cache);
-                let b_expr = build(*b, rec, cache);
+                let a_expr = build(*a, rec, cache, leaves);
+                let b_expr = build(*b, rec, cache, leaves);
                 a_expr.gt(b_expr)
             }
             TensorOp::Mask([values, condition]) => {
-                let v_expr = build(*values, rec, cache);
-                let c_expr = build(*condition, rec, cache);
+                let v_expr = build(*values, rec, cache, leaves);
+                let c_expr = build(*condition, rec, cache, leaves);
                 v_expr.mask(c_expr)
             }
         };
@@ -335,9 +392,11 @@ fn recexpr_to_expr<D: DType + Clone + Default + 'static>(rec: &RecExpr<TensorOp>
         expr
     }
 
+    let mut leaves = HashMap::new();
+    collect_leaves(original, &mut leaves);
     let mut cache = HashMap::new();
     let root = Id::from(rec.as_ref().len() - 1);
-    build(root, rec, &mut cache)
+    build(root, rec, &mut cache, &leaves)
 }
 
 /// Optimize a `TensorExpr` using e-graph rewrites.
@@ -365,7 +424,7 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
     tracing::debug!("Best cost: {}", best_cost);
     tracing::debug!("Best expression: {}", best);
 
-    recexpr_to_expr(&best)
+    recexpr_to_expr(&best, expr)
 }
 
 #[cfg(test)]
@@ -431,7 +490,7 @@ mod tests {
         let y = Parameter::new(vec![2.0f32], vec![1]);
         let expr: TensorExpr<f32> = TensorExpr::from(x) + TensorExpr::from(y);
         let rec = expr_to_recexpr(&expr);
-        let back: TensorExpr<f32> = recexpr_to_expr(&rec);
+        let back: TensorExpr<f32> = recexpr_to_expr(&rec, &expr);
         assert!(matches!(
             expr.kind(),
             ExprKind::Binary {
@@ -446,6 +505,18 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_shape_operations_roundtrip() {
+        let x = Parameter::new(vec![1.0f32; 6], vec![1, 6]);
+        let expr: TensorExpr<f32> = TensorExpr::from(x)
+            .broadcast_axis(0, 2)
+            .reshape(vec![2, 3, 2])
+            .permute(vec![1, 0, 2]);
+        let optimized = optimize_expr(&expr, RewriteConfig::default());
+
+        assert_eq!(optimized.shape(), &vec![3, 2, 2]);
     }
 
     #[test]

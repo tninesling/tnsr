@@ -78,10 +78,11 @@ pub enum Stmt {
 
     /// Matrix multiply with accumulation: dest = dest + (a @ b)
     MatMul {
-        dest: TileVar,        // Accumulator (f32)
-        a: TileVar,           // Operand (f16)
-        b: TileVar,           // Operand (f16)
+        dest: TileVar, // Accumulator (f32)
+        a: TileVar,
+        b: TileVar,
         layout: MatMulLayout, // NN, NT, TN, TT
+        plan: MatMulPlan,
     },
 
     /// Gather rows from a contiguous [vocabulary, width] table.
@@ -218,14 +219,38 @@ pub struct MatrixLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemorySpace {
     Register,
+    Fragment,
     Shared,
     Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatMulPlan {
+    ScalarF32,
+    TensorCoreTf32,
+}
+
+impl MatMulPlan {
+    pub fn for_shape(m: usize, n: usize, k: usize) -> Self {
+        const MIN_TENSOR_CORE_WORK: usize = 32 * 32 * 32;
+        if m >= 16
+            && n >= 16
+            && k >= 8
+            && m.saturating_mul(n).saturating_mul(k) >= MIN_TENSOR_CORE_WORK
+        {
+            Self::TensorCoreTf32
+        } else {
+            Self::ScalarF32
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
     F16,
     BF16,
+    /// TensorFloat-32 compute representation stored in 32 bits.
+    TF32,
     F32,
 }
 
@@ -235,6 +260,7 @@ impl DType {
         match self {
             DType::F16 => 2,
             DType::BF16 => 2,
+            DType::TF32 => 4,
             DType::F32 => 4,
         }
     }

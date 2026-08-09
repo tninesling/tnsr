@@ -1,5 +1,5 @@
 use super::builder::TileIRBuilder;
-use super::ir::{DType, Dim, Expr, MatMulLayout, MatrixLayout, ReduceOp, TileIR};
+use super::ir::{DType, Dim, Expr, MatMulLayout, MatMulPlan, MatrixLayout, ReduceOp, TileIR};
 use crate::graph::{TensorGraph, TensorGraphNode};
 use crate::tensor;
 use petgraph::{Graph, graph::NodeIndex};
@@ -201,15 +201,30 @@ impl TileGraph {
         let tile_m = 16;
         let tile_n = 16;
         let tile_k = 16;
+        let plan = MatMulPlan::for_shape(m, n, k);
 
         // Allocate shared memory for input tiles
-        let a_smem = builder.alloc_shared(DType::F32, tile_m, tile_k);
-        let b_smem = builder.alloc_shared(DType::F32, tile_k, tile_n);
+        let operand_dtype = match plan {
+            MatMulPlan::ScalarF32 => DType::F32,
+            MatMulPlan::TensorCoreTf32 => DType::TF32,
+        };
+        let a_smem = builder.alloc_shared(operand_dtype, tile_m, tile_k);
+        let b_smem = builder.alloc_shared(operand_dtype, tile_k, tile_n);
+        let c_smem = match plan {
+            MatMulPlan::ScalarF32 => None,
+            MatMulPlan::TensorCoreTf32 => Some(builder.alloc_shared(DType::F32, tile_m, tile_n)),
+        };
 
         // Allocate register tiles for computation
         let a_reg = builder.alloc_register(DType::F32, tile_m, tile_k);
         let b_reg = builder.alloc_register(DType::F32, tile_k, tile_n);
-        let c_reg = builder.alloc_register(DType::F32, tile_m, tile_n);
+        let c_reg = match plan {
+            MatMulPlan::ScalarF32 => builder.alloc_register(DType::F32, tile_m, tile_n),
+            MatMulPlan::TensorCoreTf32 => builder.alloc_fragment(DType::F32, tile_m, tile_n),
+        };
+        if let Some(c_smem) = c_smem {
+            builder.load_shared_to_register(c_reg, c_smem);
+        }
 
         // Initialize accumulator
         builder.zero(c_reg);
@@ -219,9 +234,6 @@ impl TileGraph {
 
         // Main tiling loop over K dimension
         builder.for_loop("k_tile", 0, k_tiles as i64, |builder, k_var| {
-            // Load A tile to shared memory
-            // Each thread loads one element: A[base_row + threadIdx.y][base_col + threadIdx.x]
-            // For A: base_row = blockIdx.y * tile_m, base_col = k_tile * tile_k
             let a_row = Expr::Add(
                 Box::new(Expr::BlockIdx(Dim::Y) * tile_m),
                 Box::new(Expr::ThreadIdx(Dim::Y)),
@@ -242,9 +254,6 @@ impl TileGraph {
                 },
             );
 
-            // Load B tile to shared memory
-            // Each thread loads one element: B[base_row + threadIdx.y][base_col + threadIdx.x]
-            // For B: base_row = k_tile * tile_k, base_col = blockIdx.x * tile_n
             let b_row = Expr::Add(
                 Box::new(Expr::Var(k_var) * tile_k),
                 Box::new(Expr::ThreadIdx(Dim::Y)),
@@ -279,7 +288,7 @@ impl TileGraph {
                 (true, true) => MatMulLayout::TT,
             };
 
-            builder.matmul(c_reg, a_reg, b_reg, layout);
+            builder.matmul(c_reg, a_reg, b_reg, layout, plan);
 
             builder.barrier();
         });

@@ -68,14 +68,40 @@ impl TileIRBuilder {
         var
     }
 
+    pub fn alloc_fragment(&mut self, dtype: DType, rows: usize, cols: usize) -> TileVar {
+        let var = TileVar(self.next_var);
+        self.next_var += 1;
+        self.stmts.push(Stmt::AllocTile {
+            var,
+            space: MemorySpace::Fragment,
+            dtype,
+            rows,
+            cols,
+        });
+        var
+    }
+
     #[allow(dead_code)]
     pub fn zero(&mut self, tile: TileVar) {
         self.stmts.push(Stmt::Zero { tile });
     }
 
     #[allow(dead_code)]
-    pub fn matmul(&mut self, dest: TileVar, a: TileVar, b: TileVar, layout: MatMulLayout) {
-        self.stmts.push(Stmt::MatMul { dest, a, b, layout });
+    pub fn matmul(
+        &mut self,
+        dest: TileVar,
+        a: TileVar,
+        b: TileVar,
+        layout: MatMulLayout,
+        plan: super::ir::MatMulPlan,
+    ) {
+        self.stmts.push(Stmt::MatMul {
+            dest,
+            a,
+            b,
+            layout,
+            plan,
+        });
     }
 
     pub fn embedding(&mut self, vocabulary: usize, width: usize, index_count: usize) {

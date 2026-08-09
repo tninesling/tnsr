@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use anyhow::Result;
+
+use crate::Executor;
 use crate::graph::{NodeIndex, TensorGraph};
 use crate::tensor::{Constant, DType, Parameter, Shape, TensorExpr};
 
@@ -116,6 +119,25 @@ pub fn cross_entropy_one_hot_logits<D: DType + Default + 'static>(
 
     // mean over remaining axes (e.g., batch)
     nll.mean_all()
+}
+
+/// Embedding lookup from a `[vocabulary, width]` table using index tensors.
+pub fn embedding<D: DType + Default + 'static>(
+    weight: impl Into<TensorExpr<D>>,
+    indices: impl Into<TensorExpr<D>>,
+) -> TensorExpr<D> {
+    weight.into().embedding(indices)
+}
+
+/// Mean cross-entropy loss for integer-valued targets and logit inputs.
+///
+/// Indices use the tensor dtype and are validated by executors as finite,
+/// non-negative integers in the vocabulary range.
+pub fn cross_entropy_indexed_logits<D: DType + Default + 'static>(
+    logits: impl Into<TensorExpr<D>>,
+    targets: impl Into<TensorExpr<D>>,
+) -> TensorExpr<D> {
+    logits.into().indexed_cross_entropy(targets).mean_all()
 }
 
 /// Numerically stable softmax along `axis`.
@@ -305,6 +327,10 @@ pub struct MultiHeadAttention {
 
 impl MultiHeadAttention {
     pub fn new(embed_dim: usize, num_heads: usize) -> Self {
+        Self::new_with_seed_offset(embed_dim, num_heads, 0)
+    }
+
+    fn new_with_seed_offset(embed_dim: usize, num_heads: usize, seed_offset: u64) -> Self {
         assert!(embed_dim > 0, "attention embed_dim must be non-zero");
         assert!(num_heads > 0, "attention num_heads must be non-zero");
         assert_eq!(
@@ -314,13 +340,13 @@ impl MultiHeadAttention {
         );
 
         Self {
-            query_weight: xavier_parameter(embed_dim, embed_dim, 1),
+            query_weight: xavier_parameter(embed_dim, embed_dim, seed_offset + 1),
             query_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
-            key_weight: xavier_parameter(embed_dim, embed_dim, 2),
+            key_weight: xavier_parameter(embed_dim, embed_dim, seed_offset + 2),
             key_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
-            value_weight: xavier_parameter(embed_dim, embed_dim, 3),
+            value_weight: xavier_parameter(embed_dim, embed_dim, seed_offset + 3),
             value_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
-            output_weight: xavier_parameter(embed_dim, embed_dim, 4),
+            output_weight: xavier_parameter(embed_dim, embed_dim, seed_offset + 4),
             output_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
             embed_dim,
             num_heads,
@@ -425,6 +451,16 @@ pub struct TransformerBlock {
 
 impl TransformerBlock {
     pub fn new(embed_dim: usize, num_heads: usize, feed_forward_dim: usize, epsilon: f32) -> Self {
+        Self::new_with_seed_offset(embed_dim, num_heads, feed_forward_dim, epsilon, 0)
+    }
+
+    fn new_with_seed_offset(
+        embed_dim: usize,
+        num_heads: usize,
+        feed_forward_dim: usize,
+        epsilon: f32,
+        seed_offset: u64,
+    ) -> Self {
         assert!(
             feed_forward_dim > 0,
             "transformer feed_forward_dim must be non-zero"
@@ -435,17 +471,25 @@ impl TransformerBlock {
         );
 
         Self {
-            attention: MultiHeadAttention::new(embed_dim, num_heads),
+            attention: MultiHeadAttention::new_with_seed_offset(embed_dim, num_heads, seed_offset),
             attention_norm_weight: Parameter::new(vec![1.0; embed_dim], vec![embed_dim]),
             attention_norm_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
             feed_forward_norm_weight: Parameter::new(vec![1.0; embed_dim], vec![embed_dim]),
             feed_forward_norm_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
-            feed_forward_input_weight: xavier_parameter(embed_dim, feed_forward_dim, 5),
+            feed_forward_input_weight: xavier_parameter(
+                embed_dim,
+                feed_forward_dim,
+                seed_offset + 5,
+            ),
             feed_forward_input_bias: Parameter::new(
                 vec![0.0; feed_forward_dim],
                 vec![feed_forward_dim],
             ),
-            feed_forward_output_weight: xavier_parameter(feed_forward_dim, embed_dim, 6),
+            feed_forward_output_weight: xavier_parameter(
+                feed_forward_dim,
+                embed_dim,
+                seed_offset + 6,
+            ),
             feed_forward_output_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
             epsilon,
         }
@@ -487,6 +531,182 @@ impl TransformerBlock {
             Some(self.feed_forward_output_bias.clone()),
         );
         residual + output
+    }
+}
+
+/// Configuration for a decoder-only GPT model.
+#[derive(Clone, Debug)]
+pub struct GptConfig {
+    pub vocab_size: usize,
+    pub max_sequence_length: usize,
+    pub embed_dim: usize,
+    pub num_heads: usize,
+    pub feed_forward_dim: usize,
+    pub num_layers: usize,
+    pub layer_norm_epsilon: f32,
+}
+
+/// A decoder-only transformer with learned positions and a tied language-model head.
+#[derive(Clone)]
+pub struct Gpt {
+    pub token_embedding: Parameter<f32>,
+    pub position_embedding: Parameter<f32>,
+    pub blocks: Vec<TransformerBlock>,
+    pub final_norm_weight: Parameter<f32>,
+    pub final_norm_bias: Parameter<f32>,
+    config: GptConfig,
+}
+
+impl Gpt {
+    pub fn new(config: GptConfig) -> Self {
+        const MAX_EXACT_F32_INTEGER: usize = 1 << 24;
+
+        assert!(config.vocab_size > 0, "GPT vocabulary must be non-empty");
+        assert!(
+            config.vocab_size - 1 <= MAX_EXACT_F32_INTEGER,
+            "GPT vocabulary indices must be exactly representable as f32"
+        );
+        assert!(
+            config.max_sequence_length > 0,
+            "GPT maximum sequence length must be non-zero"
+        );
+        assert!(
+            config.max_sequence_length - 1 <= MAX_EXACT_F32_INTEGER,
+            "GPT position indices must be exactly representable as f32"
+        );
+        assert!(config.embed_dim > 0, "GPT embedding width must be non-zero");
+        assert!(config.num_layers > 0, "GPT must contain at least one layer");
+        assert!(
+            config.feed_forward_dim > 0,
+            "GPT feed-forward width must be non-zero"
+        );
+        assert!(
+            config.num_heads > 0 && config.embed_dim.is_multiple_of(config.num_heads),
+            "GPT embedding width must be divisible by a non-zero head count"
+        );
+        assert!(
+            config.layer_norm_epsilon.is_finite() && config.layer_norm_epsilon > 0.0,
+            "GPT layer norm epsilon must be finite and positive"
+        );
+
+        let token_embedding = xavier_parameter(config.vocab_size, config.embed_dim, 101);
+        let position_embedding =
+            xavier_parameter(config.max_sequence_length, config.embed_dim, 102);
+        let blocks = (0..config.num_layers)
+            .map(|layer| {
+                TransformerBlock::new_with_seed_offset(
+                    config.embed_dim,
+                    config.num_heads,
+                    config.feed_forward_dim,
+                    config.layer_norm_epsilon,
+                    1_000 + layer as u64 * 100,
+                )
+            })
+            .collect();
+        let final_norm_weight = Parameter::new(vec![1.0; config.embed_dim], vec![config.embed_dim]);
+        let final_norm_bias = Parameter::new(vec![0.0; config.embed_dim], vec![config.embed_dim]);
+
+        Self {
+            token_embedding,
+            position_embedding,
+            blocks,
+            final_norm_weight,
+            final_norm_bias,
+            config,
+        }
+    }
+
+    pub fn config(&self) -> &GptConfig {
+        &self.config
+    }
+
+    /// Build logits shaped `[batch, sequence, vocabulary]` from token IDs.
+    pub fn forward(&self, token_ids: impl Into<TensorExpr<f32>>) -> TensorExpr<f32> {
+        let token_ids = token_ids.into();
+        let shape = token_ids.shape().clone();
+        assert_eq!(
+            shape.len(),
+            2,
+            "GPT token IDs must have shape [batch, sequence]"
+        );
+        let batch = shape[0];
+        let sequence = shape[1];
+        assert!(batch > 0, "GPT batch size must be non-zero");
+        assert!(sequence > 0, "GPT sequence length must be non-zero");
+        assert!(
+            sequence <= self.config.max_sequence_length,
+            "GPT sequence length {sequence} exceeds configured maximum {}",
+            self.config.max_sequence_length
+        );
+
+        let token_embeddings = embedding(self.token_embedding.clone(), token_ids);
+        let positions = Constant::new(
+            (0..sequence).map(|position| position as f32).collect(),
+            vec![sequence],
+        );
+        let position_embeddings = embedding(self.position_embedding.clone(), positions)
+            .reshape(vec![1, sequence, self.config.embed_dim])
+            .broadcast_axis(0, batch);
+        let mut hidden = token_embeddings + position_embeddings;
+        for block in &self.blocks {
+            hidden = block.forward(hidden, true);
+        }
+        hidden = layer_norm(
+            hidden,
+            2,
+            self.final_norm_weight.clone(),
+            self.final_norm_bias.clone(),
+            self.config.layer_norm_epsilon,
+        );
+
+        hidden.matmul(TensorExpr::from(self.token_embedding.clone()).transpose())
+    }
+
+    /// Build a scalar next-token prediction loss.
+    pub fn loss(
+        &self,
+        token_ids: impl Into<TensorExpr<f32>>,
+        target_ids: impl Into<TensorExpr<f32>>,
+    ) -> TensorExpr<f32> {
+        cross_entropy_indexed_logits(self.forward(token_ids), target_ids)
+    }
+
+    /// Greedily append `max_new_tokens` using the supplied executor.
+    pub fn generate<E: Executor<f32>>(
+        &self,
+        executor: &mut E,
+        prompt: &[usize],
+        max_new_tokens: usize,
+    ) -> Result<Vec<usize>> {
+        anyhow::ensure!(
+            !prompt.is_empty(),
+            "GPT generation prompt must be non-empty"
+        );
+        anyhow::ensure!(
+            prompt.iter().all(|&token| token < self.config.vocab_size),
+            "GPT generation prompt contains an out-of-range token"
+        );
+
+        let mut tokens = prompt.to_vec();
+        for _ in 0..max_new_tokens {
+            let context_start = tokens.len().saturating_sub(self.config.max_sequence_length);
+            let context = &tokens[context_start..];
+            let token_ids = Constant::new(
+                context.iter().map(|&token| token as f32).collect(),
+                vec![1, context.len()],
+            );
+            let graph: TensorGraph<f32> = self.forward(token_ids).into();
+            let logits = executor.execute(&graph, HashMap::new())?;
+            let final_row = &logits[logits.len() - self.config.vocab_size..];
+            let next_token = final_row
+                .iter()
+                .enumerate()
+                .max_by(|(_, left), (_, right)| left.total_cmp(right))
+                .map(|(index, _)| index)
+                .expect("GPT vocabulary is non-empty");
+            tokens.push(next_token);
+        }
+        Ok(tokens)
     }
 }
 

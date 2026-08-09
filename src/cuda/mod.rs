@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tracing::trace_span;
 
 static PTX: &str = include_str!("kernels.ptx");
+static INDEXED_PTX: &str = include_str!("indexed_kernels.ptx");
 
 fn checked_product(shape: &[usize], description: &str) -> Result<usize> {
     shape.iter().try_fold(1usize, |size, &dimension| {
@@ -74,6 +75,7 @@ enum PoolKind {
 pub struct CudaExecutor {
     device: Arc<CudaContext>,
     module: Arc<CudaModule>,
+    indexed_module: Option<Arc<CudaModule>>,
     values: HashMap<petgraph::graph::NodeIndex, CudaSlice<f32>>,
     pool: RefCell<CudaBufferPool>,
     stats: AllocStats,
@@ -111,6 +113,7 @@ impl CudaExecutor {
         Ok(CudaExecutor {
             device,
             module,
+            indexed_module: None,
             values: HashMap::new(),
             pool: RefCell::new(CudaBufferPool::default()),
             stats: AllocStats::default(),
@@ -122,6 +125,45 @@ impl CudaExecutor {
             .borrow_mut()
             .take(&self.device.default_stream(), len)
             .expect("Failed to allocate CUDA output buffer")
+    }
+
+    fn validate_indices(
+        &self,
+        indices: &CudaSlice<f32>,
+        upper: usize,
+        operation: &str,
+    ) -> Result<()> {
+        let mut host_indices = vec![0.0; indices.len()];
+        if !host_indices.is_empty() {
+            self.device
+                .default_stream()
+                .memcpy_dtoh(indices, &mut host_indices)
+                .with_context(|| format!("Failed to validate CUDA {operation} indices"))?;
+        }
+        for (position, &value) in host_indices.iter().enumerate() {
+            anyhow::ensure!(
+                value.is_finite(),
+                "{operation} index at position {position} must be finite, got {value}"
+            );
+            anyhow::ensure!(
+                value >= 0.0,
+                "{operation} index at position {position} must be non-negative, got {value}"
+            );
+            anyhow::ensure!(
+                value.fract() == 0.0,
+                "{operation} index at position {position} must be an integer, got {value}"
+            );
+            let index = value as usize;
+            anyhow::ensure!(
+                index as f32 == value,
+                "{operation} index at position {position} cannot be represented as usize: {value}"
+            );
+            anyhow::ensure!(
+                index < upper,
+                "{operation} index at position {position} is out of range: {index} >= {upper}"
+            );
+        }
+        Ok(())
     }
 
     #[cfg(feature = "fusion")]
@@ -495,6 +537,302 @@ impl CudaExecutor {
         }
 
         Ok(out)
+    }
+
+    fn embedding(
+        &self,
+        weight: &CudaSlice<f32>,
+        indices: &CudaSlice<f32>,
+        weight_shape: &[usize],
+        indices_shape: &[usize],
+        output_shape: &[usize],
+    ) -> Result<CudaSlice<f32>> {
+        let _span = trace_span!("embedding").entered();
+        anyhow::ensure!(
+            weight_shape.len() == 2,
+            "Embedding weight must be [V, C], got {weight_shape:?}"
+        );
+        anyhow::ensure!(
+            output_shape.len() == indices_shape.len() + 1
+                && output_shape[..indices_shape.len()] == *indices_shape
+                && output_shape[indices_shape.len()] == weight_shape[1],
+            "Embedding output shape {output_shape:?} does not match indices shape {indices_shape:?} and weight shape {weight_shape:?}"
+        );
+
+        let weight_len = checked_product(weight_shape, "Embedding weight")?;
+        let index_count = checked_product(indices_shape, "Embedding indices")?;
+        let output_len = checked_product(output_shape, "Embedding output")?;
+        anyhow::ensure!(
+            weight.len() == weight_len,
+            "Embedding weight buffer length {} does not match shape {weight_shape:?} ({weight_len} elements)",
+            weight.len()
+        );
+        anyhow::ensure!(
+            indices.len() == index_count,
+            "Embedding indices buffer length {} does not match shape {indices_shape:?} ({index_count} elements)",
+            indices.len()
+        );
+        self.validate_indices(indices, weight_shape[0], "Embedding")?;
+
+        let mut output = self.take_buffer(output_len);
+        if output_len == 0 {
+            return Ok(output);
+        }
+
+        let launch_len =
+            u32::try_from(output_len).context("Embedding output is too large for a CUDA launch")?;
+        let weight_len =
+            u64::try_from(weight_len).context("Embedding weight length exceeds u64")?;
+        let index_count =
+            u64::try_from(index_count).context("Embedding index count exceeds u64")?;
+        let output_len =
+            u64::try_from(output_len).context("Embedding output length exceeds u64")?;
+        let vocabulary =
+            u64::try_from(weight_shape[0]).context("Embedding vocabulary size exceeds u64")?;
+        let width = u64::try_from(weight_shape[1]).context("Embedding width exceeds u64")?;
+        let function = self
+            .indexed_module
+            .as_ref()
+            .context("CUDA indexed PTX module is not loaded")?
+            .load_function("embedding")
+            .context("Failed to load CUDA embedding kernel")?;
+        let stream = self.device.default_stream();
+        let mut launcher = stream.launch_builder(&function);
+        launcher.arg(weight);
+        launcher.arg(&weight_len);
+        launcher.arg(indices);
+        launcher.arg(&index_count);
+        launcher.arg(&mut output);
+        launcher.arg(&output_len);
+        launcher.arg(&vocabulary);
+        launcher.arg(&width);
+        unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+            .context("CUDA embedding kernel launch failed")?;
+        Ok(output)
+    }
+
+    fn embedding_backward(
+        &self,
+        indices: &CudaSlice<f32>,
+        grad_output: &CudaSlice<f32>,
+        indices_shape: &[usize],
+        grad_output_shape: &[usize],
+        output_shape: &[usize],
+    ) -> Result<CudaSlice<f32>> {
+        let _span = trace_span!("embedding_backward").entered();
+        anyhow::ensure!(
+            output_shape.len() == 2,
+            "EmbeddingBackward output must be [V, C], got {output_shape:?}"
+        );
+        anyhow::ensure!(
+            grad_output_shape.len() == indices_shape.len() + 1
+                && grad_output_shape[..indices_shape.len()] == *indices_shape
+                && grad_output_shape[indices_shape.len()] == output_shape[1],
+            "EmbeddingBackward grad_output shape {grad_output_shape:?} does not match indices shape {indices_shape:?} and output shape {output_shape:?}"
+        );
+
+        let index_count = checked_product(indices_shape, "EmbeddingBackward indices")?;
+        let grad_output_len = checked_product(grad_output_shape, "EmbeddingBackward grad_output")?;
+        let output_len = checked_product(output_shape, "EmbeddingBackward output")?;
+        anyhow::ensure!(
+            indices.len() == index_count,
+            "EmbeddingBackward indices buffer length {} does not match shape {indices_shape:?} ({index_count} elements)",
+            indices.len()
+        );
+        anyhow::ensure!(
+            grad_output.len() == grad_output_len,
+            "EmbeddingBackward grad_output buffer length {} does not match shape {grad_output_shape:?} ({grad_output_len} elements)",
+            grad_output.len()
+        );
+        self.validate_indices(indices, output_shape[0], "EmbeddingBackward")?;
+
+        let stream = self.device.default_stream();
+        let mut output = self.take_buffer(output_len);
+        stream
+            .memset_zeros(&mut output)
+            .context("Failed to zero CUDA embedding gradient output")?;
+        if grad_output_len == 0 {
+            return Ok(output);
+        }
+
+        let launch_len = u32::try_from(grad_output_len)
+            .context("EmbeddingBackward grad_output is too large for a CUDA launch")?;
+        let index_count =
+            u64::try_from(index_count).context("EmbeddingBackward index count exceeds u64")?;
+        let grad_output_len = u64::try_from(grad_output_len)
+            .context("EmbeddingBackward grad_output length exceeds u64")?;
+        let output_len =
+            u64::try_from(output_len).context("EmbeddingBackward output length exceeds u64")?;
+        let vocabulary = u64::try_from(output_shape[0])
+            .context("EmbeddingBackward vocabulary size exceeds u64")?;
+        let width =
+            u64::try_from(output_shape[1]).context("EmbeddingBackward width exceeds u64")?;
+        let function = self
+            .indexed_module
+            .as_ref()
+            .context("CUDA indexed PTX module is not loaded")?
+            .load_function("embedding_backward")
+            .context("Failed to load CUDA embedding_backward kernel")?;
+        let mut launcher = stream.launch_builder(&function);
+        launcher.arg(indices);
+        launcher.arg(&index_count);
+        launcher.arg(grad_output);
+        launcher.arg(&grad_output_len);
+        launcher.arg(&mut output);
+        launcher.arg(&output_len);
+        launcher.arg(&vocabulary);
+        launcher.arg(&width);
+        unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+            .context("CUDA embedding_backward kernel launch failed")?;
+        Ok(output)
+    }
+
+    fn indexed_cross_entropy(
+        &self,
+        logits: &CudaSlice<f32>,
+        targets: &CudaSlice<f32>,
+        logits_shape: &[usize],
+        targets_shape: &[usize],
+        output_shape: &[usize],
+    ) -> Result<CudaSlice<f32>> {
+        let _span = trace_span!("indexed_cross_entropy").entered();
+        let vocabulary = *logits_shape
+            .last()
+            .context("IndexedCrossEntropy logits must have rank >= 1")?;
+        anyhow::ensure!(
+            vocabulary > 0,
+            "IndexedCrossEntropy vocabulary must be nonzero"
+        );
+        anyhow::ensure!(
+            targets_shape == output_shape
+                && output_shape == &logits_shape[..logits_shape.len() - 1],
+            "IndexedCrossEntropy shapes do not match: logits {logits_shape:?}, targets {targets_shape:?}, output {output_shape:?}"
+        );
+
+        let logits_len = checked_product(logits_shape, "IndexedCrossEntropy logits")?;
+        let target_count = checked_product(targets_shape, "IndexedCrossEntropy targets")?;
+        anyhow::ensure!(
+            logits.len() == logits_len,
+            "IndexedCrossEntropy logits buffer length {} does not match shape {logits_shape:?} ({logits_len} elements)",
+            logits.len()
+        );
+        anyhow::ensure!(
+            targets.len() == target_count,
+            "IndexedCrossEntropy targets buffer length {} does not match shape {targets_shape:?} ({target_count} elements)",
+            targets.len()
+        );
+        self.validate_indices(targets, vocabulary, "IndexedCrossEntropy")?;
+
+        let mut output = self.take_buffer(target_count);
+        if target_count == 0 {
+            return Ok(output);
+        }
+
+        let launch_len = u32::try_from(target_count)
+            .context("IndexedCrossEntropy output is too large for a CUDA launch")?;
+        let logits_len =
+            u64::try_from(logits_len).context("IndexedCrossEntropy logits length exceeds u64")?;
+        let target_count =
+            u64::try_from(target_count).context("IndexedCrossEntropy target count exceeds u64")?;
+        let vocabulary =
+            u64::try_from(vocabulary).context("IndexedCrossEntropy vocabulary size exceeds u64")?;
+        let function = self
+            .indexed_module
+            .as_ref()
+            .context("CUDA indexed PTX module is not loaded")?
+            .load_function("indexed_cross_entropy")
+            .context("Failed to load CUDA indexed_cross_entropy kernel")?;
+        let stream = self.device.default_stream();
+        let mut launcher = stream.launch_builder(&function);
+        launcher.arg(logits);
+        launcher.arg(&logits_len);
+        launcher.arg(targets);
+        launcher.arg(&target_count);
+        launcher.arg(&mut output);
+        launcher.arg(&vocabulary);
+        unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+            .context("CUDA indexed_cross_entropy kernel launch failed")?;
+        Ok(output)
+    }
+
+    fn indexed_cross_entropy_backward(
+        &self,
+        logits: &CudaSlice<f32>,
+        targets: &CudaSlice<f32>,
+        grad_output: &CudaSlice<f32>,
+        logits_shape: &[usize],
+        targets_shape: &[usize],
+        grad_output_shape: &[usize],
+    ) -> Result<CudaSlice<f32>> {
+        let _span = trace_span!("indexed_cross_entropy_backward").entered();
+        let vocabulary = *logits_shape
+            .last()
+            .context("IndexedCrossEntropyBackward logits must have rank >= 1")?;
+        anyhow::ensure!(
+            vocabulary > 0,
+            "IndexedCrossEntropyBackward vocabulary must be nonzero"
+        );
+        let row_shape = &logits_shape[..logits_shape.len() - 1];
+        anyhow::ensure!(
+            targets_shape == row_shape && grad_output_shape == row_shape,
+            "IndexedCrossEntropyBackward shapes do not match: logits {logits_shape:?}, targets {targets_shape:?}, grad_output {grad_output_shape:?}"
+        );
+
+        let logits_len = checked_product(logits_shape, "IndexedCrossEntropyBackward logits")?;
+        let target_count = checked_product(targets_shape, "IndexedCrossEntropyBackward targets")?;
+        let grad_output_len =
+            checked_product(grad_output_shape, "IndexedCrossEntropyBackward grad_output")?;
+        anyhow::ensure!(
+            logits.len() == logits_len,
+            "IndexedCrossEntropyBackward logits buffer length {} does not match shape {logits_shape:?} ({logits_len} elements)",
+            logits.len()
+        );
+        anyhow::ensure!(
+            targets.len() == target_count,
+            "IndexedCrossEntropyBackward targets buffer length {} does not match shape {targets_shape:?} ({target_count} elements)",
+            targets.len()
+        );
+        anyhow::ensure!(
+            grad_output.len() == grad_output_len,
+            "IndexedCrossEntropyBackward grad_output buffer length {} does not match shape {grad_output_shape:?} ({grad_output_len} elements)",
+            grad_output.len()
+        );
+        self.validate_indices(targets, vocabulary, "IndexedCrossEntropyBackward")?;
+
+        let mut output = self.take_buffer(logits_len);
+        if target_count == 0 {
+            return Ok(output);
+        }
+
+        let launch_len = u32::try_from(target_count)
+            .context("IndexedCrossEntropyBackward row count is too large for a CUDA launch")?;
+        let logits_len = u64::try_from(logits_len)
+            .context("IndexedCrossEntropyBackward logits length exceeds u64")?;
+        let target_count = u64::try_from(target_count)
+            .context("IndexedCrossEntropyBackward target count exceeds u64")?;
+        let grad_output_len = u64::try_from(grad_output_len)
+            .context("IndexedCrossEntropyBackward grad_output length exceeds u64")?;
+        let vocabulary = u64::try_from(vocabulary)
+            .context("IndexedCrossEntropyBackward vocabulary size exceeds u64")?;
+        let function = self
+            .indexed_module
+            .as_ref()
+            .context("CUDA indexed PTX module is not loaded")?
+            .load_function("indexed_cross_entropy_backward")
+            .context("Failed to load CUDA indexed_cross_entropy_backward kernel")?;
+        let stream = self.device.default_stream();
+        let mut launcher = stream.launch_builder(&function);
+        launcher.arg(logits);
+        launcher.arg(&logits_len);
+        launcher.arg(targets);
+        launcher.arg(&target_count);
+        launcher.arg(grad_output);
+        launcher.arg(&grad_output_len);
+        launcher.arg(&mut output);
+        launcher.arg(&vocabulary);
+        unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+            .context("CUDA indexed_cross_entropy_backward kernel launch failed")?;
+        Ok(output)
     }
 
     fn transpose(
@@ -973,6 +1311,22 @@ impl Executor<f32> for CudaExecutor {
         graph: &TensorGraph<f32, G>,
         inputs: HashMap<String, Vec<f32>>,
     ) -> Result<Vec<f32>> {
+        let needs_indexed_module = graph.graph.node_weights().any(|node| {
+            matches!(
+                node,
+                TensorGraphNode::Embedding { .. }
+                    | TensorGraphNode::EmbeddingBackward { .. }
+                    | TensorGraphNode::IndexedCrossEntropy { .. }
+                    | TensorGraphNode::IndexedCrossEntropyBackward { .. }
+            )
+        });
+        if needs_indexed_module && self.indexed_module.is_none() {
+            self.indexed_module = Some(
+                self.device
+                    .load_module(Ptx::from_src(INDEXED_PTX))
+                    .context("Failed to load indexed PTX module with cudarc")?,
+            );
+        }
         let order = graph.toposort();
         let liveness = liveness::analyze(graph, &order);
         for (_, value) in self.values.drain() {
@@ -1078,6 +1432,120 @@ impl Executor<f32> for CudaExecutor {
                         .with_context(|| {
                             format!("Failed to execute CUDA MatMul at node {}", node_idx.index())
                         })?
+                }
+                TensorGraphNode::Embedding { .. } => {
+                    let inputs = graph.inputs(*node_idx);
+                    anyhow::ensure!(inputs.len() == 2, "Embedding requires 2 inputs");
+                    let weight = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing weight for Embedding")?;
+                    let indices = self
+                        .values
+                        .get(&inputs[1])
+                        .context("Missing indices for Embedding")?;
+                    self.embedding(
+                        weight,
+                        indices,
+                        graph.graph[inputs[0]].shape(),
+                        graph.graph[inputs[1]].shape(),
+                        node.shape(),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "Failed to execute CUDA Embedding at node {}",
+                            node_idx.index()
+                        )
+                    })?
+                }
+                TensorGraphNode::EmbeddingBackward { .. } => {
+                    let inputs = graph.inputs(*node_idx);
+                    anyhow::ensure!(inputs.len() == 2, "EmbeddingBackward requires 2 inputs");
+                    let indices = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing indices for EmbeddingBackward")?;
+                    let grad_output = self
+                        .values
+                        .get(&inputs[1])
+                        .context("Missing grad_output for EmbeddingBackward")?;
+                    self.embedding_backward(
+                        indices,
+                        grad_output,
+                        graph.graph[inputs[0]].shape(),
+                        graph.graph[inputs[1]].shape(),
+                        node.shape(),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "Failed to execute CUDA EmbeddingBackward at node {}",
+                            node_idx.index()
+                        )
+                    })?
+                }
+                TensorGraphNode::IndexedCrossEntropy { .. } => {
+                    let inputs = graph.inputs(*node_idx);
+                    anyhow::ensure!(inputs.len() == 2, "IndexedCrossEntropy requires 2 inputs");
+                    let logits = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing logits for IndexedCrossEntropy")?;
+                    let targets = self
+                        .values
+                        .get(&inputs[1])
+                        .context("Missing targets for IndexedCrossEntropy")?;
+                    self.indexed_cross_entropy(
+                        logits,
+                        targets,
+                        graph.graph[inputs[0]].shape(),
+                        graph.graph[inputs[1]].shape(),
+                        node.shape(),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "Failed to execute CUDA IndexedCrossEntropy at node {}",
+                            node_idx.index()
+                        )
+                    })?
+                }
+                TensorGraphNode::IndexedCrossEntropyBackward { .. } => {
+                    let inputs = graph.inputs(*node_idx);
+                    anyhow::ensure!(
+                        inputs.len() == 3,
+                        "IndexedCrossEntropyBackward requires 3 inputs"
+                    );
+                    let logits = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing logits for IndexedCrossEntropyBackward")?;
+                    let targets = self
+                        .values
+                        .get(&inputs[1])
+                        .context("Missing targets for IndexedCrossEntropyBackward")?;
+                    let grad_output = self
+                        .values
+                        .get(&inputs[2])
+                        .context("Missing grad_output for IndexedCrossEntropyBackward")?;
+                    anyhow::ensure!(
+                        node.shape() == graph.graph[inputs[0]].shape(),
+                        "IndexedCrossEntropyBackward output shape {:?} does not match logits shape {:?}",
+                        node.shape(),
+                        graph.graph[inputs[0]].shape()
+                    );
+                    self.indexed_cross_entropy_backward(
+                        logits,
+                        targets,
+                        grad_output,
+                        graph.graph[inputs[0]].shape(),
+                        graph.graph[inputs[1]].shape(),
+                        graph.graph[inputs[2]].shape(),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "Failed to execute CUDA IndexedCrossEntropyBackward at node {}",
+                            node_idx.index()
+                        )
+                    })?
                 }
                 TensorGraphNode::Parameter { data, .. } => {
                     let v = data

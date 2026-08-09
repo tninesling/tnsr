@@ -105,6 +105,18 @@ pub enum TensorGraphNode<D> {
     MatMul {
         shape: crate::tensor::Shape,
     },
+    Embedding {
+        shape: crate::tensor::Shape,
+    },
+    EmbeddingBackward {
+        shape: crate::tensor::Shape,
+    },
+    IndexedCrossEntropy {
+        shape: crate::tensor::Shape,
+    },
+    IndexedCrossEntropyBackward {
+        shape: crate::tensor::Shape,
+    },
     Transpose {
         shape: crate::tensor::Shape,
     },
@@ -183,6 +195,10 @@ impl<D> TensorGraphNode<D> {
                 BinaryOp::Div => "Div",
             },
             TensorGraphNode::MatMul { .. } => "MatMul",
+            TensorGraphNode::Embedding { .. } => "Embedding",
+            TensorGraphNode::EmbeddingBackward { .. } => "EmbeddingBackward",
+            TensorGraphNode::IndexedCrossEntropy { .. } => "IndexedCrossEntropy",
+            TensorGraphNode::IndexedCrossEntropyBackward { .. } => "IndexedCrossEntropyBackward",
             TensorGraphNode::Transpose { .. } => "Transpose",
             TensorGraphNode::Reshape { .. } => "Reshape",
             TensorGraphNode::Permute { .. } => "Permute",
@@ -213,6 +229,10 @@ impl<D> TensorGraphNode<D> {
             TensorGraphNode::FusedUnary { shape, .. } => shape,
             TensorGraphNode::Binary { shape, .. } => shape,
             TensorGraphNode::MatMul { shape } => shape,
+            TensorGraphNode::Embedding { shape } => shape,
+            TensorGraphNode::EmbeddingBackward { shape } => shape,
+            TensorGraphNode::IndexedCrossEntropy { shape } => shape,
+            TensorGraphNode::IndexedCrossEntropyBackward { shape } => shape,
             TensorGraphNode::Transpose { shape } => shape,
             TensorGraphNode::Reshape { shape } => shape,
             TensorGraphNode::Permute { shape, .. } => shape,
@@ -651,6 +671,58 @@ where
                         input_b,
                         grad_b,
                     );
+                }
+                TensorGraphNode::Embedding { .. } => {
+                    if inputs.len() != 2 {
+                        panic!("Embedding should have 2 inputs");
+                    }
+                    let weight = inputs[0];
+                    let indices = inputs[1];
+                    let indices_shape = self.graph[indices].shape().clone();
+                    let grad_shape = self.graph[node_idx].shape().clone();
+                    let table_shape = self.graph[weight].shape().clone();
+                    let indices_expr = TensorExpr::node_ref(indices, indices_shape);
+                    let grad_expr = TensorExpr::node_ref(grad_output, grad_shape);
+                    let weight_grad_expr =
+                        TensorExpr::embedding_backward(indices_expr, grad_expr, table_shape);
+                    let weight_grad =
+                        self.lower_gradient_expr(&weight_grad_expr, &mut gradient_nodes);
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        weight,
+                        weight_grad,
+                    );
+                }
+                TensorGraphNode::IndexedCrossEntropy { .. } => {
+                    if inputs.len() != 2 {
+                        panic!("IndexedCrossEntropy should have 2 inputs");
+                    }
+                    let logits = inputs[0];
+                    let targets = inputs[1];
+                    let logits_shape = self.graph[logits].shape().clone();
+                    let targets_shape = self.graph[targets].shape().clone();
+                    let grad_shape = self.graph[node_idx].shape().clone();
+                    let logits_expr = TensorExpr::node_ref(logits, logits_shape);
+                    let targets_expr = TensorExpr::node_ref(targets, targets_shape);
+                    let grad_expr = TensorExpr::node_ref(grad_output, grad_shape);
+                    let logits_grad_expr = TensorExpr::indexed_cross_entropy_backward(
+                        logits_expr,
+                        targets_expr,
+                        grad_expr,
+                    );
+                    let logits_grad =
+                        self.lower_gradient_expr(&logits_grad_expr, &mut gradient_nodes);
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        logits,
+                        logits_grad,
+                    );
+                }
+                TensorGraphNode::EmbeddingBackward { .. }
+                | TensorGraphNode::IndexedCrossEntropyBackward { .. } => {
+                    // Backward primitives are terminal for first-order autograd.
                 }
                 TensorGraphNode::Parameter { id, .. } => {
                     // Store the gradient node for this parameter

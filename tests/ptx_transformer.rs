@@ -328,6 +328,32 @@ fn ptx_matmul_predicates_15_16_17_and_rectangular_boundaries() {
 }
 
 #[test]
+fn ptx_tf32_matmul_matches_cpu() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    for (m, k, n) in [(32, 32, 32), (33, 40, 35)] {
+        let left = TensorExpr::constant(
+            (0..m * k)
+                .map(|index| (index % 29) as f32 / 29.0 - 0.5)
+                .collect(),
+            vec![m, k],
+        );
+        let right = TensorExpr::constant(
+            (0..k * n)
+                .map(|index| (index % 31) as f32 / 31.0 - 0.5)
+                .collect(),
+            vec![k, n],
+        );
+        let graph: TensorGraph<f32> = left.matmul(right).into();
+
+        let expected = execute_cpu(&graph);
+        let actual = ptx.execute(&graph, HashMap::new()).unwrap();
+        assert_close(&actual, &expected, 2e-3);
+    }
+}
+
+#[test]
 fn ptx_broadcasted_batched_matmul_matches_cpu() {
     let Some(mut ptx) = ptx_executor() else {
         return;

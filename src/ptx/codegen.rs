@@ -610,6 +610,10 @@ impl<'a> fmt::Display for Inst<'a> {
                     src.iter().join(", ")
                 ),
             },
+            Inst::StSharedB32 { addr, src } => write!(f, "st.shared.b32 [{addr}], {src};"),
+            Inst::ConvertTf32F32 { dst, src } => {
+                write!(f, "cvt.rna.tf32.f32 {dst}, {src};")
+            }
             Inst::LdMatrix { frags, addr } => {
                 write!(
                     f,
@@ -625,7 +629,7 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.load.a.sync.aligned.m16n16k8.row.tf32 {{{}}}, {}, {};",
+                    "wmma.load.a.sync.aligned.m16n16k8.row.shared.tf32 {{{}}}, [{}], {};",
                     frags.iter().join(", "),
                     addr,
                     stride
@@ -638,20 +642,7 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.load.b.sync.aligned.m16n16k8.col.tf32 {{{}}}, {}, {};",
-                    frags.iter().join(", "),
-                    addr,
-                    stride
-                )
-            }
-            Inst::WmmaLoadC {
-                frags,
-                addr,
-                stride,
-            } => {
-                write!(
-                    f,
-                    "wmma.load.c.sync.aligned.m16n8k8.row.f32 {{{}}}, {}, {};",
+                    "wmma.load.b.sync.aligned.m16n16k8.row.shared.tf32 {{{}}}, [{}], {};",
                     frags.iter().join(", "),
                     addr,
                     stride
@@ -665,7 +656,7 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.mma.sync.aligned.m16n16k8.row.col.f32.tf32.tf32.f32 {{{}}}, {{{}}}, {{{}}}, {{{}}};",
+                    "wmma.mma.sync.aligned.m16n16k8.row.row.f32.tf32.tf32.f32 {{{}}}, {{{}}}, {{{}}}, {{{}}};",
                     d_frags.iter().join(", "),
                     a_frags.iter().join(", "),
                     b_frags.iter().join(", "),
@@ -709,7 +700,7 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.store.d.sync.aligned.m16n8k8.row.f32 {}, {{{}}}, {};",
+                    "wmma.store.d.sync.aligned.m16n16k8.row.shared.f32 [{}], {{{}}}, {};",
                     addr,
                     frags.iter().join(", "),
                     stride

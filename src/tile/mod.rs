@@ -8,6 +8,6 @@ pub use builder::TileIRBuilder;
 pub use graph::TileGraph;
 #[allow(unused_imports)]
 pub use ir::{
-    Block, DType, Dim, Expr, KernelParam, MatMulLayout, MatMulPlan, MemorySpace, ReduceOp, Stmt,
-    TileIR, TileVar,
+    Block, Conv2dGeometry, DType, Dim, Expr, KernelParam, MatMulLayout, MatMulPlan,
+    MaxPool2dGeometry, MemorySpace, ReduceOp, Stmt, TileIR, TileVar,
 };

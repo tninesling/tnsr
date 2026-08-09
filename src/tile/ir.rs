@@ -111,6 +111,22 @@ pub enum Stmt {
         row_count: usize,
     },
 
+    Conv2d {
+        geometry: Conv2dGeometry,
+    },
+    ConvTranspose2d {
+        geometry: Conv2dGeometry,
+    },
+    Conv2dBackwardWeight {
+        geometry: Conv2dGeometry,
+    },
+    MaxPool2d {
+        geometry: MaxPool2dGeometry,
+    },
+    MaxPool2dBackward {
+        geometry: MaxPool2dGeometry,
+    },
+
     /// Element-wise binary operations
     Add {
         dest: TileVar,
@@ -214,6 +230,33 @@ pub struct MatrixLayout {
     pub rows: usize,
     pub cols: usize,
     pub row_stride: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Conv2dGeometry {
+    pub batch: usize,
+    pub input_channels: usize,
+    pub input_height: usize,
+    pub input_width: usize,
+    pub output_channels: usize,
+    pub output_height: usize,
+    pub output_width: usize,
+    pub kernel_height: usize,
+    pub kernel_width: usize,
+    pub stride: usize,
+    pub padding: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MaxPool2dGeometry {
+    pub batch: usize,
+    pub channels: usize,
+    pub input_height: usize,
+    pub input_width: usize,
+    pub output_height: usize,
+    pub output_width: usize,
+    pub kernel_size: usize,
+    pub stride: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -887,6 +887,13 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::mul_f32(gradient.clone(), difference, upstream));
             store_param_f32_at(func, ctx, "output", tid, gradient);
         }
+        Stmt::Conv2d { geometry } => lower_conv2d(func, ctx, *geometry),
+        Stmt::ConvTranspose2d { geometry } => lower_conv_transpose2d(func, ctx, *geometry),
+        Stmt::Conv2dBackwardWeight { geometry } => {
+            lower_conv2d_backward_weight(func, ctx, *geometry)
+        }
+        Stmt::MaxPool2d { geometry } => lower_max_pool2d(func, ctx, *geometry),
+        Stmt::MaxPool2dBackward { geometry } => lower_max_pool2d_backward(func, ctx, *geometry),
         Stmt::Add { dest, a, b } => {
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
             let a_reg = ctx.get_or_alloc_reg(func, *a);
@@ -1274,6 +1281,642 @@ fn lower_stmt<'a>(
             ctx.loop_vars.remove(loop_var);
         }
     }
+}
+
+fn lower_conv2d<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    geometry: crate::tile::Conv2dGeometry,
+) {
+    let tid = global_linear_tid(func);
+    let (batch, output_channel, output_row, output_col) = decode_nchw(
+        func,
+        tid.clone(),
+        geometry.output_channels,
+        geometry.output_height,
+        geometry.output_width,
+    );
+    let accumulator = func.add_f32_register();
+    func.add_inst(Inst::mov_f32(accumulator.clone(), Operand::imm_f32(0.0)));
+    let reduction_size = geometry.input_channels * geometry.kernel_height * geometry.kernel_width;
+    let reduction = begin_counted_loop(func, ctx, "conv", reduction_size);
+    let input_channel = decode_coordinate(
+        func,
+        reduction.counter.clone(),
+        geometry.kernel_height * geometry.kernel_width,
+        geometry.input_channels,
+    );
+    let kernel_row = decode_coordinate(
+        func,
+        reduction.counter.clone(),
+        geometry.kernel_width,
+        geometry.kernel_height,
+    );
+    let kernel_col = decode_coordinate(func, reduction.counter.clone(), 1, geometry.kernel_width);
+    let continue_label = next_label(ctx, "conv_continue");
+    let input_row = padded_input_coordinate(
+        func,
+        output_row,
+        kernel_row.clone(),
+        geometry.stride,
+        geometry.padding,
+        geometry.input_height,
+        continue_label,
+    );
+    let input_col = padded_input_coordinate(
+        func,
+        output_col,
+        kernel_col.clone(),
+        geometry.stride,
+        geometry.padding,
+        geometry.input_width,
+        continue_label,
+    );
+    let input_offset = flatten_nchw(
+        func,
+        batch,
+        input_channel.clone(),
+        input_row,
+        input_col,
+        geometry.input_channels,
+        geometry.input_height,
+        geometry.input_width,
+    );
+    let weight_offset = flatten_nchw(
+        func,
+        output_channel,
+        input_channel,
+        kernel_row,
+        kernel_col,
+        geometry.input_channels,
+        geometry.kernel_height,
+        geometry.kernel_width,
+    );
+    let input = load_param_f32_at(func, ctx, "input", input_offset);
+    let weight = load_param_f32_at(func, ctx, "weight", weight_offset);
+    accumulate_product(func, accumulator.clone(), input, weight);
+    func.add_inst(Inst::Label(continue_label));
+    end_counted_loop(func, reduction);
+    store_param_f32_at(func, ctx, "output", tid, accumulator);
+}
+
+fn lower_conv_transpose2d<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    geometry: crate::tile::Conv2dGeometry,
+) {
+    let tid = global_linear_tid(func);
+    let (batch, input_channel, input_row, input_col) = decode_nchw(
+        func,
+        tid.clone(),
+        geometry.input_channels,
+        geometry.input_height,
+        geometry.input_width,
+    );
+    let accumulator = func.add_f32_register();
+    func.add_inst(Inst::mov_f32(accumulator.clone(), Operand::imm_f32(0.0)));
+    let reduction_size = geometry.output_channels * geometry.kernel_height * geometry.kernel_width;
+    let reduction = begin_counted_loop(func, ctx, "conv_transpose", reduction_size);
+    let output_channel = decode_coordinate(
+        func,
+        reduction.counter.clone(),
+        geometry.kernel_height * geometry.kernel_width,
+        geometry.output_channels,
+    );
+    let kernel_row = decode_coordinate(
+        func,
+        reduction.counter.clone(),
+        geometry.kernel_width,
+        geometry.kernel_height,
+    );
+    let kernel_col = decode_coordinate(func, reduction.counter.clone(), 1, geometry.kernel_width);
+    let continue_label = next_label(ctx, "conv_transpose_continue");
+    let output_row = transposed_output_coordinate(
+        func,
+        input_row,
+        kernel_row.clone(),
+        geometry.stride,
+        geometry.padding,
+        geometry.output_height,
+        continue_label,
+    );
+    let output_col = transposed_output_coordinate(
+        func,
+        input_col,
+        kernel_col.clone(),
+        geometry.stride,
+        geometry.padding,
+        geometry.output_width,
+        continue_label,
+    );
+    let grad_offset = flatten_nchw(
+        func,
+        batch,
+        output_channel.clone(),
+        output_row,
+        output_col,
+        geometry.output_channels,
+        geometry.output_height,
+        geometry.output_width,
+    );
+    let weight_offset = flatten_nchw(
+        func,
+        output_channel,
+        input_channel,
+        kernel_row,
+        kernel_col,
+        geometry.input_channels,
+        geometry.kernel_height,
+        geometry.kernel_width,
+    );
+    let grad = load_param_f32_at(func, ctx, "grad_output", grad_offset);
+    let weight = load_param_f32_at(func, ctx, "weight", weight_offset);
+    accumulate_product(func, accumulator.clone(), grad, weight);
+    func.add_inst(Inst::Label(continue_label));
+    end_counted_loop(func, reduction);
+    store_param_f32_at(func, ctx, "output", tid, accumulator);
+}
+
+fn lower_conv2d_backward_weight<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    geometry: crate::tile::Conv2dGeometry,
+) {
+    let tid = global_linear_tid(func);
+    let (output_channel, input_channel, kernel_row, kernel_col) = decode_nchw(
+        func,
+        tid.clone(),
+        geometry.input_channels,
+        geometry.kernel_height,
+        geometry.kernel_width,
+    );
+    let accumulator = func.add_f32_register();
+    func.add_inst(Inst::mov_f32(accumulator.clone(), Operand::imm_f32(0.0)));
+    let reduction_size = geometry.batch * geometry.output_height * geometry.output_width;
+    let reduction = begin_counted_loop(func, ctx, "conv_weight", reduction_size);
+    let batch = decode_coordinate(
+        func,
+        reduction.counter.clone(),
+        geometry.output_height * geometry.output_width,
+        geometry.batch,
+    );
+    let output_row = decode_coordinate(
+        func,
+        reduction.counter.clone(),
+        geometry.output_width,
+        geometry.output_height,
+    );
+    let output_col = decode_coordinate(func, reduction.counter.clone(), 1, geometry.output_width);
+    let continue_label = next_label(ctx, "conv_weight_continue");
+    let input_row = padded_input_coordinate(
+        func,
+        output_row.clone(),
+        kernel_row.clone(),
+        geometry.stride,
+        geometry.padding,
+        geometry.input_height,
+        continue_label,
+    );
+    let input_col = padded_input_coordinate(
+        func,
+        output_col.clone(),
+        kernel_col,
+        geometry.stride,
+        geometry.padding,
+        geometry.input_width,
+        continue_label,
+    );
+    let input_offset = flatten_nchw(
+        func,
+        batch.clone(),
+        input_channel,
+        input_row,
+        input_col,
+        geometry.input_channels,
+        geometry.input_height,
+        geometry.input_width,
+    );
+    let grad_offset = flatten_nchw(
+        func,
+        batch,
+        output_channel,
+        output_row,
+        output_col,
+        geometry.output_channels,
+        geometry.output_height,
+        geometry.output_width,
+    );
+    let input = load_param_f32_at(func, ctx, "input", input_offset);
+    let grad = load_param_f32_at(func, ctx, "grad_output", grad_offset);
+    accumulate_product(func, accumulator.clone(), input, grad);
+    func.add_inst(Inst::Label(continue_label));
+    end_counted_loop(func, reduction);
+    store_param_f32_at(func, ctx, "output", tid, accumulator);
+}
+
+fn lower_max_pool2d<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    geometry: crate::tile::MaxPool2dGeometry,
+) {
+    let tid = global_linear_tid(func);
+    let (batch, channel, output_row, output_col) = decode_nchw(
+        func,
+        tid.clone(),
+        geometry.channels,
+        geometry.output_height,
+        geometry.output_width,
+    );
+    let maximum = func.add_f32_register();
+    func.add_inst(Inst::mov_f32(
+        maximum.clone(),
+        Operand::imm_f32(f32::NEG_INFINITY),
+    ));
+    let reduction = begin_counted_loop(
+        func,
+        ctx,
+        "max_pool",
+        geometry.kernel_size * geometry.kernel_size,
+    );
+    let kernel_row = decode_coordinate(
+        func,
+        reduction.counter.clone(),
+        geometry.kernel_size,
+        geometry.kernel_size,
+    );
+    let kernel_col = decode_coordinate(func, reduction.counter.clone(), 1, geometry.kernel_size);
+    let input_row = scaled_coordinate(func, output_row, geometry.stride, kernel_row);
+    let input_col = scaled_coordinate(func, output_col, geometry.stride, kernel_col);
+    let input_offset = flatten_nchw(
+        func,
+        batch,
+        channel,
+        input_row,
+        input_col,
+        geometry.channels,
+        geometry.input_height,
+        geometry.input_width,
+    );
+    let value = load_param_f32_at(func, ctx, "input", input_offset);
+    func.add_inst(Inst::max_f32(maximum.clone(), maximum.clone(), value));
+    end_counted_loop(func, reduction);
+    store_param_f32_at(func, ctx, "output", tid, maximum);
+}
+
+fn lower_max_pool2d_backward<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    geometry: crate::tile::MaxPool2dGeometry,
+) {
+    let tid = global_linear_tid(func);
+    let (batch, channel, input_row, input_col) = decode_nchw(
+        func,
+        tid.clone(),
+        geometry.channels,
+        geometry.input_height,
+        geometry.input_width,
+    );
+    let input_value = load_param_f32_at(func, ctx, "input", tid.clone());
+    let accumulator = func.add_f32_register();
+    func.add_inst(Inst::mov_f32(accumulator.clone(), Operand::imm_f32(0.0)));
+    let reduction = begin_counted_loop(
+        func,
+        ctx,
+        "max_pool_backward",
+        geometry.output_height * geometry.output_width,
+    );
+    let output_row = decode_coordinate(
+        func,
+        reduction.counter.clone(),
+        geometry.output_width,
+        geometry.output_height,
+    );
+    let output_col = decode_coordinate(func, reduction.counter.clone(), 1, geometry.output_width);
+    let continue_label = next_label(ctx, "max_pool_backward_continue");
+    branch_unless_window_contains(
+        func,
+        input_row,
+        output_row.clone(),
+        geometry.stride,
+        geometry.kernel_size,
+        continue_label,
+    );
+    branch_unless_window_contains(
+        func,
+        input_col,
+        output_col.clone(),
+        geometry.stride,
+        geometry.kernel_size,
+        continue_label,
+    );
+    let output_offset = flatten_nchw(
+        func,
+        batch,
+        channel,
+        output_row,
+        output_col,
+        geometry.channels,
+        geometry.output_height,
+        geometry.output_width,
+    );
+    let pooled = load_param_f32_at(func, ctx, "pooled", output_offset.clone());
+    let not_maximum = func.add_predicate_register();
+    func.add_inst(Inst::setp_ne_f32(
+        not_maximum.clone(),
+        input_value.clone(),
+        pooled,
+    ));
+    func.add_inst(Inst::Bra {
+        condition: not_maximum,
+        target: continue_label,
+    });
+    let grad = load_param_f32_at(func, ctx, "grad_output", output_offset);
+    func.add_inst(Inst::add_f32(
+        accumulator.clone(),
+        accumulator.clone(),
+        grad,
+    ));
+    func.add_inst(Inst::Label(continue_label));
+    end_counted_loop(func, reduction);
+    store_param_f32_at(func, ctx, "output", tid, accumulator);
+}
+
+struct CountedLoop<'a> {
+    counter: Operand<'a, U64>,
+    start: &'a str,
+    end: &'a str,
+}
+
+fn begin_counted_loop<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    prefix: &str,
+    limit: usize,
+) -> CountedLoop<'a> {
+    let counter = func.add_u64_register();
+    func.add_inst(Inst::mov_u64(counter.clone(), Operand::imm_u64(0)));
+    let start = next_label(ctx, &format!("{prefix}_loop"));
+    let end = next_label(ctx, &format!("{prefix}_end"));
+    func.add_inst(Inst::Label(start));
+    let done = func.add_predicate_register();
+    func.add_inst(Inst::setp_ge_u64(
+        done.clone(),
+        counter.clone(),
+        Operand::imm_u64(limit as u64),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: done,
+        target: end,
+    });
+    CountedLoop {
+        counter,
+        start,
+        end,
+    }
+}
+
+fn end_counted_loop<'a>(func: &mut Function<'a>, state: CountedLoop<'a>) {
+    func.add_inst(Inst::add_u64(
+        state.counter.clone(),
+        state.counter,
+        Operand::imm_u64(1),
+    ));
+    func.add_inst(Inst::BraUni {
+        target: state.start,
+    });
+    func.add_inst(Inst::Label(state.end));
+}
+
+fn next_label<'a>(ctx: &mut LoweringContext<'a>, prefix: &str) -> &'a str {
+    let label = bumpalo::format!(in ctx.arena, "{}_{}", prefix, ctx.label_counter).into_bump_str();
+    ctx.label_counter += 1;
+    label
+}
+
+fn decode_nchw<'a>(
+    func: &mut Function<'a>,
+    linear: Operand<'a, U64>,
+    channels: usize,
+    height: usize,
+    width: usize,
+) -> (
+    Operand<'a, U64>,
+    Operand<'a, U64>,
+    Operand<'a, U64>,
+    Operand<'a, U64>,
+) {
+    let batch_stride = channels * height * width;
+    (
+        quotient_u64(func, linear.clone(), batch_stride),
+        decode_coordinate(func, linear.clone(), height * width, channels),
+        decode_coordinate(func, linear.clone(), width, height),
+        decode_coordinate(func, linear, 1, width),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flatten_nchw<'a>(
+    func: &mut Function<'a>,
+    batch: Operand<'a, U64>,
+    channel: Operand<'a, U64>,
+    row: Operand<'a, U64>,
+    col: Operand<'a, U64>,
+    channels: usize,
+    height: usize,
+    width: usize,
+) -> Operand<'a, U64> {
+    let batch_offset = multiply_u64(func, batch, channels * height * width);
+    let channel_offset = multiply_u64(func, channel, height * width);
+    let row_offset = multiply_u64(func, row, width);
+    let offset = func.add_u64_register();
+    func.add_inst(Inst::add_u64(offset.clone(), batch_offset, channel_offset));
+    func.add_inst(Inst::add_u64(offset.clone(), offset.clone(), row_offset));
+    func.add_inst(Inst::add_u64(offset.clone(), offset.clone(), col));
+    offset
+}
+
+fn padded_input_coordinate<'a>(
+    func: &mut Function<'a>,
+    output: Operand<'a, U64>,
+    kernel: Operand<'a, U64>,
+    stride: usize,
+    padding: usize,
+    extent: usize,
+    continue_label: &'a str,
+) -> Operand<'a, U64> {
+    let raw = scaled_coordinate(func, output, stride, kernel);
+    branch_if_lt(func, raw.clone(), padding, continue_label);
+    let coordinate = func.add_u64_register();
+    func.add_inst(Inst::sub_u64(
+        coordinate.clone(),
+        raw,
+        Operand::imm_u64(padding as u64),
+    ));
+    branch_if_ge(func, coordinate.clone(), extent, continue_label);
+    coordinate
+}
+
+fn transposed_output_coordinate<'a>(
+    func: &mut Function<'a>,
+    input: Operand<'a, U64>,
+    kernel: Operand<'a, U64>,
+    stride: usize,
+    padding: usize,
+    extent: usize,
+    continue_label: &'a str,
+) -> Operand<'a, U64> {
+    let padded = func.add_u64_register();
+    func.add_inst(Inst::add_u64(
+        padded.clone(),
+        input,
+        Operand::imm_u64(padding as u64),
+    ));
+    let before_kernel = func.add_predicate_register();
+    func.add_inst(Inst::setp_lt_u64(
+        before_kernel.clone(),
+        padded.clone(),
+        kernel.clone(),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: before_kernel,
+        target: continue_label,
+    });
+    let numerator = func.add_u64_register();
+    func.add_inst(Inst::sub_u64(numerator.clone(), padded, kernel));
+    let coordinate = quotient_u64(func, numerator.clone(), stride);
+    let reconstructed = multiply_u64(func, coordinate.clone(), stride);
+    let not_divisible = func.add_predicate_register();
+    func.add_inst(Inst::setp_ne_u64(
+        not_divisible.clone(),
+        reconstructed,
+        numerator,
+    ));
+    func.add_inst(Inst::Bra {
+        condition: not_divisible,
+        target: continue_label,
+    });
+    branch_if_ge(func, coordinate.clone(), extent, continue_label);
+    coordinate
+}
+
+fn branch_unless_window_contains<'a>(
+    func: &mut Function<'a>,
+    input: Operand<'a, U64>,
+    output: Operand<'a, U64>,
+    stride: usize,
+    kernel_size: usize,
+    continue_label: &'a str,
+) {
+    let start = multiply_u64(func, output, stride);
+    let before = func.add_predicate_register();
+    func.add_inst(Inst::setp_lt_u64(
+        before.clone(),
+        input.clone(),
+        start.clone(),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: before,
+        target: continue_label,
+    });
+    let end = func.add_u64_register();
+    func.add_inst(Inst::add_u64(
+        end.clone(),
+        start,
+        Operand::imm_u64(kernel_size as u64),
+    ));
+    let after = func.add_predicate_register();
+    func.add_inst(Inst::setp_ge_u64(after.clone(), input, end));
+    func.add_inst(Inst::Bra {
+        condition: after,
+        target: continue_label,
+    });
+}
+
+fn scaled_coordinate<'a>(
+    func: &mut Function<'a>,
+    coordinate: Operand<'a, U64>,
+    scale: usize,
+    offset: Operand<'a, U64>,
+) -> Operand<'a, U64> {
+    let scaled = multiply_u64(func, coordinate, scale);
+    let result = func.add_u64_register();
+    func.add_inst(Inst::add_u64(result.clone(), scaled, offset));
+    result
+}
+
+fn multiply_u64<'a>(
+    func: &mut Function<'a>,
+    value: Operand<'a, U64>,
+    multiplier: usize,
+) -> Operand<'a, U64> {
+    let result = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        result.clone(),
+        value,
+        Operand::imm_u64(multiplier as u64),
+    ));
+    result
+}
+
+fn quotient_u64<'a>(
+    func: &mut Function<'a>,
+    value: Operand<'a, U64>,
+    divisor: usize,
+) -> Operand<'a, U64> {
+    let result = func.add_u64_register();
+    func.add_inst(Inst::div_u64(
+        result.clone(),
+        value,
+        Operand::imm_u64(divisor as u64),
+    ));
+    result
+}
+
+fn branch_if_lt<'a>(
+    func: &mut Function<'a>,
+    value: Operand<'a, U64>,
+    limit: usize,
+    target: &'a str,
+) {
+    let predicate = func.add_predicate_register();
+    func.add_inst(Inst::setp_lt_u64(
+        predicate.clone(),
+        value,
+        Operand::imm_u64(limit as u64),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: predicate,
+        target,
+    });
+}
+
+fn branch_if_ge<'a>(
+    func: &mut Function<'a>,
+    value: Operand<'a, U64>,
+    limit: usize,
+    target: &'a str,
+) {
+    let predicate = func.add_predicate_register();
+    func.add_inst(Inst::setp_ge_u64(
+        predicate.clone(),
+        value,
+        Operand::imm_u64(limit as u64),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: predicate,
+        target,
+    });
+}
+
+fn accumulate_product<'a>(
+    func: &mut Function<'a>,
+    accumulator: Operand<'a, F32>,
+    left: Operand<'a, F32>,
+    right: Operand<'a, F32>,
+) {
+    let product = func.add_f32_register();
+    func.add_inst(Inst::mul_f32(product.clone(), left, right));
+    func.add_inst(Inst::add_f32(accumulator.clone(), accumulator, product));
 }
 
 fn lower_tf32_matmul<'a>(

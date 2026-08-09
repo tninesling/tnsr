@@ -38,6 +38,11 @@ name = "gpu"
 harness = false
 required-features = ["cuda"]
 
+[[bench]]
+name = "transformer"
+harness = false
+required-features = ["cuda"]
+
 [dev-dependencies]
 clap = { version = "4.3.7", features = ["derive"] }
 criterion = "0.7.0"

@@ -92,6 +92,19 @@ pub struct ConvertInst<'a, DstT: PtxType, SrcT: PtxType> {
     _phantom: PhantomData<(DstT, SrcT)>,
 }
 
+#[derive(Clone, Debug)]
+pub struct AtomicAddInst<'a, T: PtxType> {
+    pub dst: Operand<'a, T>,
+    pub addr: Operand<'a, U64>,
+    pub value: Operand<'a, T>,
+}
+
+impl<'a, T: PtxType> AtomicAddInst<'a, T> {
+    pub fn new(dst: Operand<'a, T>, addr: Operand<'a, U64>, value: Operand<'a, T>) -> Self {
+        Self { dst, addr, value }
+    }
+}
+
 impl<'a, DstT: PtxType, SrcT: PtxType> ConvertInst<'a, DstT, SrcT> {
     pub fn new(dst: Operand<'a, DstT>, src: Operand<'a, SrcT>) -> Self {
         Self {
@@ -432,6 +445,7 @@ impl<'a, T: PtxType> SelpInst<'a, T> {
 pub enum Inst<'a> {
     ConvertU64U32(ConvertInst<'a, U64, U32>),
     ConvertU64I32(ConvertInst<'a, U64, I32>),
+    ConvertU64F32(ConvertInst<'a, U64, F32>),
     ConvertI32U64(ConvertInst<'a, I32, U64>),
     ConvertToGlobal {
         dst: Operand<'a, U64>,
@@ -471,6 +485,7 @@ pub enum Inst<'a> {
         src: Vec<Operand<'a, F32>>,
         vec: VecWidth,
     },
+    AtomicAddGlobalF32(AtomicAddInst<'a, F32>),
 
     AddI32(AddInst<'a, I32>),
     AddI64(AddInst<'a, I64>),
@@ -578,6 +593,10 @@ impl<'a> Inst<'a> {
         Inst::ConvertU64I32(ConvertInst::new(dst, src))
     }
 
+    pub fn convert_u64_f32(dst: Operand<'a, U64>, src: Operand<'a, F32>) -> Self {
+        Inst::ConvertU64F32(ConvertInst::new(dst, src))
+    }
+
     pub fn convert_i32_u64(dst: Operand<'a, I32>, src: Operand<'a, U64>) -> Self {
         Inst::ConvertI32U64(ConvertInst::new(dst, src))
     }
@@ -624,6 +643,14 @@ impl<'a> Inst<'a> {
             src: vec![src],
             vec: VecWidth::Scalar,
         }
+    }
+
+    pub fn atomic_add_global_f32(
+        dst: Operand<'a, F32>,
+        addr: Operand<'a, U64>,
+        value: Operand<'a, F32>,
+    ) -> Self {
+        Inst::AtomicAddGlobalF32(AtomicAddInst::new(dst, addr, value))
     }
 
     pub fn add_i32(dst: Operand<'a, I32>, a: Operand<'a, I32>, b: Operand<'a, I32>) -> Self {

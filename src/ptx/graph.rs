@@ -1,35 +1,46 @@
 use std::collections::HashMap;
 
-use super::Function;
 use super::instructions::{Inst, Operand};
 use super::types::{F32, I32, U64};
+use super::{Function, Module};
 use crate::tile::{Expr, TileGraph, TileIR, TileVar};
-use petgraph::Graph;
+use petgraph::{Graph, graph::NodeIndex};
 
-pub struct PtxGraph {
-    pub graph: Graph<Function<'static>, usize>,
-    // Arena is kept alive for the lifetime of PtxGraph
-    // All string data referenced by Functions is allocated from this arena
+pub(crate) struct PtxGraph {
+    // SAFETY INVARIANT: Functions contain references into `arena` whose lifetimes are
+    // forged to 'static. `graph` is private, is declared before `arena` so it drops
+    // first, and no API may return an owned Function or a borrow not tied to `&self`.
+    graph: Graph<Function<'static>, usize>,
     #[allow(dead_code)]
-    arena: bumpalo::Bump,
+    arena: Box<bumpalo::Bump>,
+}
+
+impl PtxGraph {
+    pub(crate) fn module_source(&self) -> String {
+        let mut module = Module::new();
+        for function in self.graph.node_weights() {
+            module.add_function(function.clone());
+        }
+        module.to_string()
+    }
+
+    pub(crate) fn kernel_name(&self, node: NodeIndex) -> Option<&str> {
+        self.graph.node_weight(node).map(|function| function.name)
+    }
 }
 
 impl From<TileGraph> for PtxGraph {
     fn from(tile_graph: TileGraph) -> Self {
         // Create a single arena for all functions in the graph
-        let arena = bumpalo::Bump::new();
-
-        // We need to convert each TileIR into a Function with arena-allocated strings.
-        // This is tricky because we need the arena to outlive the conversion.
-        // We'll use unsafe to extend the lifetime to 'static since we know the arena
-        // will live as long as the PtxGraph.
+        let arena = Box::new(bumpalo::Bump::new());
 
         let graph = tile_graph.graph.map_owned(
             |node_idx, tile_ir| {
-                // Get a reference to the arena with 'static lifetime
-                // SAFETY: The arena is stored in PtxGraph and will outlive all Functions
+                // SAFETY: `arena` is boxed at a stable address and is owned by the
+                // resulting PtxGraph. Its private graph is dropped before the arena,
+                // and the impl above never lets an owned Function escape.
                 let arena_ref: &'static bumpalo::Bump =
-                    unsafe { &*(&arena as *const bumpalo::Bump) };
+                    unsafe { &*(arena.as_ref() as *const bumpalo::Bump) };
 
                 tile_ir_to_function(tile_ir, arena_ref, node_idx.index())
             },
@@ -73,7 +84,7 @@ fn tile_ir_to_function<'a>(
     // Convert body statements to PTX instructions
     lower_block(&mut func, &mut ctx, &tile_ir.body);
 
-    // Add return instruction
+    func.add_inst(Inst::Label(ctx.return_label));
     func.add_inst(super::instructions::Inst::Ret);
 
     func
@@ -98,10 +109,12 @@ struct LoweringContext<'a> {
     reg_to_shared: HashMap<TileVar, TileVar>,
     /// Counter for generating unique labels
     label_counter: usize,
+    return_label: &'a str,
 }
 
 impl<'a> LoweringContext<'a> {
     fn new(arena: &'a bumpalo::Bump) -> Self {
+        let return_label = arena.alloc_str("kernel_return");
         Self {
             arena,
             tile_to_reg: HashMap::new(),
@@ -112,6 +125,7 @@ impl<'a> LoweringContext<'a> {
             tile_dims: HashMap::new(),
             reg_to_shared: HashMap::new(),
             label_counter: 0,
+            return_label,
         }
     }
 
@@ -153,6 +167,19 @@ fn lower_stmt<'a>(
     use crate::tile::Stmt;
 
     match stmt {
+        Stmt::BoundsCheck { extent } => {
+            let tid = global_linear_tid(func);
+            let outside = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                outside.clone(),
+                tid,
+                Operand::imm_u64(*extent as u64),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: outside,
+                target: ctx.return_label,
+            });
+        }
         Stmt::AllocTile {
             var,
             space,
@@ -300,6 +327,65 @@ fn lower_stmt<'a>(
                 func.add_inst(Inst::load_global_scalar_f32(dest_reg, addr));
             }
         }
+        Stmt::LoadGlobalToSharedPredicated {
+            dest,
+            src_param,
+            row,
+            col,
+            layout,
+        } => {
+            let row = lower_expr(func, ctx, row);
+            let col = lower_expr(func, ctx, col);
+            let value = func.add_f32_register();
+            func.add_inst(Inst::mov_f32(value.clone(), Operand::imm_f32(0.0)));
+            let skip_load =
+                bumpalo::format!(in ctx.arena, "matmul_load_skip_{}", ctx.label_counter)
+                    .into_bump_str();
+            ctx.label_counter += 1;
+            let row_outside = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                row_outside.clone(),
+                row.clone(),
+                Operand::imm_u64(layout.rows as u64),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: row_outside,
+                target: skip_load,
+            });
+            let col_outside = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                col_outside.clone(),
+                col.clone(),
+                Operand::imm_u64(layout.cols as u64),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: col_outside,
+                target: skip_load,
+            });
+            let row_offset = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                row_offset.clone(),
+                row,
+                Operand::imm_u64(layout.row_stride as u64),
+            ));
+            let element_offset = func.add_u64_register();
+            func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, col));
+            let source = ctx
+                .param_ptrs
+                .get(src_param)
+                .expect("Parameter not found in context")
+                .clone();
+            let address = global_f32_address(func, source, element_offset);
+            func.add_inst(Inst::load_global_scalar_f32(value.clone(), address));
+            func.add_inst(Inst::Label(skip_load));
+
+            let shared_address = shared_thread_address(func, ctx, *dest);
+            func.add_inst(Inst::StSharedF32 {
+                addr: shared_address,
+                src: vec![value],
+                vec: super::instructions::VecWidth::Scalar,
+            });
+        }
         Stmt::Store {
             dest_param,
             src,
@@ -348,6 +434,57 @@ fn lower_stmt<'a>(
 
             // Store to global memory
             func.add_inst(Inst::store_global_scalar_f32(addr, src_reg));
+        }
+        Stmt::StoreGlobalPredicated {
+            dest_param,
+            src,
+            row,
+            col,
+            layout,
+        } => {
+            let row = lower_expr(func, ctx, row);
+            let col = lower_expr(func, ctx, col);
+            let skip_store =
+                bumpalo::format!(in ctx.arena, "matmul_store_skip_{}", ctx.label_counter)
+                    .into_bump_str();
+            ctx.label_counter += 1;
+            let row_outside = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                row_outside.clone(),
+                row.clone(),
+                Operand::imm_u64(layout.rows as u64),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: row_outside,
+                target: skip_store,
+            });
+            let col_outside = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                col_outside.clone(),
+                col.clone(),
+                Operand::imm_u64(layout.cols as u64),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: col_outside,
+                target: skip_store,
+            });
+            let row_offset = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                row_offset.clone(),
+                row,
+                Operand::imm_u64(layout.row_stride as u64),
+            ));
+            let element_offset = func.add_u64_register();
+            func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, col));
+            let destination = ctx
+                .param_ptrs
+                .get(dest_param)
+                .expect("Parameter not found in context")
+                .clone();
+            let address = global_f32_address(func, destination, element_offset);
+            let value = ctx.get_or_alloc_reg(func, *src);
+            func.add_inst(Inst::store_global_scalar_f32(address, value));
+            func.add_inst(Inst::Label(skip_store));
         }
         Stmt::LoadSharedToReg { dest, src } => {
             // Track that this register tile is backed by shared memory
@@ -543,6 +680,173 @@ fn lower_stmt<'a>(
             // Loop end label
             func.add_inst(Inst::Label(loop_end));
         }
+        Stmt::Embedding {
+            vocabulary: _,
+            width,
+            index_count: _,
+        } => {
+            let tid = global_linear_tid(func);
+            let width = (*width).max(1);
+            let index_position = func.add_u64_register();
+            func.add_inst(Inst::div_u64(
+                index_position.clone(),
+                tid.clone(),
+                Operand::imm_u64(width as u64),
+            ));
+            let row_start = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                row_start.clone(),
+                index_position.clone(),
+                Operand::imm_u64(width as u64),
+            ));
+            let column = func.add_u64_register();
+            func.add_inst(Inst::sub_u64(column.clone(), tid, row_start));
+
+            let index_value = load_param_f32_at(func, ctx, "indices", index_position);
+            let index = func.add_u64_register();
+            func.add_inst(Inst::convert_u64_f32(index.clone(), index_value));
+            let source_row = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                source_row.clone(),
+                index,
+                Operand::imm_u64(width as u64),
+            ));
+            let source_offset = func.add_u64_register();
+            func.add_inst(Inst::add_u64(source_offset.clone(), source_row, column));
+            let value = load_param_f32_at(func, ctx, "weight", source_offset);
+            let output_offset = global_linear_tid(func);
+            store_param_f32_at(func, ctx, "output", output_offset, value);
+        }
+        Stmt::EmbeddingBackward {
+            vocabulary: _,
+            width,
+            index_count: _,
+        } => {
+            let tid = global_linear_tid(func);
+            let width = (*width).max(1);
+            let index_position = func.add_u64_register();
+            func.add_inst(Inst::div_u64(
+                index_position.clone(),
+                tid.clone(),
+                Operand::imm_u64(width as u64),
+            ));
+            let row_start = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                row_start.clone(),
+                index_position.clone(),
+                Operand::imm_u64(width as u64),
+            ));
+            let column = func.add_u64_register();
+            func.add_inst(Inst::sub_u64(column.clone(), tid.clone(), row_start));
+            let index_value = load_param_f32_at(func, ctx, "indices", index_position);
+            let index = func.add_u64_register();
+            func.add_inst(Inst::convert_u64_f32(index.clone(), index_value));
+            let destination_row = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                destination_row.clone(),
+                index,
+                Operand::imm_u64(width as u64),
+            ));
+            let destination_offset = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                destination_offset.clone(),
+                destination_row,
+                column,
+            ));
+            let gradient = load_param_f32_at(func, ctx, "grad_output", tid);
+            let output_ptr = ctx
+                .param_ptrs
+                .get("output")
+                .expect("Output parameter not found")
+                .clone();
+            let destination = global_f32_address(func, output_ptr, destination_offset);
+            let discarded = func.add_f32_register();
+            func.add_inst(Inst::atomic_add_global_f32(
+                discarded,
+                destination,
+                gradient,
+            ));
+        }
+        Stmt::IndexedCrossEntropy {
+            vocabulary,
+            row_count: _,
+        } => {
+            let row = global_linear_tid(func);
+            let row_start = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                row_start.clone(),
+                row.clone(),
+                Operand::imm_u64(*vocabulary as u64),
+            ));
+            let (maximum, exponential_sum) =
+                emit_row_softmax_stats(func, ctx, row_start.clone(), *vocabulary);
+            let target_value = load_param_f32_at(func, ctx, "targets", row.clone());
+            let target = func.add_u64_register();
+            func.add_inst(Inst::convert_u64_f32(target.clone(), target_value));
+            let target_offset = func.add_u64_register();
+            func.add_inst(Inst::add_u64(target_offset.clone(), row_start, target));
+            let target_logit = load_param_f32_at(func, ctx, "logits", target_offset);
+            let shifted = func.add_f32_register();
+            func.add_inst(Inst::sub_f32(shifted.clone(), maximum, target_logit));
+            let log_sum = emit_log(func, exponential_sum);
+            let loss = func.add_f32_register();
+            func.add_inst(Inst::add_f32(loss.clone(), shifted, log_sum));
+            store_param_f32_at(func, ctx, "output", row, loss);
+        }
+        Stmt::IndexedCrossEntropyBackward {
+            vocabulary,
+            row_count: _,
+        } => {
+            let tid = global_linear_tid(func);
+            let row = func.add_u64_register();
+            func.add_inst(Inst::div_u64(
+                row.clone(),
+                tid.clone(),
+                Operand::imm_u64(*vocabulary as u64),
+            ));
+            let row_start = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                row_start.clone(),
+                row.clone(),
+                Operand::imm_u64(*vocabulary as u64),
+            ));
+            let column = func.add_u64_register();
+            func.add_inst(Inst::sub_u64(
+                column.clone(),
+                tid.clone(),
+                row_start.clone(),
+            ));
+            let (maximum, exponential_sum) =
+                emit_row_softmax_stats(func, ctx, row_start, *vocabulary);
+            let logit = load_param_f32_at(func, ctx, "logits", tid.clone());
+            let shifted = func.add_f32_register();
+            func.add_inst(Inst::sub_f32(shifted.clone(), logit, maximum));
+            let exponential = emit_exp(func, shifted);
+            let probability = func.add_f32_register();
+            func.add_inst(Inst::div_f32(
+                probability.clone(),
+                exponential,
+                exponential_sum,
+            ));
+            let target_value = load_param_f32_at(func, ctx, "targets", row.clone());
+            let target = func.add_u64_register();
+            func.add_inst(Inst::convert_u64_f32(target.clone(), target_value));
+            let is_target = func.add_predicate_register();
+            func.add_inst(Inst::setp_eq_u64(is_target.clone(), column, target));
+            let indicator = func.add_f32_register();
+            func.add_inst(Inst::selp_f32(
+                indicator.clone(),
+                Operand::imm_f32(1.0),
+                Operand::imm_f32(0.0),
+                is_target,
+            ));
+            let difference = func.add_f32_register();
+            func.add_inst(Inst::sub_f32(difference.clone(), probability, indicator));
+            let upstream = load_param_f32_at(func, ctx, "grad_output", row);
+            let gradient = func.add_f32_register();
+            func.add_inst(Inst::mul_f32(gradient.clone(), difference, upstream));
+            store_param_f32_at(func, ctx, "output", tid, gradient);
+        }
         Stmt::Add { dest, a, b } => {
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
             let a_reg = ctx.get_or_alloc_reg(func, *a);
@@ -606,92 +910,44 @@ fn lower_stmt<'a>(
             let zero = Operand::imm_f32(0.0);
             func.add_inst(Inst::max_f32(dest_reg, src_reg, zero));
         }
-        Stmt::Transpose {
+        Stmt::Reindex {
             dest,
             src: _,
             input_shape,
             output_shape,
+            axes,
         } => {
-            // Implement 2D transpose: output[i,j] = input[j,i]
-            // For input shape [rows, cols] -> output shape [cols, rows]
-            // Each thread computes one output element
-
-            assert_eq!(input_shape.len(), 2, "Transpose only supports 2D tensors");
-            assert_eq!(output_shape.len(), 2, "Transpose only supports 2D tensors");
-
-            let rows = input_shape[0]; // Input rows
-            let cols = input_shape[1]; // Input cols
-
-            assert_eq!(output_shape[0], cols, "Output rows should equal input cols");
-            assert_eq!(output_shape[1], rows, "Output cols should equal input rows");
-
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-
-            // Get parameter pointers for direct memory access
             let src_ptr = ctx
                 .param_ptrs
                 .get("input")
                 .expect("Input parameter not found")
                 .clone();
-
-            // Get thread index (which output element this thread computes)
-            let tid = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_u32(
-                tid.clone(),
-                super::instructions::THREAD_ID.x.clone(),
-            ));
-
-            // Calculate output position (out_row, out_col) from thread id
-            // tid = out_row * output_cols + out_col
-            // out_row = tid / output_cols
-            // out_col = tid % output_cols
-
-            let out_row = func.add_u64_register();
-            func.add_inst(Inst::div_u64(
-                out_row.clone(),
-                tid.clone(),
-                Operand::imm_u64(rows as u64), // output_cols = input_rows
-            ));
-
-            let temp = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                temp.clone(),
-                out_row.clone(),
-                Operand::imm_u64(rows as u64),
-            ));
-
-            let out_col = func.add_u64_register();
-            func.add_inst(Inst::sub_u64(out_col.clone(), tid.clone(), temp));
-
-            // Map to input position: input[out_col, out_row]
-            // input_offset = out_col * input_cols + out_row
-
-            let input_row_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                input_row_offset.clone(),
-                out_col.clone(),
-                Operand::imm_u64(cols as u64), // input_cols
-            ));
-
+            let tid = global_linear_tid(func);
+            let input_strides = contiguous_strides(input_shape);
+            let output_strides = contiguous_strides(output_shape);
             let input_offset = func.add_u64_register();
-            func.add_inst(Inst::add_u64(
-                input_offset.clone(),
-                input_row_offset,
-                out_row,
-            ));
-
-            // Load from input[input_offset]
-            let byte_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                byte_offset.clone(),
-                input_offset,
-                Operand::imm_u64(4), // sizeof(f32)
-            ));
-
-            let input_addr = func.add_u64_register();
-            func.add_inst(Inst::add_u64(input_addr.clone(), src_ptr, byte_offset));
-
-            func.add_inst(Inst::load_global_scalar_f32(dest_reg, input_addr));
+            func.add_inst(Inst::mov_u64(input_offset.clone(), Operand::imm_u64(0)));
+            for output_axis in 0..output_shape.len() {
+                let coordinate = decode_coordinate(
+                    func,
+                    tid.clone(),
+                    output_strides[output_axis],
+                    output_shape[output_axis],
+                );
+                let contribution = func.add_u64_register();
+                func.add_inst(Inst::mul_u64(
+                    contribution.clone(),
+                    coordinate,
+                    Operand::imm_u64(input_strides[axes[output_axis]] as u64),
+                ));
+                func.add_inst(Inst::add_u64(
+                    input_offset.clone(),
+                    input_offset.clone(),
+                    contribution,
+                ));
+            }
+            load_f32_at(func, dest_reg, src_ptr, input_offset);
         }
         Stmt::BroadcastAxis {
             dest,
@@ -700,111 +956,41 @@ fn lower_stmt<'a>(
             input_shape,
             output_shape,
         } => {
-            // Each thread handles one output element
-            // Broadcast means copying values from input to multiple output positions
-            // Example: input [2,1], output [2,3], axis=1
-            //   output[i,j] = input[i, 0] for all j
-
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-
-            // Get parameter pointers for direct access
             let src_ptr = ctx
                 .param_ptrs
                 .get("input")
                 .expect("Input parameter not found")
                 .clone();
 
-            // Get thread index (which output element this thread computes)
-            let tid = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_u32(
-                tid.clone(),
-                super::instructions::THREAD_ID.x.clone(),
-            ));
-
-            // Calculate strides for input tensor
-            let input_stride: Vec<usize> = {
-                let mut strides = vec![1; input_shape.len()];
-                for i in (0..input_shape.len() - 1).rev() {
-                    strides[i] = strides[i + 1] * input_shape[i + 1];
+            let tid = global_linear_tid(func);
+            let input_strides = contiguous_strides(input_shape);
+            let output_strides = contiguous_strides(output_shape);
+            let input_offset = func.add_u64_register();
+            func.add_inst(Inst::mov_u64(input_offset.clone(), Operand::imm_u64(0)));
+            for dimension in 0..output_shape.len() {
+                if dimension == *axis {
+                    continue;
                 }
-                strides
-            };
-
-            // Calculate input offset based on output thread index
-            // For broadcasting along axis 1 with shapes [2,1] -> [2,3]:
-            //   output[i,j] maps to input[i, 0]
-            //   tid represents output position in row-major order
-            //   row = tid / output_cols
-
-            let input_offset = if output_shape.len() == 2 && *axis == 1 {
-                // Common case: 2D broadcast along last axis
-                // tid = row * output_cols + col
-                // input_offset = row * input_stride[0] (since input has size 1 along axis 1)
-
-                let row = func.add_u64_register();
-                func.add_inst(Inst::div_u64(
-                    row.clone(),
+                let coordinate = decode_coordinate(
+                    func,
                     tid.clone(),
-                    Operand::imm_u64(output_shape[1] as u64),
-                ));
-
-                let offset = func.add_u64_register();
+                    output_strides[dimension],
+                    output_shape[dimension],
+                );
+                let contribution = func.add_u64_register();
                 func.add_inst(Inst::mul_u64(
-                    offset.clone(),
-                    row,
-                    Operand::imm_u64(input_stride[0] as u64),
+                    contribution.clone(),
+                    coordinate,
+                    Operand::imm_u64(input_strides[dimension] as u64),
                 ));
-
-                offset
-            } else if output_shape.len() == 2 && *axis == 0 {
-                // 2D broadcast along first axis
-                // output[i,j] maps to input[0, j]
-                // col = tid % output_shape[1] = tid - (tid / output_shape[1]) * output_shape[1]
-
-                let div_result = func.add_u64_register();
-                func.add_inst(Inst::div_u64(
-                    div_result.clone(),
-                    tid.clone(),
-                    Operand::imm_u64(output_shape[1] as u64),
+                func.add_inst(Inst::add_u64(
+                    input_offset.clone(),
+                    input_offset.clone(),
+                    contribution,
                 ));
-
-                let mul_result = func.add_u64_register();
-                func.add_inst(Inst::mul_u64(
-                    mul_result.clone(),
-                    div_result,
-                    Operand::imm_u64(output_shape[1] as u64),
-                ));
-
-                let col = func.add_u64_register();
-                func.add_inst(Inst::sub_u64(col.clone(), tid.clone(), mul_result));
-
-                col
-            } else if output_shape.len() == 1 && *axis == 0 {
-                // 1D broadcast along axis 0: [1] -> [N]
-                // All output elements map to input[0]
-                let offset = func.add_u64_register();
-                func.add_inst(Inst::mov_u64(offset.clone(), Operand::imm_u64(0)));
-                offset
-            } else {
-                // Fallback: assume simple 1:1 mapping
-                let offset = func.add_u64_register();
-                func.add_inst(Inst::mov_u64(offset.clone(), tid.clone()));
-                offset
-            };
-
-            // Convert element offset to byte offset
-            let byte_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                byte_offset.clone(),
-                input_offset,
-                Operand::imm_u64(4),
-            ));
-
-            // Load from input
-            let addr = func.add_u64_register();
-            func.add_inst(Inst::add_u64(addr.clone(), src_ptr.clone(), byte_offset));
-
-            func.add_inst(Inst::load_global_scalar_f32(dest_reg, addr));
+            }
+            load_f32_at(func, dest_reg, src_ptr, input_offset);
         }
         Stmt::ReduceAxis {
             dest,
@@ -812,7 +998,7 @@ fn lower_stmt<'a>(
             op,
             axis,
             input_shape,
-            output_shape: _,
+            output_shape,
         } => {
             // Each thread computes one output element by reducing along the specified axis
             // Example: input shape [2, 3], axis=1, output shape [2, 1]
@@ -827,27 +1013,33 @@ fn lower_stmt<'a>(
                 .get("input")
                 .expect("Input parameter not found")
                 .clone();
-            let _dest_ptr = ctx
-                .param_ptrs
-                .get("output")
-                .expect("Output parameter not found")
-                .clone();
-
-            // Calculate strides for input tensor
-            let input_stride: Vec<usize> = {
-                let mut strides = vec![1; input_shape.len()];
-                for i in (0..input_shape.len() - 1).rev() {
-                    strides[i] = strides[i + 1] * input_shape[i + 1];
+            let input_strides = contiguous_strides(input_shape);
+            let output_strides = contiguous_strides(output_shape);
+            let tid = global_linear_tid(func);
+            let base_offset = func.add_u64_register();
+            func.add_inst(Inst::mov_u64(base_offset.clone(), Operand::imm_u64(0)));
+            for dimension in 0..output_shape.len() {
+                if dimension == *axis {
+                    continue;
                 }
-                strides
-            };
-
-            // Get thread index (which output element this thread computes)
-            let tid = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_u32(
-                tid.clone(),
-                super::instructions::THREAD_ID.x.clone(),
-            ));
+                let coordinate = decode_coordinate(
+                    func,
+                    tid.clone(),
+                    output_strides[dimension],
+                    output_shape[dimension],
+                );
+                let contribution = func.add_u64_register();
+                func.add_inst(Inst::mul_u64(
+                    contribution.clone(),
+                    coordinate,
+                    Operand::imm_u64(input_strides[dimension] as u64),
+                ));
+                func.add_inst(Inst::add_u64(
+                    base_offset.clone(),
+                    base_offset.clone(),
+                    contribution,
+                ));
+            }
 
             // Initialize accumulator based on reduce operation
             let accumulator = func.add_f32_register();
@@ -868,54 +1060,18 @@ fn lower_stmt<'a>(
 
             // Loop over the reduction axis
             for k in 0..reduce_size {
-                // Calculate input index based on output thread index and reduction position
-                // For axis=1, input_shape=[2,3]: thread i accesses input[i, k]
-                // offset = i * input_stride[0] + k * input_stride[1]
-
                 let input_offset = func.add_u64_register();
-
-                // Start with tid * stride[axis-1] (or 0 if axis==0)
-                if *axis == 0 {
-                    // Reducing along first axis: all threads access input[k, tid, ...]
-                    // offset = k * stride[0] + tid * stride[1]
-                    let k_contrib = func.add_u64_register();
-                    func.add_inst(Inst::mul_u64(
-                        k_contrib.clone(),
-                        Operand::imm_u64(k as u64),
-                        Operand::imm_u64(input_stride[0] as u64),
-                    ));
-
-                    let tid_contrib = func.add_u64_register();
-                    if input_shape.len() > 1 {
-                        func.add_inst(Inst::mul_u64(
-                            tid_contrib.clone(),
-                            tid.clone(),
-                            Operand::imm_u64(input_stride[1] as u64),
-                        ));
-                    } else {
-                        func.add_inst(Inst::mov_u64(tid_contrib.clone(), Operand::imm_u64(0)));
-                    }
-
-                    func.add_inst(Inst::add_u64(input_offset.clone(), k_contrib, tid_contrib));
-                } else {
-                    // Reducing along axis > 0: thread i accesses input[i, k] (for 2D)
-                    // offset = tid * stride[axis-1] + k * stride[axis]
-                    let tid_contrib = func.add_u64_register();
-                    func.add_inst(Inst::mul_u64(
-                        tid_contrib.clone(),
-                        tid.clone(),
-                        Operand::imm_u64(input_stride[axis - 1] as u64),
-                    ));
-
-                    let k_contrib = func.add_u64_register();
-                    func.add_inst(Inst::mul_u64(
-                        k_contrib.clone(),
-                        Operand::imm_u64(k as u64),
-                        Operand::imm_u64(input_stride[*axis] as u64),
-                    ));
-
-                    func.add_inst(Inst::add_u64(input_offset.clone(), tid_contrib, k_contrib));
-                }
+                let k_contribution = func.add_u64_register();
+                func.add_inst(Inst::mul_u64(
+                    k_contribution.clone(),
+                    Operand::imm_u64(k as u64),
+                    Operand::imm_u64(input_strides[*axis] as u64),
+                ));
+                func.add_inst(Inst::add_u64(
+                    input_offset.clone(),
+                    base_offset.clone(),
+                    k_contribution,
+                ));
 
                 // Convert element offset to byte offset
                 let byte_offset = func.add_u64_register();
@@ -1078,6 +1234,289 @@ fn lower_stmt<'a>(
             ctx.loop_vars.remove(loop_var);
         }
     }
+}
+
+fn global_linear_tid<'a>(func: &mut Function<'a>) -> Operand<'a, U64> {
+    let block = func.add_u64_register();
+    let block_dim = func.add_u64_register();
+    let thread = func.add_u64_register();
+    func.add_inst(Inst::convert_u64_u32(
+        block.clone(),
+        super::instructions::BLOCK_ID.x.clone(),
+    ));
+    func.add_inst(Inst::convert_u64_u32(
+        block_dim.clone(),
+        super::instructions::BLOCK_DIM.x.clone(),
+    ));
+    func.add_inst(Inst::convert_u64_u32(
+        thread.clone(),
+        super::instructions::THREAD_ID.x.clone(),
+    ));
+    let block_offset = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(block_offset.clone(), block, block_dim));
+    let tid = func.add_u64_register();
+    func.add_inst(Inst::add_u64(tid.clone(), block_offset, thread));
+    tid
+}
+
+fn shared_thread_address<'a>(
+    func: &mut Function<'a>,
+    ctx: &LoweringContext<'a>,
+    tile: TileVar,
+) -> Operand<'a, U64> {
+    let shared = ctx
+        .shared_mem_ptrs
+        .get(&tile)
+        .expect("Shared tile pointer not found")
+        .clone();
+    let (_, columns) = ctx
+        .tile_dims
+        .get(&tile)
+        .expect("Shared tile dimensions not found");
+    let row = func.add_u64_register();
+    let column = func.add_u64_register();
+    func.add_inst(Inst::convert_u64_u32(
+        row.clone(),
+        super::instructions::THREAD_ID.y.clone(),
+    ));
+    func.add_inst(Inst::convert_u64_u32(
+        column.clone(),
+        super::instructions::THREAD_ID.x.clone(),
+    ));
+    let row_offset = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        row_offset.clone(),
+        row,
+        Operand::imm_u64(*columns as u64),
+    ));
+    let element_offset = func.add_u64_register();
+    func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, column));
+    let byte_offset = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        byte_offset.clone(),
+        element_offset,
+        Operand::imm_u64(4),
+    ));
+    let address = func.add_u64_register();
+    func.add_inst(Inst::add_u64(address.clone(), shared, byte_offset));
+    address
+}
+
+fn global_f32_address<'a>(
+    func: &mut Function<'a>,
+    base: Operand<'a, U64>,
+    element_offset: Operand<'a, U64>,
+) -> Operand<'a, U64> {
+    let byte_offset = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        byte_offset.clone(),
+        element_offset,
+        Operand::imm_u64(4),
+    ));
+    let address = func.add_u64_register();
+    func.add_inst(Inst::add_u64(address.clone(), base, byte_offset));
+    address
+}
+
+fn load_param_f32_at<'a>(
+    func: &mut Function<'a>,
+    ctx: &LoweringContext<'a>,
+    parameter: &str,
+    element_offset: Operand<'a, U64>,
+) -> Operand<'a, F32> {
+    let base = ctx
+        .param_ptrs
+        .get(parameter)
+        .unwrap_or_else(|| panic!("Parameter {parameter} not found"))
+        .clone();
+    let address = global_f32_address(func, base, element_offset);
+    let value = func.add_f32_register();
+    func.add_inst(Inst::load_global_scalar_f32(value.clone(), address));
+    value
+}
+
+fn store_param_f32_at<'a>(
+    func: &mut Function<'a>,
+    ctx: &LoweringContext<'a>,
+    parameter: &str,
+    element_offset: Operand<'a, U64>,
+    value: Operand<'a, F32>,
+) {
+    let base = ctx
+        .param_ptrs
+        .get(parameter)
+        .unwrap_or_else(|| panic!("Parameter {parameter} not found"))
+        .clone();
+    let address = global_f32_address(func, base, element_offset);
+    func.add_inst(Inst::store_global_scalar_f32(address, value));
+}
+
+fn emit_exp<'a>(func: &mut Function<'a>, value: Operand<'a, F32>) -> Operand<'a, F32> {
+    let scaled = func.add_f32_register();
+    func.add_inst(Inst::mul_f32(
+        scaled.clone(),
+        value,
+        Operand::imm_f32(std::f32::consts::LOG2_E),
+    ));
+    let exponential = func.add_f32_register();
+    func.add_inst(Inst::ex2_f32(exponential.clone(), scaled));
+    exponential
+}
+
+fn emit_log<'a>(func: &mut Function<'a>, value: Operand<'a, F32>) -> Operand<'a, F32> {
+    let logarithm_base_two = func.add_f32_register();
+    func.add_inst(Inst::lg2_f32(logarithm_base_two.clone(), value));
+    let logarithm = func.add_f32_register();
+    func.add_inst(Inst::mul_f32(
+        logarithm.clone(),
+        logarithm_base_two,
+        Operand::imm_f32(std::f32::consts::LN_2),
+    ));
+    logarithm
+}
+
+fn emit_row_softmax_stats<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    row_start: Operand<'a, U64>,
+    vocabulary: usize,
+) -> (Operand<'a, F32>, Operand<'a, F32>) {
+    let maximum = func.add_f32_register();
+    func.add_inst(Inst::mov_f32(
+        maximum.clone(),
+        Operand::imm_f32(f32::NEG_INFINITY),
+    ));
+    let maximum_column = func.add_u64_register();
+    func.add_inst(Inst::mov_u64(maximum_column.clone(), Operand::imm_u64(0)));
+    let maximum_loop =
+        bumpalo::format!(in ctx.arena, "ce_max_{}", ctx.label_counter).into_bump_str();
+    let maximum_end =
+        bumpalo::format!(in ctx.arena, "ce_max_end_{}", ctx.label_counter).into_bump_str();
+    ctx.label_counter += 1;
+    func.add_inst(Inst::Label(maximum_loop));
+    let maximum_done = func.add_predicate_register();
+    func.add_inst(Inst::setp_ge_u64(
+        maximum_done.clone(),
+        maximum_column.clone(),
+        Operand::imm_u64(vocabulary as u64),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: maximum_done,
+        target: maximum_end,
+    });
+    let offset = func.add_u64_register();
+    func.add_inst(Inst::add_u64(
+        offset.clone(),
+        row_start.clone(),
+        maximum_column.clone(),
+    ));
+    let value = load_param_f32_at(func, ctx, "logits", offset);
+    func.add_inst(Inst::max_f32(maximum.clone(), maximum.clone(), value));
+    func.add_inst(Inst::add_u64(
+        maximum_column.clone(),
+        maximum_column.clone(),
+        Operand::imm_u64(1),
+    ));
+    func.add_inst(Inst::BraUni {
+        target: maximum_loop,
+    });
+    func.add_inst(Inst::Label(maximum_end));
+
+    let exponential_sum = func.add_f32_register();
+    func.add_inst(Inst::mov_f32(
+        exponential_sum.clone(),
+        Operand::imm_f32(0.0),
+    ));
+    let sum_column = func.add_u64_register();
+    func.add_inst(Inst::mov_u64(sum_column.clone(), Operand::imm_u64(0)));
+    let sum_loop = bumpalo::format!(in ctx.arena, "ce_sum_{}", ctx.label_counter).into_bump_str();
+    let sum_end =
+        bumpalo::format!(in ctx.arena, "ce_sum_end_{}", ctx.label_counter).into_bump_str();
+    ctx.label_counter += 1;
+    func.add_inst(Inst::Label(sum_loop));
+    let sum_done = func.add_predicate_register();
+    func.add_inst(Inst::setp_ge_u64(
+        sum_done.clone(),
+        sum_column.clone(),
+        Operand::imm_u64(vocabulary as u64),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: sum_done,
+        target: sum_end,
+    });
+    let offset = func.add_u64_register();
+    func.add_inst(Inst::add_u64(offset.clone(), row_start, sum_column.clone()));
+    let value = load_param_f32_at(func, ctx, "logits", offset);
+    let shifted = func.add_f32_register();
+    func.add_inst(Inst::sub_f32(shifted.clone(), value, maximum.clone()));
+    let exponential = emit_exp(func, shifted);
+    func.add_inst(Inst::add_f32(
+        exponential_sum.clone(),
+        exponential_sum.clone(),
+        exponential,
+    ));
+    func.add_inst(Inst::add_u64(
+        sum_column.clone(),
+        sum_column,
+        Operand::imm_u64(1),
+    ));
+    func.add_inst(Inst::BraUni { target: sum_loop });
+    func.add_inst(Inst::Label(sum_end));
+    (maximum, exponential_sum)
+}
+
+fn contiguous_strides(shape: &[usize]) -> Vec<usize> {
+    let mut strides = vec![1; shape.len()];
+    for dimension in (0..shape.len().saturating_sub(1)).rev() {
+        strides[dimension] = strides[dimension + 1] * shape[dimension + 1];
+    }
+    strides
+}
+
+fn decode_coordinate<'a>(
+    func: &mut Function<'a>,
+    linear: Operand<'a, U64>,
+    stride: usize,
+    dimension: usize,
+) -> Operand<'a, U64> {
+    let quotient = func.add_u64_register();
+    func.add_inst(Inst::div_u64(
+        quotient.clone(),
+        linear,
+        Operand::imm_u64(stride as u64),
+    ));
+    let groups = func.add_u64_register();
+    func.add_inst(Inst::div_u64(
+        groups.clone(),
+        quotient.clone(),
+        Operand::imm_u64(dimension as u64),
+    ));
+    let consumed = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        consumed.clone(),
+        groups,
+        Operand::imm_u64(dimension as u64),
+    ));
+    let coordinate = func.add_u64_register();
+    func.add_inst(Inst::sub_u64(coordinate.clone(), quotient, consumed));
+    coordinate
+}
+
+fn load_f32_at<'a>(
+    func: &mut Function<'a>,
+    destination: Operand<'a, F32>,
+    base: Operand<'a, U64>,
+    element_offset: Operand<'a, U64>,
+) {
+    let byte_offset = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        byte_offset.clone(),
+        element_offset,
+        Operand::imm_u64(4),
+    ));
+    let address = func.add_u64_register();
+    func.add_inst(Inst::add_u64(address.clone(), base, byte_offset));
+    func.add_inst(Inst::load_global_scalar_f32(destination, address));
 }
 
 /// Lower an expression to a U64 operand (for address calculations)

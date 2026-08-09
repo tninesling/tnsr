@@ -1,5 +1,6 @@
 use super::ir::{
-    Block, DType, Expr, KernelParam, MatMulLayout, MemorySpace, ReduceOp, Stmt, TileIR, TileVar,
+    Block, DType, Expr, KernelParam, MatMulLayout, MatrixLayout, MemorySpace, ReduceOp, Stmt,
+    TileIR, TileVar,
 };
 
 #[allow(dead_code)]
@@ -77,9 +78,43 @@ impl TileIRBuilder {
         self.stmts.push(Stmt::MatMul { dest, a, b, layout });
     }
 
+    pub fn embedding(&mut self, vocabulary: usize, width: usize, index_count: usize) {
+        self.stmts.push(Stmt::Embedding {
+            vocabulary,
+            width,
+            index_count,
+        });
+    }
+
+    pub fn embedding_backward(&mut self, vocabulary: usize, width: usize, index_count: usize) {
+        self.stmts.push(Stmt::EmbeddingBackward {
+            vocabulary,
+            width,
+            index_count,
+        });
+    }
+
+    pub fn indexed_cross_entropy(&mut self, vocabulary: usize, row_count: usize) {
+        self.stmts.push(Stmt::IndexedCrossEntropy {
+            vocabulary,
+            row_count,
+        });
+    }
+
+    pub fn indexed_cross_entropy_backward(&mut self, vocabulary: usize, row_count: usize) {
+        self.stmts.push(Stmt::IndexedCrossEntropyBackward {
+            vocabulary,
+            row_count,
+        });
+    }
+
     #[allow(dead_code)]
     pub fn barrier(&mut self) {
         self.stmts.push(Stmt::Barrier);
+    }
+
+    pub fn bounds_check(&mut self, extent: usize) {
+        self.stmts.push(Stmt::BoundsCheck { extent });
     }
 
     #[allow(dead_code)]
@@ -98,6 +133,23 @@ impl TileIRBuilder {
         });
     }
 
+    pub fn load_global_to_shared_predicated(
+        &mut self,
+        dest: TileVar,
+        src_param: &str,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
+    ) {
+        self.stmts.push(Stmt::LoadGlobalToSharedPredicated {
+            dest,
+            src_param: src_param.to_string(),
+            row,
+            col,
+            layout,
+        });
+    }
+
     #[allow(dead_code)]
     pub fn load_shared_to_register(&mut self, dest: TileVar, src: TileVar) {
         self.stmts.push(Stmt::LoadSharedToReg { dest, src });
@@ -110,6 +162,23 @@ impl TileIRBuilder {
             src,
             row_offset,
             col_offset,
+        });
+    }
+
+    pub fn store_global_predicated(
+        &mut self,
+        dest_param: &str,
+        src: TileVar,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
+    ) {
+        self.stmts.push(Stmt::StoreGlobalPredicated {
+            dest_param: dest_param.to_string(),
+            src,
+            row,
+            col,
+            layout,
         });
     }
 
@@ -154,18 +223,20 @@ impl TileIRBuilder {
     }
 
     #[allow(dead_code)]
-    pub fn transpose(
+    pub fn reindex(
         &mut self,
         dest: TileVar,
         src: TileVar,
         input_shape: Vec<usize>,
         output_shape: Vec<usize>,
+        axes: Vec<usize>,
     ) {
-        self.stmts.push(Stmt::Transpose {
+        self.stmts.push(Stmt::Reindex {
             dest,
             src,
             input_shape,
             output_shape,
+            axes,
         });
     }
 

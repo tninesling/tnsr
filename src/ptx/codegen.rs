@@ -521,6 +521,9 @@ impl<'a> fmt::Display for Inst<'a> {
         match self {
             Inst::ConvertU64U32(inst) => write!(f, "{inst}"),
             Inst::ConvertU64I32(inst) => write!(f, "{inst}"),
+            Inst::ConvertU64F32(inst) => {
+                write!(f, "cvt.rzi.u64.f32 {}, {};", inst.dst, inst.src)
+            }
             Inst::ConvertI32U64(inst) => write!(f, "{inst}"),
             Inst::ConvertToGlobal { dst, src } => write!(f, "cvta.to.global.u64 {dst}, {src};"),
             Inst::MovI32 { dst, src } => write!(f, "mov.u32 {dst}, {src};"),
@@ -550,6 +553,11 @@ impl<'a> fmt::Display for Inst<'a> {
                     src.iter().join(", ")
                 ),
             },
+            Inst::AtomicAddGlobalF32(inst) => write!(
+                f,
+                "atom.global.add.f32 {}, [{}], {};",
+                inst.dst, inst.addr, inst.value
+            ),
 
             Inst::AddI32(inst) => write!(f, "{inst}"),
             Inst::AddI64(inst) => write!(f, "{inst}"),

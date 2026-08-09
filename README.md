@@ -40,6 +40,25 @@ remain available until the next execution; gradients can be returned earlier
 with `release_gradients`. Consequently, `get_value` is only guaranteed for
 pinned output and gradient nodes after execution.
 
+## Decoder-only GPT
+
+`tnsr::nn::Gpt` composes learned token and position embeddings, causal
+transformer blocks, final layer normalization, and a tied language-model head.
+Indexed embedding and cross-entropy operations avoid one-hot vocabulary tensors
+and support autograd on both CPU and static CUDA executors.
+
+Run the self-contained character-level training and generation example on CPU:
+
+```bash
+cargo run --release --example gpt
+```
+
+Enable CUDA to use an available NVIDIA GPU automatically:
+
+```bash
+cargo run --release --features cuda --example gpt
+```
+
 ## Tile representation
 
 For GPU hardware targets, we take advantage of tiling to improve memory access patterns. Tiling breaks down large tensor operations into smaller blocks (tiles) that fit into the faster shared memory of the GPU. This allows threads within a block to cooperate and share data, reducing the number of global memory accesses. It also allows coalesced memory accesses, which improves bandwidth utilization. The smallest primitive is a register tile, which corresponds to the size of a warp. The 16x16 register tile comes directly from the [ThunderKittens] project, which provides high-performance C++ templates for CUDA kernels.
@@ -59,7 +78,13 @@ Burn aims to encode more information about tensors in the type system. A `burn::
 ## CUDA Support
 
 The CUDA backend can be enabled via the `cuda` feature. This uses static PTX
-kernels located in `src/cuda/kernels.ptx`.
+kernels in `src/cuda/`. Regenerate the indexed-operation module with CUDA 12.9
+or newer using:
+
+```bash
+nvcc --ptx --gpu-architecture=compute_61 --use_fast_math \
+  --output-file src/cuda/indexed_kernels.ptx src/cuda/indexed_kernels.cu
+```
 
 ## Benchmarking
 

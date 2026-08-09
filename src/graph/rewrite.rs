@@ -244,6 +244,12 @@ fn expr_to_recexpr<D: DType>(expr: &TensorExpr<D>) -> RecExpr<TensorOp> {
                 let _ = build_rec(x, rec);
                 rec.add(TensorOp::Sym("Flatten".into()))
             }
+            ExprKind::Embedding { .. }
+            | ExprKind::EmbeddingBackward { .. }
+            | ExprKind::IndexedCrossEntropy { .. }
+            | ExprKind::IndexedCrossEntropyBackward { .. } => {
+                unreachable!("indexed expressions bypass e-graph rewriting")
+            }
         }
     }
 
@@ -404,6 +410,22 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
     expr: &TensorExpr<D>,
     config: RewriteConfig,
 ) -> TensorExpr<D> {
+    fn contains_indexed_op<D: DType>(expr: &TensorExpr<D>) -> bool {
+        matches!(
+            expr.kind(),
+            ExprKind::Embedding { .. }
+                | ExprKind::EmbeddingBackward { .. }
+                | ExprKind::IndexedCrossEntropy { .. }
+                | ExprKind::IndexedCrossEntropyBackward { .. }
+        ) || expr.children().into_iter().any(contains_indexed_op)
+    }
+
+    // Indexed operations are not represented in TensorOp. Bypass the entire
+    // rewrite so an indexed subtree cannot be replaced by an opaque symbol.
+    if contains_indexed_op(expr) {
+        return expr.clone();
+    }
+
     let start = expr_to_recexpr(expr);
 
     tracing::debug!("Starting expression: {}", start);

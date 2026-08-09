@@ -97,6 +97,10 @@ impl TileGraph {
             | TensorGraphNode::Conv2dBackwardWeight { .. }
             | TensorGraphNode::MaxPool2d { .. }
             | TensorGraphNode::MaxPool2dBackward { .. }
+            | TensorGraphNode::Embedding { .. }
+            | TensorGraphNode::EmbeddingBackward { .. }
+            | TensorGraphNode::IndexedCrossEntropy { .. }
+            | TensorGraphNode::IndexedCrossEntropyBackward { .. }
             | TensorGraphNode::Flatten { .. }
             | TensorGraphNode::Reshape { .. }
             | TensorGraphNode::Permute { .. } => {

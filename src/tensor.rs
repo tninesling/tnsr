@@ -1,6 +1,7 @@
 use crate::graph;
 use crate::graph::TensorGraphNode;
 use petgraph::graph::NodeIndex;
+use std::collections::HashMap;
 use std::ops::{Add, Div, Mul, Sub};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -222,6 +223,17 @@ impl<D: DType> TensorExpr<D> {
             ExprKind::Unary { x, .. } => vec![x],
             ExprKind::Binary { a, b, .. } => vec![a, b],
             ExprKind::MatMul { a, b } => vec![a, b],
+            ExprKind::Embedding { weight, indices } => vec![weight, indices],
+            ExprKind::EmbeddingBackward {
+                indices,
+                grad_output,
+            } => vec![indices, grad_output],
+            ExprKind::IndexedCrossEntropy { logits, targets } => vec![logits, targets],
+            ExprKind::IndexedCrossEntropyBackward {
+                logits,
+                targets,
+                grad_output,
+            } => vec![logits, targets, grad_output],
             ExprKind::Transpose { x } => vec![x],
             ExprKind::Reshape { x } => vec![x],
             ExprKind::Permute { x, .. } => vec![x],
@@ -322,6 +334,27 @@ pub enum ExprKind<D: DType> {
     MatMul {
         a: TensorExpr<D>,
         b: TensorExpr<D>,
+    },
+    /// Gather rows from a [vocabulary, channels] table.
+    Embedding {
+        weight: TensorExpr<D>,
+        indices: TensorExpr<D>,
+    },
+    /// Scatter-add embedding output gradients into a table-shaped gradient.
+    EmbeddingBackward {
+        indices: TensorExpr<D>,
+        grad_output: TensorExpr<D>,
+    },
+    /// Stable cross entropy against one target index per logits row.
+    IndexedCrossEntropy {
+        logits: TensorExpr<D>,
+        targets: TensorExpr<D>,
+    },
+    /// Gradient of indexed cross entropy with respect to logits.
+    IndexedCrossEntropyBackward {
+        logits: TensorExpr<D>,
+        targets: TensorExpr<D>,
+        grad_output: TensorExpr<D>,
     },
     BroadcastAxis {
         x: TensorExpr<D>,
@@ -505,6 +538,127 @@ impl<D: DType> TensorExpr<D> {
         Self(Arc::new(ExprNode {
             shape,
             kind: ExprKind::MatMul { a: self, b: rhs },
+        }))
+    }
+
+    /// Gather embedding rows. `self` must have shape `[vocabulary, channels]`.
+    pub fn embedding(self, indices: impl Into<TensorExpr<D>>) -> Self
+    where
+        D: 'static,
+    {
+        let indices = indices.into();
+        assert_eq!(
+            self.shape().len(),
+            2,
+            "Embedding weight must be 2D [V, C], got {:?}",
+            self.shape()
+        );
+        let mut shape = indices.shape().clone();
+        shape.push(self.shape()[1]);
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Embedding {
+                weight: self,
+                indices,
+            },
+        }))
+    }
+
+    /// Scatter-add embedding gradients into `table_shape`.
+    pub fn embedding_backward(
+        indices: impl Into<TensorExpr<D>>,
+        grad_output: impl Into<TensorExpr<D>>,
+        table_shape: Shape,
+    ) -> Self
+    where
+        D: 'static,
+    {
+        let indices = indices.into();
+        let grad_output = grad_output.into();
+        assert_eq!(
+            table_shape.len(),
+            2,
+            "Embedding table shape must be [V, C], got {table_shape:?}"
+        );
+        let mut expected_grad_shape = indices.shape().clone();
+        expected_grad_shape.push(table_shape[1]);
+        assert_eq!(
+            grad_output.shape(),
+            &expected_grad_shape,
+            "Embedding grad_output shape must be indices shape + [C]"
+        );
+        Self(Arc::new(ExprNode {
+            shape: table_shape,
+            kind: ExprKind::EmbeddingBackward {
+                indices,
+                grad_output,
+            },
+        }))
+    }
+
+    /// Compute one stable cross-entropy loss per target index.
+    pub fn indexed_cross_entropy(self, targets: impl Into<TensorExpr<D>>) -> Self
+    where
+        D: 'static,
+    {
+        let targets = targets.into();
+        assert!(
+            !self.shape().is_empty(),
+            "IndexedCrossEntropy logits must have rank >= 1"
+        );
+        assert!(
+            *self.shape().last().unwrap() > 0,
+            "IndexedCrossEntropy vocabulary size must be nonzero"
+        );
+        let loss_shape = self.shape()[..self.shape().len() - 1].to_vec();
+        assert_eq!(
+            targets.shape(),
+            &loss_shape,
+            "IndexedCrossEntropy targets must match the logits prefix shape"
+        );
+        Self(Arc::new(ExprNode {
+            shape: loss_shape,
+            kind: ExprKind::IndexedCrossEntropy {
+                logits: self,
+                targets,
+            },
+        }))
+    }
+
+    /// Compute the logits gradient for indexed cross entropy.
+    pub fn indexed_cross_entropy_backward(
+        logits: impl Into<TensorExpr<D>>,
+        targets: impl Into<TensorExpr<D>>,
+        grad_output: impl Into<TensorExpr<D>>,
+    ) -> Self
+    where
+        D: 'static,
+    {
+        let logits = logits.into();
+        let targets = targets.into();
+        let grad_output = grad_output.into();
+        assert!(
+            !logits.shape().is_empty(),
+            "IndexedCrossEntropyBackward logits must have rank >= 1"
+        );
+        assert!(
+            *logits.shape().last().unwrap() > 0,
+            "IndexedCrossEntropyBackward vocabulary size must be nonzero"
+        );
+        let loss_shape = logits.shape()[..logits.shape().len() - 1].to_vec();
+        assert_eq!(targets.shape(), &loss_shape, "targets shape mismatch");
+        assert_eq!(
+            grad_output.shape(),
+            &loss_shape,
+            "grad_output shape mismatch"
+        );
+        Self(Arc::new(ExprNode {
+            shape: logits.shape().clone(),
+            kind: ExprKind::IndexedCrossEntropyBackward {
+                logits,
+                targets,
+                grad_output,
+            },
         }))
     }
 
@@ -1006,8 +1160,14 @@ impl<D: DType> TensorExpr<D> {
         fn lower_rec<D: DType, G>(
             expr: &TensorExpr<D>,
             g: &mut graph::TensorGraph<D, G>,
+            memo: &mut HashMap<*const ExprNode<D>, (TensorExpr<D>, NodeIndex)>,
         ) -> NodeIndex {
-            match &expr.0.kind {
+            let expression_pointer = Arc::as_ptr(&expr.0);
+            if let Some((_, node_idx)) = memo.get(&expression_pointer) {
+                return *node_idx;
+            }
+
+            let node_idx = match &expr.0.kind {
                 ExprKind::NodeRef { idx } => {
                     // NodeRef just returns the existing node index
                     // No new node is created - this allows referencing nodes during gradient construction
@@ -1063,7 +1223,7 @@ impl<D: DType> TensorExpr<D> {
                     })
                 }
                 ExprKind::Unary { op, x } => {
-                    let x_idx = lower_rec(x, g);
+                    let x_idx = lower_rec(x, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::Unary {
                         op: *op,
                         shape: expr.shape().clone(),
@@ -1073,14 +1233,14 @@ impl<D: DType> TensorExpr<D> {
                 }
                 ExprKind::Binary { op, a, b } => {
                     let a_idx = if a.shape() == expr.shape() {
-                        lower_rec(a, g)
+                        lower_rec(a, g, memo)
                     } else {
-                        lower_rec(&a.clone().broadcast(expr.shape().clone()), g)
+                        lower_rec(&a.clone().broadcast(expr.shape().clone()), g, memo)
                     };
                     let b_idx = if b.shape() == expr.shape() {
-                        lower_rec(b, g)
+                        lower_rec(b, g, memo)
                     } else {
-                        lower_rec(&b.clone().broadcast(expr.shape().clone()), g)
+                        lower_rec(&b.clone().broadcast(expr.shape().clone()), g, memo)
                     };
                     let node_idx = g.graph.add_node(TensorGraphNode::Binary {
                         op: op.clone(),
@@ -1091,8 +1251,8 @@ impl<D: DType> TensorExpr<D> {
                     node_idx
                 }
                 ExprKind::MatMul { a, b } => {
-                    let a_idx = lower_rec(a, g);
-                    let b_idx = lower_rec(b, g);
+                    let a_idx = lower_rec(a, g, memo);
+                    let b_idx = lower_rec(b, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::MatMul {
                         shape: expr.shape().clone(),
                     });
@@ -1100,8 +1260,59 @@ impl<D: DType> TensorExpr<D> {
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
                 }
+                ExprKind::Embedding { weight, indices } => {
+                    let weight_idx = lower_rec(weight, g, memo);
+                    let indices_idx = lower_rec(indices, g, memo);
+                    let node_idx = g.graph.add_node(TensorGraphNode::Embedding {
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(weight_idx, node_idx, 0);
+                    g.graph.add_edge(indices_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::EmbeddingBackward {
+                    indices,
+                    grad_output,
+                } => {
+                    let indices_idx = lower_rec(indices, g, memo);
+                    let grad_idx = lower_rec(grad_output, g, memo);
+                    let node_idx = g.graph.add_node(TensorGraphNode::EmbeddingBackward {
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(indices_idx, node_idx, 0);
+                    g.graph.add_edge(grad_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::IndexedCrossEntropy { logits, targets } => {
+                    let logits_idx = lower_rec(logits, g, memo);
+                    let targets_idx = lower_rec(targets, g, memo);
+                    let node_idx = g.graph.add_node(TensorGraphNode::IndexedCrossEntropy {
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(logits_idx, node_idx, 0);
+                    g.graph.add_edge(targets_idx, node_idx, 1);
+                    node_idx
+                }
+                ExprKind::IndexedCrossEntropyBackward {
+                    logits,
+                    targets,
+                    grad_output,
+                } => {
+                    let logits_idx = lower_rec(logits, g, memo);
+                    let targets_idx = lower_rec(targets, g, memo);
+                    let grad_idx = lower_rec(grad_output, g, memo);
+                    let node_idx = g
+                        .graph
+                        .add_node(TensorGraphNode::IndexedCrossEntropyBackward {
+                            shape: expr.shape().clone(),
+                        });
+                    g.graph.add_edge(logits_idx, node_idx, 0);
+                    g.graph.add_edge(targets_idx, node_idx, 1);
+                    g.graph.add_edge(grad_idx, node_idx, 2);
+                    node_idx
+                }
                 ExprKind::BroadcastAxis { x, axis } => {
-                    let x_idx = lower_rec(x, g);
+                    let x_idx = lower_rec(x, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::BroadcastAxis {
                         axis: *axis,
                         shape: expr.shape().clone(),
@@ -1110,7 +1321,7 @@ impl<D: DType> TensorExpr<D> {
                     node_idx
                 }
                 ExprKind::ReduceAxis { op, x, axis } => {
-                    let x_idx = lower_rec(x, g);
+                    let x_idx = lower_rec(x, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::ReduceAxis {
                         op: op.clone(),
                         axis: *axis,
@@ -1120,7 +1331,7 @@ impl<D: DType> TensorExpr<D> {
                     node_idx
                 }
                 ExprKind::Transpose { x } => {
-                    let x_idx = lower_rec(x, g);
+                    let x_idx = lower_rec(x, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::Transpose {
                         shape: expr.shape().clone(),
                     });
@@ -1128,7 +1339,7 @@ impl<D: DType> TensorExpr<D> {
                     node_idx
                 }
                 ExprKind::Reshape { x } => {
-                    let x_idx = lower_rec(x, g);
+                    let x_idx = lower_rec(x, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::Reshape {
                         shape: expr.shape().clone(),
                     });
@@ -1136,7 +1347,7 @@ impl<D: DType> TensorExpr<D> {
                     node_idx
                 }
                 ExprKind::Permute { x, axes } => {
-                    let x_idx = lower_rec(x, g);
+                    let x_idx = lower_rec(x, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::Permute {
                         axes: axes.clone(),
                         shape: expr.shape().clone(),
@@ -1146,14 +1357,14 @@ impl<D: DType> TensorExpr<D> {
                 }
                 ExprKind::Gt { a, b } => {
                     let a_idx = if a.shape() == expr.shape() {
-                        lower_rec(a, g)
+                        lower_rec(a, g, memo)
                     } else {
-                        lower_rec(&a.clone().broadcast(expr.shape().clone()), g)
+                        lower_rec(&a.clone().broadcast(expr.shape().clone()), g, memo)
                     };
                     let b_idx = if b.shape() == expr.shape() {
-                        lower_rec(b, g)
+                        lower_rec(b, g, memo)
                     } else {
-                        lower_rec(&b.clone().broadcast(expr.shape().clone()), g)
+                        lower_rec(&b.clone().broadcast(expr.shape().clone()), g, memo)
                     };
                     let node_idx = g.graph.add_node(TensorGraphNode::Gt {
                         shape: expr.shape().clone(),
@@ -1164,14 +1375,14 @@ impl<D: DType> TensorExpr<D> {
                 }
                 ExprKind::Mask { values, condition } => {
                     let values_idx = if values.shape() == expr.shape() {
-                        lower_rec(values, g)
+                        lower_rec(values, g, memo)
                     } else {
-                        lower_rec(&values.clone().broadcast(expr.shape().clone()), g)
+                        lower_rec(&values.clone().broadcast(expr.shape().clone()), g, memo)
                     };
                     let condition_idx = if condition.shape() == expr.shape() {
-                        lower_rec(condition, g)
+                        lower_rec(condition, g, memo)
                     } else {
-                        lower_rec(&condition.clone().broadcast(expr.shape().clone()), g)
+                        lower_rec(&condition.clone().broadcast(expr.shape().clone()), g, memo)
                     };
                     let node_idx = g.graph.add_node(TensorGraphNode::Mask {
                         shape: expr.shape().clone(),
@@ -1186,8 +1397,8 @@ impl<D: DType> TensorExpr<D> {
                     stride,
                     padding,
                 } => {
-                    let input_idx = lower_rec(input, g);
-                    let weight_idx = lower_rec(weight, g);
+                    let input_idx = lower_rec(input, g, memo);
+                    let weight_idx = lower_rec(weight, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::Conv2d {
                         stride: *stride,
                         padding: *padding,
@@ -1203,8 +1414,8 @@ impl<D: DType> TensorExpr<D> {
                     stride,
                     padding,
                 } => {
-                    let grad_idx = lower_rec(grad_output, g);
-                    let weight_idx = lower_rec(weight, g);
+                    let grad_idx = lower_rec(grad_output, g, memo);
+                    let weight_idx = lower_rec(weight, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::ConvTranspose2d {
                         stride: *stride,
                         padding: *padding,
@@ -1220,8 +1431,8 @@ impl<D: DType> TensorExpr<D> {
                     stride,
                     padding,
                 } => {
-                    let input_idx = lower_rec(input, g);
-                    let grad_idx = lower_rec(grad_output, g);
+                    let input_idx = lower_rec(input, g, memo);
+                    let grad_idx = lower_rec(grad_output, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::Conv2dBackwardWeight {
                         stride: *stride,
                         padding: *padding,
@@ -1236,7 +1447,7 @@ impl<D: DType> TensorExpr<D> {
                     kernel_size,
                     stride,
                 } => {
-                    let x_idx = lower_rec(x, g);
+                    let x_idx = lower_rec(x, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::MaxPool2d {
                         kernel_size: *kernel_size,
                         stride: *stride,
@@ -1252,9 +1463,9 @@ impl<D: DType> TensorExpr<D> {
                     kernel_size,
                     stride,
                 } => {
-                    let input_idx = lower_rec(input, g);
-                    let output_idx = lower_rec(output, g);
-                    let grad_idx = lower_rec(grad_output, g);
+                    let input_idx = lower_rec(input, g, memo);
+                    let output_idx = lower_rec(output, g, memo);
+                    let grad_idx = lower_rec(grad_output, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::MaxPool2dBackward {
                         kernel_size: *kernel_size,
                         stride: *stride,
@@ -1266,16 +1477,20 @@ impl<D: DType> TensorExpr<D> {
                     node_idx
                 }
                 ExprKind::Flatten { x } => {
-                    let x_idx = lower_rec(x, g);
+                    let x_idx = lower_rec(x, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::Flatten {
                         shape: expr.shape().clone(),
                     });
                     g.graph.add_edge(x_idx, node_idx, 0);
                     node_idx
                 }
+            };
+            if !matches!(&expr.0.kind, ExprKind::NodeRef { .. }) {
+                memo.insert(expression_pointer, (expr.clone(), node_idx));
             }
+            node_idx
         }
-        lower_rec(self, graph)
+        lower_rec(self, graph, &mut HashMap::new())
     }
 }
 

@@ -16,6 +16,11 @@ pub struct Block {
 }
 
 pub enum Stmt {
+    /// Return threads whose global linear index is outside the logical extent.
+    BoundsCheck {
+        extent: usize,
+    },
+
     /// Allocate a tile variable
     AllocTile {
         var: TileVar,
@@ -33,12 +38,30 @@ pub enum Stmt {
         col_offset: Expr,
     },
 
+    /// Load one logical matrix element into shared memory, or zero outside bounds.
+    LoadGlobalToSharedPredicated {
+        dest: TileVar,
+        src_param: String,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
+    },
+
     /// Store from register/shared to global
     Store {
         dest_param: String, // Parameter name
         src: TileVar,
         row_offset: Expr,
         col_offset: Expr,
+    },
+
+    /// Store one logical matrix element when its row and column are in bounds.
+    StoreGlobalPredicated {
+        dest_param: String,
+        src: TileVar,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
     },
 
     /// Load from shared memory to register tile (for tensor cores)
@@ -59,6 +82,32 @@ pub enum Stmt {
         a: TileVar,           // Operand (f16)
         b: TileVar,           // Operand (f16)
         layout: MatMulLayout, // NN, NT, TN, TT
+    },
+
+    /// Gather rows from a contiguous [vocabulary, width] table.
+    Embedding {
+        vocabulary: usize,
+        width: usize,
+        index_count: usize,
+    },
+
+    /// Scatter-add embedding gradients, including repeated indices.
+    EmbeddingBackward {
+        vocabulary: usize,
+        width: usize,
+        index_count: usize,
+    },
+
+    /// Stable cross-entropy loss for each contiguous logits row.
+    IndexedCrossEntropy {
+        vocabulary: usize,
+        row_count: usize,
+    },
+
+    /// Gradient of indexed cross entropy with respect to contiguous logits rows.
+    IndexedCrossEntropyBackward {
+        vocabulary: usize,
+        row_count: usize,
     },
 
     /// Element-wise binary operations
@@ -101,12 +150,13 @@ pub enum Stmt {
         src: TileVar,
     },
 
-    /// Transpose operation
-    Transpose {
+    /// Materialize a contiguous row-major permutation.
+    Reindex {
         dest: TileVar,
         src: TileVar,
         input_shape: Vec<usize>,
         output_shape: Vec<usize>,
+        axes: Vec<usize>,
     },
 
     /// Broadcast along axis
@@ -157,6 +207,13 @@ pub enum Stmt {
 /// Tile variable reference (like SSA values)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TileVar(pub usize);
+
+#[derive(Debug, Clone, Copy)]
+pub struct MatrixLayout {
+    pub rows: usize,
+    pub cols: usize,
+    pub row_stride: usize,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemorySpace {

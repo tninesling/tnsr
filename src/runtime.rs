@@ -45,13 +45,11 @@ pub enum Runtime<D = f32> {
 impl Runtime<f32> {
     /// Create a runtime with automatic backend selection.
     ///
-    /// When the `ptx` feature is enabled, prefers PTX JIT executor.
-    /// Otherwise, prefers static CUDA executor if available.
-    /// Falls back to CPU if CUDA initialization fails.
+    /// When the `ptx` feature is enabled, prefers the Tile IR/PTX executor.
+    /// Otherwise, prefers static CUDA and falls back to CPU if CUDA is unavailable.
     pub fn new() -> Self {
         #[cfg(all(feature = "cuda", feature = "ptx"))]
         {
-            // PTX feature enabled: try PTX first, then CUDA, then CPU
             match PtxExecutor::try_new() {
                 Ok(executor) => {
                     tracing::info!("Runtime initialized with PTX JIT backend");
@@ -77,7 +75,6 @@ impl Runtime<f32> {
         }
         #[cfg(all(feature = "cuda", not(feature = "ptx")))]
         {
-            // CUDA feature enabled but not PTX: try CUDA, then CPU
             match CudaExecutor::try_new() {
                 Ok(executor) => {
                     tracing::info!("Runtime initialized with CUDA backend");
@@ -167,10 +164,13 @@ where
                 }
             }
             #[cfg(feature = "cuda")]
-            Runtime::Ptx(_executor) => {
+            Runtime::Ptx(executor) => {
                 use std::any::TypeId;
                 if TypeId::of::<D>() == TypeId::of::<f32>() {
-                    unimplemented!("PTX get_value not yet implemented")
+                    executor
+                        .get_value(node_idx)
+                        // Safety: D is f32 at runtime, so the transmute is a no-op.
+                        .map(|v| unsafe { std::mem::transmute::<Vec<f32>, Vec<D>>(v) })
                 } else {
                     None
                 }
@@ -220,8 +220,23 @@ where
                 }
             }
             #[cfg(feature = "cuda")]
-            Runtime::Ptx(_executor) => {
-                anyhow::bail!("PTX backend not yet supported through Runtime")
+            Runtime::Ptx(executor) => {
+                use std::any::TypeId;
+                if TypeId::of::<D>() == TypeId::of::<f32>() {
+                    // Safety: D is f32 at runtime, so transmute is a no-op.
+                    let graph = unsafe {
+                        &*(graph as *const TensorGraph<D, G> as *const TensorGraph<f32, G>)
+                    };
+                    let inputs = unsafe {
+                        std::mem::transmute::<HashMap<String, Vec<D>>, HashMap<String, Vec<f32>>>(
+                            inputs,
+                        )
+                    };
+                    let result = executor.execute(graph, inputs);
+                    unsafe { std::mem::transmute::<Result<Vec<f32>>, Result<Vec<D>>>(result) }
+                } else {
+                    anyhow::bail!("PTX backend only supports f32")
+                }
             }
         }
     }
@@ -249,8 +264,23 @@ where
                 }
             }
             #[cfg(feature = "cuda")]
-            Runtime::Ptx(_executor) => {
-                unimplemented!("PTX gradients not yet implemented")
+            Runtime::Ptx(executor) => {
+                use std::any::TypeId;
+                if TypeId::of::<D>() == TypeId::of::<f32>() {
+                    // Safety: D is f32 at runtime, so transmute is a no-op.
+                    let graph = unsafe {
+                        &*(graph as *const TensorGraph<D, WithGrad>
+                            as *const TensorGraph<f32, WithGrad>)
+                    };
+                    let result = executor.get_gradients(graph);
+                    unsafe {
+                        std::mem::transmute::<HashMap<usize, Vec<f32>>, HashMap<usize, Vec<D>>>(
+                            result,
+                        )
+                    }
+                } else {
+                    HashMap::new()
+                }
             }
         }
     }

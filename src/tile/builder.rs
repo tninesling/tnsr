@@ -134,6 +134,26 @@ impl TileIRBuilder {
         });
     }
 
+    pub fn conv2d(&mut self, geometry: super::ir::Conv2dGeometry) {
+        self.stmts.push(Stmt::Conv2d { geometry });
+    }
+
+    pub fn conv_transpose2d(&mut self, geometry: super::ir::Conv2dGeometry) {
+        self.stmts.push(Stmt::ConvTranspose2d { geometry });
+    }
+
+    pub fn conv2d_backward_weight(&mut self, geometry: super::ir::Conv2dGeometry) {
+        self.stmts.push(Stmt::Conv2dBackwardWeight { geometry });
+    }
+
+    pub fn max_pool2d(&mut self, geometry: super::ir::MaxPool2dGeometry) {
+        self.stmts.push(Stmt::MaxPool2d { geometry });
+    }
+
+    pub fn max_pool2d_backward(&mut self, geometry: super::ir::MaxPool2dGeometry) {
+        self.stmts.push(Stmt::MaxPool2dBackward { geometry });
+    }
+
     #[allow(dead_code)]
     pub fn barrier(&mut self) {
         self.stmts.push(Stmt::Barrier);

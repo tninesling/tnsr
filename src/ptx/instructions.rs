@@ -761,6 +761,10 @@ impl<'a> Inst<'a> {
         Inst::SetpU64(SetpInst::new(dst, a, b, CompareOp::Eq))
     }
 
+    pub fn setp_ne_u64(dst: Operand<'a, Pred>, a: Operand<'a, U64>, b: Operand<'a, U64>) -> Self {
+        Inst::SetpU64(SetpInst::new(dst, a, b, CompareOp::Ne))
+    }
+
     pub fn setp_lt_i32(dst: Operand<'a, Pred>, a: Operand<'a, I32>, b: Operand<'a, I32>) -> Self {
         Inst::SetpI32(SetpInst::new(dst, a, b, CompareOp::Lt))
     }

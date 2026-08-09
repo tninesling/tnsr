@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use tnsr::graph::TensorGraph;
 use tnsr::tensor::{Parameter, TensorExpr};
-use tnsr::{Executor, Runtime};
+use tnsr::{Executor, Runtime, SimpleExecutor, nn};
 
 const EPSILON: f32 = 1e-4;
 
@@ -288,6 +288,107 @@ fn max_pool2d_gradient() {
         0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0,
     ];
     assert_close(g, &expected);
+}
+
+#[test]
+fn max_pool2d_backward_accumulates_overlapping_tied_windows() {
+    let mut runtime = create_runtime();
+    let x = Parameter::new(vec![1.0; 9], vec![1, 1, 3, 3]);
+    let x_id = x.id();
+    let pooled = TensorExpr::from(x).max_pool2d(2, 1);
+    let loss = pooled.flatten().reduce_sum(1);
+    let graph: TensorGraph<f32> = loss.into();
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    assert_close(
+        &runtime.get_gradients(&grad_graph)[&x_id],
+        &[1.0, 2.0, 1.0, 2.0, 4.0, 2.0, 1.0, 2.0, 1.0],
+    );
+}
+
+#[test]
+fn max_pool2d_preserves_batches_and_channels() {
+    let mut runtime = create_runtime();
+    let x = Parameter::new(
+        (1..=16).map(|value| value as f32).collect(),
+        vec![2, 2, 2, 2],
+    );
+    let graph: TensorGraph<f32> = TensorExpr::from(x).max_pool2d(2, 2).into();
+
+    let output = runtime.execute(&graph, HashMap::new()).unwrap();
+    assert_close(&output, &[4.0, 8.0, 12.0, 16.0]);
+}
+
+#[test]
+fn padded_strided_convolution_gradients_match_cpu() {
+    let input = Parameter::new(
+        (0..40).map(|index| index as f32 / 20.0 - 0.5).collect(),
+        vec![1, 2, 5, 4],
+    );
+    let weight = Parameter::new(
+        (0..36).map(|index| index as f32 / 30.0 - 0.4).collect(),
+        vec![3, 2, 3, 2],
+    );
+    let input_id = input.id();
+    let weight_id = weight.id();
+    let loss = TensorExpr::from(input)
+        .conv2d(weight, 2, 1)
+        .flatten()
+        .reduce_sum(1);
+    let graph: TensorGraph<f32> = loss.into();
+    let loss_node = *graph.toposort().last().unwrap();
+    let grad_graph = graph.with_gradients(loss_node);
+
+    let mut cpu = SimpleExecutor::new();
+    cpu.execute(&grad_graph, HashMap::new()).unwrap();
+    let expected = cpu.get_gradients(&grad_graph);
+    let mut runtime = create_runtime();
+    runtime.execute(&grad_graph, HashMap::new()).unwrap();
+    let actual = runtime.get_gradients(&grad_graph);
+
+    assert_close(&actual[&input_id], &expected[&input_id]);
+    assert_close(&actual[&weight_id], &expected[&weight_id]);
+}
+
+#[test]
+fn lenet_forward_executes_end_to_end() {
+    let images = Parameter::new(vec![0.1; 28 * 28], vec![1, 1, 28, 28]);
+    let conv1_weight = Parameter::new(vec![0.01; 6 * 5 * 5], vec![6, 1, 5, 5]);
+    let conv2_weight = Parameter::new(vec![0.01; 16 * 6 * 5 * 5], vec![16, 6, 5, 5]);
+    let fc1_weight = Parameter::new(vec![0.001; 400 * 120], vec![400, 120]);
+    let fc1_bias = Parameter::new(vec![0.0; 120], vec![1, 120]);
+    let fc2_weight = Parameter::new(vec![0.001; 120 * 84], vec![120, 84]);
+    let fc2_bias = Parameter::new(vec![0.0; 84], vec![1, 84]);
+    let fc3_weight = Parameter::new(vec![0.001; 84 * 10], vec![84, 10]);
+    let fc3_bias = Parameter::new(vec![0.0; 10], vec![1, 10]);
+
+    let conv1 = nn::relu(nn::conv2d(
+        images,
+        conv1_weight,
+        1,
+        2,
+        None::<TensorExpr<f32>>,
+    ));
+    let pool1 = nn::max_pool2d(conv1, 2, 2);
+    let conv2 = nn::relu(nn::conv2d(
+        pool1,
+        conv2_weight,
+        1,
+        0,
+        None::<TensorExpr<f32>>,
+    ));
+    let pool2 = nn::max_pool2d(conv2, 2, 2);
+    let hidden1 = nn::relu(nn::linear(nn::flatten(pool2), fc1_weight, Some(fc1_bias)));
+    let hidden2 = nn::relu(nn::linear(hidden1, fc2_weight, Some(fc2_bias)));
+    let logits = nn::linear(hidden2, fc3_weight, Some(fc3_bias));
+    let graph: TensorGraph<f32> = logits.into();
+
+    let mut runtime = create_runtime();
+    let output = runtime.execute(&graph, HashMap::new()).unwrap();
+    assert_eq!(output.len(), 10);
+    assert!(output.iter().all(|value| value.is_finite()));
 }
 
 #[test]

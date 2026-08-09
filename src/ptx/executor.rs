@@ -133,7 +133,6 @@ impl PtxExecutor {
     ///
     /// Prefer this over compiling from a reference when you have an owned graph.
     pub fn compile_owned<G>(&mut self, graph: TensorGraph<f32, G>) -> Result<()> {
-        validate_supported_graph(&graph)?;
         let signature = graph_compilation_signature(&graph);
         let tile_graph: TileGraph = graph.into();
         let ptx_graph: PtxGraph = tile_graph.into();
@@ -814,14 +813,162 @@ impl PtxExecutor {
                     }
                     output
                 }
-                TensorGraphNode::Conv2d { .. }
-                | TensorGraphNode::ConvTranspose2d { .. }
-                | TensorGraphNode::Conv2dBackwardWeight { .. }
-                | TensorGraphNode::MaxPool2d { .. }
-                | TensorGraphNode::MaxPool2dBackward { .. } => {
-                    anyhow::bail!(
-                        "Operation is not yet supported by the PTX backend. Use the CUDA (static kernels) or CPU backend instead."
-                    )
+                TensorGraphNode::Conv2d { .. } => {
+                    let kernel_name = ptx_graph
+                        .kernel_name(*node_idx)
+                        .context("Missing compiled Conv2d kernel")?;
+                    let inputs = graph.inputs(*node_idx);
+                    let input = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing input for Conv2d")?;
+                    let weight = self
+                        .values
+                        .get(&inputs[1])
+                        .context("Missing weight for Conv2d")?;
+                    let output_len: usize = node.shape().iter().product();
+                    let mut output = self.take_buffer(output_len)?;
+                    if output_len != 0 {
+                        let function = module.load_function(kernel_name)?;
+                        let stream = self.device.default_stream();
+                        let mut launcher = stream.launch_builder(&function);
+                        launcher.arg(input).arg(weight).arg(&mut output);
+                        unsafe {
+                            launcher.launch(LaunchConfig::for_num_elems(
+                                u32::try_from(output_len)
+                                    .context("Conv2d output is too large for a CUDA launch")?,
+                            ))
+                        }
+                        .context("PTX Conv2d kernel launch failed")?;
+                    }
+                    output
+                }
+                TensorGraphNode::ConvTranspose2d { .. } => {
+                    let kernel_name = ptx_graph
+                        .kernel_name(*node_idx)
+                        .context("Missing compiled ConvTranspose2d kernel")?;
+                    let inputs = graph.inputs(*node_idx);
+                    let grad_output = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing grad_output for ConvTranspose2d")?;
+                    let weight = self
+                        .values
+                        .get(&inputs[1])
+                        .context("Missing weight for ConvTranspose2d")?;
+                    let output_len: usize = node.shape().iter().product();
+                    let mut output = self.take_buffer(output_len)?;
+                    if output_len != 0 {
+                        let function = module.load_function(kernel_name)?;
+                        let stream = self.device.default_stream();
+                        let mut launcher = stream.launch_builder(&function);
+                        launcher.arg(grad_output).arg(weight).arg(&mut output);
+                        unsafe {
+                            launcher.launch(LaunchConfig::for_num_elems(
+                                u32::try_from(output_len).context(
+                                    "ConvTranspose2d output is too large for a CUDA launch",
+                                )?,
+                            ))
+                        }
+                        .context("PTX ConvTranspose2d kernel launch failed")?;
+                    }
+                    output
+                }
+                TensorGraphNode::Conv2dBackwardWeight { .. } => {
+                    let kernel_name = ptx_graph
+                        .kernel_name(*node_idx)
+                        .context("Missing compiled Conv2dBackwardWeight kernel")?;
+                    let inputs = graph.inputs(*node_idx);
+                    let input = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing input for Conv2dBackwardWeight")?;
+                    let grad_output = self
+                        .values
+                        .get(&inputs[1])
+                        .context("Missing grad_output for Conv2dBackwardWeight")?;
+                    let output_len: usize = node.shape().iter().product();
+                    let mut output = self.take_buffer(output_len)?;
+                    if output_len != 0 {
+                        let function = module.load_function(kernel_name)?;
+                        let stream = self.device.default_stream();
+                        let mut launcher = stream.launch_builder(&function);
+                        launcher.arg(input).arg(grad_output).arg(&mut output);
+                        unsafe {
+                            launcher.launch(LaunchConfig::for_num_elems(
+                                u32::try_from(output_len).context(
+                                    "Conv2dBackwardWeight output is too large for a CUDA launch",
+                                )?,
+                            ))
+                        }
+                        .context("PTX Conv2dBackwardWeight kernel launch failed")?;
+                    }
+                    output
+                }
+                TensorGraphNode::MaxPool2d { .. } => {
+                    let kernel_name = ptx_graph
+                        .kernel_name(*node_idx)
+                        .context("Missing compiled MaxPool2d kernel")?;
+                    let input_index = graph.inputs(*node_idx)[0];
+                    let input = self
+                        .values
+                        .get(&input_index)
+                        .context("Missing input for MaxPool2d")?;
+                    let output_len: usize = node.shape().iter().product();
+                    let mut output = self.take_buffer(output_len)?;
+                    if output_len != 0 {
+                        let function = module.load_function(kernel_name)?;
+                        let stream = self.device.default_stream();
+                        let mut launcher = stream.launch_builder(&function);
+                        launcher.arg(input).arg(&mut output);
+                        unsafe {
+                            launcher.launch(LaunchConfig::for_num_elems(
+                                u32::try_from(output_len)
+                                    .context("MaxPool2d output is too large for a CUDA launch")?,
+                            ))
+                        }
+                        .context("PTX MaxPool2d kernel launch failed")?;
+                    }
+                    output
+                }
+                TensorGraphNode::MaxPool2dBackward { .. } => {
+                    let kernel_name = ptx_graph
+                        .kernel_name(*node_idx)
+                        .context("Missing compiled MaxPool2dBackward kernel")?;
+                    let inputs = graph.inputs(*node_idx);
+                    let input = self
+                        .values
+                        .get(&inputs[0])
+                        .context("Missing input for MaxPool2dBackward")?;
+                    let pooled = self
+                        .values
+                        .get(&inputs[1])
+                        .context("Missing pooled output for MaxPool2dBackward")?;
+                    let grad_output = self
+                        .values
+                        .get(&inputs[2])
+                        .context("Missing grad_output for MaxPool2dBackward")?;
+                    let output_len: usize = node.shape().iter().product();
+                    let mut output = self.take_buffer(output_len)?;
+                    if output_len != 0 {
+                        let function = module.load_function(kernel_name)?;
+                        let stream = self.device.default_stream();
+                        let mut launcher = stream.launch_builder(&function);
+                        launcher
+                            .arg(input)
+                            .arg(pooled)
+                            .arg(grad_output)
+                            .arg(&mut output);
+                        unsafe {
+                            launcher.launch(LaunchConfig::for_num_elems(
+                                u32::try_from(output_len).context(
+                                    "MaxPool2dBackward output is too large for a CUDA launch",
+                                )?,
+                            ))
+                        }
+                        .context("PTX MaxPool2dBackward kernel launch failed")?;
+                    }
+                    output
                 }
             };
 
@@ -882,27 +1029,6 @@ fn validate_batch_broadcast(input_shape: &[usize], output_batch_shape: &[usize])
             input_size == 1 || input_size == output_size,
             "Cannot broadcast MatMul batch dimension {input_size} to {output_size}"
         );
-    }
-    Ok(())
-}
-
-fn validate_supported_graph<G>(graph: &TensorGraph<f32, G>) -> Result<()> {
-    for node_index in graph.graph.node_indices() {
-        let node = &graph.graph[node_index];
-        if matches!(
-            node,
-            TensorGraphNode::Conv2d { .. }
-                | TensorGraphNode::ConvTranspose2d { .. }
-                | TensorGraphNode::Conv2dBackwardWeight { .. }
-                | TensorGraphNode::MaxPool2d { .. }
-                | TensorGraphNode::MaxPool2dBackward { .. }
-        ) {
-            anyhow::bail!(
-                "PTX backend does not support {} at node {}",
-                node.name(),
-                node_index.index()
-            );
-        }
     }
     Ok(())
 }

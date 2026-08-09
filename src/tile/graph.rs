@@ -1,5 +1,8 @@
 use super::builder::TileIRBuilder;
-use super::ir::{DType, Dim, Expr, MatMulLayout, MatMulPlan, MatrixLayout, ReduceOp, TileIR};
+use super::ir::{
+    Conv2dGeometry, DType, Dim, Expr, MatMulLayout, MatMulPlan, MatrixLayout, MaxPool2dGeometry,
+    ReduceOp, TileIR,
+};
 use crate::graph::{TensorGraph, TensorGraphNode};
 use crate::tensor;
 use petgraph::{Graph, graph::NodeIndex};
@@ -8,6 +11,51 @@ use std::collections::HashMap;
 #[allow(dead_code)]
 pub struct TileGraph {
     pub graph: Graph<TileIR, usize>,
+}
+
+fn conv2d_geometry(
+    input: &[usize],
+    weight: &[usize],
+    output: &[usize],
+    stride: usize,
+    padding: usize,
+) -> Conv2dGeometry {
+    assert_eq!(input.len(), 4, "convolution input must be NCHW");
+    assert_eq!(weight.len(), 4, "convolution weight must be OIHW");
+    assert_eq!(output.len(), 4, "convolution output must be NCHW");
+    Conv2dGeometry {
+        batch: input[0],
+        input_channels: input[1],
+        input_height: input[2],
+        input_width: input[3],
+        output_channels: weight[0],
+        output_height: output[2],
+        output_width: output[3],
+        kernel_height: weight[2],
+        kernel_width: weight[3],
+        stride,
+        padding,
+    }
+}
+
+fn max_pool2d_geometry(
+    input: &[usize],
+    output: &[usize],
+    kernel_size: usize,
+    stride: usize,
+) -> MaxPool2dGeometry {
+    assert_eq!(input.len(), 4, "max-pool input must be NCHW");
+    assert_eq!(output.len(), 4, "max-pool output must be NCHW");
+    MaxPool2dGeometry {
+        batch: input[0],
+        channels: input[1],
+        input_height: input[2],
+        input_width: input[3],
+        output_height: output[2],
+        output_width: output[3],
+        kernel_size,
+        stride,
+    }
 }
 
 impl<G> From<TensorGraph<f32, G>> for TileGraph {
@@ -26,6 +74,11 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
                     | TensorGraphNode::EmbeddingBackward { .. }
                     | TensorGraphNode::IndexedCrossEntropy { .. }
                     | TensorGraphNode::IndexedCrossEntropyBackward { .. }
+                    | TensorGraphNode::Conv2d { .. }
+                    | TensorGraphNode::ConvTranspose2d { .. }
+                    | TensorGraphNode::Conv2dBackwardWeight { .. }
+                    | TensorGraphNode::MaxPool2d { .. }
+                    | TensorGraphNode::MaxPool2dBackward { .. }
             ) {
                 let inputs: Vec<Vec<usize>> = tensor_graph
                     .inputs(idx)
@@ -125,13 +178,42 @@ impl TileGraph {
             }
             TensorGraphNode::Gt { .. } => Self::lower_gt(shape),
             TensorGraphNode::Mask { .. } => Self::lower_mask(shape),
-            TensorGraphNode::Conv2d { .. }
-            | TensorGraphNode::ConvTranspose2d { .. }
-            | TensorGraphNode::Conv2dBackwardWeight { .. }
-            | TensorGraphNode::MaxPool2d { .. }
-            | TensorGraphNode::MaxPool2dBackward { .. } => {
-                unimplemented!("operation not yet supported in tile IR backend")
-            }
+            TensorGraphNode::Conv2d {
+                stride, padding, ..
+            } => Self::lower_conv2d(input_shapes[0], input_shapes[1], shape, stride, padding),
+            TensorGraphNode::ConvTranspose2d {
+                stride, padding, ..
+            } => Self::lower_conv_transpose2d(
+                input_shapes[0],
+                input_shapes[1],
+                shape,
+                stride,
+                padding,
+            ),
+            TensorGraphNode::Conv2dBackwardWeight {
+                stride, padding, ..
+            } => Self::lower_conv2d_backward_weight(
+                input_shapes[0],
+                input_shapes[1],
+                shape,
+                stride,
+                padding,
+            ),
+            TensorGraphNode::MaxPool2d {
+                kernel_size,
+                stride,
+                ..
+            } => Self::lower_max_pool2d(input_shapes[0], shape, kernel_size, stride),
+            TensorGraphNode::MaxPool2dBackward {
+                kernel_size,
+                stride,
+                ..
+            } => Self::lower_max_pool2d_backward(
+                input_shapes[0],
+                input_shapes[1],
+                kernel_size,
+                stride,
+            ),
             TensorGraphNode::Flatten { .. } | TensorGraphNode::Reshape { .. } => Self::lower_view(),
         }
     }
@@ -184,6 +266,94 @@ impl TileGraph {
         builder.add_param("output", DType::F32, false);
         builder.bounds_check(row_count * vocabulary);
         builder.indexed_cross_entropy_backward(vocabulary, row_count);
+        builder.finish()
+    }
+
+    fn lower_conv2d(
+        input: &[usize],
+        weight: &[usize],
+        output: &[usize],
+        stride: usize,
+        padding: usize,
+    ) -> TileIR {
+        let geometry = conv2d_geometry(input, weight, output, stride, padding);
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("conv2d");
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("weight", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+        builder.bounds_check(output.iter().product());
+        builder.conv2d(geometry);
+        builder.finish()
+    }
+
+    fn lower_conv_transpose2d(
+        grad_output: &[usize],
+        weight: &[usize],
+        output: &[usize],
+        stride: usize,
+        padding: usize,
+    ) -> TileIR {
+        let geometry = conv2d_geometry(output, weight, grad_output, stride, padding);
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("conv_transpose2d");
+        builder.add_param("grad_output", DType::F32, true);
+        builder.add_param("weight", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+        builder.bounds_check(output.iter().product());
+        builder.conv_transpose2d(geometry);
+        builder.finish()
+    }
+
+    fn lower_conv2d_backward_weight(
+        input: &[usize],
+        grad_output: &[usize],
+        output: &[usize],
+        stride: usize,
+        padding: usize,
+    ) -> TileIR {
+        let geometry = conv2d_geometry(input, output, grad_output, stride, padding);
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("conv2d_backward_weight");
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("grad_output", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+        builder.bounds_check(output.iter().product());
+        builder.conv2d_backward_weight(geometry);
+        builder.finish()
+    }
+
+    fn lower_max_pool2d(
+        input: &[usize],
+        output: &[usize],
+        kernel_size: usize,
+        stride: usize,
+    ) -> TileIR {
+        let geometry = max_pool2d_geometry(input, output, kernel_size, stride);
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("max_pool2d");
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+        builder.bounds_check(output.iter().product());
+        builder.max_pool2d(geometry);
+        builder.finish()
+    }
+
+    fn lower_max_pool2d_backward(
+        input: &[usize],
+        pooled: &[usize],
+        kernel_size: usize,
+        stride: usize,
+    ) -> TileIR {
+        let geometry = max_pool2d_geometry(input, pooled, kernel_size, stride);
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("max_pool2d_backward");
+        builder.add_param("input", DType::F32, true);
+        builder.add_param("pooled", DType::F32, true);
+        builder.add_param("grad_output", DType::F32, true);
+        builder.add_param("output", DType::F32, false);
+        builder.bounds_check(input.iter().product());
+        builder.max_pool2d_backward(geometry);
         builder.finish()
     }
 

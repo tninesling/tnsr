@@ -140,7 +140,7 @@ fn ptx_execute_compiled_rejects_different_graph_structure() {
 }
 
 #[test]
-fn ptx_unsupported_compile_returns_error() {
+fn ptx_conv2d_compiles_and_executes_without_fallback() {
     let Some(mut ptx) = ptx_executor() else {
         return;
     };
@@ -148,12 +148,13 @@ fn ptx_unsupported_compile_returns_error() {
     let weight = TensorExpr::constant(vec![1.0; 4], vec![1, 1, 2, 2]);
     let graph: TensorGraph<f32> = input.conv2d(weight, 1, 0).into();
 
-    let error = ptx.compile_owned(graph).unwrap_err();
-    assert!(
-        error.to_string().contains("does not support Conv2d"),
-        "{error:#}"
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(ptx.compilation_count(), 1);
+    assert_close(
+        &ptx.execute_compiled(&graph, HashMap::new()).unwrap(),
+        &[4.0; 4],
+        0.0,
     );
-    assert_eq!(ptx.compilation_count(), 0);
 }
 
 #[test]

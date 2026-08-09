@@ -41,6 +41,74 @@ fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
 }
 
 #[test]
+fn ptx_reports_unfused_pointwise_plan_metrics() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![0.25, 0.5, 1.0, 2.0], vec![4]);
+    let shared = input.exp();
+    let graph: TensorGraph<f32> = (shared.clone().log() + shared.relu()).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let compile = ptx.compile_metrics();
+    assert_eq!(compile.graph_nodes, 5);
+    assert_eq!(compile.generated_kernels, 5);
+    assert!(compile.ptx_source_bytes > 0);
+    assert!(!compile.compile_time.is_zero());
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.steps().len(), 5);
+    assert!(plan.steps().iter().all(|step| step.materialize));
+    assert_eq!(
+        plan.steps()
+            .iter()
+            .filter(|step| step.action == tnsr::ptx::PtxPlanAction::Kernel)
+            .count(),
+        4
+    );
+
+    let description = ptx.describe_unfused_plan(&graph).unwrap();
+    assert!(description.contains("unfused PTX plan: 5 graph nodes, 5 generated kernels"));
+    assert!(description.contains("action=upload"));
+    assert_eq!(description.matches("action=kernel").count(), 4);
+
+    ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_eq!(
+        ptx.execution_metrics(),
+        &tnsr::ptx::PtxExecutionMetrics {
+            kernel_launches: 4,
+            materialized_values: 5,
+            materialized_bytes: 80,
+            intermediate_materialized_bytes: 48,
+            device_copies: 2,
+        }
+    );
+}
+
+#[test]
+fn ptx_reports_view_copy_baseline() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let graph: TensorGraph<f32> =
+        TensorExpr::constant((0..6).map(|value| value as f32).collect(), vec![6])
+            .reshape(vec![2, 3])
+            .flatten()
+            .into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let description = ptx.describe_unfused_plan(&graph).unwrap();
+    assert_eq!(description.matches("action=device-copy").count(), 2);
+
+    ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let execution = ptx.execution_metrics();
+    assert_eq!(execution.kernel_launches, 0);
+    assert_eq!(execution.materialized_values, 3);
+    assert_eq!(execution.materialized_bytes, 72);
+    assert_eq!(execution.intermediate_materialized_bytes, 24);
+    assert_eq!(execution.device_copies, 4);
+}
+
+#[test]
 fn ptx_elementwise_length_17_is_bounds_safe() {
     let Some(mut ptx) = ptx_executor() else {
         return;

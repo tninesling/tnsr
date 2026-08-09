@@ -16,6 +16,10 @@ pub(crate) struct PtxGraph {
 }
 
 impl PtxGraph {
+    pub(crate) fn kernel_count(&self) -> usize {
+        self.graph.node_count()
+    }
+
     pub(crate) fn module_source(&self) -> String {
         let mut module = Module::new();
         for function in self.graph.node_weights() {

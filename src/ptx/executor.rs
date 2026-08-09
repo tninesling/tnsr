@@ -1,15 +1,37 @@
 use super::graph::PtxGraph;
+use super::plan::{PtxExecutionPlan, PtxPlanAction};
 use crate::Executor;
 use crate::alloc::{AllocStats, CudaBufferPool};
-use crate::graph::{TensorGraph, TensorGraphNode, WithGrad, liveness};
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
 use crate::tile::TileGraph;
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use petgraph::visit::EdgeRef;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// Measurements from the most recent successful PTX compilation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PtxCompileMetrics {
+    pub graph_nodes: usize,
+    pub generated_kernels: usize,
+    pub ptx_source_bytes: usize,
+    pub compile_time: Duration,
+}
+
+/// Measurements from the most recent successful graph execution.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PtxExecutionMetrics {
+    pub kernel_launches: usize,
+    pub materialized_values: usize,
+    pub materialized_bytes: usize,
+    pub intermediate_materialized_bytes: usize,
+    pub device_copies: usize,
+}
 
 /// PTX executor that compiles TensorGraph → TileGraph → PtxGraph → PTX string
 /// and executes kernels via cudarc
@@ -21,8 +43,12 @@ pub struct PtxExecutor {
     stats: AllocStats,
     /// Stores the PtxGraph to access kernel names during execution
     ptx_graph: Option<PtxGraph>,
+    execution_plan: Option<PtxExecutionPlan>,
     compilation_signature: Option<Vec<u8>>,
     compilation_count: usize,
+    compile_metrics: PtxCompileMetrics,
+    execution_metrics: PtxExecutionMetrics,
+    kernel_launches: Cell<usize>,
 }
 
 impl Default for PtxExecutor {
@@ -49,8 +75,12 @@ impl PtxExecutor {
             pool: RefCell::new(CudaBufferPool::default()),
             stats: AllocStats::default(),
             ptx_graph: None,
+            execution_plan: None,
             compilation_signature: None,
             compilation_count: 0,
+            compile_metrics: PtxCompileMetrics::default(),
+            execution_metrics: PtxExecutionMetrics::default(),
+            kernel_launches: Cell::new(0),
         })
     }
 
@@ -109,6 +139,69 @@ impl PtxExecutor {
         self.compilation_count
     }
 
+    pub fn compile_metrics(&self) -> &PtxCompileMetrics {
+        &self.compile_metrics
+    }
+
+    pub fn execution_metrics(&self) -> &PtxExecutionMetrics {
+        &self.execution_metrics
+    }
+
+    pub fn execution_plan(&self) -> Option<&PtxExecutionPlan> {
+        self.execution_plan.as_ref()
+    }
+
+    /// Describe the current node-for-node PTX execution baseline.
+    pub fn describe_unfused_plan<G>(&self, graph: &TensorGraph<f32, G>) -> Result<String> {
+        let supplied_signature = graph_compilation_signature(graph);
+        let compiled_signature = self
+            .compilation_signature
+            .as_deref()
+            .context("No compiled graph signature available. Call compile_owned() first.")?;
+        anyhow::ensure!(
+            compiled_signature == supplied_signature.as_slice(),
+            "Supplied graph structure does not match the compiled PTX module"
+        );
+        let ptx_graph = self
+            .ptx_graph
+            .as_ref()
+            .context("No PTX graph available. Call compile_owned() first.")?;
+        let mut description = format!(
+            "unfused PTX plan: {} graph nodes, {} generated kernels\n",
+            graph.graph.node_count(),
+            ptx_graph.kernel_count()
+        );
+        let plan = self
+            .execution_plan
+            .as_ref()
+            .context("No PTX execution plan available. Call compile_owned() first.")?;
+        for (step, plan_step) in plan.steps().iter().enumerate() {
+            let node_index = plan_step.node;
+            let action = match plan_step.action {
+                PtxPlanAction::Upload => "upload".to_string(),
+                PtxPlanAction::DeviceCopy => "device-copy".to_string(),
+                PtxPlanAction::Kernel => format!(
+                    "kernel {}",
+                    ptx_graph
+                        .kernel_name(node_index)
+                        .context("Missing compiled kernel in unfused plan")?
+                ),
+            };
+            writeln!(
+                description,
+                "{step:04}: node {:04} {:<32} shape={:?} action={action}",
+                node_index.index(),
+                plan_step.operation,
+                plan_step.shape
+            )?;
+        }
+        Ok(description)
+    }
+
+    fn record_kernel_launch(&self) {
+        self.kernel_launches.set(self.kernel_launches.get() + 1);
+    }
+
     /// Reset allocation counters without discarding pooled device buffers.
     pub fn reset_stats(&mut self) {
         self.stats.reset();
@@ -133,10 +226,15 @@ impl PtxExecutor {
     ///
     /// Prefer this over compiling from a reference when you have an owned graph.
     pub fn compile_owned<G>(&mut self, graph: TensorGraph<f32, G>) -> Result<()> {
+        let started = Instant::now();
+        let graph_nodes = graph.graph.node_count();
         let signature = graph_compilation_signature(&graph);
+        let execution_plan = PtxExecutionPlan::unfused(&graph);
         let tile_graph: TileGraph = graph.into();
         let ptx_graph: PtxGraph = tile_graph.into();
         let ptx_src = ptx_graph.module_source();
+        let generated_kernels = ptx_graph.kernel_count();
+        let ptx_source_bytes = ptx_src.len();
 
         let cuda_module = self
             .device
@@ -144,8 +242,15 @@ impl PtxExecutor {
             .context("Failed to load PTX module with cudarc")?;
         self.module = Some(cuda_module);
         self.ptx_graph = Some(ptx_graph);
+        self.execution_plan = Some(execution_plan);
         self.compilation_signature = Some(signature);
         self.compilation_count += 1;
+        self.compile_metrics = PtxCompileMetrics {
+            graph_nodes,
+            generated_kernels,
+            ptx_source_bytes,
+            compile_time: started.elapsed(),
+        };
 
         Ok(())
     }
@@ -236,6 +341,7 @@ impl PtxExecutor {
             launcher.arg(&a_view);
             launcher.arg(&b_view);
             launcher.arg(&mut output_view);
+            self.record_kernel_launch();
             unsafe { launcher.launch(config) }
                 .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
         }
@@ -248,6 +354,8 @@ impl PtxExecutor {
         graph: &TensorGraph<f32, G>,
         inputs: HashMap<String, Vec<f32>>,
     ) -> Result<Vec<f32>> {
+        self.execution_metrics = PtxExecutionMetrics::default();
+        self.kernel_launches.set(0);
         let supplied_signature = graph_compilation_signature(graph);
         let compiled_signature = self
             .compilation_signature
@@ -267,20 +375,28 @@ impl PtxExecutor {
             .as_ref()
             .context("No PTX graph available. Call compile() first.")?;
 
-        let order = graph.toposort();
-        let liveness = liveness::analyze(graph, &order);
+        let plan_steps = self
+            .execution_plan
+            .as_ref()
+            .context("No PTX execution plan available. Call compile_owned() first.")?
+            .steps()
+            .to_vec();
+        let order: Vec<_> = plan_steps.iter().map(|step| step.node).collect();
         for (_, value) in self.values.drain() {
             self.pool.get_mut().give(value);
         }
         let mut live_bytes = 0usize;
 
-        for (pos, node_idx) in order.iter().enumerate() {
+        for (pos, plan_step) in plan_steps.iter().enumerate() {
+            let node_idx = &plan_step.node;
+            let planned_inputs = &plan_step.inputs;
             let node = &graph[*node_idx];
             let result = match node {
                 TensorGraphNode::Constant { data, .. } => {
                     let stream = self.device.default_stream();
                     let mut device_data = self.take_buffer(data.len())?;
                     if !data.is_empty() {
+                        self.execution_metrics.device_copies += 1;
                         stream
                             .memcpy_htod(data.as_slice(), &mut device_data)
                             .context("Failed to copy constant to CUDA device")?;
@@ -300,6 +416,7 @@ impl PtxExecutor {
                     let stream = self.device.default_stream();
                     let mut device_data = self.take_buffer(val.len())?;
                     if !val.is_empty() {
+                        self.execution_metrics.device_copies += 1;
                         stream
                             .memcpy_htod(val.as_slice(), &mut device_data)
                             .context("Failed to copy input to CUDA device")?;
@@ -314,6 +431,7 @@ impl PtxExecutor {
                     let stream = self.device.default_stream();
                     let mut device_data = self.take_buffer(v.len())?;
                     if !v.is_empty() {
+                        self.execution_metrics.device_copies += 1;
                         stream
                             .memcpy_htod(v.as_slice(), &mut device_data)
                             .context("Failed to copy parameter to CUDA device")?;
@@ -325,7 +443,7 @@ impl PtxExecutor {
                         .kernel_name(*node_idx)
                         .context("Missing compiled unary kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -340,6 +458,7 @@ impl PtxExecutor {
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input);
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -353,7 +472,7 @@ impl PtxExecutor {
                         .kernel_name(*node_idx)
                         .context("Missing compiled fused unary kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -368,6 +487,7 @@ impl PtxExecutor {
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input);
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -380,7 +500,7 @@ impl PtxExecutor {
                         .kernel_name(*node_idx)
                         .context("Missing compiled binary kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let lhs = self
                         .values
                         .get(&ins[0])
@@ -401,6 +521,7 @@ impl PtxExecutor {
                         launcher.arg(lhs);
                         launcher.arg(rhs);
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -413,7 +534,7 @@ impl PtxExecutor {
                         .kernel_name(*node_idx)
                         .context("Missing compiled Gt kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let lhs = self
                         .values
                         .get(&ins[0])
@@ -434,6 +555,7 @@ impl PtxExecutor {
                         launcher.arg(lhs);
                         launcher.arg(rhs);
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -446,7 +568,7 @@ impl PtxExecutor {
                         .kernel_name(*node_idx)
                         .context("Missing compiled Mask kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let values = self
                         .values
                         .get(&ins[0])
@@ -467,6 +589,7 @@ impl PtxExecutor {
                         launcher.arg(values);
                         launcher.arg(condition);
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }
                             .context("CUDA mask kernel launch failed")?;
                     }
@@ -478,7 +601,7 @@ impl PtxExecutor {
                         .kernel_name(*node_idx)
                         .context("Missing compiled MatMul kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let a = self
                         .values
                         .get(&ins[0])
@@ -503,7 +626,7 @@ impl PtxExecutor {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled Embedding kernel")?;
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     anyhow::ensure!(ins.len() == 2, "Embedding requires 2 inputs");
                     let weight = self
                         .values
@@ -540,6 +663,7 @@ impl PtxExecutor {
                         launcher.arg(weight);
                         launcher.arg(indices);
                         launcher.arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
                             .context("PTX embedding kernel launch failed")?;
                     }
@@ -549,7 +673,7 @@ impl PtxExecutor {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled EmbeddingBackward kernel")?;
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     anyhow::ensure!(ins.len() == 2, "EmbeddingBackward requires 2 inputs");
                     let indices = self
                         .values
@@ -592,6 +716,7 @@ impl PtxExecutor {
                         launcher.arg(indices);
                         launcher.arg(grad_output);
                         launcher.arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
                             .context("PTX embedding_backward kernel launch failed")?;
                     }
@@ -601,7 +726,7 @@ impl PtxExecutor {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled IndexedCrossEntropy kernel")?;
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     anyhow::ensure!(ins.len() == 2, "IndexedCrossEntropy requires 2 inputs");
                     let logits = self
                         .values
@@ -639,6 +764,7 @@ impl PtxExecutor {
                         launcher.arg(logits);
                         launcher.arg(targets);
                         launcher.arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
                             .context("PTX indexed_cross_entropy kernel launch failed")?;
                     }
@@ -648,7 +774,7 @@ impl PtxExecutor {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled IndexedCrossEntropyBackward kernel")?;
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     anyhow::ensure!(
                         ins.len() == 3,
                         "IndexedCrossEntropyBackward requires 3 inputs"
@@ -700,6 +826,7 @@ impl PtxExecutor {
                         launcher.arg(targets);
                         launcher.arg(grad_output);
                         launcher.arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
                             .context("PTX indexed_cross_entropy_backward kernel launch failed")?;
                     }
@@ -710,7 +837,7 @@ impl PtxExecutor {
                         .kernel_name(*node_idx)
                         .context("Missing compiled BroadcastAxis kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -728,6 +855,7 @@ impl PtxExecutor {
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input);
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -740,7 +868,7 @@ impl PtxExecutor {
                         .kernel_name(*node_idx)
                         .context("Missing compiled ReduceAxis kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -758,6 +886,7 @@ impl PtxExecutor {
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input);
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -770,7 +899,7 @@ impl PtxExecutor {
                         .kernel_name(*node_idx)
                         .context("Missing compiled permutation kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -785,6 +914,7 @@ impl PtxExecutor {
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input);
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -793,7 +923,7 @@ impl PtxExecutor {
                     out
                 }
                 TensorGraphNode::Reshape { .. } | TensorGraphNode::Flatten { .. } => {
-                    let input_index = graph.inputs(*node_idx)[0];
+                    let input_index = planned_inputs[0];
                     let input = self
                         .values
                         .get(&input_index)
@@ -806,6 +936,7 @@ impl PtxExecutor {
                     );
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
+                        self.execution_metrics.device_copies += 1;
                         self.device
                             .default_stream()
                             .memcpy_dtod(input, &mut output)
@@ -817,7 +948,7 @@ impl PtxExecutor {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled Conv2d kernel")?;
-                    let inputs = graph.inputs(*node_idx);
+                    let inputs = planned_inputs;
                     let input = self
                         .values
                         .get(&inputs[0])
@@ -833,6 +964,7 @@ impl PtxExecutor {
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(input).arg(weight).arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len)
@@ -847,7 +979,7 @@ impl PtxExecutor {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled ConvTranspose2d kernel")?;
-                    let inputs = graph.inputs(*node_idx);
+                    let inputs = planned_inputs;
                     let grad_output = self
                         .values
                         .get(&inputs[0])
@@ -863,6 +995,7 @@ impl PtxExecutor {
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(grad_output).arg(weight).arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len).context(
@@ -878,7 +1011,7 @@ impl PtxExecutor {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled Conv2dBackwardWeight kernel")?;
-                    let inputs = graph.inputs(*node_idx);
+                    let inputs = planned_inputs;
                     let input = self
                         .values
                         .get(&inputs[0])
@@ -894,6 +1027,7 @@ impl PtxExecutor {
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(input).arg(grad_output).arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len).context(
@@ -909,7 +1043,7 @@ impl PtxExecutor {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled MaxPool2d kernel")?;
-                    let input_index = graph.inputs(*node_idx)[0];
+                    let input_index = planned_inputs[0];
                     let input = self
                         .values
                         .get(&input_index)
@@ -921,6 +1055,7 @@ impl PtxExecutor {
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(input).arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len)
@@ -935,7 +1070,7 @@ impl PtxExecutor {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled MaxPool2dBackward kernel")?;
-                    let inputs = graph.inputs(*node_idx);
+                    let inputs = planned_inputs;
                     let input = self
                         .values
                         .get(&inputs[0])
@@ -959,6 +1094,7 @@ impl PtxExecutor {
                             .arg(pooled)
                             .arg(grad_output)
                             .arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len).context(
@@ -973,11 +1109,22 @@ impl PtxExecutor {
             };
 
             let bytes = result.len() * std::mem::size_of::<f32>();
+            self.execution_metrics.materialized_values += 1;
+            self.execution_metrics.materialized_bytes += bytes;
+            let is_source = matches!(
+                node,
+                TensorGraphNode::Constant { .. }
+                    | TensorGraphNode::Input { .. }
+                    | TensorGraphNode::Parameter { .. }
+            );
+            if !is_source && pos + 1 != order.len() {
+                self.execution_metrics.intermediate_materialized_bytes += bytes;
+            }
             self.values.insert(*node_idx, result);
             live_bytes += bytes;
             self.stats.record_live(live_bytes);
 
-            for &dead in liveness.free_after(pos) {
+            for &dead in &plan_step.release_after {
                 if let Some(value) = self.values.remove(&dead) {
                     live_bytes -= value.len() * std::mem::size_of::<f32>();
                     self.pool.get_mut().give(value);
@@ -986,6 +1133,7 @@ impl PtxExecutor {
         }
 
         self.stats = self.stats.with_pool_stats(self.pool.get_mut().stats());
+        self.execution_metrics.kernel_launches = self.kernel_launches.get();
 
         let last_node_idx = order.last().context("Graph is empty")?;
         let out_device = self
@@ -994,6 +1142,7 @@ impl PtxExecutor {
             .context("Output value not found after execution")?;
         let mut out_host = vec![0.0f32; out_device.len()];
         if !out_host.is_empty() {
+            self.execution_metrics.device_copies += 1;
             self.device
                 .default_stream()
                 .memcpy_dtoh(out_device, &mut out_host)

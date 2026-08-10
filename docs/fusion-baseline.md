@@ -19,8 +19,9 @@ cargo bench --bench fusion --features cuda -- --noplot
 - explicit host/device and device/device copies.
 
 `PtxExecutionPlan` records the baseline topological order, input edges, physical
-action, materialization intent, and release points. `describe_unfused_plan`
-renders uploads, kernels, and view copies for inspection.
+action, materialization intent, release points, and normalized virtual outputs.
+`describe_unfused_plan` renders uploads, kernels, materialization copies, and
+virtual views for inspection.
 
 ## Initial Measurements
 
@@ -42,5 +43,16 @@ dominate small graphs.
 - Stage 0 is complete for the PTX backend: metrics, plan rendering, exact tests,
   pointwise/reduction benchmarks, and existing transformer/convolution coverage.
 - Stage 1 has an unfused one-node-per-step `PtxExecutionPlan`. Runtime consumes
-  its order, dependencies, and release decisions. Virtual tensors and access
-  maps are the next structural change before plan steps can become regions.
+  its order, dependencies, and release decisions, establishing the boundary
+  used by virtual values and future fused regions.
+- Stage 2 implements structural iteration domains, index maps, predicates, and
+  normalized virtual tensors. Reshape and flatten alias storage directly.
+  Trailing transpose, permutation, and broadcast paths remain virtual through
+  host output materialization, while paths feeding opaque kernels conservatively
+  retain their existing materialization until consumer fusion is available.
+
+Stage 2 verification on the same GPU measured Tile PTX pointwise at
+337.86-340.53 us and reduction at 271.37-272.62 us. Criterion classified the
+pointwise change as an improvement and the reduction change as within noise. A
+constant -> reshape -> flatten plan now reports zero kernel launches, zero
+device-to-device copies, and one materialized value.

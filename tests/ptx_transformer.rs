@@ -85,7 +85,7 @@ fn ptx_reports_unfused_pointwise_plan_metrics() {
 }
 
 #[test]
-fn ptx_reports_view_copy_baseline() {
+fn ptx_reports_virtual_view_baseline() {
     let Some(mut ptx) = ptx_executor() else {
         return;
     };
@@ -97,15 +97,44 @@ fn ptx_reports_view_copy_baseline() {
 
     ptx.compile_owned(graph.clone()).unwrap();
     let description = ptx.describe_unfused_plan(&graph).unwrap();
-    assert_eq!(description.matches("action=device-copy").count(), 2);
+    assert_eq!(description.matches("action=virtual-view").count(), 2);
 
-    ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_eq!(actual, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
     let execution = ptx.execution_metrics();
     assert_eq!(execution.kernel_launches, 0);
-    assert_eq!(execution.materialized_values, 3);
-    assert_eq!(execution.materialized_bytes, 72);
-    assert_eq!(execution.intermediate_materialized_bytes, 24);
-    assert_eq!(execution.device_copies, 4);
+    assert_eq!(execution.materialized_values, 1);
+    assert_eq!(execution.materialized_bytes, 24);
+    assert_eq!(execution.intermediate_materialized_bytes, 0);
+    assert_eq!(execution.device_copies, 2);
+}
+
+#[test]
+fn ptx_plan_normalizes_composed_virtual_views() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let graph: TensorGraph<f32> =
+        TensorExpr::constant((0..24).map(|value| value as f32).collect(), vec![2, 3, 4])
+            .reshape(vec![1, 4, 6])
+            .permute(vec![0, 2, 1])
+            .broadcast_axis(0, 5)
+            .into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    let source = plan.steps().first().unwrap().node;
+    let output = &plan.steps().last().unwrap().virtual_output;
+    assert_eq!(output.source, source);
+    assert_eq!(output.shape, vec![5, 6, 4]);
+    assert_eq!(output.source_index(&[4, 5, 3]).unwrap(), vec![1, 2, 3]);
+    let first_plan = plan.clone();
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(ptx.execution_plan().unwrap(), &first_plan);
+
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 0.0);
 }
 
 #[test]

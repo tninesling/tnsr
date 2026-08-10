@@ -1,7 +1,12 @@
+pub mod access;
 pub mod builder;
 pub mod graph;
 pub mod ir;
 
+pub use access::{
+    CompareOp, Extent, IndexExpr, IndexMap, IndexPredicate, IterDim, IterDomain, IterKind,
+    ScalarValue, VirtualTensor,
+};
 #[allow(unused_imports)]
 pub use builder::TileIRBuilder;
 #[allow(unused_imports)]

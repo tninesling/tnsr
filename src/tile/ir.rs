@@ -288,7 +288,7 @@ impl MatMulPlan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
     F16,
     BF16,

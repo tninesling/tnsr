@@ -4,6 +4,9 @@ Tracking issue: [#15 Implement operator fusion](https://github.com/tninesling/tn
 
 Status: accepted; implementation in progress.
 
+Implemented through Stage 2: PTX execution plans, observability, structural
+access maps, and virtual view paths.
+
 Primary reference: [DNNFusion, PLDI 2021](references/dnnfusion-pldi-2021.pdf).
 
 Implementation baseline: [Fusion Baseline](fusion-baseline.md).

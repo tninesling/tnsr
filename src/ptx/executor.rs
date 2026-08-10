@@ -3,7 +3,7 @@ use super::plan::{PtxExecutionPlan, PtxPlanAction};
 use crate::Executor;
 use crate::alloc::{AllocStats, CudaBufferPool};
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
-use crate::tile::TileGraph;
+use crate::tile::{IndexMap, TileGraph, VirtualTensor};
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
@@ -38,7 +38,7 @@ pub struct PtxExecutionMetrics {
 pub struct PtxExecutor {
     device: Arc<CudaContext>,
     module: Option<Arc<CudaModule>>,
-    values: HashMap<petgraph::graph::NodeIndex, CudaSlice<f32>>,
+    values: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<f32>>>,
     pool: RefCell<CudaBufferPool>,
     stats: AllocStats,
     /// Stores the PtxGraph to access kernel names during execution
@@ -180,6 +180,7 @@ impl PtxExecutor {
             let action = match plan_step.action {
                 PtxPlanAction::Upload => "upload".to_string(),
                 PtxPlanAction::DeviceCopy => "device-copy".to_string(),
+                PtxPlanAction::VirtualView => "virtual-view".to_string(),
                 PtxPlanAction::Kernel => format!(
                     "kernel {}",
                     ptx_graph
@@ -202,6 +203,16 @@ impl PtxExecutor {
         self.kernel_launches.set(self.kernel_launches.get() + 1);
     }
 
+    fn recycle_value(&self, value: Arc<CudaSlice<f32>>) -> usize {
+        let bytes = value.len() * std::mem::size_of::<f32>();
+        if let Ok(value) = Arc::try_unwrap(value) {
+            self.pool.borrow_mut().give(value);
+            bytes
+        } else {
+            0
+        }
+    }
+
     /// Reset allocation counters without discarding pooled device buffers.
     pub fn reset_stats(&mut self) {
         self.stats.reset();
@@ -217,7 +228,7 @@ impl PtxExecutor {
     pub fn release_gradients(&mut self, graph: &TensorGraph<f32, WithGrad>) {
         for grad_node in graph.gradient_metadata().param_to_grad.values() {
             if let Some(buf) = self.values.remove(grad_node) {
-                self.pool.get_mut().give(buf);
+                self.recycle_value(buf);
             }
         }
     }
@@ -229,7 +240,7 @@ impl PtxExecutor {
         let started = Instant::now();
         let graph_nodes = graph.graph.node_count();
         let signature = graph_compilation_signature(&graph);
-        let execution_plan = PtxExecutionPlan::unfused(&graph);
+        let execution_plan = PtxExecutionPlan::unfused(&graph)?;
         let tile_graph: TileGraph = graph.into();
         let ptx_graph: PtxGraph = tile_graph.into();
         let ptx_src = ptx_graph.module_source();
@@ -266,12 +277,19 @@ impl PtxExecutor {
     /// Get the value of a specific node from the executor's cache after execution
     pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<Vec<f32>> {
         self.values.get(&node_idx).and_then(|cuda_slice| {
-            let mut host_vec = vec![0.0f32; cuda_slice.len()];
+            let mut storage = vec![0.0f32; cuda_slice.len()];
             self.device
                 .default_stream()
-                .memcpy_dtoh(cuda_slice, &mut host_vec)
+                .memcpy_dtoh(cuda_slice.as_ref(), &mut storage)
                 .ok()?;
-            Some(host_vec)
+            let plan = self.execution_plan.as_ref()?;
+            let step = plan.steps().iter().find(|step| step.node == node_idx)?;
+            let source_shape = &plan
+                .steps()
+                .iter()
+                .find(|source| source.node == step.virtual_output.source)?
+                .shape;
+            materialize_host_view(storage, &step.virtual_output, source_shape).ok()
         })
     }
 
@@ -382,8 +400,9 @@ impl PtxExecutor {
             .steps()
             .to_vec();
         let order: Vec<_> = plan_steps.iter().map(|step| step.node).collect();
-        for (_, value) in self.values.drain() {
-            self.pool.get_mut().give(value);
+        let old_values: Vec<_> = self.values.drain().map(|(_, value)| value).collect();
+        for value in old_values {
+            self.recycle_value(value);
         }
         let mut live_bytes = 0usize;
 
@@ -391,6 +410,24 @@ impl PtxExecutor {
             let node_idx = &plan_step.node;
             let planned_inputs = &plan_step.inputs;
             let node = &graph[*node_idx];
+            if plan_step.action == PtxPlanAction::VirtualView {
+                let input = planned_inputs
+                    .first()
+                    .context("virtual view plan step has no input")?;
+                let result = Arc::clone(
+                    self.values
+                        .get(input)
+                        .context("virtual view input value is unavailable")?,
+                );
+                self.values.insert(*node_idx, result);
+                self.stats.record_live(live_bytes);
+                for &dead in &plan_step.release_after {
+                    if let Some(value) = self.values.remove(&dead) {
+                        live_bytes -= self.recycle_value(value);
+                    }
+                }
+                continue;
+            }
             let result = match node {
                 TensorGraphNode::Constant { data, .. } => {
                     let stream = self.device.default_stream();
@@ -456,7 +493,7 @@ impl PtxExecutor {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
@@ -485,7 +522,7 @@ impl PtxExecutor {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
@@ -518,8 +555,8 @@ impl PtxExecutor {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(lhs);
-                        launcher.arg(rhs);
+                        launcher.arg(lhs.as_ref());
+                        launcher.arg(rhs.as_ref());
                         launcher.arg(&mut out);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
@@ -552,8 +589,8 @@ impl PtxExecutor {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(lhs);
-                        launcher.arg(rhs);
+                        launcher.arg(lhs.as_ref());
+                        launcher.arg(rhs.as_ref());
                         launcher.arg(&mut out);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
@@ -586,8 +623,8 @@ impl PtxExecutor {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(values);
-                        launcher.arg(condition);
+                        launcher.arg(values.as_ref());
+                        launcher.arg(condition.as_ref());
                         launcher.arg(&mut out);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }
@@ -660,8 +697,8 @@ impl PtxExecutor {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(weight);
-                        launcher.arg(indices);
+                        launcher.arg(weight.as_ref());
+                        launcher.arg(indices.as_ref());
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
@@ -713,8 +750,8 @@ impl PtxExecutor {
                         )?;
                         let function = module.load_function(kernel_name)?;
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(indices);
-                        launcher.arg(grad_output);
+                        launcher.arg(indices.as_ref());
+                        launcher.arg(grad_output.as_ref());
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
@@ -761,8 +798,8 @@ impl PtxExecutor {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(logits);
-                        launcher.arg(targets);
+                        launcher.arg(logits.as_ref());
+                        launcher.arg(targets.as_ref());
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
@@ -822,9 +859,9 @@ impl PtxExecutor {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(logits);
-                        launcher.arg(targets);
-                        launcher.arg(grad_output);
+                        launcher.arg(logits.as_ref());
+                        launcher.arg(targets.as_ref());
+                        launcher.arg(grad_output.as_ref());
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
@@ -853,7 +890,7 @@ impl PtxExecutor {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(out_len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
@@ -884,7 +921,7 @@ impl PtxExecutor {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(out_len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
@@ -912,7 +949,7 @@ impl PtxExecutor {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
@@ -939,7 +976,7 @@ impl PtxExecutor {
                         self.execution_metrics.device_copies += 1;
                         self.device
                             .default_stream()
-                            .memcpy_dtod(input, &mut output)
+                            .memcpy_dtod(input.as_ref(), &mut output)
                             .context("Failed to copy contiguous view")?;
                     }
                     output
@@ -963,7 +1000,10 @@ impl PtxExecutor {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(input).arg(weight).arg(&mut output);
+                        launcher
+                            .arg(input.as_ref())
+                            .arg(weight.as_ref())
+                            .arg(&mut output);
                         self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
@@ -994,7 +1034,10 @@ impl PtxExecutor {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(grad_output).arg(weight).arg(&mut output);
+                        launcher
+                            .arg(grad_output.as_ref())
+                            .arg(weight.as_ref())
+                            .arg(&mut output);
                         self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
@@ -1026,7 +1069,10 @@ impl PtxExecutor {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(input).arg(grad_output).arg(&mut output);
+                        launcher
+                            .arg(input.as_ref())
+                            .arg(grad_output.as_ref())
+                            .arg(&mut output);
                         self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
@@ -1054,7 +1100,7 @@ impl PtxExecutor {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(input).arg(&mut output);
+                        launcher.arg(input.as_ref()).arg(&mut output);
                         self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
@@ -1090,9 +1136,9 @@ impl PtxExecutor {
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher
-                            .arg(input)
-                            .arg(pooled)
-                            .arg(grad_output)
+                            .arg(input.as_ref())
+                            .arg(pooled.as_ref())
+                            .arg(grad_output.as_ref())
                             .arg(&mut output);
                         self.record_kernel_launch();
                         unsafe {
@@ -1107,6 +1153,7 @@ impl PtxExecutor {
                     output
                 }
             };
+            let result = Arc::new(result);
 
             let bytes = result.len() * std::mem::size_of::<f32>();
             self.execution_metrics.materialized_values += 1;
@@ -1126,8 +1173,7 @@ impl PtxExecutor {
 
             for &dead in &plan_step.release_after {
                 if let Some(value) = self.values.remove(&dead) {
-                    live_bytes -= value.len() * std::mem::size_of::<f32>();
-                    self.pool.get_mut().give(value);
+                    live_bytes -= self.recycle_value(value);
                 }
             }
         }
@@ -1135,20 +1181,26 @@ impl PtxExecutor {
         self.stats = self.stats.with_pool_stats(self.pool.get_mut().stats());
         self.execution_metrics.kernel_launches = self.kernel_launches.get();
 
-        let last_node_idx = order.last().context("Graph is empty")?;
+        let last_step = plan_steps.last().context("Graph is empty")?;
+        let last_node_idx = &last_step.node;
         let out_device = self
             .values
             .get(last_node_idx)
             .context("Output value not found after execution")?;
-        let mut out_host = vec![0.0f32; out_device.len()];
-        if !out_host.is_empty() {
+        let mut storage_host = vec![0.0f32; out_device.len()];
+        if !storage_host.is_empty() {
             self.execution_metrics.device_copies += 1;
             self.device
                 .default_stream()
-                .memcpy_dtoh(out_device, &mut out_host)
+                .memcpy_dtoh(out_device.as_ref(), &mut storage_host)
                 .context("Failed to copy output from CUDA device to host")?;
         }
-        Ok(out_host)
+        let source_shape = &plan_steps
+            .iter()
+            .find(|step| step.node == last_step.virtual_output.source)
+            .context("Virtual output source is absent from the execution plan")?
+            .shape;
+        materialize_host_view(storage_host, &last_step.virtual_output, source_shape)
     }
 
     /// Compile and execute a TensorGraph in one call
@@ -1180,6 +1232,54 @@ fn validate_batch_broadcast(input_shape: &[usize], output_batch_shape: &[usize])
         );
     }
     Ok(())
+}
+
+fn materialize_host_view(
+    storage: Vec<f32>,
+    view: &VirtualTensor,
+    source_shape: &[usize],
+) -> Result<Vec<f32>> {
+    anyhow::ensure!(
+        view.predicate.is_none(),
+        "Predicated virtual outputs are not yet supported at the host boundary"
+    );
+    if view.shape == source_shape && view.access == IndexMap::identity(view.shape.len()) {
+        return Ok(storage);
+    }
+    let output_len = checked_element_count(&view.shape, "Virtual output")?;
+    let mut output = Vec::with_capacity(output_len);
+    for linear_output in 0..output_len {
+        let mut remainder = linear_output;
+        let mut output_index = vec![0; view.shape.len()];
+        for dimension in (0..view.shape.len()).rev() {
+            let extent = view.shape[dimension];
+            anyhow::ensure!(extent > 0, "non-empty virtual output has a zero extent");
+            output_index[dimension] = remainder % extent;
+            remainder /= extent;
+        }
+        let source_index = view.source_index(&output_index)?;
+        anyhow::ensure!(
+            source_index.len() == source_shape.len(),
+            "Virtual output source rank does not match its storage shape"
+        );
+        let mut linear_source = 0usize;
+        for (&coordinate, &extent) in source_index.iter().zip(source_shape) {
+            anyhow::ensure!(
+                coordinate < extent,
+                "Virtual output source coordinate {coordinate} exceeds extent {extent}"
+            );
+            linear_source = linear_source
+                .checked_mul(extent)
+                .and_then(|offset| offset.checked_add(coordinate))
+                .context("Virtual output source index overflowed usize")?;
+        }
+        output.push(
+            *storage
+                .get(linear_source)
+                .context("Virtual output source index exceeds its storage buffer")?,
+        );
+    }
+    Ok(output)
 }
 
 fn checked_element_count(shape: &[usize], description: &str) -> Result<usize> {

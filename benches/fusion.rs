@@ -23,12 +23,30 @@ fn reduction_chain() -> TensorGraph<f32> {
         .into()
 }
 
+fn bias_broadcast_region() -> TensorGraph<f32> {
+    let input = Parameter::new(vec![0.25; 256 * 1024], vec![256, 1024]);
+    let bias = Parameter::new(vec![0.5; 1024], vec![1024]);
+    (TensorExpr::from(input) + TensorExpr::from(bias))
+        .relu()
+        .into()
+}
+
+fn permutation_region() -> TensorGraph<f32> {
+    let input = Parameter::new(vec![0.25; 512 * 512], vec![512, 512]);
+    let residual = Parameter::new(vec![0.5; 512 * 512], vec![512, 512]);
+    (TensorExpr::from(input).permute(vec![1, 0]) + TensorExpr::from(residual))
+        .relu()
+        .into()
+}
+
 fn fusion_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("fusion_baseline");
     group.sample_size(10);
     for (name, graph) in [
         ("pointwise_diamond", pointwise_diamond()),
         ("reduction_chain", reduction_chain()),
+        ("bias_broadcast_region", bias_broadcast_region()),
+        ("permutation_region", permutation_region()),
     ] {
         let mut cpu = SimpleExecutor::new();
         group.bench_function(BenchmarkId::new("cpu", name), |benchmark| {

@@ -339,6 +339,9 @@ pub enum Expr {
     ThreadIdx(Dim),
     Mul(Box<Expr>, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr>, Box<Expr>),
+    FloorDiv(Box<Expr>, usize),
+    Mod(Box<Expr>, usize),
 }
 
 impl std::ops::Mul<usize> for Expr {

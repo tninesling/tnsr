@@ -69,3 +69,17 @@ Stage 3 verification measured the fused Tile PTX pointwise diamond at
 reported a 7.39-8.22% improvement. The reduction chain measured
 265.35-265.79 us, a further 2.27-2.61% improvement from pointwise producer
 fusion before the still-materialized reduction.
+
+- Stage 4 binds each region input to a logical virtual tensor and a physical
+  base buffer. Region lowering composes reshape, permutation, and broadcast
+  maps into source addresses. Views remain virtual only when every consumer can
+  use the map; opaque consumers force materialization. The initial analytical
+  cost guard also materializes maps above 64 index operations or non-identity
+  views feeding more than two distinct regions.
+
+Stage 4 measured bias broadcast plus ReLU at 324.64-329.05 us for Tile PTX,
+versus 365.81-369.20 us for static CUDA. A transposed pointwise residual path
+measured 408.60-410.08 us versus 411.85-414.12 us for static CUDA; its
+non-coalesced source access largely offsets the removed materialization. A
+repeat pointwise-diamond run measured 311.16-313.10 us, showing no regression
+for identity access maps.

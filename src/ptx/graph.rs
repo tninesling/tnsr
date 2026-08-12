@@ -2415,6 +2415,41 @@ fn lower_expr<'a>(
             func.add_inst(Inst::add_u64(result.clone(), a_val, b_val));
             result
         }
+        Expr::Sub(a, b) => {
+            let lhs = lower_expr(func, ctx, a);
+            let rhs = lower_expr(func, ctx, b);
+            let result = func.add_u64_register();
+            func.add_inst(Inst::sub_u64(result.clone(), lhs, rhs));
+            result
+        }
+        Expr::FloorDiv(value, divisor) => {
+            let value = lower_expr(func, ctx, value);
+            let result = func.add_u64_register();
+            func.add_inst(Inst::div_u64(
+                result.clone(),
+                value,
+                Operand::imm_u64(*divisor as u64),
+            ));
+            result
+        }
+        Expr::Mod(value, modulus) => {
+            let value = lower_expr(func, ctx, value);
+            let quotient = func.add_u64_register();
+            func.add_inst(Inst::div_u64(
+                quotient.clone(),
+                value.clone(),
+                Operand::imm_u64(*modulus as u64),
+            ));
+            let consumed = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                consumed.clone(),
+                quotient,
+                Operand::imm_u64(*modulus as u64),
+            ));
+            let result = func.add_u64_register();
+            func.add_inst(Inst::sub_u64(result.clone(), value, consumed));
+            result
+        }
     }
 }
 

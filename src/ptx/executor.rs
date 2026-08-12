@@ -413,11 +413,22 @@ impl PtxExecutor {
             })
             .collect::<Result<_>>()?;
         let len = checked_element_count(&step.shape, "Pointwise region")?;
-        for input in &input_values {
+        let region = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.regions().get(region_id))
+            .context("Pointwise region metadata is unavailable")?;
+        anyhow::ensure!(
+            region.inputs.len() == input_values.len(),
+            "Pointwise region input binding count mismatch"
+        );
+        for (input, descriptor) in input_values.iter().zip(&region.inputs) {
+            let expected =
+                checked_element_count(&descriptor.source_shape, "Pointwise region input storage")?;
             anyhow::ensure!(
-                input.len() == len,
-                "Pointwise region input length {} does not match output length {len}",
-                input.len()
+                input.len() == expected,
+                "Pointwise region input length {} does not match storage length {expected}",
+                input.len(),
             );
         }
         let mut outputs = Vec::with_capacity(step.outputs.len());

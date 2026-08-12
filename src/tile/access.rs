@@ -56,6 +56,16 @@ pub enum IndexExpr {
 }
 
 impl IndexExpr {
+    pub fn operation_count(&self) -> usize {
+        match self {
+            Self::IterDim(_) | Self::Symbol(_) | Self::Const(_) => 0,
+            Self::Add(lhs, rhs) | Self::Sub(lhs, rhs) | Self::Mul(lhs, rhs) => {
+                1 + lhs.operation_count() + rhs.operation_count()
+            }
+            Self::FloorDiv(value, _) | Self::Mod(value, _) => 1 + value.operation_count(),
+        }
+    }
+
     pub fn normalize(self) -> Result<Self> {
         let normalized = match self {
             Self::Add(lhs, rhs) => match (lhs.normalize()?, rhs.normalize()?) {
@@ -186,6 +196,17 @@ impl IndexMap {
         Self {
             results: (0..rank).map(IndexExpr::IterDim).collect(),
         }
+    }
+
+    pub fn operation_count(&self) -> usize {
+        self.results.iter().map(IndexExpr::operation_count).sum()
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.results
+            .iter()
+            .enumerate()
+            .all(|(dimension, result)| result == &IndexExpr::IterDim(dimension))
     }
 
     /// Compose `next -> current` with this `current -> source` map.

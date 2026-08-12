@@ -146,6 +146,98 @@ fn ptx_zero_size_pointwise_region_does_not_launch() {
 }
 
 #[test]
+fn ptx_region_composes_bias_broadcast_access() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let matrix = TensorExpr::constant(vec![-3.0, -2.0, -1.0, 1.0, 2.0, 3.0], vec![2, 3]);
+    let bias = TensorExpr::constant(vec![0.5, 1.0, 1.5], vec![3]);
+    let graph: TensorGraph<f32> = (matrix + bias).relu().into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.regions().len(), 1);
+    assert_eq!(
+        plan.steps()
+            .iter()
+            .filter(|step| step.action == tnsr::ptx::PtxPlanAction::VirtualView)
+            .count(),
+        2
+    );
+    assert_eq!(ptx.compile_metrics().generated_kernels, 1);
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 0.0);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+    assert_eq!(ptx.execution_metrics().materialized_values, 3);
+}
+
+#[test]
+fn ptx_region_composes_permutation_access() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-3.0, -2.0, -1.0, 1.0, 2.0, 3.0], vec![2, 3]);
+    let residual = TensorExpr::constant(vec![0.5; 6], vec![3, 2]);
+    let graph: TensorGraph<f32> = (input.permute(vec![1, 0]) + residual).relu().into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert!(plan.steps().iter().any(|step| {
+        step.operation == "Permute" && step.action == tnsr::ptx::PtxPlanAction::VirtualView
+    }));
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 0.0);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+}
+
+#[test]
+fn ptx_materializes_permutation_for_opaque_shared_consumer() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-3.0, -2.0, -1.0, 1.0, 2.0, 3.0], vec![2, 3]);
+    let residual = TensorExpr::constant(vec![0.5; 6], vec![3, 2]);
+    let permuted = input.permute(vec![1, 0]);
+    let branch = (permuted.clone() + residual).relu().reduce_sum(0);
+    let graph: TensorGraph<f32> = (branch + permuted.reduce_sum(0)).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert!(plan.steps().iter().any(|step| {
+        step.operation == "Permute" && step.action == tnsr::ptx::PtxPlanAction::Kernel
+    }));
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-6);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 5);
+}
+
+#[test]
+fn ptx_materializes_non_identity_view_for_high_region_fanout() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-3.0, -2.0, -1.0, 1.0, 2.0, 3.0], vec![2, 3]);
+    let permuted = input.permute(vec![1, 0]);
+    let one = || TensorExpr::constant(vec![1.0; 6], vec![3, 2]);
+    let first = (permuted.clone() + one()).relu().reduce_sum(0);
+    let second = (permuted.clone() * one()).exp().reduce_sum(0);
+    let third = (permuted - one()).relu().reduce_sum(0);
+    let graph: TensorGraph<f32> = (first + second + third).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert!(plan.steps().iter().any(|step| {
+        step.operation == "Permute" && step.action == tnsr::ptx::PtxPlanAction::Kernel
+    }));
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-4);
+}
+
+#[test]
 fn ptx_reports_virtual_view_baseline() {
     let Some(mut ptx) = ptx_executor() else {
         return;

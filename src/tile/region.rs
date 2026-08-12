@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::{BinaryOp, Shape, UnaryOp};
 
-use super::{DType, Dim, Expr, TileIR, TileIRBuilder, TileVar};
+use super::{DType, Dim, Expr, IndexExpr, IndexMap, TileIR, TileIRBuilder, TileVar, VirtualTensor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RegionValue(pub usize);
@@ -14,6 +14,8 @@ pub struct RegionValue(pub usize);
 pub struct RegionInput {
     pub node: NodeIndex,
     pub value: RegionValue,
+    pub tensor: VirtualTensor,
+    pub source_shape: Shape,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +91,16 @@ impl FusionRegion {
                     let value = RegionValue(next_value);
                     next_value += 1;
                     values.insert(input, value);
-                    inputs.push(RegionInput { node: input, value });
+                    inputs.push(RegionInput {
+                        node: input,
+                        value,
+                        tensor: VirtualTensor::identity(
+                            input,
+                            graph[input].shape().clone(),
+                            DType::F32,
+                        ),
+                        source_shape: graph[input].shape().clone(),
+                    });
                 }
             }
 
@@ -205,10 +216,11 @@ impl FusionRegion {
         let mut registers = HashMap::new();
         for (index, input) in self.inputs.iter().enumerate() {
             let register = builder.alloc_register(DType::F32, 1, 1);
+            let element_index = input_element_index(input, &self.shape, &thread_index)?;
             builder.load_global_to_shared(
                 register,
                 &format!("input_{index}"),
-                thread_index.clone(),
+                element_index,
                 Expr::Const(0),
             );
             registers.insert(input.value, register);
@@ -251,4 +263,108 @@ impl FusionRegion {
         }
         Ok(builder.finish())
     }
+}
+
+fn input_element_index(input: &RegionInput, output_shape: &[usize], linear: &Expr) -> Result<Expr> {
+    anyhow::ensure!(
+        input.tensor.predicate.is_none(),
+        "predicated region inputs are not yet supported"
+    );
+    if input.tensor.shape == input.source_shape
+        && input.tensor.access == IndexMap::identity(input.tensor.shape.len())
+    {
+        return Ok(linear.clone());
+    }
+    anyhow::ensure!(
+        input.tensor.shape == output_shape,
+        "virtual region input shape does not match its iteration domain"
+    );
+    anyhow::ensure!(
+        input.tensor.access.results.len() == input.source_shape.len(),
+        "virtual region input access rank does not match source storage"
+    );
+    let output_strides = row_major_strides(output_shape)?;
+    let iterations: Vec<_> = output_shape
+        .iter()
+        .zip(output_strides)
+        .map(|(&extent, stride)| {
+            Expr::Mod(
+                Box::new(Expr::FloorDiv(Box::new(linear.clone()), stride.max(1))),
+                extent.max(1),
+            )
+        })
+        .collect();
+    let source_strides = row_major_strides(&input.source_shape)?;
+    input
+        .tensor
+        .access
+        .results
+        .iter()
+        .zip(source_strides)
+        .try_fold(Expr::Const(0), |offset, (coordinate, stride)| {
+            Ok(Expr::Add(
+                Box::new(offset),
+                Box::new(Expr::Mul(
+                    Box::new(lower_index_expr(coordinate, &iterations)?),
+                    Box::new(Expr::Const(
+                        i64::try_from(stride)
+                            .context("virtual region input stride does not fit in i64")?,
+                    )),
+                )),
+            ))
+        })
+}
+
+fn lower_index_expr(expression: &IndexExpr, iterations: &[Expr]) -> Result<Expr> {
+    match expression {
+        IndexExpr::IterDim(dimension) => iterations
+            .get(*dimension)
+            .cloned()
+            .with_context(|| format!("virtual access dimension {dimension} is unavailable")),
+        IndexExpr::Symbol(symbol) => {
+            anyhow::bail!("symbolic virtual access {symbol} is not yet supported")
+        }
+        IndexExpr::Const(value) => {
+            anyhow::ensure!(*value >= 0, "virtual access contains a negative constant");
+            Ok(Expr::Const(*value))
+        }
+        IndexExpr::Add(lhs, rhs) => Ok(Expr::Add(
+            Box::new(lower_index_expr(lhs, iterations)?),
+            Box::new(lower_index_expr(rhs, iterations)?),
+        )),
+        IndexExpr::Sub(lhs, rhs) => Ok(Expr::Sub(
+            Box::new(lower_index_expr(lhs, iterations)?),
+            Box::new(lower_index_expr(rhs, iterations)?),
+        )),
+        IndexExpr::Mul(lhs, rhs) => Ok(Expr::Mul(
+            Box::new(lower_index_expr(lhs, iterations)?),
+            Box::new(lower_index_expr(rhs, iterations)?),
+        )),
+        IndexExpr::FloorDiv(value, divisor) => {
+            anyhow::ensure!(*divisor > 0, "virtual access divisor must be positive");
+            Ok(Expr::FloorDiv(
+                Box::new(lower_index_expr(value, iterations)?),
+                usize::try_from(*divisor).context("virtual access divisor does not fit usize")?,
+            ))
+        }
+        IndexExpr::Mod(value, modulus) => {
+            anyhow::ensure!(*modulus > 0, "virtual access modulus must be positive");
+            Ok(Expr::Mod(
+                Box::new(lower_index_expr(value, iterations)?),
+                usize::try_from(*modulus).context("virtual access modulus does not fit usize")?,
+            ))
+        }
+    }
+}
+
+fn row_major_strides(shape: &[usize]) -> Result<Vec<usize>> {
+    let mut stride = 1usize;
+    let mut strides = vec![0; shape.len()];
+    for (dimension, &extent) in shape.iter().enumerate().rev() {
+        strides[dimension] = stride;
+        stride = stride
+            .checked_mul(extent)
+            .context("virtual region input stride overflowed usize")?;
+    }
+    Ok(strides)
 }

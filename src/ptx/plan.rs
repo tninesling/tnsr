@@ -12,6 +12,8 @@ use crate::tensor::Shape;
 use crate::tile::{DType, FusionRegion, VirtualTensor};
 
 const MAX_POINTWISE_REGION_OPS: usize = 64;
+const MAX_VIRTUAL_INDEX_OPS: usize = 64;
+const MAX_NON_IDENTITY_VIRTUAL_FANOUT: usize = 2;
 
 /// Physical action used to produce values in a PTX execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +76,7 @@ impl PtxExecutionPlan {
     fn build_with_regions<G>(
         graph: &TensorGraph<f32, G>,
         order: &[NodeIndex],
-        regions: Vec<FusionRegion>,
+        mut regions: Vec<FusionRegion>,
         graph_output: Option<NodeIndex>,
     ) -> Result<Self> {
         let mut node_to_region = HashMap::new();
@@ -122,13 +124,25 @@ impl PtxExecutionPlan {
         let physical_order = toposort(&quotient, None)
             .map_err(|_| anyhow::anyhow!("fusion plan contraction contains a cycle"))?;
 
-        let trailing_view_path = trailing_view_paths(graph, order);
+        let virtual_view_path = virtual_view_paths(graph, order, &node_to_region);
         let mut virtual_values: HashMap<NodeIndex, VirtualTensor> = HashMap::new();
         let mut steps = Vec::with_capacity(units.len());
         for unit_index in physical_order.into_iter().map(|node| quotient[node]) {
             match units[unit_index] {
                 PlanUnit::Region(region_id) => {
-                    let region = &regions[region_id];
+                    let region = &mut regions[region_id];
+                    for input in &mut region.inputs {
+                        let tensor =
+                            virtual_values.get(&input.node).cloned().unwrap_or_else(|| {
+                                VirtualTensor::identity(
+                                    input.node,
+                                    graph[input.node].shape().clone(),
+                                    DType::F32,
+                                )
+                            });
+                        input.source_shape = graph[tensor.source].shape().clone();
+                        input.tensor = tensor;
+                    }
                     let outputs: Vec<_> = region.outputs.iter().map(|output| output.node).collect();
                     let virtual_outputs: Vec<_> = outputs
                         .iter()
@@ -142,7 +156,11 @@ impl PtxExecutionPlan {
                     steps.push(PtxPlanStep {
                         node: *outputs.last().context("pointwise region has no outputs")?,
                         members: region.members.clone(),
-                        inputs: region.inputs.iter().map(|input| input.node).collect(),
+                        inputs: region
+                            .inputs
+                            .iter()
+                            .map(|input| input.tensor.source)
+                            .collect(),
                         outputs,
                         operation: "PointwiseRegion",
                         shape: region.shape.clone(),
@@ -155,7 +173,7 @@ impl PtxExecutionPlan {
                 PlanUnit::Node(node_index) => {
                     let node = &graph[node_index];
                     let inputs = graph.inputs(node_index);
-                    let action = node_action(node, node_index, &trailing_view_path);
+                    let mut action = node_action(node, node_index, &virtual_view_path);
                     let input_view = || {
                         let input = inputs.first().context("view operation has no input")?;
                         virtual_values
@@ -179,6 +197,27 @@ impl PtxExecutionPlan {
                         }
                         _ => VirtualTensor::identity(node_index, node.shape().clone(), DType::F32),
                     };
+                    let consumer_regions: HashSet<_> = graph
+                        .graph
+                        .neighbors_directed(node_index, Direction::Outgoing)
+                        .filter_map(|consumer| node_to_region.get(&consumer).copied())
+                        .collect();
+                    let consumer_count = if consumer_regions.is_empty() {
+                        graph
+                            .graph
+                            .neighbors_directed(node_index, Direction::Outgoing)
+                            .count()
+                    } else {
+                        consumer_regions.len()
+                    };
+                    if action == PtxPlanAction::VirtualView
+                        && consumer_count != 0
+                        && (view_output.access.operation_count() > MAX_VIRTUAL_INDEX_OPS
+                            || (!view_output.access.is_identity()
+                                && consumer_count > MAX_NON_IDENTITY_VIRTUAL_FANOUT))
+                    {
+                        action = PtxPlanAction::Kernel;
+                    }
                     let virtual_output = if action == PtxPlanAction::VirtualView {
                         view_output
                     } else {
@@ -312,9 +351,10 @@ fn form_pointwise_regions<G>(
     Ok(regions)
 }
 
-fn trailing_view_paths<G>(
+fn virtual_view_paths<G>(
     graph: &TensorGraph<f32, G>,
     order: &[NodeIndex],
+    node_to_region: &HashMap<NodeIndex, usize>,
 ) -> HashMap<NodeIndex, bool> {
     let mut trailing = HashMap::new();
     for &node_index in order.iter().rev() {
@@ -326,11 +366,13 @@ fn trailing_view_paths<G>(
                 | TensorGraphNode::Permute { .. }
                 | TensorGraphNode::BroadcastAxis { .. }
         );
-        let consumers_are_views = graph
+        let consumers_accept_virtual = graph
             .graph
             .neighbors_directed(node_index, Direction::Outgoing)
-            .all(|consumer| trailing.get(&consumer) == Some(&true));
-        trailing.insert(node_index, is_view && consumers_are_views);
+            .all(|consumer| {
+                node_to_region.contains_key(&consumer) || trailing.get(&consumer) == Some(&true)
+            });
+        trailing.insert(node_index, is_view && consumers_accept_virtual);
     }
     trailing
 }
@@ -338,7 +380,7 @@ fn trailing_view_paths<G>(
 fn node_action(
     node: &TensorGraphNode<f32>,
     node_index: NodeIndex,
-    trailing_view_path: &HashMap<NodeIndex, bool>,
+    virtual_view_path: &HashMap<NodeIndex, bool>,
 ) -> PtxPlanAction {
     match node {
         TensorGraphNode::Constant { .. }
@@ -350,7 +392,7 @@ fn node_action(
         TensorGraphNode::Transpose { .. }
         | TensorGraphNode::Permute { .. }
         | TensorGraphNode::BroadcastAxis { .. }
-            if trailing_view_path[&node_index] =>
+            if virtual_view_path[&node_index] =>
         {
             PtxPlanAction::VirtualView
         }

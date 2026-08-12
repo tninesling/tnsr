@@ -1,3 +1,5 @@
+#[cfg(feature = "cuda")]
+use super::FusionRegion;
 use super::builder::TileIRBuilder;
 use super::ir::{
     Conv2dGeometry, DType, Dim, Expr, MatMulLayout, MatMulPlan, MatrixLayout, MaxPool2dGeometry,
@@ -6,11 +8,21 @@ use super::ir::{
 use crate::graph::{TensorGraph, TensorGraphNode};
 use crate::tensor;
 use petgraph::{Graph, graph::NodeIndex};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[allow(dead_code)]
 pub struct TileGraph {
     pub graph: Graph<TileIR, usize>,
+    #[cfg(feature = "cuda")]
+    pub(crate) region_kernels: Vec<TileRegionKernel>,
+    #[cfg(feature = "cuda")]
+    pub(crate) physical_nodes: Option<HashSet<NodeIndex>>,
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct TileRegionKernel {
+    pub region_id: usize,
+    pub ir: TileIR,
 }
 
 fn conv2d_geometry(
@@ -102,11 +114,35 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
                 },
                 |_, e| e,
             ),
+            #[cfg(feature = "cuda")]
+            region_kernels: Vec::new(),
+            #[cfg(feature = "cuda")]
+            physical_nodes: None,
         }
     }
 }
 
 impl TileGraph {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn add_fusion_regions(&mut self, regions: &[FusionRegion]) -> anyhow::Result<()> {
+        self.region_kernels = regions
+            .iter()
+            .enumerate()
+            .map(|(region_id, region)| {
+                Ok(TileRegionKernel {
+                    region_id,
+                    ir: region.lower_to_tile_ir(region_id)?,
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn set_physical_nodes(&mut self, nodes: HashSet<NodeIndex>) {
+        self.physical_nodes = Some(nodes);
+    }
+
     #[allow(dead_code)]
     fn lower_node(
         node: TensorGraphNode<f32>,

@@ -42,8 +42,8 @@ pub struct PtxExecutor {
     pool: RefCell<CudaBufferPool>,
     stats: AllocStats,
     /// Stores the PtxGraph to access kernel names during execution
-    ptx_graph: Option<PtxGraph>,
-    execution_plan: Option<PtxExecutionPlan>,
+    ptx_graph: Option<Box<PtxGraph>>,
+    execution_plan: Option<Box<PtxExecutionPlan>>,
     compilation_signature: Option<Vec<u8>>,
     compilation_count: usize,
     compile_metrics: PtxCompileMetrics,
@@ -148,11 +148,11 @@ impl PtxExecutor {
     }
 
     pub fn execution_plan(&self) -> Option<&PtxExecutionPlan> {
-        self.execution_plan.as_ref()
+        self.execution_plan.as_deref()
     }
 
-    /// Describe the current node-for-node PTX execution baseline.
-    pub fn describe_unfused_plan<G>(&self, graph: &TensorGraph<f32, G>) -> Result<String> {
+    /// Describe the current physical PTX execution plan.
+    pub fn describe_plan<G>(&self, graph: &TensorGraph<f32, G>) -> Result<String> {
         let supplied_signature = graph_compilation_signature(graph);
         let compiled_signature = self
             .compilation_signature
@@ -167,9 +167,9 @@ impl PtxExecutor {
             .as_ref()
             .context("No PTX graph available. Call compile_owned() first.")?;
         let mut description = format!(
-            "unfused PTX plan: {} graph nodes, {} generated kernels\n",
+            "PTX plan: {} graph nodes, {} physical kernels\n",
             graph.graph.node_count(),
-            ptx_graph.kernel_count()
+            self.compile_metrics.generated_kernels
         );
         let plan = self
             .execution_plan
@@ -187,13 +187,20 @@ impl PtxExecutor {
                         .kernel_name(node_index)
                         .context("Missing compiled kernel in unfused plan")?
                 ),
+                PtxPlanAction::PointwiseRegion(region_id) => format!(
+                    "kernel {}",
+                    ptx_graph
+                        .region_kernel_name(region_id)
+                        .context("Missing compiled pointwise region kernel")?
+                ),
             };
             writeln!(
                 description,
-                "{step:04}: node {:04} {:<32} shape={:?} action={action}",
+                "{step:04}: node {:04} {:<32} shape={:?} outputs={:?} action={action}",
                 node_index.index(),
                 plan_step.operation,
-                plan_step.shape
+                plan_step.shape,
+                plan_step.outputs
             )?;
         }
         Ok(description)
@@ -240,11 +247,28 @@ impl PtxExecutor {
         let started = Instant::now();
         let graph_nodes = graph.graph.node_count();
         let signature = graph_compilation_signature(&graph);
-        let execution_plan = PtxExecutionPlan::unfused(&graph)?;
-        let tile_graph: TileGraph = graph.into();
+        let execution_plan = PtxExecutionPlan::build(&graph)?;
+        let mut tile_graph: TileGraph = graph.into();
+        tile_graph.add_fusion_regions(execution_plan.regions())?;
+        tile_graph.set_physical_nodes(
+            execution_plan
+                .steps()
+                .iter()
+                .filter_map(|step| (step.action == PtxPlanAction::Kernel).then_some(step.node))
+                .collect(),
+        );
         let ptx_graph: PtxGraph = tile_graph.into();
         let ptx_src = ptx_graph.module_source();
-        let generated_kernels = ptx_graph.kernel_count();
+        let generated_kernels = execution_plan
+            .steps()
+            .iter()
+            .filter(|step| {
+                matches!(
+                    step.action,
+                    PtxPlanAction::Kernel | PtxPlanAction::PointwiseRegion(_)
+                )
+            })
+            .count();
         let ptx_source_bytes = ptx_src.len();
 
         let cuda_module = self
@@ -252,8 +276,8 @@ impl PtxExecutor {
             .load_module(Ptx::from_src(&ptx_src))
             .context("Failed to load PTX module with cudarc")?;
         self.module = Some(cuda_module);
-        self.ptx_graph = Some(ptx_graph);
-        self.execution_plan = Some(execution_plan);
+        self.ptx_graph = Some(Box::new(ptx_graph));
+        self.execution_plan = Some(Box::new(execution_plan));
         self.compilation_signature = Some(signature);
         self.compilation_count += 1;
         self.compile_metrics = PtxCompileMetrics {
@@ -283,13 +307,13 @@ impl PtxExecutor {
                 .memcpy_dtoh(cuda_slice.as_ref(), &mut storage)
                 .ok()?;
             let plan = self.execution_plan.as_ref()?;
-            let step = plan.steps().iter().find(|step| step.node == node_idx)?;
+            let view = plan.virtual_value(node_idx)?;
             let source_shape = &plan
                 .steps()
                 .iter()
-                .find(|source| source.node == step.virtual_output.source)?
+                .find(|source| source.outputs.contains(&view.source))?
                 .shape;
-            materialize_host_view(storage, &step.virtual_output, source_shape).ok()
+            materialize_host_view(storage, view, source_shape).ok()
         })
     }
 
@@ -366,6 +390,64 @@ impl PtxExecutor {
         Ok(output)
     }
 
+    fn execute_pointwise_region(
+        &self,
+        module: &Arc<CudaModule>,
+        ptx_graph: &PtxGraph,
+        region_id: usize,
+        step: &super::plan::PtxPlanStep,
+    ) -> Result<Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<f32>>)>> {
+        let kernel_name = ptx_graph
+            .region_kernel_name(region_id)
+            .context("Missing compiled pointwise region kernel")?;
+        let input_values: Vec<_> = step
+            .inputs
+            .iter()
+            .map(|input| {
+                self.values.get(input).cloned().with_context(|| {
+                    format!(
+                        "Pointwise region input node {} is unavailable",
+                        input.index()
+                    )
+                })
+            })
+            .collect::<Result<_>>()?;
+        let len = checked_element_count(&step.shape, "Pointwise region")?;
+        for input in &input_values {
+            anyhow::ensure!(
+                input.len() == len,
+                "Pointwise region input length {} does not match output length {len}",
+                input.len()
+            );
+        }
+        let mut outputs = Vec::with_capacity(step.outputs.len());
+        for _ in &step.outputs {
+            outputs.push(self.take_buffer(len)?);
+        }
+        if len != 0 {
+            let launch_len = u32::try_from(len)
+                .context("Pointwise region output is too large for a CUDA launch")?;
+            let function = module.load_function(kernel_name)?;
+            let stream = self.device.default_stream();
+            let mut launcher = stream.launch_builder(&function);
+            for input in &input_values {
+                launcher.arg(input.as_ref());
+            }
+            for output in &mut outputs {
+                launcher.arg(output);
+            }
+            self.record_kernel_launch();
+            unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+                .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
+        }
+        Ok(step
+            .outputs
+            .iter()
+            .copied()
+            .zip(outputs.into_iter().map(Arc::new))
+            .collect())
+    }
+
     /// Execute a compiled graph with the given inputs
     pub fn execute_compiled<G>(
         &mut self,
@@ -393,23 +475,43 @@ impl PtxExecutor {
             .as_ref()
             .context("No PTX graph available. Call compile() first.")?;
 
-        let plan_steps = self
+        let execution_plan = self
             .execution_plan
             .as_ref()
-            .context("No PTX execution plan available. Call compile_owned() first.")?
-            .steps()
-            .to_vec();
-        let order: Vec<_> = plan_steps.iter().map(|step| step.node).collect();
+            .context("No PTX execution plan available. Call compile_owned() first.")?;
+        let plan_steps = execution_plan.steps().to_vec();
+        let graph_output = execution_plan.graph_output().context("Graph is empty")?;
         let old_values: Vec<_> = self.values.drain().map(|(_, value)| value).collect();
         for value in old_values {
             self.recycle_value(value);
         }
         let mut live_bytes = 0usize;
 
-        for (pos, plan_step) in plan_steps.iter().enumerate() {
+        for plan_step in &plan_steps {
             let node_idx = &plan_step.node;
             let planned_inputs = &plan_step.inputs;
             let node = &graph[*node_idx];
+            if let PtxPlanAction::PointwiseRegion(region_id) = plan_step.action {
+                let region_outputs =
+                    self.execute_pointwise_region(module, ptx_graph, region_id, plan_step)?;
+                for (output_node, output) in region_outputs {
+                    let bytes = output.len() * std::mem::size_of::<f32>();
+                    self.execution_metrics.materialized_values += 1;
+                    self.execution_metrics.materialized_bytes += bytes;
+                    if output_node != graph_output {
+                        self.execution_metrics.intermediate_materialized_bytes += bytes;
+                    }
+                    self.values.insert(output_node, output);
+                    live_bytes += bytes;
+                }
+                self.stats.record_live(live_bytes);
+                for &dead in &plan_step.release_after {
+                    if let Some(value) = self.values.remove(&dead) {
+                        live_bytes -= self.recycle_value(value);
+                    }
+                }
+                continue;
+            }
             if plan_step.action == PtxPlanAction::VirtualView {
                 let input = planned_inputs
                     .first()
@@ -1164,7 +1266,7 @@ impl PtxExecutor {
                     | TensorGraphNode::Input { .. }
                     | TensorGraphNode::Parameter { .. }
             );
-            if !is_source && pos + 1 != order.len() {
+            if !is_source && *node_idx != graph_output {
                 self.execution_metrics.intermediate_materialized_bytes += bytes;
             }
             self.values.insert(*node_idx, result);
@@ -1181,8 +1283,7 @@ impl PtxExecutor {
         self.stats = self.stats.with_pool_stats(self.pool.get_mut().stats());
         self.execution_metrics.kernel_launches = self.kernel_launches.get();
 
-        let last_step = plan_steps.last().context("Graph is empty")?;
-        let last_node_idx = &last_step.node;
+        let last_node_idx = &graph_output;
         let out_device = self
             .values
             .get(last_node_idx)
@@ -1195,12 +1296,17 @@ impl PtxExecutor {
                 .memcpy_dtoh(out_device.as_ref(), &mut storage_host)
                 .context("Failed to copy output from CUDA device to host")?;
         }
+        let output_view = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.virtual_value(graph_output))
+            .context("Graph output has no virtual value")?;
         let source_shape = &plan_steps
             .iter()
-            .find(|step| step.node == last_step.virtual_output.source)
+            .find(|step| step.outputs.contains(&output_view.source))
             .context("Virtual output source is absent from the execution plan")?
             .shape;
-        materialize_host_view(storage_host, &last_step.virtual_output, source_shape)
+        materialize_host_view(storage_host, output_view, source_shape)
     }
 
     /// Compile and execute a TensorGraph in one call

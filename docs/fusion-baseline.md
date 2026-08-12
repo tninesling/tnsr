@@ -20,7 +20,7 @@ cargo bench --bench fusion --features cuda -- --noplot
 
 `PtxExecutionPlan` records the baseline topological order, input edges, physical
 action, materialization intent, release points, and normalized virtual outputs.
-`describe_unfused_plan` renders uploads, kernels, materialization copies, and
+`describe_plan` renders uploads, kernels, materialization copies, and
 virtual views for inspection.
 
 ## Initial Measurements
@@ -56,3 +56,16 @@ Stage 2 verification on the same GPU measured Tile PTX pointwise at
 pointwise change as an improvement and the reduction change as within noise. A
 constant -> reshape -> flatten plan now reports zero kernel launches, zero
 device-to-device copies, and one materialized value.
+
+- Stage 3 introduces backend-independent scalar SSA regions for unary, binary,
+  comparison, and mask operations. Maximal same-shape pointwise components are
+  contracted into physical plan steps with deterministic inputs and multiple
+  escaping outputs. Regions are capped at 64 operations, and a quotient-cycle
+  check conservatively falls back to unfused steps for non-convex candidates.
+  Internal values remain in registers and are absent from plan liveness.
+
+Stage 3 verification measured the fused Tile PTX pointwise diamond at
+312.79-314.45 us, down from the Stage 2 range of 337.86-340.53 us. Criterion
+reported a 7.39-8.22% improvement. The reduction chain measured
+265.35-265.79 us, a further 2.27-2.61% improvement from pointwise producer
+fusion before the still-materialized reduction.

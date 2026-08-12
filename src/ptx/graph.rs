@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::instructions::{Inst, Operand};
 use super::types::{B32, F32, I32, U64};
@@ -11,18 +11,25 @@ pub(crate) struct PtxGraph {
     // forged to 'static. `graph` is private, is declared before `arena` so it drops
     // first, and no API may return an owned Function or a borrow not tied to `&self`.
     graph: Graph<Function<'static>, usize>,
+    region_functions: Vec<(usize, Function<'static>)>,
+    physical_nodes: Option<HashSet<NodeIndex>>,
     #[allow(dead_code)]
     arena: Box<bumpalo::Bump>,
 }
 
 impl PtxGraph {
-    pub(crate) fn kernel_count(&self) -> usize {
-        self.graph.node_count()
-    }
-
     pub(crate) fn module_source(&self) -> String {
         let mut module = Module::new();
-        for function in self.graph.node_weights() {
+        for node in self.graph.node_indices() {
+            if self
+                .physical_nodes
+                .as_ref()
+                .is_none_or(|physical| physical.contains(&node))
+            {
+                module.add_function(self.graph[node].clone());
+            }
+        }
+        for (_, function) in &self.region_functions {
             module.add_function(function.clone());
         }
         module.to_string()
@@ -31,6 +38,13 @@ impl PtxGraph {
     pub(crate) fn kernel_name(&self, node: NodeIndex) -> Option<&str> {
         self.graph.node_weight(node).map(|function| function.name)
     }
+
+    pub(crate) fn region_kernel_name(&self, region_id: usize) -> Option<&str> {
+        self.region_functions
+            .iter()
+            .find(|(id, _)| *id == region_id)
+            .map(|(_, function)| function.name)
+    }
 }
 
 impl From<TileGraph> for PtxGraph {
@@ -38,7 +52,12 @@ impl From<TileGraph> for PtxGraph {
         // Create a single arena for all functions in the graph
         let arena = Box::new(bumpalo::Bump::new());
 
-        let graph = tile_graph.graph.map_owned(
+        let crate::tile::TileGraph {
+            graph: tile_nodes,
+            region_kernels,
+            physical_nodes,
+        } = tile_graph;
+        let graph = tile_nodes.map_owned(
             |node_idx, tile_ir| {
                 // SAFETY: `arena` is boxed at a stable address and is owned by the
                 // resulting PtxGraph. Its private graph is dropped before the arena,
@@ -50,8 +69,26 @@ impl From<TileGraph> for PtxGraph {
             },
             |_, weight| weight,
         );
+        let region_offset = graph.node_count();
+        let region_functions = region_kernels
+            .into_iter()
+            .map(|kernel| {
+                // SAFETY: Same arena ownership and drop-order invariant as graph functions.
+                let arena_ref: &'static bumpalo::Bump =
+                    unsafe { &*(arena.as_ref() as *const bumpalo::Bump) };
+                (
+                    kernel.region_id,
+                    tile_ir_to_function(kernel.ir, arena_ref, region_offset + kernel.region_id),
+                )
+            })
+            .collect();
 
-        Self { graph, arena }
+        Self {
+            graph,
+            region_functions,
+            physical_nodes,
+            arena,
+        }
     }
 }
 

@@ -41,7 +41,7 @@ fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
 }
 
 #[test]
-fn ptx_reports_unfused_pointwise_plan_metrics() {
+fn ptx_reports_fused_pointwise_plan_metrics() {
     let Some(mut ptx) = ptx_executor() else {
         return;
     };
@@ -52,36 +52,97 @@ fn ptx_reports_unfused_pointwise_plan_metrics() {
     ptx.compile_owned(graph.clone()).unwrap();
     let compile = ptx.compile_metrics();
     assert_eq!(compile.graph_nodes, 5);
-    assert_eq!(compile.generated_kernels, 5);
+    assert_eq!(compile.generated_kernels, 1);
     assert!(compile.ptx_source_bytes > 0);
     assert!(!compile.compile_time.is_zero());
     let plan = ptx.execution_plan().unwrap();
-    assert_eq!(plan.steps().len(), 5);
+    assert_eq!(plan.steps().len(), 2);
     assert!(plan.steps().iter().all(|step| step.materialize));
     assert_eq!(
         plan.steps()
             .iter()
-            .filter(|step| step.action == tnsr::ptx::PtxPlanAction::Kernel)
+            .filter(|step| matches!(step.action, tnsr::ptx::PtxPlanAction::PointwiseRegion(_)))
             .count(),
-        4
+        1
     );
 
-    let description = ptx.describe_unfused_plan(&graph).unwrap();
-    assert!(description.contains("unfused PTX plan: 5 graph nodes, 5 generated kernels"));
+    let description = ptx.describe_plan(&graph).unwrap();
+    assert!(description.contains("PTX plan: 5 graph nodes, 1 physical kernels"));
     assert!(description.contains("action=upload"));
-    assert_eq!(description.matches("action=kernel").count(), 4);
+    assert_eq!(description.matches("action=kernel").count(), 1);
 
     ptx.execute_compiled(&graph, HashMap::new()).unwrap();
     assert_eq!(
         ptx.execution_metrics(),
         &tnsr::ptx::PtxExecutionMetrics {
-            kernel_launches: 4,
-            materialized_values: 5,
-            materialized_bytes: 80,
-            intermediate_materialized_bytes: 48,
+            kernel_launches: 1,
+            materialized_values: 2,
+            materialized_bytes: 32,
+            intermediate_materialized_bytes: 0,
             device_copies: 2,
         }
     );
+}
+
+#[test]
+fn ptx_fuses_multi_output_pointwise_region() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![0.25, 0.5, 1.0, 2.0], vec![4]);
+    let shared = input.exp();
+    let branch = shared.clone().log();
+    let graph: TensorGraph<f32> = (shared.reduce_sum(0) + branch.reduce_sum(0)).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.regions().len(), 1);
+    assert_eq!(plan.regions()[0].members.len(), 2);
+    assert_eq!(plan.regions()[0].outputs.len(), 2);
+    assert_eq!(ptx.compile_metrics().generated_kernels, 4);
+
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-4);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 4);
+}
+
+#[test]
+fn ptx_fused_region_preserves_operand_and_mask_order() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let lhs = TensorExpr::constant(vec![4.0, 2.0, 9.0, 1.0], vec![4]);
+    let rhs = TensorExpr::constant(vec![2.0, 3.0, 3.0, 4.0], vec![4]);
+    let ratio = (lhs.clone() - rhs.clone()) / (lhs.clone() + rhs.clone());
+    let graph: TensorGraph<f32> = ratio.mask(lhs.gt(rhs)).relu().into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(ptx.execution_plan().unwrap().regions().len(), 1);
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-6);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+}
+
+#[test]
+fn ptx_zero_size_pointwise_region_does_not_launch() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let graph: TensorGraph<f32> = TensorExpr::constant(Vec::new(), vec![0, 3])
+        .exp()
+        .relu()
+        .into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(ptx.execution_plan().unwrap().regions().len(), 1);
+    assert!(
+        ptx.execute_compiled(&graph, HashMap::new())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(ptx.execution_metrics().kernel_launches, 0);
 }
 
 #[test]
@@ -96,7 +157,7 @@ fn ptx_reports_virtual_view_baseline() {
             .into();
 
     ptx.compile_owned(graph.clone()).unwrap();
-    let description = ptx.describe_unfused_plan(&graph).unwrap();
+    let description = ptx.describe_plan(&graph).unwrap();
     assert_eq!(description.matches("action=virtual-view").count(), 2);
 
     let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
@@ -124,7 +185,8 @@ fn ptx_plan_normalizes_composed_virtual_views() {
     ptx.compile_owned(graph.clone()).unwrap();
     let plan = ptx.execution_plan().unwrap();
     let source = plan.steps().first().unwrap().node;
-    let output = &plan.steps().last().unwrap().virtual_output;
+    let graph_output = *graph.toposort().last().unwrap();
+    let output = plan.virtual_value(graph_output).unwrap();
     assert_eq!(output.source, source);
     assert_eq!(output.shape, vec![5, 6, 4]);
     assert_eq!(output.source_index(&[4, 5, 3]).unwrap(), vec![1, 2, 3]);

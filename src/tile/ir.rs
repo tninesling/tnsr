@@ -16,6 +16,11 @@ pub struct Block {
 }
 
 pub enum Stmt {
+    /// Return threads whose global linear index is outside the logical extent.
+    BoundsCheck {
+        extent: usize,
+    },
+
     /// Allocate a tile variable
     AllocTile {
         var: TileVar,
@@ -33,12 +38,30 @@ pub enum Stmt {
         col_offset: Expr,
     },
 
+    /// Load one logical matrix element into shared memory, or zero outside bounds.
+    LoadGlobalToSharedPredicated {
+        dest: TileVar,
+        src_param: String,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
+    },
+
     /// Store from register/shared to global
     Store {
         dest_param: String, // Parameter name
         src: TileVar,
         row_offset: Expr,
         col_offset: Expr,
+    },
+
+    /// Store one logical matrix element when its row and column are in bounds.
+    StoreGlobalPredicated {
+        dest_param: String,
+        src: TileVar,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
     },
 
     /// Load from shared memory to register tile (for tensor cores)
@@ -55,10 +78,53 @@ pub enum Stmt {
 
     /// Matrix multiply with accumulation: dest = dest + (a @ b)
     MatMul {
-        dest: TileVar,        // Accumulator (f32)
-        a: TileVar,           // Operand (f16)
-        b: TileVar,           // Operand (f16)
+        dest: TileVar, // Accumulator (f32)
+        a: TileVar,
+        b: TileVar,
         layout: MatMulLayout, // NN, NT, TN, TT
+        plan: MatMulPlan,
+    },
+
+    /// Gather rows from a contiguous [vocabulary, width] table.
+    Embedding {
+        vocabulary: usize,
+        width: usize,
+        index_count: usize,
+    },
+
+    /// Scatter-add embedding gradients, including repeated indices.
+    EmbeddingBackward {
+        vocabulary: usize,
+        width: usize,
+        index_count: usize,
+    },
+
+    /// Stable cross-entropy loss for each contiguous logits row.
+    IndexedCrossEntropy {
+        vocabulary: usize,
+        row_count: usize,
+    },
+
+    /// Gradient of indexed cross entropy with respect to contiguous logits rows.
+    IndexedCrossEntropyBackward {
+        vocabulary: usize,
+        row_count: usize,
+    },
+
+    Conv2d {
+        geometry: Conv2dGeometry,
+    },
+    ConvTranspose2d {
+        geometry: Conv2dGeometry,
+    },
+    Conv2dBackwardWeight {
+        geometry: Conv2dGeometry,
+    },
+    MaxPool2d {
+        geometry: MaxPool2dGeometry,
+    },
+    MaxPool2dBackward {
+        geometry: MaxPool2dGeometry,
     },
 
     /// Element-wise binary operations
@@ -101,12 +167,13 @@ pub enum Stmt {
         src: TileVar,
     },
 
-    /// Transpose operation
-    Transpose {
+    /// Materialize a contiguous row-major permutation.
+    Reindex {
         dest: TileVar,
         src: TileVar,
         input_shape: Vec<usize>,
         output_shape: Vec<usize>,
+        axes: Vec<usize>,
     },
 
     /// Broadcast along axis
@@ -158,17 +225,75 @@ pub enum Stmt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TileVar(pub usize);
 
+#[derive(Debug, Clone, Copy)]
+pub struct MatrixLayout {
+    pub rows: usize,
+    pub cols: usize,
+    pub row_stride: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Conv2dGeometry {
+    pub batch: usize,
+    pub input_channels: usize,
+    pub input_height: usize,
+    pub input_width: usize,
+    pub output_channels: usize,
+    pub output_height: usize,
+    pub output_width: usize,
+    pub kernel_height: usize,
+    pub kernel_width: usize,
+    pub stride: usize,
+    pub padding: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MaxPool2dGeometry {
+    pub batch: usize,
+    pub channels: usize,
+    pub input_height: usize,
+    pub input_width: usize,
+    pub output_height: usize,
+    pub output_width: usize,
+    pub kernel_size: usize,
+    pub stride: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemorySpace {
     Register,
+    Fragment,
     Shared,
     Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatMulPlan {
+    ScalarF32,
+    TensorCoreTf32,
+}
+
+impl MatMulPlan {
+    pub fn for_shape(m: usize, n: usize, k: usize) -> Self {
+        const MIN_TENSOR_CORE_WORK: usize = 32 * 32 * 32;
+        if m >= 16
+            && n >= 16
+            && k >= 8
+            && m.saturating_mul(n).saturating_mul(k) >= MIN_TENSOR_CORE_WORK
+        {
+            Self::TensorCoreTf32
+        } else {
+            Self::ScalarF32
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
     F16,
     BF16,
+    /// TensorFloat-32 compute representation stored in 32 bits.
+    TF32,
     F32,
 }
 
@@ -178,6 +303,7 @@ impl DType {
         match self {
             DType::F16 => 2,
             DType::BF16 => 2,
+            DType::TF32 => 4,
             DType::F32 => 4,
         }
     }

@@ -189,7 +189,11 @@ where
     ) -> anyhow::Result<cudarc::driver::CudaSlice<D>> {
         self.inner
             .take_or_try_with(len, len * std::mem::size_of::<D>(), || {
-                stream.alloc_zeros::<D>(len).map_err(anyhow::Error::from)
+                if len == 0 {
+                    stream.null::<D>().map_err(anyhow::Error::from)
+                } else {
+                    stream.alloc_zeros::<D>(len).map_err(anyhow::Error::from)
+                }
             })
     }
 

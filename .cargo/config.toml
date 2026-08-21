@@ -1,2 +1,6 @@
-[build]
+# On virtualized Apple Silicon (GitHub-hosted macOS runners) `target-cpu=native`
+# resolves to `generic`, which drops the aes/sha2/pmull features that
+# aarch64-apple-darwin otherwise guarantees. `ring` asserts on those features
+# statically, so enabling native codegen there fails to compile.
+[target.'cfg(not(all(target_arch = "aarch64", target_os = "macos")))']
 rustflags = ["-C", "target-cpu=native"]

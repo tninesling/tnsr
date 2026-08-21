@@ -52,9 +52,8 @@ pub enum Runtime<D = f32> {
 impl Runtime<f32> {
     /// Create a runtime with automatic backend selection.
     ///
-    /// When the `ptx` feature is enabled, prefers PTX JIT executor.
-    /// Otherwise, prefers static CUDA executor if available.
-    /// Falls back to CPU if CUDA initialization fails.
+    /// When the `ptx` feature is enabled, prefers the Tile IR/PTX executor.
+    /// Otherwise, prefers static CUDA and falls back to CPU if CUDA is unavailable.
     pub fn new() -> Self {
         #[cfg(all(feature = "cuda", feature = "ptx"))]
         {
@@ -84,7 +83,6 @@ impl Runtime<f32> {
         }
         #[cfg(all(feature = "cuda", not(feature = "ptx")))]
         {
-            // CUDA feature enabled but not PTX: try CUDA, then CPU
             match CudaExecutor::try_new() {
                 Ok(executor) => {
                     tracing::info!("Runtime initialized with CUDA backend");
@@ -129,7 +127,7 @@ macro_rules! impl_half_runtime {
             pub fn new() -> Self {
                 #[cfg(all(feature = "cuda", feature = "ptx"))]
                 {
-                    match PtxExecutor::<$marker>::try_new() {
+                    match PtxExecutor::<$marker>::try_new_for_dtype() {
                         Ok(executor) => Runtime::$variant(executor),
                         Err(error) => {
                             tracing::warn!(
@@ -185,7 +183,7 @@ macro_rules! impl_half_runtime {
                     )),
                     #[cfg(feature = "cuda")]
                     Backend::Ptx => Ok(Runtime::$variant(
-                        PtxExecutor::<$marker>::try_new()
+                        PtxExecutor::<$marker>::try_new_for_dtype()
                             .context("Failed to initialize PTX executor")?,
                     )),
                 }
@@ -381,9 +379,8 @@ where
                         )
                     })
                     .collect();
-                executor.compile(&execute_graph)?;
                 executor
-                    .execute_compiled(&execute_graph, inputs)?
+                    .compile_and_execute(&execute_graph, inputs)?
                     .into_iter()
                     .map(|value| D::from(value).context("PTX result conversion failed"))
                     .collect()
@@ -405,9 +402,8 @@ where
                         )
                     })
                     .collect();
-                executor.compile(&execute_graph)?;
                 executor
-                    .execute_compiled(&execute_graph, inputs)?
+                    .compile_and_execute(&execute_graph, inputs)?
                     .into_iter()
                     .map(|value| {
                         D::from(value.to_f32()).context("PTX f16 result conversion failed")
@@ -431,9 +427,8 @@ where
                         )
                     })
                     .collect();
-                executor.compile(&execute_graph)?;
                 executor
-                    .execute_compiled(&execute_graph, inputs)?
+                    .compile_and_execute(&execute_graph, inputs)?
                     .into_iter()
                     .map(|value| {
                         D::from(value.to_f32()).context("PTX bf16 result conversion failed")

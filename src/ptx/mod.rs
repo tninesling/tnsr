@@ -6,6 +6,6 @@ pub mod types;
 
 pub use codegen::*;
 pub use executor::*;
-pub use graph::*;
+pub use graph::PtxGraph;
 pub use instructions::*;
 pub use types::*;

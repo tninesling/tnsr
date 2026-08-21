@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
+use anyhow::Result;
+
+use crate::Executor;
 use crate::graph::{NodeIndex, TensorGraph};
-use crate::tensor::{Constant, DType, Shape, TensorExpr};
+use crate::tensor::{Constant, DType, Parameter, Shape, TensorExpr};
 
 /// Fully connected (linear) layer: `y = x @ w + b`.
 pub fn linear<D: DType + Default + 'static>(
@@ -116,6 +119,595 @@ pub fn cross_entropy_one_hot_logits<D: DType + Default + 'static>(
 
     // mean over remaining axes (e.g., batch)
     nll.mean_all()
+}
+
+/// Embedding lookup from a `[vocabulary, width]` table using index tensors.
+pub fn embedding<D: DType + Default + 'static>(
+    weight: impl Into<TensorExpr<D>>,
+    indices: impl Into<TensorExpr<D>>,
+) -> TensorExpr<D> {
+    weight.into().embedding(indices)
+}
+
+/// Mean cross-entropy loss for integer-valued targets and logit inputs.
+///
+/// Indices use the tensor dtype and are validated by executors as finite,
+/// non-negative integers in the vocabulary range.
+pub fn cross_entropy_indexed_logits<D: DType + Default + 'static>(
+    logits: impl Into<TensorExpr<D>>,
+    targets: impl Into<TensorExpr<D>>,
+) -> TensorExpr<D> {
+    logits.into().indexed_cross_entropy(targets).mean_all()
+}
+
+/// Numerically stable softmax along `axis`.
+pub fn softmax<D: DType + 'static>(x: impl Into<TensorExpr<D>>, axis: usize) -> TensorExpr<D> {
+    let x = x.into();
+    let shape = x.shape().clone();
+    assert!(
+        axis < shape.len(),
+        "softmax axis {axis} out of bounds for shape {shape:?}"
+    );
+    assert!(shape[axis] > 0, "softmax axis must be non-empty");
+
+    let max = x.clone().reduce_max(axis).broadcast(shape.clone());
+    let exp = (x - max).exp();
+    let sum = exp.clone().reduce_sum(axis).broadcast(shape);
+    exp / sum
+}
+
+/// Layer normalization over one axis with a learned scale and bias.
+pub fn layer_norm(
+    x: impl Into<TensorExpr<f32>>,
+    axis: usize,
+    weight: impl Into<TensorExpr<f32>>,
+    bias: impl Into<TensorExpr<f32>>,
+    epsilon: f32,
+) -> TensorExpr<f32> {
+    assert!(
+        epsilon > 0.0 && epsilon.is_finite(),
+        "layer_norm epsilon must be finite and positive"
+    );
+
+    let x = x.into();
+    let shape = x.shape().clone();
+    assert!(
+        axis < shape.len(),
+        "layer_norm axis {axis} out of bounds for shape {shape:?}"
+    );
+
+    let axis_size = shape[axis];
+    assert!(axis_size > 0, "layer_norm axis must be non-empty");
+    let weight = weight.into();
+    let bias = bias.into();
+    assert_eq!(
+        weight.shape(),
+        &vec![axis_size],
+        "layer_norm weight must have shape [{axis_size}]"
+    );
+    assert_eq!(
+        bias.shape(),
+        &vec![axis_size],
+        "layer_norm bias must have shape [{axis_size}]"
+    );
+
+    let mean = x.clone().reduce_mean(axis).broadcast(shape.clone());
+    let centered = x - mean;
+    let variance = (centered.clone() * centered.clone())
+        .reduce_mean(axis)
+        .broadcast(shape.clone());
+    let inv_std = ((variance + epsilon).log() * -0.5).exp();
+
+    let mut parameter_shape = vec![1; shape.len()];
+    parameter_shape[axis] = axis_size;
+    let weight = weight
+        .reshape(parameter_shape.clone())
+        .broadcast(shape.clone());
+    let bias = bias.reshape(parameter_shape).broadcast(shape);
+    centered * inv_std * weight + bias
+}
+
+/// Scaled dot-product attention over tensors shaped `[..., sequence, features]`.
+pub fn scaled_dot_product_attention(
+    query: impl Into<TensorExpr<f32>>,
+    key: impl Into<TensorExpr<f32>>,
+    value: impl Into<TensorExpr<f32>>,
+    causal: bool,
+) -> TensorExpr<f32> {
+    let query = query.into();
+    let key = key.into();
+    let value = value.into();
+    let q_shape = query.shape().clone();
+    let k_shape = key.shape().clone();
+    let v_shape = value.shape().clone();
+
+    assert!(
+        q_shape.len() >= 3,
+        "attention query must have rank >= 3, got shape {q_shape:?}"
+    );
+    assert!(
+        k_shape.len() >= 3,
+        "attention key must have rank >= 3, got shape {k_shape:?}"
+    );
+    assert!(
+        v_shape.len() >= 3,
+        "attention value must have rank >= 3, got shape {v_shape:?}"
+    );
+    assert_eq!(
+        q_shape.len(),
+        k_shape.len(),
+        "attention query and key ranks must match"
+    );
+    assert_eq!(
+        q_shape.len(),
+        v_shape.len(),
+        "attention query and value ranks must match"
+    );
+
+    let rank = q_shape.len();
+    assert_eq!(
+        &q_shape[..rank - 2],
+        &k_shape[..rank - 2],
+        "attention query and key batch dimensions must match"
+    );
+    assert_eq!(
+        &q_shape[..rank - 2],
+        &v_shape[..rank - 2],
+        "attention query and value batch dimensions must match"
+    );
+    assert_eq!(
+        q_shape[rank - 1],
+        k_shape[rank - 1],
+        "attention query and key feature dimensions must match"
+    );
+    assert_eq!(
+        k_shape[rank - 2],
+        v_shape[rank - 2],
+        "attention key and value sequence lengths must match"
+    );
+    assert!(
+        q_shape[rank - 1] > 0,
+        "attention feature dimension must be non-zero"
+    );
+    assert!(
+        q_shape[rank - 2] > 0 && k_shape[rank - 2] > 0,
+        "attention sequence lengths must be non-zero"
+    );
+
+    let key_transposed = key.swap_axes(rank - 2, rank - 1);
+    let mut scores = query.matmul(key_transposed) * (q_shape[rank - 1] as f32).sqrt().recip();
+    if causal {
+        let query_len = q_shape[rank - 2];
+        let key_len = k_shape[rank - 2];
+        let mut mask = Vec::with_capacity(query_len * key_len);
+        for query_index in 0..query_len {
+            for key_index in 0..key_len {
+                mask.push(if key_index <= query_index {
+                    0.0
+                } else {
+                    f32::NEG_INFINITY
+                });
+            }
+        }
+        scores = scores + Constant::new(mask, vec![query_len, key_len]);
+    }
+
+    softmax(scores, rank - 1).matmul(value)
+}
+
+fn xavier_parameter(rows: usize, columns: usize, seed: u64) -> Parameter<f32> {
+    let limit = (6.0 / (rows + columns) as f32).sqrt();
+    let mut state = seed;
+    let data = (0..rows * columns)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let unit = (state >> 40) as f32 / (1_u32 << 24) as f32;
+            (unit * 2.0 - 1.0) * limit
+        })
+        .collect();
+    Parameter::new(data, vec![rows, columns])
+}
+
+/// Trainable multi-head attention with independent Q, K, V, and output projections.
+#[derive(Clone)]
+pub struct MultiHeadAttention {
+    pub query_weight: Parameter<f32>,
+    pub query_bias: Parameter<f32>,
+    pub key_weight: Parameter<f32>,
+    pub key_bias: Parameter<f32>,
+    pub value_weight: Parameter<f32>,
+    pub value_bias: Parameter<f32>,
+    pub output_weight: Parameter<f32>,
+    pub output_bias: Parameter<f32>,
+    embed_dim: usize,
+    num_heads: usize,
+}
+
+impl MultiHeadAttention {
+    pub fn new(embed_dim: usize, num_heads: usize) -> Self {
+        Self::new_with_seed_offset(embed_dim, num_heads, 0)
+    }
+
+    fn new_with_seed_offset(embed_dim: usize, num_heads: usize, seed_offset: u64) -> Self {
+        assert!(embed_dim > 0, "attention embed_dim must be non-zero");
+        assert!(num_heads > 0, "attention num_heads must be non-zero");
+        assert_eq!(
+            embed_dim % num_heads,
+            0,
+            "attention embed_dim must be divisible by num_heads"
+        );
+
+        Self {
+            query_weight: xavier_parameter(embed_dim, embed_dim, seed_offset + 1),
+            query_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
+            key_weight: xavier_parameter(embed_dim, embed_dim, seed_offset + 2),
+            key_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
+            value_weight: xavier_parameter(embed_dim, embed_dim, seed_offset + 3),
+            value_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
+            output_weight: xavier_parameter(embed_dim, embed_dim, seed_offset + 4),
+            output_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
+            embed_dim,
+            num_heads,
+        }
+    }
+
+    pub fn forward(
+        &self,
+        query: impl Into<TensorExpr<f32>>,
+        key: impl Into<TensorExpr<f32>>,
+        value: impl Into<TensorExpr<f32>>,
+        causal: bool,
+    ) -> TensorExpr<f32> {
+        let query = query.into();
+        let key = key.into();
+        let value = value.into();
+        let query_shape = query.shape().clone();
+        let key_shape = key.shape().clone();
+        let value_shape = value.shape().clone();
+        assert!(
+            query_shape.len() >= 3,
+            "multi-head attention inputs must have rank >= 3"
+        );
+        assert!(
+            key_shape.len() >= 3 && value_shape.len() >= 3,
+            "multi-head attention inputs must have rank >= 3"
+        );
+        assert_eq!(
+            query_shape.len(),
+            key_shape.len(),
+            "query and key ranks must match"
+        );
+        assert_eq!(
+            query_shape.len(),
+            value_shape.len(),
+            "query and value ranks must match"
+        );
+        assert_eq!(
+            query_shape.last(),
+            Some(&self.embed_dim),
+            "query's last dimension must equal embed_dim"
+        );
+        assert_eq!(
+            key_shape.last(),
+            Some(&self.embed_dim),
+            "key's last dimension must equal embed_dim"
+        );
+        assert_eq!(
+            value_shape.last(),
+            Some(&self.embed_dim),
+            "value's last dimension must equal embed_dim"
+        );
+
+        let query = linear(
+            query,
+            self.query_weight.clone(),
+            Some(self.query_bias.clone()),
+        );
+        let key = linear(key, self.key_weight.clone(), Some(self.key_bias.clone()));
+        let value = linear(
+            value,
+            self.value_weight.clone(),
+            Some(self.value_bias.clone()),
+        );
+        let rank = query_shape.len();
+        let head_dim = self.embed_dim / self.num_heads;
+
+        let split_heads = |tensor: TensorExpr<f32>, shape: &Shape| {
+            let mut split_shape = shape.clone();
+            split_shape.pop();
+            split_shape.extend([self.num_heads, head_dim]);
+            tensor.reshape(split_shape).swap_axes(rank - 2, rank - 1)
+        };
+        let query = split_heads(query, &query_shape);
+        let key = split_heads(key, &key_shape);
+        let value = split_heads(value, &value_shape);
+        let attended = scaled_dot_product_attention(query, key, value, causal);
+        let merged = attended.swap_axes(rank - 2, rank - 1).reshape(query_shape);
+
+        linear(
+            merged,
+            self.output_weight.clone(),
+            Some(self.output_bias.clone()),
+        )
+    }
+}
+
+/// A pre-norm transformer block with a two-layer ReLU feed-forward network.
+#[derive(Clone)]
+pub struct TransformerBlock {
+    pub attention: MultiHeadAttention,
+    pub attention_norm_weight: Parameter<f32>,
+    pub attention_norm_bias: Parameter<f32>,
+    pub feed_forward_norm_weight: Parameter<f32>,
+    pub feed_forward_norm_bias: Parameter<f32>,
+    pub feed_forward_input_weight: Parameter<f32>,
+    pub feed_forward_input_bias: Parameter<f32>,
+    pub feed_forward_output_weight: Parameter<f32>,
+    pub feed_forward_output_bias: Parameter<f32>,
+    epsilon: f32,
+}
+
+impl TransformerBlock {
+    pub fn new(embed_dim: usize, num_heads: usize, feed_forward_dim: usize, epsilon: f32) -> Self {
+        Self::new_with_seed_offset(embed_dim, num_heads, feed_forward_dim, epsilon, 0)
+    }
+
+    fn new_with_seed_offset(
+        embed_dim: usize,
+        num_heads: usize,
+        feed_forward_dim: usize,
+        epsilon: f32,
+        seed_offset: u64,
+    ) -> Self {
+        assert!(
+            feed_forward_dim > 0,
+            "transformer feed_forward_dim must be non-zero"
+        );
+        assert!(
+            epsilon > 0.0 && epsilon.is_finite(),
+            "transformer epsilon must be finite and positive"
+        );
+
+        Self {
+            attention: MultiHeadAttention::new_with_seed_offset(embed_dim, num_heads, seed_offset),
+            attention_norm_weight: Parameter::new(vec![1.0; embed_dim], vec![embed_dim]),
+            attention_norm_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
+            feed_forward_norm_weight: Parameter::new(vec![1.0; embed_dim], vec![embed_dim]),
+            feed_forward_norm_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
+            feed_forward_input_weight: xavier_parameter(
+                embed_dim,
+                feed_forward_dim,
+                seed_offset + 5,
+            ),
+            feed_forward_input_bias: Parameter::new(
+                vec![0.0; feed_forward_dim],
+                vec![feed_forward_dim],
+            ),
+            feed_forward_output_weight: xavier_parameter(
+                feed_forward_dim,
+                embed_dim,
+                seed_offset + 6,
+            ),
+            feed_forward_output_bias: Parameter::new(vec![0.0; embed_dim], vec![embed_dim]),
+            epsilon,
+        }
+    }
+
+    pub fn forward(&self, x: impl Into<TensorExpr<f32>>, causal: bool) -> TensorExpr<f32> {
+        let x = x.into();
+        let rank = x.shape().len();
+        assert!(rank >= 3, "transformer input must have rank >= 3");
+        let feature_axis = rank - 1;
+
+        let normalized = layer_norm(
+            x.clone(),
+            feature_axis,
+            self.attention_norm_weight.clone(),
+            self.attention_norm_bias.clone(),
+            self.epsilon,
+        );
+        let attended =
+            self.attention
+                .forward(normalized.clone(), normalized.clone(), normalized, causal);
+        let residual = x + attended;
+        let normalized = layer_norm(
+            residual.clone(),
+            feature_axis,
+            self.feed_forward_norm_weight.clone(),
+            self.feed_forward_norm_bias.clone(),
+            self.epsilon,
+        );
+        let hidden = linear(
+            normalized,
+            self.feed_forward_input_weight.clone(),
+            Some(self.feed_forward_input_bias.clone()),
+        )
+        .relu();
+        let output = linear(
+            hidden,
+            self.feed_forward_output_weight.clone(),
+            Some(self.feed_forward_output_bias.clone()),
+        );
+        residual + output
+    }
+}
+
+/// Configuration for a decoder-only GPT model.
+#[derive(Clone, Debug)]
+pub struct GptConfig {
+    pub vocab_size: usize,
+    pub max_sequence_length: usize,
+    pub embed_dim: usize,
+    pub num_heads: usize,
+    pub feed_forward_dim: usize,
+    pub num_layers: usize,
+    pub layer_norm_epsilon: f32,
+}
+
+/// A decoder-only transformer with learned positions and a tied language-model head.
+#[derive(Clone)]
+pub struct Gpt {
+    pub token_embedding: Parameter<f32>,
+    pub position_embedding: Parameter<f32>,
+    pub blocks: Vec<TransformerBlock>,
+    pub final_norm_weight: Parameter<f32>,
+    pub final_norm_bias: Parameter<f32>,
+    config: GptConfig,
+}
+
+impl Gpt {
+    pub fn new(config: GptConfig) -> Self {
+        const MAX_EXACT_F32_INTEGER: usize = 1 << 24;
+
+        assert!(config.vocab_size > 0, "GPT vocabulary must be non-empty");
+        assert!(
+            config.vocab_size - 1 <= MAX_EXACT_F32_INTEGER,
+            "GPT vocabulary indices must be exactly representable as f32"
+        );
+        assert!(
+            config.max_sequence_length > 0,
+            "GPT maximum sequence length must be non-zero"
+        );
+        assert!(
+            config.max_sequence_length - 1 <= MAX_EXACT_F32_INTEGER,
+            "GPT position indices must be exactly representable as f32"
+        );
+        assert!(config.embed_dim > 0, "GPT embedding width must be non-zero");
+        assert!(config.num_layers > 0, "GPT must contain at least one layer");
+        assert!(
+            config.feed_forward_dim > 0,
+            "GPT feed-forward width must be non-zero"
+        );
+        assert!(
+            config.num_heads > 0 && config.embed_dim.is_multiple_of(config.num_heads),
+            "GPT embedding width must be divisible by a non-zero head count"
+        );
+        assert!(
+            config.layer_norm_epsilon.is_finite() && config.layer_norm_epsilon > 0.0,
+            "GPT layer norm epsilon must be finite and positive"
+        );
+
+        let token_embedding = xavier_parameter(config.vocab_size, config.embed_dim, 101);
+        let position_embedding =
+            xavier_parameter(config.max_sequence_length, config.embed_dim, 102);
+        let blocks = (0..config.num_layers)
+            .map(|layer| {
+                TransformerBlock::new_with_seed_offset(
+                    config.embed_dim,
+                    config.num_heads,
+                    config.feed_forward_dim,
+                    config.layer_norm_epsilon,
+                    1_000 + layer as u64 * 100,
+                )
+            })
+            .collect();
+        let final_norm_weight = Parameter::new(vec![1.0; config.embed_dim], vec![config.embed_dim]);
+        let final_norm_bias = Parameter::new(vec![0.0; config.embed_dim], vec![config.embed_dim]);
+
+        Self {
+            token_embedding,
+            position_embedding,
+            blocks,
+            final_norm_weight,
+            final_norm_bias,
+            config,
+        }
+    }
+
+    pub fn config(&self) -> &GptConfig {
+        &self.config
+    }
+
+    /// Build logits shaped `[batch, sequence, vocabulary]` from token IDs.
+    pub fn forward(&self, token_ids: impl Into<TensorExpr<f32>>) -> TensorExpr<f32> {
+        let token_ids = token_ids.into();
+        let shape = token_ids.shape().clone();
+        assert_eq!(
+            shape.len(),
+            2,
+            "GPT token IDs must have shape [batch, sequence]"
+        );
+        let batch = shape[0];
+        let sequence = shape[1];
+        assert!(batch > 0, "GPT batch size must be non-zero");
+        assert!(sequence > 0, "GPT sequence length must be non-zero");
+        assert!(
+            sequence <= self.config.max_sequence_length,
+            "GPT sequence length {sequence} exceeds configured maximum {}",
+            self.config.max_sequence_length
+        );
+
+        let token_embeddings = embedding(self.token_embedding.clone(), token_ids);
+        let positions = Constant::new(
+            (0..sequence).map(|position| position as f32).collect(),
+            vec![sequence],
+        );
+        let position_embeddings = embedding(self.position_embedding.clone(), positions)
+            .reshape(vec![1, sequence, self.config.embed_dim])
+            .broadcast_axis(0, batch);
+        let mut hidden = token_embeddings + position_embeddings;
+        for block in &self.blocks {
+            hidden = block.forward(hidden, true);
+        }
+        hidden = layer_norm(
+            hidden,
+            2,
+            self.final_norm_weight.clone(),
+            self.final_norm_bias.clone(),
+            self.config.layer_norm_epsilon,
+        );
+
+        hidden.matmul(TensorExpr::from(self.token_embedding.clone()).transpose())
+    }
+
+    /// Build a scalar next-token prediction loss.
+    pub fn loss(
+        &self,
+        token_ids: impl Into<TensorExpr<f32>>,
+        target_ids: impl Into<TensorExpr<f32>>,
+    ) -> TensorExpr<f32> {
+        cross_entropy_indexed_logits(self.forward(token_ids), target_ids)
+    }
+
+    /// Greedily append `max_new_tokens` using the supplied executor.
+    pub fn generate<E: Executor<f32>>(
+        &self,
+        executor: &mut E,
+        prompt: &[usize],
+        max_new_tokens: usize,
+    ) -> Result<Vec<usize>> {
+        anyhow::ensure!(
+            !prompt.is_empty(),
+            "GPT generation prompt must be non-empty"
+        );
+        anyhow::ensure!(
+            prompt.iter().all(|&token| token < self.config.vocab_size),
+            "GPT generation prompt contains an out-of-range token"
+        );
+
+        let mut tokens = prompt.to_vec();
+        for _ in 0..max_new_tokens {
+            let context_start = tokens.len().saturating_sub(self.config.max_sequence_length);
+            let context = &tokens[context_start..];
+            let token_ids = Constant::new(
+                context.iter().map(|&token| token as f32).collect(),
+                vec![1, context.len()],
+            );
+            let graph: TensorGraph<f32> = self.forward(token_ids).into();
+            let logits = executor.execute(&graph, HashMap::new())?;
+            let final_row = &logits[logits.len() - self.config.vocab_size..];
+            let next_token = final_row
+                .iter()
+                .enumerate()
+                .max_by(|(_, left), (_, right)| left.total_cmp(right))
+                .map(|(index, _)| index)
+                .expect("GPT vocabulary is non-empty");
+            tokens.push(next_token);
+        }
+        Ok(tokens)
+    }
 }
 
 /// A model structure for organizing computation graphs with multiple outputs.
@@ -287,5 +879,41 @@ mod tests {
         assert_eq!(out.len(), 1);
         let expected = (3.0f32).ln();
         assert!((out[0] - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn transformer_expressions_have_expected_shapes() {
+        let softmax_output: TensorExpr<f32> =
+            softmax(constant_f32(vec![0.0; 24], vec![2, 3, 4]), 1);
+        assert_eq!(softmax_output.shape(), &vec![2, 3, 4]);
+
+        let norm_output = layer_norm(
+            constant_f32(vec![0.0; 24], vec![2, 3, 4]),
+            1,
+            constant_f32(vec![1.0; 3], vec![3]),
+            constant_f32(vec![0.0; 3], vec![3]),
+            1e-5,
+        );
+        assert_eq!(norm_output.shape(), &vec![2, 3, 4]);
+
+        let attention_output = scaled_dot_product_attention(
+            constant_f32(vec![0.0; 2 * 4 * 3 * 8], vec![2, 4, 3, 8]),
+            constant_f32(vec![0.0; 2 * 4 * 5 * 8], vec![2, 4, 5, 8]),
+            constant_f32(vec![0.0; 2 * 4 * 5 * 6], vec![2, 4, 5, 6]),
+            true,
+        );
+        assert_eq!(attention_output.shape(), &vec![2, 4, 3, 6]);
+
+        let input = constant_f32(vec![0.0; 2 * 5 * 8], vec![2, 5, 8]);
+        let attention = MultiHeadAttention::new(8, 2);
+        assert_eq!(
+            attention
+                .forward(input.clone(), input.clone(), input.clone(), true)
+                .shape(),
+            &vec![2, 5, 8]
+        );
+
+        let block = TransformerBlock::new(8, 2, 16, 1e-5);
+        assert_eq!(block.forward(input, true).shape(), &vec![2, 5, 8]);
     }
 }

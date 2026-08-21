@@ -7,6 +7,7 @@ use num_traits::Float;
 pub mod alloc;
 #[cfg(feature = "cuda")]
 pub mod cuda;
+pub mod data;
 pub mod graph;
 pub mod nn;
 pub mod optimizer;
@@ -180,6 +181,36 @@ impl<D> Value<D> {
                 f(&data, &data)
             }
             _ => self.with(|a| other.with(|b| f(a, b))),
+        }
+    }
+
+    /// Run `f` with three values without locking an aliased parameter twice.
+    fn with_triple<R>(
+        &self,
+        second: &Self,
+        third: &Self,
+        f: impl FnOnce(&[D], &[D], &[D]) -> R,
+    ) -> R {
+        match (self, second, third) {
+            (Value::Parameter(a), Value::Parameter(b), Value::Parameter(c))
+                if Arc::ptr_eq(a, b) && Arc::ptr_eq(a, c) =>
+            {
+                let data = a.lock().unwrap();
+                f(&data, &data, &data)
+            }
+            (Value::Parameter(a), Value::Parameter(b), _) if Arc::ptr_eq(a, b) => {
+                let data = a.lock().unwrap();
+                third.with(|c| f(&data, &data, c))
+            }
+            (Value::Parameter(a), _, Value::Parameter(c)) if Arc::ptr_eq(a, c) => {
+                let data = a.lock().unwrap();
+                second.with(|b| f(&data, b, &data))
+            }
+            (_, Value::Parameter(b), Value::Parameter(c)) if Arc::ptr_eq(b, c) => {
+                let data = b.lock().unwrap();
+                self.with(|a| f(a, &data, &data))
+            }
+            _ => self.with(|a| second.with(|b| third.with(|c| f(a, b, c)))),
         }
     }
 }
@@ -402,6 +433,46 @@ where
                         *node_idx,
                     )?)
                 }
+                TensorGraphNode::Embedding { .. } => {
+                    let _span = trace_span!("embedding", node = node_idx.index()).entered();
+                    Value::Owned(embedding_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                    )?)
+                }
+                TensorGraphNode::EmbeddingBackward { .. } => {
+                    let _span =
+                        trace_span!("embedding_backward", node = node_idx.index()).entered();
+                    Value::Owned(embedding_backward_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                    )?)
+                }
+                TensorGraphNode::IndexedCrossEntropy { .. } => {
+                    let _span =
+                        trace_span!("indexed_cross_entropy", node = node_idx.index()).entered();
+                    Value::Owned(indexed_cross_entropy_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                    )?)
+                }
+                TensorGraphNode::IndexedCrossEntropyBackward { .. } => {
+                    let _span =
+                        trace_span!("indexed_cross_entropy_backward", node = node_idx.index())
+                            .entered();
+                    Value::Owned(indexed_cross_entropy_backward_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                    )?)
+                }
                 TensorGraphNode::Transpose { .. } => {
                     let _span = trace_span!("transpose", node = node_idx.index()).entered();
                     Value::Owned(transpose_forward(
@@ -409,6 +480,26 @@ where
                         &self.values,
                         &mut self.pool,
                         *node_idx,
+                    )?)
+                }
+                TensorGraphNode::Reshape { .. } => {
+                    let _span = trace_span!("reshape", node = node_idx.index()).entered();
+                    let ins = graph.inputs(*node_idx);
+                    let x = self.values.get(&ins[0]).with_context(|| {
+                        format!("Value for node {} not computed", ins[0].index())
+                    })?;
+                    let mut out = self.pool.take(x.len());
+                    x.with(|v| out.copy_from_slice(v));
+                    Value::Owned(out)
+                }
+                TensorGraphNode::Permute { axes, .. } => {
+                    let _span = trace_span!("permute", node = node_idx.index()).entered();
+                    Value::Owned(permute_forward(
+                        graph,
+                        &self.values,
+                        &mut self.pool,
+                        *node_idx,
+                        axes,
                     )?)
                 }
                 TensorGraphNode::BroadcastAxis { axis, .. } => {
@@ -622,6 +713,226 @@ fn rowmajor_strides(shape: &[usize]) -> Vec<usize> {
     s
 }
 
+fn checked_index<D: Float>(value: D, upper_bound: usize, operation: &str) -> Result<usize> {
+    anyhow::ensure!(value.is_finite(), "{operation} index must be finite");
+    anyhow::ensure!(value >= D::zero(), "{operation} index must be non-negative");
+    anyhow::ensure!(
+        value.fract() == D::zero(),
+        "{operation} index must be an integer"
+    );
+    let index = value
+        .to_usize()
+        .with_context(|| format!("{operation} index cannot be represented as usize"))?;
+    anyhow::ensure!(
+        D::from(index) == Some(value),
+        "{operation} index does not round-trip through usize"
+    );
+    anyhow::ensure!(
+        index < upper_bound,
+        "{operation} index {index} is out of range for size {upper_bound}"
+    );
+    Ok(index)
+}
+
+fn embedding_forward<D: Float, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+) -> Result<Vec<D>> {
+    let inputs = graph.inputs(node_idx);
+    anyhow::ensure!(inputs.len() == 2, "Embedding requires 2 inputs");
+    let weight_idx = inputs[0];
+    let indices_idx = inputs[1];
+    let weight = values
+        .get(&weight_idx)
+        .context("Embedding weight not computed")?;
+    let indices = values
+        .get(&indices_idx)
+        .context("Embedding indices not computed")?;
+    let weight_shape = graph.graph[weight_idx].shape();
+    anyhow::ensure!(weight_shape.len() == 2, "Embedding weight must be [V, C]");
+    let vocabulary = weight_shape[0];
+    let channels = weight_shape[1];
+    let index_count: usize = graph.graph[indices_idx].shape().iter().product();
+    anyhow::ensure!(
+        weight.len() == vocabulary * channels,
+        "Embedding weight length mismatch"
+    );
+    anyhow::ensure!(
+        indices.len() == index_count,
+        "Embedding indices length mismatch"
+    );
+    let mut out = pool.take(index_count * channels);
+    weight.with_pair(indices, |weight, indices| -> Result<()> {
+        for (position, &value) in indices.iter().enumerate() {
+            let index = checked_index(value, vocabulary, "Embedding")?;
+            out[position * channels..(position + 1) * channels]
+                .copy_from_slice(&weight[index * channels..(index + 1) * channels]);
+        }
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+fn embedding_backward_forward<D: Float, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+) -> Result<Vec<D>> {
+    let inputs = graph.inputs(node_idx);
+    anyhow::ensure!(inputs.len() == 2, "EmbeddingBackward requires 2 inputs");
+    let indices = values
+        .get(&inputs[0])
+        .context("EmbeddingBackward indices not computed")?;
+    let grad_output = values
+        .get(&inputs[1])
+        .context("EmbeddingBackward grad_output not computed")?;
+    let table_shape = graph.graph[node_idx].shape();
+    anyhow::ensure!(
+        table_shape.len() == 2,
+        "EmbeddingBackward output must be [V, C]"
+    );
+    let vocabulary = table_shape[0];
+    let channels = table_shape[1];
+    let index_count: usize = graph.graph[inputs[0]].shape().iter().product();
+    anyhow::ensure!(
+        indices.len() == index_count,
+        "EmbeddingBackward indices length mismatch"
+    );
+    anyhow::ensure!(
+        grad_output.len() == index_count * channels,
+        "EmbeddingBackward grad_output length mismatch"
+    );
+    let mut out = pool.take(vocabulary * channels);
+    out.fill(D::zero());
+    indices.with_pair(grad_output, |indices, grad_output| -> Result<()> {
+        for (position, &value) in indices.iter().enumerate() {
+            let index = checked_index(value, vocabulary, "EmbeddingBackward")?;
+            for channel in 0..channels {
+                out[index * channels + channel] =
+                    out[index * channels + channel] + grad_output[position * channels + channel];
+            }
+        }
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+fn indexed_cross_entropy_forward<D: Float, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+) -> Result<Vec<D>> {
+    let inputs = graph.inputs(node_idx);
+    anyhow::ensure!(inputs.len() == 2, "IndexedCrossEntropy requires 2 inputs");
+    let logits = values
+        .get(&inputs[0])
+        .context("Cross entropy logits not computed")?;
+    let targets = values
+        .get(&inputs[1])
+        .context("Cross entropy targets not computed")?;
+    let logits_shape = graph.graph[inputs[0]].shape();
+    let vocabulary = *logits_shape
+        .last()
+        .context("Cross entropy logits must have rank >= 1")?;
+    anyhow::ensure!(vocabulary > 0, "Cross entropy vocabulary must be nonzero");
+    let row_count: usize = graph.graph[node_idx].shape().iter().product();
+    anyhow::ensure!(
+        logits.len() == row_count * vocabulary,
+        "Cross entropy logits length mismatch"
+    );
+    anyhow::ensure!(
+        targets.len() == row_count,
+        "Cross entropy targets length mismatch"
+    );
+    let mut out = pool.take(row_count);
+    logits.with_pair(targets, |logits, targets| -> Result<()> {
+        for row in 0..row_count {
+            let target = checked_index(targets[row], vocabulary, "IndexedCrossEntropy")?;
+            let row_logits = &logits[row * vocabulary..(row + 1) * vocabulary];
+            let maximum = row_logits.iter().copied().fold(D::neg_infinity(), D::max);
+            let exponential_sum = row_logits
+                .iter()
+                .copied()
+                .fold(D::zero(), |sum, value| sum + (value - maximum).exp());
+            out[row] = (maximum - row_logits[target]) + exponential_sum.ln();
+        }
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+fn indexed_cross_entropy_backward_forward<D: Float, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+) -> Result<Vec<D>> {
+    let inputs = graph.inputs(node_idx);
+    anyhow::ensure!(
+        inputs.len() == 3,
+        "IndexedCrossEntropyBackward requires 3 inputs"
+    );
+    let logits = values
+        .get(&inputs[0])
+        .context("Cross entropy logits not computed")?;
+    let targets = values
+        .get(&inputs[1])
+        .context("Cross entropy targets not computed")?;
+    let grad_output = values
+        .get(&inputs[2])
+        .context("Cross entropy grad_output not computed")?;
+    let logits_shape = graph.graph[node_idx].shape();
+    let vocabulary = *logits_shape
+        .last()
+        .context("Cross entropy logits must have rank >= 1")?;
+    anyhow::ensure!(vocabulary > 0, "Cross entropy vocabulary must be nonzero");
+    let row_count = logits_shape.iter().product::<usize>() / vocabulary;
+    anyhow::ensure!(
+        logits.len() == row_count * vocabulary,
+        "Cross entropy logits length mismatch"
+    );
+    anyhow::ensure!(
+        targets.len() == row_count,
+        "Cross entropy targets length mismatch"
+    );
+    anyhow::ensure!(
+        grad_output.len() == row_count,
+        "Cross entropy grad_output length mismatch"
+    );
+    let mut out = pool.take(row_count * vocabulary);
+    logits.with_triple(
+        targets,
+        grad_output,
+        |logits, targets, grad_output| -> Result<()> {
+            for row in 0..row_count {
+                let target =
+                    checked_index(targets[row], vocabulary, "IndexedCrossEntropyBackward")?;
+                let row_logits = &logits[row * vocabulary..(row + 1) * vocabulary];
+                let maximum = row_logits.iter().copied().fold(D::neg_infinity(), D::max);
+                let exponential_sum = row_logits
+                    .iter()
+                    .copied()
+                    .fold(D::zero(), |sum, value| sum + (value - maximum).exp());
+                for column in 0..vocabulary {
+                    let probability = (row_logits[column] - maximum).exp() / exponential_sum;
+                    let indicator = if column == target {
+                        D::one()
+                    } else {
+                        D::zero()
+                    };
+                    out[row * vocabulary + column] = (probability - indicator) * grad_output[row];
+                }
+            }
+            Ok(())
+        },
+    )?;
+    Ok(out)
+}
+
 fn matmul_forward<D, G>(
     graph: &TensorGraph<D, G>,
     values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
@@ -643,27 +954,30 @@ where
     let a_shape = graph.graph[a_idx].shape();
     let b_shape = graph.graph[b_idx].shape();
     anyhow::ensure!(
-        a_shape.len() == 2,
-        "Matmul left operand must be 2D, got {}D",
-        a_shape.len()
-    );
-    anyhow::ensure!(
-        b_shape.len() == 2,
-        "Matmul right operand must be 2D, got {}D",
+        a_shape.len() >= 2 && b_shape.len() >= 2,
+        "Matmul operands must have rank >= 2, got {}D and {}D",
+        a_shape.len(),
         b_shape.len()
     );
-    let m = a_shape[0];
-    let k = a_shape[1];
-    let n = b_shape[1];
+    let m = a_shape[a_shape.len() - 2];
+    let k = a_shape[a_shape.len() - 1];
+    let n = b_shape[b_shape.len() - 1];
+    anyhow::ensure!(
+        k == b_shape[b_shape.len() - 2],
+        "Matmul inner dimensions must match: {a_shape:?} and {b_shape:?}"
+    );
+    let out_shape = graph.graph[node_idx].shape();
+    let out_batch_shape = &out_shape[..out_shape.len() - 2];
+    let batch_count: usize = out_batch_shape.iter().product();
 
-    let mut out = pool.take(m * n);
+    let mut out = pool.take(batch_count * m * n);
     a_val.with_pair(b_val, |a, b| {
         if uses_f32_accumulation::<D>() {
             let a_f32: Vec<f32> = a.iter().map(|value| value.to_f32().unwrap()).collect();
             let b_f32: Vec<f32> = b.iter().map(|value| value.to_f32().unwrap()).collect();
 
             #[cfg(feature = "parallel")]
-            if m >= parallel_config::MATMUL_THRESHOLD {
+            if batch_count == 1 && m >= parallel_config::MATMUL_THRESHOLD {
                 out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
                     for (j, value) in row.iter_mut().enumerate() {
                         *value = D::from(dot_product(&a_f32, &b_f32, i, j, k, n)).unwrap();
@@ -672,16 +986,48 @@ where
                 return;
             }
 
-            for i in 0..m {
-                for j in 0..n {
-                    out[i * n + j] = D::from(dot_product(&a_f32, &b_f32, i, j, k, n)).unwrap();
+            let a_batch_shape = &a_shape[..a_shape.len() - 2];
+            let b_batch_shape = &b_shape[..b_shape.len() - 2];
+            let out_batch_strides = rowmajor_strides(out_batch_shape);
+            let a_batch_strides = rowmajor_strides(a_batch_shape);
+            let b_batch_strides = rowmajor_strides(b_batch_shape);
+            for batch in 0..batch_count {
+                let a_batch = broadcast_batch_index(
+                    batch,
+                    out_batch_shape,
+                    &out_batch_strides,
+                    a_batch_shape,
+                    &a_batch_strides,
+                );
+                let b_batch = broadcast_batch_index(
+                    batch,
+                    out_batch_shape,
+                    &out_batch_strides,
+                    b_batch_shape,
+                    &b_batch_strides,
+                );
+                let a_offset = a_batch * m * k;
+                let b_offset = b_batch * k * n;
+                let out_offset = batch * m * n;
+                for i in 0..m {
+                    for j in 0..n {
+                        out[out_offset + i * n + j] = D::from(dot_product(
+                            &a_f32[a_offset..a_offset + m * k],
+                            &b_f32[b_offset..b_offset + k * n],
+                            i,
+                            j,
+                            k,
+                            n,
+                        ))
+                        .unwrap();
+                    }
                 }
             }
             return;
         }
 
         #[cfg(feature = "parallel")]
-        if m >= parallel_config::MATMUL_THRESHOLD {
+        if batch_count == 1 && m >= parallel_config::MATMUL_THRESHOLD {
             out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
                 for (j, value) in row.iter_mut().enumerate() {
                     let mut sum = D::zero();
@@ -694,14 +1040,37 @@ where
             return;
         }
 
-        // Sequential fallback
-        for i in 0..m {
-            for j in 0..n {
-                let mut sum = D::zero();
-                for p in 0..k {
-                    sum = sum + a[i * k + p] * b[p * n + j];
+        let a_batch_shape = &a_shape[..a_shape.len() - 2];
+        let b_batch_shape = &b_shape[..b_shape.len() - 2];
+        let out_batch_strides = rowmajor_strides(out_batch_shape);
+        let a_batch_strides = rowmajor_strides(a_batch_shape);
+        let b_batch_strides = rowmajor_strides(b_batch_shape);
+        for batch in 0..batch_count {
+            let a_batch = broadcast_batch_index(
+                batch,
+                out_batch_shape,
+                &out_batch_strides,
+                a_batch_shape,
+                &a_batch_strides,
+            );
+            let b_batch = broadcast_batch_index(
+                batch,
+                out_batch_shape,
+                &out_batch_strides,
+                b_batch_shape,
+                &b_batch_strides,
+            );
+            let a_offset = a_batch * m * k;
+            let b_offset = b_batch * k * n;
+            let out_offset = batch * m * n;
+            for i in 0..m {
+                for j in 0..n {
+                    let mut sum = D::zero();
+                    for p in 0..k {
+                        sum = sum + a[a_offset + i * k + p] * b[b_offset + p * n + j];
+                    }
+                    out[out_offset + i * n + j] = sum;
                 }
-                out[i * n + j] = sum;
             }
         }
     });
@@ -710,6 +1079,29 @@ where
 
 fn dot_product(a: &[f32], b: &[f32], row: usize, col: usize, k: usize, n: usize) -> f32 {
     (0..k).map(|p| a[row * k + p] * b[p * n + col]).sum()
+}
+
+fn broadcast_batch_index(
+    output_index: usize,
+    output_shape: &[usize],
+    output_strides: &[usize],
+    input_shape: &[usize],
+    input_strides: &[usize],
+) -> usize {
+    let rank_difference = output_shape.len() - input_shape.len();
+    let mut input_index = 0;
+    let mut remainder = output_index;
+    for (axis, &stride) in output_strides.iter().enumerate() {
+        let coordinate = remainder / stride;
+        remainder %= stride;
+        if axis >= rank_difference {
+            let input_axis = axis - rank_difference;
+            if input_shape[input_axis] != 1 {
+                input_index += coordinate * input_strides[input_axis];
+            }
+        }
+    }
+    input_index
 }
 
 fn conv2d_forward<D, G>(
@@ -1070,27 +1462,45 @@ where
 {
     let inputs_idx = graph.inputs(node_idx);
     let a_idx = inputs_idx[0];
-    let a_val = values
-        .get(&a_idx)
-        .context("Input value not computed for transpose")?;
-    let a_shape = graph.graph[a_idx].shape();
+    let rank = graph.graph[a_idx].shape().len();
+    anyhow::ensure!(rank >= 2, "Transpose requires rank >= 2, got {rank}D");
+    let mut axes: Vec<usize> = (0..rank).collect();
+    axes.swap(rank - 2, rank - 1);
+    permute_forward(graph, values, pool, node_idx, &axes)
+}
 
-    anyhow::ensure!(
-        a_shape.len() == 2,
-        "Transpose currently only supports 2D matrices, got {}D",
-        a_shape.len()
-    );
-
-    let (m, n) = (a_shape[0], a_shape[1]);
-    let mut out = pool.take(m * n);
-    a_val.with(|a| {
-        for i in 0..m {
-            for j in 0..n {
-                out[j * m + i] = a[i * n + j];
+fn permute_forward<D, G>(
+    graph: &TensorGraph<D, G>,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    pool: &mut BufferPool<D>,
+    node_idx: petgraph::graph::NodeIndex,
+    axes: &[usize],
+) -> Result<Vec<D>>
+where
+    D: Float,
+{
+    let input_idx = graph.inputs(node_idx)[0];
+    let input = values
+        .get(&input_idx)
+        .context("Input value not computed for permute")?;
+    let input_shape = graph.graph[input_idx].shape();
+    let output_shape = graph.graph[node_idx].shape();
+    let input_strides = rowmajor_strides(input_shape);
+    let output_strides = rowmajor_strides(output_shape);
+    let output_size: usize = output_shape.iter().product();
+    let mut out = pool.take(output_size);
+    input.with(|input| {
+        for (output_index, output) in out.iter_mut().enumerate() {
+            let mut remainder = output_index;
+            let mut input_index = 0;
+            for (output_axis, &stride) in output_strides.iter().enumerate() {
+                let coordinate = remainder / stride;
+                remainder %= stride;
+                input_index += coordinate * input_strides[axes[output_axis]];
             }
+            *output = input[input_index];
         }
     });
-
     Ok(out)
 }
 

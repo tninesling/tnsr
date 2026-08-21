@@ -92,6 +92,19 @@ pub struct ConvertInst<'a, DstT: PtxType, SrcT: PtxType> {
     _phantom: PhantomData<(DstT, SrcT)>,
 }
 
+#[derive(Clone, Debug)]
+pub struct AtomicAddInst<'a, T: PtxType> {
+    pub dst: Operand<'a, T>,
+    pub addr: Operand<'a, U64>,
+    pub value: Operand<'a, T>,
+}
+
+impl<'a, T: PtxType> AtomicAddInst<'a, T> {
+    pub fn new(dst: Operand<'a, T>, addr: Operand<'a, U64>, value: Operand<'a, T>) -> Self {
+        Self { dst, addr, value }
+    }
+}
+
 impl<'a, DstT: PtxType, SrcT: PtxType> ConvertInst<'a, DstT, SrcT> {
     pub fn new(dst: Operand<'a, DstT>, src: Operand<'a, SrcT>) -> Self {
         Self {
@@ -432,6 +445,7 @@ impl<'a, T: PtxType> SelpInst<'a, T> {
 pub enum Inst<'a> {
     ConvertU64U32(ConvertInst<'a, U64, U32>),
     ConvertU64I32(ConvertInst<'a, U64, I32>),
+    ConvertU64F32(ConvertInst<'a, U64, F32>),
     ConvertI32U64(ConvertInst<'a, I32, U64>),
     ConvertF32F16(ConvertInst<'a, F32, F16>),
     ConvertF16F32(ConvertInst<'a, F16, F32>),
@@ -491,6 +505,7 @@ pub enum Inst<'a> {
         addr: Operand<'a, U64>,
         src: Operand<'a, BF16>,
     },
+    AtomicAddGlobalF32(AtomicAddInst<'a, F32>),
 
     AddI32(AddInst<'a, I32>),
     AddI64(AddInst<'a, I64>),
@@ -560,30 +575,33 @@ pub enum Inst<'a> {
         addr: Operand<'a, U64>,
         src: Operand<'a, BF16>,
     },
+    StSharedB32 {
+        addr: Operand<'a, U64>,
+        src: Operand<'a, B32>,
+    },
+    ConvertTf32F32 {
+        dst: Operand<'a, B32>,
+        src: Operand<'a, F32>,
+    },
     LdMatrix {
         frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
     },
 
     WmmaLoadA {
-        frags: Vec<Operand<'a, F32>>,
+        frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     },
     WmmaLoadB {
-        frags: Vec<Operand<'a, F32>>,
-        addr: Operand<'a, U64>,
-        stride: Operand<'a, I32>,
-    },
-    WmmaLoadC {
-        frags: Vec<Operand<'a, F32>>,
+        frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     },
     WmmaMma {
         d_frags: Vec<Operand<'a, F32>>,
-        a_frags: Vec<Operand<'a, F32>>,
-        b_frags: Vec<Operand<'a, F32>>,
+        a_frags: Vec<Operand<'a, B32>>,
+        b_frags: Vec<Operand<'a, B32>>,
         c_frags: Vec<Operand<'a, F32>>,
     },
     MmaM16N8K16 {
@@ -612,6 +630,10 @@ impl<'a> Inst<'a> {
 
     pub fn convert_u64_i32(dst: Operand<'a, U64>, src: Operand<'a, I32>) -> Self {
         Inst::ConvertU64I32(ConvertInst::new(dst, src))
+    }
+
+    pub fn convert_u64_f32(dst: Operand<'a, U64>, src: Operand<'a, F32>) -> Self {
+        Inst::ConvertU64F32(ConvertInst::new(dst, src))
     }
 
     pub fn convert_i32_u64(dst: Operand<'a, I32>, src: Operand<'a, U64>) -> Self {
@@ -676,6 +698,14 @@ impl<'a> Inst<'a> {
             src: vec![src],
             vec: VecWidth::Scalar,
         }
+    }
+
+    pub fn atomic_add_global_f32(
+        dst: Operand<'a, F32>,
+        addr: Operand<'a, U64>,
+        value: Operand<'a, F32>,
+    ) -> Self {
+        Inst::AtomicAddGlobalF32(AtomicAddInst::new(dst, addr, value))
     }
 
     pub fn add_i32(dst: Operand<'a, I32>, a: Operand<'a, I32>, b: Operand<'a, I32>) -> Self {
@@ -783,6 +813,10 @@ impl<'a> Inst<'a> {
         Inst::SetpU64(SetpInst::new(dst, a, b, CompareOp::Eq))
     }
 
+    pub fn setp_ne_u64(dst: Operand<'a, Pred>, a: Operand<'a, U64>, b: Operand<'a, U64>) -> Self {
+        Inst::SetpU64(SetpInst::new(dst, a, b, CompareOp::Ne))
+    }
+
     pub fn setp_lt_i32(dst: Operand<'a, Pred>, a: Operand<'a, I32>, b: Operand<'a, I32>) -> Self {
         Inst::SetpI32(SetpInst::new(dst, a, b, CompareOp::Lt))
     }
@@ -826,7 +860,7 @@ impl<'a> Inst<'a> {
     }
 
     pub fn wmma_load_a(
-        frags: Vec<Operand<'a, F32>>,
+        frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     ) -> Self {
@@ -838,7 +872,7 @@ impl<'a> Inst<'a> {
     }
 
     pub fn wmma_load_b(
-        frags: Vec<Operand<'a, F32>>,
+        frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     ) -> Self {
@@ -849,22 +883,10 @@ impl<'a> Inst<'a> {
         }
     }
 
-    pub fn wmma_load_c(
-        frags: Vec<Operand<'a, F32>>,
-        addr: Operand<'a, U64>,
-        stride: Operand<'a, I32>,
-    ) -> Self {
-        Inst::WmmaLoadC {
-            frags,
-            addr,
-            stride,
-        }
-    }
-
     pub fn wmma_mma(
         d_frags: Vec<Operand<'a, F32>>,
-        a_frags: Vec<Operand<'a, F32>>,
-        b_frags: Vec<Operand<'a, F32>>,
+        a_frags: Vec<Operand<'a, B32>>,
+        b_frags: Vec<Operand<'a, B32>>,
         c_frags: Vec<Operand<'a, F32>>,
     ) -> Self {
         Inst::WmmaMma {
@@ -873,6 +895,10 @@ impl<'a> Inst<'a> {
             b_frags,
             c_frags,
         }
+    }
+
+    pub fn convert_tf32_f32(dst: Operand<'a, B32>, src: Operand<'a, F32>) -> Self {
+        Inst::ConvertTf32F32 { dst, src }
     }
 
     pub fn mma_m16n8k16(

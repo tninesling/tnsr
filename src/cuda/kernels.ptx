@@ -66,6 +66,104 @@ $L__BB0_3:
 	trap;
 
 }
+	// .globl	permute
+.visible .entry permute(
+	.param .u64 permute_param_0,
+	.param .u64 permute_param_1,
+	.param .u64 permute_param_2,
+	.param .u64 permute_param_3,
+	.param .u64 permute_param_4,
+	.param .u64 permute_param_5,
+	.param .u64 permute_param_6,
+	.param .u64 permute_param_7
+)
+{
+	.reg .pred 	%p<9>;
+	.reg .b32 	%r<8>;
+	.reg .b64 	%rd<31>;
+
+
+	ld.param.u64 	%rd1, [permute_param_0];
+	ld.param.u64 	%rd2, [permute_param_1];
+	ld.param.u64 	%rd3, [permute_param_2];
+	ld.param.u64 	%rd4, [permute_param_3];
+	ld.param.u64 	%rd5, [permute_param_4];
+	ld.param.u64 	%rd6, [permute_param_5];
+	ld.param.u64 	%rd7, [permute_param_6];
+	ld.param.u64 	%rd8, [permute_param_7];
+	cvta.to.global.u64 	%rd9, %rd1;
+	cvta.to.global.u64 	%rd10, %rd3;
+	cvta.to.global.u64 	%rd11, %rd4;
+	cvta.to.global.u64 	%rd12, %rd6;
+	mov.u32 	%r1, %ctaid.x;
+	mov.u32 	%r2, %ntid.x;
+	mov.u32 	%r3, %tid.x;
+	mad.lo.s32 	%r4, %r2, %r1, %r3;
+	cvt.u64.u32 	%rd13, %r4;
+	mov.u32 	%r5, %nctaid.x;
+	mul.lo.s32 	%r6, %r2, %r5;
+	cvt.u64.u32 	%rd14, %r6;
+	setp.ge.u64 	%p1, %rd13, %rd8;
+	@%p1 bra 	$L__BB23_7;
+
+$L__BB23_2:
+	setp.ge.u64 	%p2, %rd13, %rd8;
+	@%p2 bra 	$L__BB23_7;
+
+	mov.u64 	%rd15, 0;
+	setp.eq.u64 	%p3, %rd5, 0;
+	@%p3 bra 	$L__BB23_6;
+
+	mov.u64 	%rd16, %rd13;
+	mov.u64 	%rd17, 0;
+
+$L__BB23_3:
+	setp.ge.u64 	%p4, %rd17, %rd5;
+	@%p4 bra 	$L__BB23_6;
+
+	setp.ge.u64 	%p5, %rd17, %rd7;
+	@%p5 bra 	$L__BB23_8;
+
+	shl.b64 	%rd18, %rd17, 3;
+	add.s64 	%rd19, %rd12, %rd18;
+	ld.global.u64 	%rd20, [%rd19];
+	setp.eq.u64 	%p6, %rd20, 0;
+	@%p6 bra 	$L__BB23_8;
+
+	div.u64 	%rd21, %rd16, %rd20;
+	mul.lo.u64 	%rd22, %rd21, %rd20;
+	sub.u64 	%rd16, %rd16, %rd22;
+	add.s64 	%rd23, %rd11, %rd18;
+	ld.global.u64 	%rd24, [%rd23];
+	mul.lo.u64 	%rd25, %rd21, %rd24;
+	add.u64 	%rd15, %rd15, %rd25;
+	add.u64 	%rd17, %rd17, 1;
+	bra.uni 	$L__BB23_3;
+
+$L__BB23_6:
+	setp.ge.u64 	%p7, %rd15, %rd2;
+	@%p7 bra 	$L__BB23_9;
+
+	shl.b64 	%rd26, %rd15, 2;
+	add.s64 	%rd27, %rd9, %rd26;
+	ld.global.u32 	%r7, [%rd27];
+	shl.b64 	%rd28, %rd13, 2;
+	add.s64 	%rd29, %rd10, %rd28;
+	st.global.u32 	[%rd29], %r7;
+	add.u64 	%rd13, %rd13, %rd14;
+	setp.lt.u64 	%p8, %rd13, %rd8;
+	@%p8 bra 	$L__BB23_2;
+
+$L__BB23_7:
+	ret;
+
+$L__BB23_8:
+	trap;
+
+$L__BB23_9:
+	trap;
+
+}
 	// .globl	exp
 .visible .entry exp(
 	.param .u64 exp_param_0,

@@ -553,6 +553,9 @@ impl<'a> fmt::Display for Inst<'a> {
         match self {
             Inst::ConvertU64U32(inst) => write!(f, "{inst}"),
             Inst::ConvertU64I32(inst) => write!(f, "{inst}"),
+            Inst::ConvertU64F32(inst) => {
+                write!(f, "cvt.rzi.u64.f32 {}, {};", inst.dst, inst.src)
+            }
             Inst::ConvertI32U64(inst) => write!(f, "{inst}"),
             Inst::ConvertF32F16(inst) => write!(f, "{inst}"),
             Inst::ConvertF16F32(inst) => write!(f, "{inst}"),
@@ -590,6 +593,11 @@ impl<'a> fmt::Display for Inst<'a> {
             },
             Inst::StGlobalF16 { addr, src } => write!(f, "st.global.b16 [{addr}], {src};"),
             Inst::StGlobalBF16 { addr, src } => write!(f, "st.global.b16 [{addr}], {src};"),
+            Inst::AtomicAddGlobalF32(inst) => write!(
+                f,
+                "atom.global.add.f32 {}, [{}], {};",
+                inst.dst, inst.addr, inst.value
+            ),
 
             Inst::AddI32(inst) => write!(f, "{inst}"),
             Inst::AddI64(inst) => write!(f, "{inst}"),
@@ -646,6 +654,10 @@ impl<'a> fmt::Display for Inst<'a> {
             },
             Inst::StSharedF16 { addr, src } => write!(f, "st.shared.b16 [{addr}], {src};"),
             Inst::StSharedBF16 { addr, src } => write!(f, "st.shared.b16 [{addr}], {src};"),
+            Inst::StSharedB32 { addr, src } => write!(f, "st.shared.b32 [{addr}], {src};"),
+            Inst::ConvertTf32F32 { dst, src } => {
+                write!(f, "cvt.rna.tf32.f32 {dst}, {src};")
+            }
             Inst::LdMatrix { frags, addr } => {
                 write!(
                     f,
@@ -661,7 +673,7 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.load.a.sync.aligned.m16n16k8.row.tf32 {{{}}}, {}, {};",
+                    "wmma.load.a.sync.aligned.m16n16k8.row.shared.tf32 {{{}}}, [{}], {};",
                     frags.iter().join(", "),
                     addr,
                     stride
@@ -674,20 +686,7 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.load.b.sync.aligned.m16n16k8.col.tf32 {{{}}}, {}, {};",
-                    frags.iter().join(", "),
-                    addr,
-                    stride
-                )
-            }
-            Inst::WmmaLoadC {
-                frags,
-                addr,
-                stride,
-            } => {
-                write!(
-                    f,
-                    "wmma.load.c.sync.aligned.m16n8k8.row.f32 {{{}}}, {}, {};",
+                    "wmma.load.b.sync.aligned.m16n16k8.row.shared.tf32 {{{}}}, [{}], {};",
                     frags.iter().join(", "),
                     addr,
                     stride
@@ -701,7 +700,7 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.mma.sync.aligned.m16n16k8.row.col.f32.tf32.tf32.f32 {{{}}}, {{{}}}, {{{}}}, {{{}}};",
+                    "wmma.mma.sync.aligned.m16n16k8.row.row.f32.tf32.tf32.f32 {{{}}}, {{{}}}, {{{}}}, {{{}}};",
                     d_frags.iter().join(", "),
                     a_frags.iter().join(", "),
                     b_frags.iter().join(", "),
@@ -745,7 +744,7 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.store.d.sync.aligned.m16n8k8.row.f32 {}, {{{}}}, {};",
+                    "wmma.store.d.sync.aligned.m16n16k8.row.shared.f32 [{}], {{{}}}, {};",
                     addr,
                     frags.iter().join(", "),
                     stride

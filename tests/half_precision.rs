@@ -103,6 +103,21 @@ fn test_bf16_matmul() {
 }
 
 #[test]
+fn test_f16_batched_matmul_accumulates_each_batch_independently() {
+    let a = TensorExpr::<f16>::input("a", vec![2, 1, 2]);
+    let b = TensorExpr::<f16>::input("b", vec![1, 2, 1]);
+    let mut inputs = HashMap::new();
+    inputs.insert("a".to_string(), to_dtype(&[1.0, 2.0, 3.0, 4.0]));
+    inputs.insert("b".to_string(), to_dtype(&[5.0, 6.0]));
+
+    let result = SimpleExecutor::<f16>::new()
+        .execute(&a.matmul(b).into(), inputs)
+        .unwrap();
+
+    assert_close(&result, &[17.0, 39.0], 0.01);
+}
+
+#[test]
 fn test_f16_relu() {
     let x = TensorExpr::<f16>::input("x", vec![6]);
     let y = x.relu();
@@ -268,7 +283,7 @@ fn test_ptx_executor_runs_f16_with_f32_compute() {
     use tnsr::ptx::PtxExecutor;
     use tnsr::ptx::types::F16;
 
-    let Ok(mut executor) = PtxExecutor::<F16>::try_new() else {
+    let Ok(mut executor) = PtxExecutor::<F16>::try_new_for_dtype() else {
         return;
     };
     let x = TensorExpr::<f16>::input("x", vec![4]);
@@ -293,7 +308,7 @@ fn test_ptx_executor_runs_bf16_reduction_with_f32_accumulator() {
     use tnsr::ptx::PtxExecutor;
     use tnsr::ptx::types::BF16;
 
-    let Ok(mut executor) = PtxExecutor::<BF16>::try_new() else {
+    let Ok(mut executor) = PtxExecutor::<BF16>::try_new_for_dtype() else {
         return;
     };
     let x = TensorExpr::<bf16>::input("x", vec![512]);

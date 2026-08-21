@@ -1,3 +1,4 @@
 data/
 target/
 mnist_trace.json
+.serena/

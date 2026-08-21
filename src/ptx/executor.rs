@@ -1,4 +1,5 @@
-use super::{Module, PtxGraph};
+use super::PtxGraph;
+use super::types::{CudaDType, F32};
 use crate::Executor;
 use crate::alloc::{AllocStats, CudaBufferPool};
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad, liveness};
@@ -6,30 +7,30 @@ use crate::tile::TileGraph;
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
-use petgraph::visit::IntoNodeReferences;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// PTX executor that compiles TensorGraph → TileGraph → PtxGraph → PTX string
 /// and executes kernels via cudarc
-pub struct PtxExecutor {
+pub struct PtxExecutor<D: CudaDType = F32> {
     device: Arc<CudaContext>,
     module: Option<Arc<CudaModule>>,
-    values: HashMap<petgraph::graph::NodeIndex, CudaSlice<f32>>,
-    pool: RefCell<CudaBufferPool>,
+    values: HashMap<petgraph::graph::NodeIndex, CudaSlice<D::HostType>>,
+    pool: RefCell<CudaBufferPool<D::HostType>>,
     stats: AllocStats,
     /// Stores the PtxGraph to access kernel names during execution
     ptx_graph: Option<PtxGraph>,
+    dtype: std::marker::PhantomData<D>,
 }
 
-impl Default for PtxExecutor {
+impl<D: CudaDType> Default for PtxExecutor<D> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PtxExecutor {
+impl<D: CudaDType> PtxExecutor<D> {
     /// Create a new PTX executor, panicking if CUDA initialization fails.
     ///
     /// For fallible initialization, use [`PtxExecutor::try_new`].
@@ -47,10 +48,11 @@ impl PtxExecutor {
             pool: RefCell::new(CudaBufferPool::default()),
             stats: AllocStats::default(),
             ptx_graph: None,
+            dtype: std::marker::PhantomData,
         })
     }
 
-    fn take_buffer(&self, len: usize) -> Result<CudaSlice<f32>> {
+    fn take_buffer(&self, len: usize) -> Result<CudaSlice<D::HostType>> {
         self.pool
             .borrow_mut()
             .take(&self.device.default_stream(), len)
@@ -73,7 +75,7 @@ impl PtxExecutor {
     }
 
     /// Release pinned gradient buffers before the next execution.
-    pub fn release_gradients(&mut self, graph: &TensorGraph<f32, WithGrad>) {
+    pub fn release_gradients(&mut self, graph: &TensorGraph<D::HostType, WithGrad>) {
         for grad_node in graph.gradient_metadata().param_to_grad.values() {
             if let Some(buf) = self.values.remove(grad_node) {
                 self.pool.get_mut().give(buf);
@@ -84,18 +86,15 @@ impl PtxExecutor {
     /// Compile an owned TensorGraph to PTX without cloning during lowering.
     ///
     /// Prefer this over compiling from a reference when you have an owned graph.
-    pub fn compile_owned<G>(&mut self, graph: TensorGraph<f32, G>) -> Result<()> {
-        let tile_graph: TileGraph = graph.into();
+    pub fn compile_owned<G>(&mut self, graph: TensorGraph<D::HostType, G>) -> Result<()> {
+        self.compile(&graph)
+    }
+
+    /// Compile a borrowed tensor graph to PTX.
+    pub fn compile<G>(&mut self, graph: &TensorGraph<D::HostType, G>) -> Result<()> {
+        let tile_graph = TileGraph::from_graph(graph);
         let ptx_graph: PtxGraph = tile_graph.into();
-
-        let mut module = Module::new();
-
-        // Functions already have unique names from PtxGraph conversion
-        for (_node_idx, function) in ptx_graph.graph.node_references() {
-            module.add_function(function.clone());
-        }
-
-        let ptx_src = module.to_string();
+        let ptx_src = ptx_graph.to_ptx();
 
         let cuda_module = self
             .device
@@ -107,18 +106,10 @@ impl PtxExecutor {
         Ok(())
     }
 
-    /// Compile a TensorGraph to PTX via clone (for use with Executor trait).
-    fn compile_via_clone<G>(&mut self, graph: &TensorGraph<f32, G>) -> Result<()>
-    where
-        TensorGraph<f32, G>: Clone,
-    {
-        self.compile_owned(graph.clone())
-    }
-
     /// Get the value of a specific node from the executor's cache after execution
-    pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<Vec<f32>> {
+    pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<Vec<D::HostType>> {
         self.values.get(&node_idx).map(|cuda_slice| {
-            let mut host_vec = vec![0.0f32; cuda_slice.len()];
+            let mut host_vec = vec![D::HostType::default(); cuda_slice.len()];
             self.device
                 .default_stream()
                 .memcpy_dtoh(cuda_slice, &mut host_vec)
@@ -130,9 +121,9 @@ impl PtxExecutor {
     /// Execute a compiled graph with the given inputs
     pub fn execute_compiled<G>(
         &mut self,
-        graph: &TensorGraph<f32, G>,
-        inputs: HashMap<String, Vec<f32>>,
-    ) -> Result<Vec<f32>> {
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+    ) -> Result<Vec<D::HostType>> {
         let module = self
             .module
             .as_ref()
@@ -527,14 +518,14 @@ impl PtxExecutor {
                 }
             };
 
-            let bytes = result.len() * std::mem::size_of::<f32>();
+            let bytes = result.len() * std::mem::size_of::<D::HostType>();
             self.values.insert(*node_idx, result);
             live_bytes += bytes;
             self.stats.record_live(live_bytes);
 
             for &dead in liveness.free_after(pos) {
                 if let Some(value) = self.values.remove(&dead) {
-                    live_bytes -= value.len() * std::mem::size_of::<f32>();
+                    live_bytes -= value.len() * std::mem::size_of::<D::HostType>();
                     self.pool.get_mut().give(value);
                 }
             }
@@ -547,7 +538,7 @@ impl PtxExecutor {
             .values
             .get(last_node_idx)
             .context("Output value not found after execution")?;
-        let mut out_host = vec![0.0f32; out_device.len()];
+        let mut out_host = vec![D::HostType::default(); out_device.len()];
         self.device
             .default_stream()
             .memcpy_dtoh(out_device, &mut out_host)
@@ -558,34 +549,38 @@ impl PtxExecutor {
     /// Compile and execute a TensorGraph in one call
     pub fn compile_and_execute<G>(
         &mut self,
-        graph: &TensorGraph<f32, G>,
-        inputs: HashMap<String, Vec<f32>>,
-    ) -> Result<Vec<f32>>
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+    ) -> Result<Vec<D::HostType>>
     where
-        TensorGraph<f32, G>: Clone,
+        TensorGraph<D::HostType, G>: Clone,
     {
-        self.compile_via_clone(graph)?;
+        self.compile(graph)?;
         self.execute_compiled(graph, inputs)
     }
 }
 
-impl Executor<f32> for PtxExecutor {
+impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
     fn execute<G>(
         &mut self,
-        graph: &TensorGraph<f32, G>,
-        inputs: HashMap<String, Vec<f32>>,
-    ) -> Result<Vec<f32>>
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+    ) -> Result<Vec<D::HostType>>
     where
+        TensorGraph<D::HostType, G>: Clone,
         TensorGraph<f32, G>: Clone,
     {
         // Always recompile for each graph execution
         // This ensures we don't reuse cached modules from different graphs
         self.values.clear();
-        self.compile_owned(graph.clone())?;
+        self.compile(graph)?;
         self.execute_compiled(graph, inputs)
     }
 
-    fn get_gradients(&self, graph: &TensorGraph<f32, WithGrad>) -> HashMap<usize, Vec<f32>> {
+    fn get_gradients(
+        &self,
+        graph: &TensorGraph<D::HostType, WithGrad>,
+    ) -> HashMap<usize, Vec<D::HostType>> {
         let mut result = HashMap::new();
 
         // Iterate through all parameters in the gradient metadata

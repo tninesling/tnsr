@@ -1149,3 +1149,56 @@ impl Executor<f32> for CudaExecutor {
         grads
     }
 }
+
+macro_rules! impl_half_executor {
+    ($dtype:ty) => {
+        impl Executor<$dtype> for CudaExecutor {
+            fn execute<G>(
+                &mut self,
+                graph: &TensorGraph<$dtype, G>,
+                inputs: HashMap<String, Vec<$dtype>>,
+            ) -> Result<Vec<$dtype>>
+            where
+                TensorGraph<$dtype, G>: Clone,
+                TensorGraph<f32, G>: Clone,
+            {
+                // CUDA kernels compute and accumulate in f32. Conversion happens only
+                // at graph boundaries, avoiding repeated half-precision rounding.
+                let graph_f32 = graph.clone().map_dtype(|value| value.to_f32());
+                let inputs_f32 = inputs
+                    .into_iter()
+                    .map(|(name, values)| {
+                        (
+                            name,
+                            values.into_iter().map(|value| value.to_f32()).collect(),
+                        )
+                    })
+                    .collect();
+                let output = <Self as Executor<f32>>::execute(self, &graph_f32, inputs_f32)?;
+                Ok(output.into_iter().map(<$dtype>::from_f32).collect())
+            }
+
+            fn get_gradients(
+                &self,
+                graph: &TensorGraph<$dtype, WithGrad>,
+            ) -> HashMap<usize, Vec<$dtype>> {
+                graph
+                    .gradient_metadata()
+                    .param_to_grad
+                    .iter()
+                    .filter_map(|(param_id, node_idx)| {
+                        self.get_value(*node_idx).map(|values| {
+                            (
+                                *param_id,
+                                values.into_iter().map(<$dtype>::from_f32).collect(),
+                            )
+                        })
+                    })
+                    .collect()
+            }
+        }
+    };
+}
+
+impl_half_executor!(half::f16);
+impl_half_executor!(half::bf16);

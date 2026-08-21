@@ -183,6 +183,23 @@ impl DType {
     }
 }
 
+/// Host scalar types that can be represented by the tile IR.
+pub trait TileDType: crate::tensor::DType + 'static {
+    const TILE_DTYPE: DType;
+}
+
+impl TileDType for f32 {
+    const TILE_DTYPE: DType = DType::F32;
+}
+
+impl TileDType for half::f16 {
+    const TILE_DTYPE: DType = DType::F16;
+}
+
+impl TileDType for half::bf16 {
+    const TILE_DTYPE: DType = DType::BF16;
+}
+
 /// Matrix multiply layout
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]

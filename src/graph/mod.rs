@@ -264,6 +264,98 @@ impl<D, G> TensorGraph<D, G> {
             .collect()
     }
 
+    /// Convert graph-owned scalar data while preserving topology and node indices.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn map_dtype<E>(self, mut convert: impl FnMut(&D) -> E) -> TensorGraph<E, G> {
+        let graph = self.graph.map_owned(
+            |_, node| match node {
+                TensorGraphNode::Constant { data, shape } => TensorGraphNode::Constant {
+                    data: Arc::new(data.iter().map(&mut convert).collect()),
+                    shape,
+                },
+                TensorGraphNode::Input { name, shape } => TensorGraphNode::Input { name, shape },
+                TensorGraphNode::Parameter { id, data, shape } => {
+                    let data = data
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    TensorGraphNode::Parameter {
+                        id,
+                        data: Arc::new(Mutex::new(data.iter().map(&mut convert).collect())),
+                        shape,
+                    }
+                }
+                TensorGraphNode::Unary { op, shape } => TensorGraphNode::Unary { op, shape },
+                #[cfg(feature = "fusion")]
+                TensorGraphNode::FusedUnary { ops, shape } => {
+                    TensorGraphNode::FusedUnary { ops, shape }
+                }
+                TensorGraphNode::Binary { op, shape } => TensorGraphNode::Binary { op, shape },
+                TensorGraphNode::MatMul { shape } => TensorGraphNode::MatMul { shape },
+                TensorGraphNode::Transpose { shape } => TensorGraphNode::Transpose { shape },
+                TensorGraphNode::BroadcastAxis { axis, shape } => {
+                    TensorGraphNode::BroadcastAxis { axis, shape }
+                }
+                TensorGraphNode::ReduceAxis { op, axis, shape } => {
+                    TensorGraphNode::ReduceAxis { op, axis, shape }
+                }
+                TensorGraphNode::Gt { shape } => TensorGraphNode::Gt { shape },
+                TensorGraphNode::Mask { shape } => TensorGraphNode::Mask { shape },
+                TensorGraphNode::Conv2d {
+                    stride,
+                    padding,
+                    shape,
+                } => TensorGraphNode::Conv2d {
+                    stride,
+                    padding,
+                    shape,
+                },
+                TensorGraphNode::ConvTranspose2d {
+                    stride,
+                    padding,
+                    shape,
+                } => TensorGraphNode::ConvTranspose2d {
+                    stride,
+                    padding,
+                    shape,
+                },
+                TensorGraphNode::Conv2dBackwardWeight {
+                    stride,
+                    padding,
+                    shape,
+                } => TensorGraphNode::Conv2dBackwardWeight {
+                    stride,
+                    padding,
+                    shape,
+                },
+                TensorGraphNode::MaxPool2d {
+                    kernel_size,
+                    stride,
+                    shape,
+                } => TensorGraphNode::MaxPool2d {
+                    kernel_size,
+                    stride,
+                    shape,
+                },
+                TensorGraphNode::MaxPool2dBackward {
+                    kernel_size,
+                    stride,
+                    shape,
+                } => TensorGraphNode::MaxPool2dBackward {
+                    kernel_size,
+                    stride,
+                    shape,
+                },
+                TensorGraphNode::Flatten { shape } => TensorGraphNode::Flatten { shape },
+            },
+            |_, weight| weight,
+        );
+
+        TensorGraph {
+            graph,
+            gradients: self.gradients,
+        }
+    }
+
     /// Lower a TensorExpr into the graph, optionally optimizing it first.
     pub fn add_expr(&mut self, expr: &TensorExpr<D>, optimize: bool) -> NodeIndex
     where

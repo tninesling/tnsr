@@ -8,8 +8,10 @@ use criterion::criterion_main;
 use tnsr::Executor;
 use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
-use tnsr::ptx::PtxExecutor;
+use tnsr::ptx::{F32, PtxExecutor as GenericPtxExecutor};
 use tnsr::tensor::{Constant, TensorExpr};
+
+type PtxExecutor = GenericPtxExecutor<F32>;
 
 pub fn benches(c: &mut Criterion) {
     let sizes: [usize; 4] = [32, 256, 512, 1024];

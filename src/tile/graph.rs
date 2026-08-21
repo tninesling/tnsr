@@ -1,5 +1,5 @@
 use super::builder::TileIRBuilder;
-use super::ir::{DType, Dim, Expr, MatMulLayout, ReduceOp, TileIR};
+use super::ir::{DType, Dim, Expr, MatMulLayout, ReduceOp, TileDType, TileIR};
 use crate::graph::{TensorGraph, TensorGraphNode};
 use crate::tensor;
 use petgraph::{Direction, Graph, graph::NodeIndex};
@@ -10,8 +10,14 @@ pub struct TileGraph {
     pub graph: Graph<TileIR, usize>,
 }
 
-impl<G> From<TensorGraph<f32, G>> for TileGraph {
-    fn from(tensor_graph: TensorGraph<f32, G>) -> Self {
+impl<D: TileDType, G> From<TensorGraph<D, G>> for TileGraph {
+    fn from(tensor_graph: TensorGraph<D, G>) -> Self {
+        Self::from_graph(&tensor_graph)
+    }
+}
+
+impl TileGraph {
+    pub fn from_graph<D: TileDType, G>(tensor_graph: &TensorGraph<D, G>) -> Self {
         // Pre-compute input shapes for MatMul, BroadcastAxis, ReduceAxis, and Transpose nodes
         let mut op_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
         for idx in tensor_graph.graph.node_indices() {
@@ -32,7 +38,7 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
         }
 
         Self {
-            graph: tensor_graph.graph.map_owned(
+            graph: tensor_graph.graph.map(
                 |idx, node| {
                     let shape = node.shape().clone();
                     // Get input shapes for operations that need them
@@ -40,29 +46,30 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
                         .get(&idx)
                         .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
                         .unwrap_or_default();
-                    Self::lower_node(node, &shape, &input_shapes)
+                    Self::lower_node(node.clone(), D::TILE_DTYPE, &shape, &input_shapes)
                 },
-                |_, e| e,
+                |_, e| *e,
             ),
         }
     }
-}
 
-impl TileGraph {
     #[allow(dead_code)]
-    fn lower_node(
-        node: TensorGraphNode<f32>,
+    fn lower_node<D: TileDType>(
+        node: TensorGraphNode<D>,
+        dtype: DType,
         shape: &[usize],
         input_shapes: &[&[usize]],
     ) -> TileIR {
         match node {
-            TensorGraphNode::Constant { data, .. } => Self::lower_constant(data, shape),
-            TensorGraphNode::Input { name, .. } => Self::lower_input(name, shape),
-            TensorGraphNode::Parameter { id, data, .. } => Self::lower_parameter(id, data, shape),
-            TensorGraphNode::Unary { op, .. } => Self::lower_unary(op, shape),
+            TensorGraphNode::Constant { data, .. } => Self::lower_constant(dtype, data, shape),
+            TensorGraphNode::Input { name, .. } => Self::lower_input(dtype, name, shape),
+            TensorGraphNode::Parameter { id, data, .. } => {
+                Self::lower_parameter(dtype, id, data, shape)
+            }
+            TensorGraphNode::Unary { op, .. } => Self::lower_unary(dtype, op, shape),
             #[cfg(feature = "fusion")]
-            TensorGraphNode::FusedUnary { ops, .. } => Self::lower_fused_unary(&ops, shape),
-            TensorGraphNode::Binary { op, .. } => Self::lower_binary(op, shape),
+            TensorGraphNode::FusedUnary { ops, .. } => Self::lower_fused_unary(dtype, &ops, shape),
+            TensorGraphNode::Binary { op, .. } => Self::lower_binary(dtype, op, shape),
             TensorGraphNode::MatMul { .. } => {
                 let _m = shape[0];
                 let n = shape[1];
@@ -72,22 +79,22 @@ impl TileGraph {
                 let m_padded = _m.div_ceil(TILE_SIZE) * TILE_SIZE;
                 let n_padded = n.div_ceil(TILE_SIZE) * TILE_SIZE;
                 let k_padded = k.div_ceil(TILE_SIZE) * TILE_SIZE;
-                Self::lower_matmul(m_padded, n_padded, k_padded, false, false)
+                Self::lower_matmul(dtype, m_padded, n_padded, k_padded, false, false)
             }
             TensorGraphNode::Transpose { .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
-                Self::lower_transpose(input_shape, shape)
+                Self::lower_transpose(dtype, input_shape, shape)
             }
             TensorGraphNode::BroadcastAxis { axis, .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
-                Self::lower_broadcast_axis(axis, input_shape, shape)
+                Self::lower_broadcast_axis(dtype, axis, input_shape, shape)
             }
             TensorGraphNode::ReduceAxis { op, axis, .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
-                Self::lower_reduce_axis(op, axis, input_shape, shape)
+                Self::lower_reduce_axis(dtype, op, axis, input_shape, shape)
             }
-            TensorGraphNode::Gt { .. } => Self::lower_gt(shape),
-            TensorGraphNode::Mask { .. } => Self::lower_mask(shape),
+            TensorGraphNode::Gt { .. } => Self::lower_gt(dtype, shape),
+            TensorGraphNode::Mask { .. } => Self::lower_mask(dtype, shape),
             TensorGraphNode::Conv2d { .. }
             | TensorGraphNode::ConvTranspose2d { .. }
             | TensorGraphNode::Conv2dBackwardWeight { .. }
@@ -100,14 +107,21 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_matmul(_m: usize, n: usize, k: usize, transpose_a: bool, transpose_b: bool) -> TileIR {
+    fn lower_matmul(
+        dtype: DType,
+        _m: usize,
+        n: usize,
+        k: usize,
+        transpose_a: bool,
+        transpose_b: bool,
+    ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("matmul");
 
         // Add parameters for input and output matrices
-        builder.add_param("A", DType::F32, true);
-        builder.add_param("B", DType::F32, true);
-        builder.add_param("C", DType::F32, false);
+        builder.add_param("A", dtype, true);
+        builder.add_param("B", dtype, true);
+        builder.add_param("C", dtype, false);
 
         // Tile sizes for shared memory
         let tile_m = 16;
@@ -115,12 +129,13 @@ impl TileGraph {
         let tile_k = 16;
 
         // Allocate shared memory for input tiles
-        let a_smem = builder.alloc_shared(DType::F32, tile_m, tile_k);
-        let b_smem = builder.alloc_shared(DType::F32, tile_k, tile_n);
+        let a_smem = builder.alloc_shared(dtype, tile_m, tile_k);
+        let b_smem = builder.alloc_shared(dtype, tile_k, tile_n);
 
         // Allocate register tiles for computation
-        let a_reg = builder.alloc_register(DType::F32, tile_m, tile_k);
-        let b_reg = builder.alloc_register(DType::F32, tile_k, tile_n);
+        let a_reg = builder.alloc_register(dtype, tile_m, tile_k);
+        let b_reg = builder.alloc_register(dtype, tile_k, tile_n);
+        // Accumulate in f32 for stable half-precision matrix multiplication.
         let c_reg = builder.alloc_register(DType::F32, tile_m, tile_n);
 
         // Initialize accumulator
@@ -200,15 +215,19 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_constant(_data: std::sync::Arc<Vec<f32>>, shape: &[usize]) -> TileIR {
+    fn lower_constant<D: TileDType>(
+        dtype: DType,
+        _data: std::sync::Arc<Vec<D>>,
+        shape: &[usize],
+    ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("constant");
-        builder.add_param("constant_data", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("constant_data", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = shape.iter().product();
-        let tile_const = builder.alloc_register(DType::F32, total_elements, 1);
-        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_const = builder.alloc_register(dtype, total_elements, 1);
+        let tile_out = builder.alloc_register(dtype, total_elements, 1);
 
         builder.load_global_to_shared(tile_const, "constant_data", Expr::Const(0), Expr::Const(0));
         builder.add(tile_out, tile_const, tile_const);
@@ -218,14 +237,14 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_input(name: &'static str, shape: &[usize]) -> TileIR {
+    fn lower_input(dtype: DType, name: &'static str, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel(&format!("input_{}", name));
-        builder.add_param(name, DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param(name, dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = shape.iter().product();
-        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_in = builder.alloc_register(dtype, total_elements, 1);
 
         builder.load_global_to_shared(tile_in, name, Expr::Const(0), Expr::Const(0));
         builder.store("output", tile_in, Expr::Const(0), Expr::Const(0));
@@ -234,18 +253,19 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_parameter(
+    fn lower_parameter<D: TileDType>(
+        dtype: DType,
         _id: usize,
-        _data: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
+        _data: std::sync::Arc<std::sync::Mutex<Vec<D>>>,
         shape: &[usize],
     ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("parameter");
-        builder.add_param("param", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("param", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = shape.iter().product();
-        let tile_param = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_param = builder.alloc_register(dtype, total_elements, 1);
 
         builder.load_global_to_shared(tile_param, "param", Expr::Const(0), Expr::Const(0));
         builder.store("output", tile_param, Expr::Const(0), Expr::Const(0));
@@ -254,7 +274,7 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_unary(op: tensor::UnaryOp, _shape: &[usize]) -> TileIR {
+    fn lower_unary(dtype: DType, op: tensor::UnaryOp, _shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         let kernel_name = match op {
             tensor::UnaryOp::Neg => "neg",
@@ -263,12 +283,12 @@ impl TileGraph {
             tensor::UnaryOp::Relu => "relu",
         };
         builder.start_kernel(kernel_name);
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
 
         // Each thread processes one scalar element
-        let tile_in = builder.alloc_register(DType::F32, 1, 1);
-        let tile_out = builder.alloc_register(DType::F32, 1, 1);
+        let tile_in = builder.alloc_register(dtype, 1, 1);
+        let tile_out = builder.alloc_register(dtype, 1, 1);
 
         // Calculate global thread ID: blockIdx.x * blockDim.x + threadIdx.x
         let global_tid = Expr::Add(
@@ -295,15 +315,15 @@ impl TileGraph {
 
     #[allow(dead_code)]
     #[cfg(feature = "fusion")]
-    fn lower_fused_unary(ops: &[tensor::UnaryOp], _shape: &[usize]) -> TileIR {
+    fn lower_fused_unary(dtype: DType, ops: &[tensor::UnaryOp], _shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("fused_unary");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
 
         // Each thread processes one scalar element
         // Allocate scalar registers (1 element per thread)
-        let tile_in = builder.alloc_register(DType::F32, 1, 1);
+        let tile_in = builder.alloc_register(dtype, 1, 1);
         let mut current_tile = tile_in;
 
         // Calculate global thread ID: blockIdx.x * blockDim.x + threadIdx.x
@@ -319,7 +339,7 @@ impl TileGraph {
 
         // Apply each operation in sequence
         for op in ops.iter() {
-            let next_tile = builder.alloc_register(DType::F32, 1, 1);
+            let next_tile = builder.alloc_register(dtype, 1, 1);
 
             match op {
                 tensor::UnaryOp::Neg => builder.neg(next_tile, current_tile),
@@ -337,7 +357,7 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_binary(op: tensor::BinaryOp, _shape: &[usize]) -> TileIR {
+    fn lower_binary(dtype: DType, op: tensor::BinaryOp, _shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         let kernel_name = match op {
             tensor::BinaryOp::Add => "add",
@@ -346,14 +366,14 @@ impl TileGraph {
             tensor::BinaryOp::Div => "div",
         };
         builder.start_kernel(kernel_name);
-        builder.add_param("a", DType::F32, true);
-        builder.add_param("b", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("a", dtype, true);
+        builder.add_param("b", dtype, true);
+        builder.add_param("output", dtype, false);
 
         // Each thread processes one scalar element
-        let tile_a = builder.alloc_register(DType::F32, 1, 1);
-        let tile_b = builder.alloc_register(DType::F32, 1, 1);
-        let tile_out = builder.alloc_register(DType::F32, 1, 1);
+        let tile_a = builder.alloc_register(dtype, 1, 1);
+        let tile_b = builder.alloc_register(dtype, 1, 1);
+        let tile_out = builder.alloc_register(dtype, 1, 1);
 
         // Calculate global thread ID: blockIdx.x * blockDim.x + threadIdx.x
         let global_tid = Expr::Add(
@@ -380,11 +400,11 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_transpose(input_shape: Vec<usize>, output_shape: &[usize]) -> TileIR {
+    fn lower_transpose(dtype: DType, input_shape: Vec<usize>, output_shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("transpose");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
 
         // For now, just handle the simple case of 2D transpose
         // TODO: generalize to arbitrary dimensional transpose
@@ -408,8 +428,8 @@ impl TileGraph {
         );
 
         let total_elements: usize = output_shape.iter().product();
-        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
-        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_in = builder.alloc_register(dtype, total_elements, 1);
+        let tile_out = builder.alloc_register(dtype, total_elements, 1);
 
         // Don't load here - Transpose will load directly from global memory with transposed addressing
         // Each thread handles one output element
@@ -429,18 +449,19 @@ impl TileGraph {
 
     #[allow(dead_code)]
     fn lower_broadcast_axis(
+        dtype: DType,
         axis: usize,
         input_shape: Vec<usize>,
         output_shape: &[usize],
     ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("broadcast_axis");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = output_shape.iter().product();
-        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
-        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_in = builder.alloc_register(dtype, total_elements, 1);
+        let tile_out = builder.alloc_register(dtype, total_elements, 1);
 
         // Don't load here - BroadcastAxis will load directly from global memory
         // Each thread handles one output element
@@ -455,6 +476,7 @@ impl TileGraph {
 
     #[allow(dead_code)]
     fn lower_reduce_axis(
+        dtype: DType,
         op: tensor::ReduceOp,
         axis: usize,
         input_shape: Vec<usize>,
@@ -462,11 +484,12 @@ impl TileGraph {
     ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("reduce_axis");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = output_shape.iter().product();
-        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_in = builder.alloc_register(dtype, total_elements, 1);
+        // Reductions use an f32 accumulator and narrow only at the output boundary.
         let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
 
         // Don't load here - ReduceAxis will load directly from global memory
@@ -494,17 +517,17 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_gt(shape: &[usize]) -> TileIR {
+    fn lower_gt(dtype: DType, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("gt");
-        builder.add_param("a", DType::F32, true);
-        builder.add_param("b", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("a", dtype, true);
+        builder.add_param("b", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = shape.iter().product();
-        let tile_a = builder.alloc_register(DType::F32, total_elements, 1);
-        let tile_b = builder.alloc_register(DType::F32, total_elements, 1);
-        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_a = builder.alloc_register(dtype, total_elements, 1);
+        let tile_b = builder.alloc_register(dtype, total_elements, 1);
+        let tile_out = builder.alloc_register(dtype, total_elements, 1);
 
         // Each thread processes one element using thread index
         let offset: Expr = Expr::ThreadIdx(Dim::X);
@@ -517,17 +540,17 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_mask(shape: &[usize]) -> TileIR {
+    fn lower_mask(dtype: DType, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("mask");
-        builder.add_param("values", DType::F32, true);
-        builder.add_param("condition", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("values", dtype, true);
+        builder.add_param("condition", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = shape.iter().product();
-        let tile_values = builder.alloc_register(DType::F32, total_elements, 1);
-        let tile_cond = builder.alloc_register(DType::F32, total_elements, 1);
-        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_values = builder.alloc_register(dtype, total_elements, 1);
+        let tile_cond = builder.alloc_register(dtype, total_elements, 1);
+        let tile_out = builder.alloc_register(dtype, total_elements, 1);
 
         // Each thread processes one element using thread index
         let offset: Expr = Expr::ThreadIdx(Dim::X);

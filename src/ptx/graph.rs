@@ -1,23 +1,37 @@
 use std::collections::HashMap;
 
-use super::Function;
 use super::instructions::{Inst, Operand};
 use super::types::{F32, I32, U64};
+use super::{Function, Module};
 use crate::tile::{Expr, TileGraph, TileIR, TileVar};
 use petgraph::Graph;
 
 pub struct PtxGraph {
-    pub graph: Graph<Function<'static>, usize>,
+    pub(crate) graph: Graph<Function<'static>, usize>,
     // Arena is kept alive for the lifetime of PtxGraph
     // All string data referenced by Functions is allocated from this arena
     #[allow(dead_code)]
-    arena: bumpalo::Bump,
+    arena: Box<bumpalo::Bump>,
+}
+
+impl PtxGraph {
+    /// Render this graph as a complete PTX module.
+    pub fn to_ptx(&self) -> String {
+        let mut module = Module::new();
+        for function in self.graph.node_weights() {
+            module.add_function(function.clone());
+        }
+        module.to_string()
+    }
 }
 
 impl From<TileGraph> for PtxGraph {
     fn from(tile_graph: TileGraph) -> Self {
         // Create a single arena for all functions in the graph
-        let arena = bumpalo::Bump::new();
+        // Keep the arena at a stable address. Bump-backed vectors retain a
+        // pointer to the allocator, so moving a stack-allocated Bump here
+        // would invalidate cloned functions.
+        let arena = Box::new(bumpalo::Bump::new());
 
         // We need to convert each TileIR into a Function with arena-allocated strings.
         // This is tricky because we need the arena to outlive the conversion.
@@ -29,7 +43,7 @@ impl From<TileGraph> for PtxGraph {
                 // Get a reference to the arena with 'static lifetime
                 // SAFETY: The arena is stored in PtxGraph and will outlive all Functions
                 let arena_ref: &'static bumpalo::Bump =
-                    unsafe { &*(&arena as *const bumpalo::Bump) };
+                    unsafe { &*(&*arena as *const bumpalo::Bump) };
 
                 tile_ir_to_function(tile_ir, arena_ref, node_idx.index())
             },
@@ -62,6 +76,7 @@ fn tile_ir_to_function<'a>(
         // All parameters are pointers, so they're u64 in PTX
         let ptr = func.add_global_ptr_param(param_name);
         ctx.param_ptrs.insert(param.name.clone(), ptr);
+        ctx.param_dtypes.insert(param.name.clone(), param.dtype);
     }
 
     // Allocate shared memory if needed
@@ -84,10 +99,14 @@ struct LoweringContext<'a> {
     arena: &'a bumpalo::Bump,
     /// Maps TileVar to PTX register operands (for scalar/simple cases)
     tile_to_reg: HashMap<TileVar, Operand<'a, F32>>,
+    /// Storage dtype for every tile. Computation registers are always f32.
+    tile_dtypes: HashMap<TileVar, crate::tile::DType>,
     /// Tracks allocated shared memory base pointers
     shared_mem_ptrs: HashMap<TileVar, Operand<'a, U64>>,
     /// Tracks loaded parameter pointers (global addresses)
     param_ptrs: HashMap<String, Operand<'a, U64>>,
+    /// Storage dtype for global-memory parameters.
+    param_dtypes: HashMap<String, crate::tile::DType>,
     /// Maps loop variable names to their i32 register operands
     loop_vars: HashMap<String, Operand<'a, I32>>,
     /// Current offset into shared memory for allocation
@@ -105,8 +124,10 @@ impl<'a> LoweringContext<'a> {
         Self {
             arena,
             tile_to_reg: HashMap::new(),
+            tile_dtypes: HashMap::new(),
             shared_mem_ptrs: HashMap::new(),
             param_ptrs: HashMap::new(),
+            param_dtypes: HashMap::new(),
             loop_vars: HashMap::new(),
             shared_mem_offset: 0,
             tile_dims: HashMap::new(),
@@ -132,6 +153,106 @@ fn dtype_to_ptx_type(dtype: crate::tile::DType) -> super::types::Type {
         crate::tile::DType::F16 => super::types::Type::F16,
         crate::tile::DType::BF16 => super::types::Type::BF16,
         crate::tile::DType::F32 => super::types::Type::F32,
+    }
+}
+
+fn load_global_as_f32<'a>(
+    func: &mut Function<'a>,
+    dtype: crate::tile::DType,
+    dst: Operand<'a, F32>,
+    addr: Operand<'a, U64>,
+) {
+    match dtype {
+        crate::tile::DType::F32 => func.add_inst(Inst::load_global_scalar_f32(dst, addr)),
+        crate::tile::DType::F16 => {
+            let value = func.add_f16_register();
+            func.add_inst(Inst::LdGlobalF16 {
+                dst: value.clone(),
+                addr,
+            });
+            func.add_inst(Inst::convert_f32_f16(dst, value));
+        }
+        crate::tile::DType::BF16 => {
+            let value = func.add_bf16_register();
+            func.add_inst(Inst::LdGlobalBF16 {
+                dst: value.clone(),
+                addr,
+            });
+            func.add_inst(Inst::convert_f32_bf16(dst, value));
+        }
+    }
+}
+
+fn store_global_from_f32<'a>(
+    func: &mut Function<'a>,
+    dtype: crate::tile::DType,
+    addr: Operand<'a, U64>,
+    src: Operand<'a, F32>,
+) {
+    match dtype {
+        crate::tile::DType::F32 => func.add_inst(Inst::store_global_scalar_f32(addr, src)),
+        crate::tile::DType::F16 => {
+            let value = func.add_f16_register();
+            func.add_inst(Inst::convert_f16_f32(value.clone(), src));
+            func.add_inst(Inst::StGlobalF16 { addr, src: value });
+        }
+        crate::tile::DType::BF16 => {
+            let value = func.add_bf16_register();
+            func.add_inst(Inst::convert_bf16_f32(value.clone(), src));
+            func.add_inst(Inst::StGlobalBF16 { addr, src: value });
+        }
+    }
+}
+
+fn load_shared_as_f32<'a>(
+    func: &mut Function<'a>,
+    dtype: crate::tile::DType,
+    dst: Operand<'a, F32>,
+    addr: Operand<'a, U64>,
+) {
+    match dtype {
+        crate::tile::DType::F32 => func.add_inst(Inst::load_shared_scalar_f32(dst, addr)),
+        crate::tile::DType::F16 => {
+            let value = func.add_f16_register();
+            func.add_inst(Inst::LdSharedF16 {
+                dst: value.clone(),
+                addr,
+            });
+            func.add_inst(Inst::convert_f32_f16(dst, value));
+        }
+        crate::tile::DType::BF16 => {
+            let value = func.add_bf16_register();
+            func.add_inst(Inst::LdSharedBF16 {
+                dst: value.clone(),
+                addr,
+            });
+            func.add_inst(Inst::convert_f32_bf16(dst, value));
+        }
+    }
+}
+
+fn store_shared_from_f32<'a>(
+    func: &mut Function<'a>,
+    dtype: crate::tile::DType,
+    addr: Operand<'a, U64>,
+    src: Operand<'a, F32>,
+) {
+    match dtype {
+        crate::tile::DType::F32 => func.add_inst(Inst::StSharedF32 {
+            addr,
+            src: vec![src],
+            vec: super::instructions::VecWidth::Scalar,
+        }),
+        crate::tile::DType::F16 => {
+            let value = func.add_f16_register();
+            func.add_inst(Inst::convert_f16_f32(value.clone(), src));
+            func.add_inst(Inst::StSharedF16 { addr, src: value });
+        }
+        crate::tile::DType::BF16 => {
+            let value = func.add_bf16_register();
+            func.add_inst(Inst::convert_bf16_f32(value.clone(), src));
+            func.add_inst(Inst::StSharedBF16 { addr, src: value });
+        }
     }
 }
 
@@ -162,6 +283,7 @@ fn lower_stmt<'a>(
         } => {
             // Track tile dimensions
             ctx.tile_dims.insert(*var, (*rows, *cols));
+            ctx.tile_dtypes.insert(*var, *dtype);
 
             use crate::tile::MemorySpace;
             match space {
@@ -203,6 +325,10 @@ fn lower_stmt<'a>(
             row_offset,
             col_offset,
         } => {
+            let dtype = *ctx
+                .param_dtypes
+                .get(src_param)
+                .expect("Parameter dtype not found in context");
             // Load from global memory to register or shared memory
             // Get parameter pointer from cache (already loaded during initialization)
             let param_ptr = ctx
@@ -223,12 +349,12 @@ fn lower_stmt<'a>(
                 col_offset_reg,
             ));
 
-            // Byte offset = element offset * sizeof(f32) = element offset * 4
+            // Byte offset uses the global parameter's storage dtype.
             let byte_offset = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 byte_offset.clone(),
                 elem_offset,
-                Operand::imm_u64(4),
+                Operand::imm_u64(dtype.size_bytes() as u64),
             ));
 
             // Add offset to base pointer
@@ -243,7 +369,7 @@ fn lower_stmt<'a>(
             if let Some(shared_ptr) = ctx.shared_mem_ptrs.get(dest).cloned() {
                 // Destination is shared memory: load to temp register, then store to shared
                 let temp_reg = func.add_f32_register();
-                func.add_inst(Inst::load_global_scalar_f32(temp_reg.clone(), addr));
+                load_global_as_f32(func, dtype, temp_reg.clone(), addr);
 
                 // Calculate offset within shared memory tile: threadIdx.y * cols + threadIdx.x
                 let (_, cols) = ctx.tile_dims.get(dest).expect("Tile dimensions not found");
@@ -277,27 +403,24 @@ fn lower_stmt<'a>(
                 let elem_idx_u64 = func.add_u64_register();
                 func.add_inst(Inst::convert_u64_i32(elem_idx_u64.clone(), elem_idx));
 
-                // byte_offset = elem_idx * 4
+                // Offset within shared memory uses the destination tile dtype.
+                let dest_dtype = *ctx.tile_dtypes.get(dest).expect("Tile dtype not found");
                 let byte_offset = func.add_u64_register();
                 func.add_inst(Inst::mul_u64(
                     byte_offset.clone(),
                     elem_idx_u64,
-                    Operand::imm_u64(4),
+                    Operand::imm_u64(dest_dtype.size_bytes() as u64),
                 ));
 
                 // Add offset to base pointer
                 let final_addr = func.add_u64_register();
                 func.add_inst(Inst::add_u64(final_addr.clone(), shared_ptr, byte_offset));
 
-                func.add_inst(Inst::StSharedF32 {
-                    addr: final_addr,
-                    src: vec![temp_reg],
-                    vec: super::instructions::VecWidth::Scalar,
-                });
+                store_shared_from_f32(func, dest_dtype, final_addr, temp_reg);
             } else {
                 // Destination is register: load directly
                 let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-                func.add_inst(Inst::load_global_scalar_f32(dest_reg, addr));
+                load_global_as_f32(func, dtype, dest_reg, addr);
             }
         }
         Stmt::Store {
@@ -330,12 +453,16 @@ fn lower_stmt<'a>(
                 col_offset_reg,
             ));
 
-            // Byte offset = element offset * sizeof(f32) = element offset * 4
+            let dtype = *ctx
+                .param_dtypes
+                .get(dest_param)
+                .expect("Parameter dtype not found in context");
+            // Byte offset uses the global parameter's storage dtype.
             let byte_offset = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 byte_offset.clone(),
                 elem_offset,
-                Operand::imm_u64(4),
+                Operand::imm_u64(dtype.size_bytes() as u64),
             ));
 
             // Add offset to base pointer
@@ -347,7 +474,7 @@ fn lower_stmt<'a>(
             )));
 
             // Store to global memory
-            func.add_inst(Inst::store_global_scalar_f32(addr, src_reg));
+            store_global_from_f32(func, dtype, addr, src_reg);
         }
         Stmt::LoadSharedToReg { dest, src } => {
             // Track that this register tile is backed by shared memory
@@ -402,6 +529,14 @@ fn lower_stmt<'a>(
                 .get(&b_smem)
                 .expect("Tile dimensions not found for B");
             let tile_k = *a_cols; // K dimension of the tile
+            let a_dtype = *ctx
+                .tile_dtypes
+                .get(&a_smem)
+                .expect("Tile dtype not found for A");
+            let b_dtype = *ctx
+                .tile_dtypes
+                .get(&b_smem)
+                .expect("Tile dtype not found for B");
 
             // Get threadIdx.y and threadIdx.x (this thread's position in the output tile)
             let tid_y = func.add_u32_register();
@@ -422,7 +557,7 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::convert_u64_u32(tid_y_u64.clone(), tid_y.clone()));
             func.add_inst(Inst::convert_u64_u32(tid_x_u64.clone(), tid_x.clone()));
 
-            // Compute A row base offset: threadIdx.y * a_cols * 4 (in bytes)
+            // Compute A row base offset in bytes.
             let a_row_base = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 a_row_base.clone(),
@@ -432,17 +567,17 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::mul_u64(
                 a_row_base.clone(),
                 a_row_base.clone(),
-                Operand::imm_u64(4),
+                Operand::imm_u64(a_dtype.size_bytes() as u64),
             ));
             let a_row_ptr = func.add_u64_register();
             func.add_inst(Inst::add_u64(a_row_ptr.clone(), a_ptr.clone(), a_row_base));
 
-            // Compute B column base offset: threadIdx.x * 4 (in bytes)
+            // Compute B column base offset in bytes.
             let b_col_base = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 b_col_base.clone(),
                 tid_x_u64.clone(),
-                Operand::imm_u64(4),
+                Operand::imm_u64(b_dtype.size_bytes() as u64),
             ));
             let b_col_ptr = func.add_u64_register();
             func.add_inst(Inst::add_u64(b_col_ptr.clone(), b_ptr.clone(), b_col_base));
@@ -496,18 +631,18 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::convert_u64_i32(k_u64.clone(), k_idx.clone()));
 
             // Load A[threadIdx.y][k] from shared memory
-            // Address = a_row_ptr + k * 4
+            // Address = a_row_ptr + k * sizeof(A)
             let k_offset_a = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 k_offset_a.clone(),
                 k_u64.clone(),
-                Operand::imm_u64(4),
+                Operand::imm_u64(a_dtype.size_bytes() as u64),
             ));
             func.add_inst(Inst::add_u64(a_addr.clone(), a_row_ptr.clone(), k_offset_a));
-            func.add_inst(Inst::load_shared_scalar_f32(a_val.clone(), a_addr.clone()));
+            load_shared_as_f32(func, a_dtype, a_val.clone(), a_addr.clone());
 
             // Load B[k][threadIdx.x] from shared memory
-            // Address = b_col_ptr + k * b_cols * 4
+            // Address = b_col_ptr + k * b_cols * sizeof(B)
             let k_offset_b = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 k_offset_b.clone(),
@@ -517,10 +652,10 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::mul_u64(
                 k_offset_b.clone(),
                 k_offset_b.clone(),
-                Operand::imm_u64(4),
+                Operand::imm_u64(b_dtype.size_bytes() as u64),
             ));
             func.add_inst(Inst::add_u64(b_addr.clone(), b_col_ptr.clone(), k_offset_b));
-            func.add_inst(Inst::load_shared_scalar_f32(b_val.clone(), b_addr.clone()));
+            load_shared_as_f32(func, b_dtype, b_val.clone(), b_addr.clone());
 
             // Multiply and accumulate: dest += a_val * b_val
             func.add_inst(Inst::mul_f32(prod.clone(), a_val.clone(), b_val.clone()));
@@ -633,6 +768,10 @@ fn lower_stmt<'a>(
                 .get("input")
                 .expect("Input parameter not found")
                 .clone();
+            let dtype = *ctx
+                .param_dtypes
+                .get("input")
+                .expect("Input parameter dtype not found");
 
             // Get thread index (which output element this thread computes)
             let tid = func.add_u64_register();
@@ -685,13 +824,13 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::mul_u64(
                 byte_offset.clone(),
                 input_offset,
-                Operand::imm_u64(4), // sizeof(f32)
+                Operand::imm_u64(dtype.size_bytes() as u64),
             ));
 
             let input_addr = func.add_u64_register();
             func.add_inst(Inst::add_u64(input_addr.clone(), src_ptr, byte_offset));
 
-            func.add_inst(Inst::load_global_scalar_f32(dest_reg, input_addr));
+            load_global_as_f32(func, dtype, dest_reg, input_addr);
         }
         Stmt::BroadcastAxis {
             dest,
@@ -713,6 +852,10 @@ fn lower_stmt<'a>(
                 .get("input")
                 .expect("Input parameter not found")
                 .clone();
+            let dtype = *ctx
+                .param_dtypes
+                .get("input")
+                .expect("Input parameter dtype not found");
 
             // Get thread index (which output element this thread computes)
             let tid = func.add_u64_register();
@@ -797,14 +940,14 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::mul_u64(
                 byte_offset.clone(),
                 input_offset,
-                Operand::imm_u64(4),
+                Operand::imm_u64(dtype.size_bytes() as u64),
             ));
 
             // Load from input
             let addr = func.add_u64_register();
             func.add_inst(Inst::add_u64(addr.clone(), src_ptr.clone(), byte_offset));
 
-            func.add_inst(Inst::load_global_scalar_f32(dest_reg, addr));
+            load_global_as_f32(func, dtype, dest_reg, addr);
         }
         Stmt::ReduceAxis {
             dest,
@@ -827,6 +970,10 @@ fn lower_stmt<'a>(
                 .get("input")
                 .expect("Input parameter not found")
                 .clone();
+            let dtype = *ctx
+                .param_dtypes
+                .get("input")
+                .expect("Input parameter dtype not found");
             let _dest_ptr = ctx
                 .param_ptrs
                 .get("output")
@@ -922,7 +1069,7 @@ fn lower_stmt<'a>(
                 func.add_inst(Inst::mul_u64(
                     byte_offset.clone(),
                     input_offset,
-                    Operand::imm_u64(4),
+                    Operand::imm_u64(dtype.size_bytes() as u64),
                 ));
 
                 // Load input element
@@ -930,7 +1077,7 @@ fn lower_stmt<'a>(
                 func.add_inst(Inst::add_u64(addr.clone(), src_ptr.clone(), byte_offset));
 
                 let value = func.add_f32_register();
-                func.add_inst(Inst::load_global_scalar_f32(value.clone(), addr));
+                load_global_as_f32(func, dtype, value.clone(), addr);
 
                 // Accumulate based on operation
                 match op {

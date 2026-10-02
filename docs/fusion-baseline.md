@@ -148,3 +148,33 @@ The same run measured warm Tile PTX transformer forward at 379.59-383.06 us
 measured 2.2368-2.3078 ms, 2.6260-2.6708 ms, and 3.2633-3.3733 ms respectively.
 These are improvements over the pre-fusion warm baselines recorded in issue
 #36 and keep compilation within the previously observed range.
+
+## Stage 5c Cooperative Warp Reductions
+
+Stage 5c adds an opt-in `DeterministicTree` reduction policy while retaining
+strict serial accumulation as the default. Eligible axes of at least 32
+elements use one warp per output fiber. Every lane accumulates a strided subset,
+the 32 lane-local partials are combined through shared memory, and lane zero
+evaluates and stores the reduced epilogue. The schedule supports sum, mean, max,
+partial warps, and arbitrary reduction axes. Regions with fused full-shape
+epilogues currently remain serial.
+
+The execution policy and selected schedule are part of compilation identity,
+and schedule-specific launch geometry keeps all cooperative lanes active. The
+PTX model also includes predicate-aware warp shuffle instructions for a later
+tree-reduction refinement; the initial production path deliberately uses the
+shared-memory partial fold validated here.
+
+Measured on 2026-10-01 with the same RTX 4080. These are end-to-end Criterion
+95% confidence intervals:
+
+| Graph | Strict Tile PTX | Cooperative Tile PTX | Midpoint improvement |
+| --- | ---: | ---: | ---: |
+| Reduction chain | 248.23-249.12 us | 159.93-160.84 us | 35.6% |
+| Softmax, `[256, 1024]` | 791.33-802.47 us | 442.21-448.96 us | 43.9% |
+| LayerNorm, `[256, 1024]` | 833.30-837.48 us | 460.19-474.07 us | 43.8% |
+
+Cooperative softmax and LayerNorm now outperform the Stage 5b static-CUDA
+ranges. The next reduction work is to replace the lane-zero partial fold with a
+validated shuffle tree, support cooperative full-shape epilogues, and add a
+multi-warp block schedule for wider or lower-fiber-count reductions.

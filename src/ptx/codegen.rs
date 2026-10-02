@@ -531,6 +531,7 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::MovU64 { dst, src } => write!(f, "mov.u64 {dst}, {src};"),
             Inst::MovF32 { dst, src } => write!(f, "mov.f32 {dst}, {src};"),
             Inst::MovB32 { dst, src } => write!(f, "mov.b32 {dst}, {src};"),
+            Inst::MovF32B32 { dst, src } => write!(f, "mov.b32 {dst}, {src};"),
             Inst::LdGlobalF32 { dst, addr, vec } => match vec {
                 VecWidth::Scalar => write!(f, "ld.global.f32 {}, [{addr}];", dst[0]),
                 VecWidth::V2 => write!(
@@ -585,6 +586,15 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::SetpF32(inst) => write!(f, "{inst}"),
             Inst::SelpF32(inst) => write!(f, "{inst}"),
             Inst::SelpU64(inst) => write!(f, "{inst}"),
+            Inst::ShflSyncDownB32 {
+                dst,
+                predicate,
+                src,
+                offset,
+            } => write!(
+                f,
+                "shfl.sync.down.b32 {dst}|{predicate}, {src}, {offset}, 0x1f, 0xffffffff;"
+            ),
 
             Inst::Bra { condition, target } => write!(f, "@{condition} bra {target};"),
             Inst::BraUni { target } => write!(f, "bra.uni {target};"),

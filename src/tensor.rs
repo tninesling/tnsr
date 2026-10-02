@@ -135,6 +135,16 @@ pub enum ReduceOp {
     Mean,
 }
 
+impl ReduceOp {
+    /// Identity value used to initialize an f32 reduction accumulator.
+    pub const fn identity_f32(self) -> f32 {
+        match self {
+            Self::Sum | Self::Mean => 0.0,
+            Self::Max => f32::NEG_INFINITY,
+        }
+    }
+}
+
 /// A trainable parameter with mutable data updated during optimization.
 #[derive(Clone)]
 pub struct Parameter<D: DType> {

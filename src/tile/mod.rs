@@ -18,5 +18,7 @@ pub use ir::{
     Block, Conv2dGeometry, DType, Dim, Expr, KernelParam, MatMulLayout, MatMulPlan,
     MaxPool2dGeometry, MemorySpace, ReduceOp, Stmt, TileIR, TileVar,
 };
-pub use reduction_region::{ReductionInput, ReductionInputDomain, ReductionRegion};
+pub use reduction_region::{
+    ReductionInput, ReductionInputDomain, ReductionRegion, ReductionSchedule,
+};
 pub use region::{FusionRegion, RegionInput, RegionOp, RegionOpKind, RegionOutput, RegionValue};

@@ -1,5 +1,5 @@
 use super::graph::PtxGraph;
-use super::plan::{PtxExecutionPlan, PtxPlanAction};
+use super::plan::{PtxExecutionPlan, PtxPlanAction, PtxReductionMode};
 use crate::Executor;
 use crate::alloc::{AllocStats, CudaBufferPool};
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
@@ -13,6 +13,11 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+// This versions the in-memory compilation-key schema, not the crate release.
+// Bump it whenever signature encoding or generated-code-affecting inputs change.
+const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 2;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -49,6 +54,7 @@ pub struct PtxExecutor {
     compile_metrics: PtxCompileMetrics,
     execution_metrics: PtxExecutionMetrics,
     kernel_launches: Cell<usize>,
+    reduction_mode: PtxReductionMode,
 }
 
 impl Default for PtxExecutor {
@@ -65,8 +71,19 @@ impl PtxExecutor {
         Self::try_new().expect("Failed to initialize PTX executor")
     }
 
+    /// Create a PTX executor with an explicit reduction ordering policy.
+    pub fn new_with_reduction_mode(reduction_mode: PtxReductionMode) -> Self {
+        Self::try_new_with_reduction_mode(reduction_mode)
+            .expect("Failed to initialize PTX executor")
+    }
+
     /// Try to create a new PTX executor, returning an error if initialization fails.
     pub fn try_new() -> Result<Self> {
+        Self::try_new_with_reduction_mode(PtxReductionMode::Strict)
+    }
+
+    /// Try to create a PTX executor with an explicit reduction ordering policy.
+    pub fn try_new_with_reduction_mode(reduction_mode: PtxReductionMode) -> Result<Self> {
         let device = CudaContext::new(0).context("Failed to initialize CUDA device 0")?;
         Ok(PtxExecutor {
             device,
@@ -81,6 +98,7 @@ impl PtxExecutor {
             compile_metrics: PtxCompileMetrics::default(),
             execution_metrics: PtxExecutionMetrics::default(),
             kernel_launches: Cell::new(0),
+            reduction_mode,
         })
     }
 
@@ -151,9 +169,14 @@ impl PtxExecutor {
         self.execution_plan.as_deref()
     }
 
+    /// Return the generated PTX module for diagnostics after compilation.
+    pub fn module_source(&self) -> Option<String> {
+        self.ptx_graph.as_ref().map(|graph| graph.module_source())
+    }
+
     /// Describe the current physical PTX execution plan.
     pub fn describe_plan<G>(&self, graph: &TensorGraph<f32, G>) -> Result<String> {
-        let supplied_signature = graph_compilation_signature(graph);
+        let supplied_signature = graph_compilation_signature(graph, self.reduction_mode);
         let compiled_signature = self
             .compilation_signature
             .as_deref()
@@ -193,12 +216,19 @@ impl PtxExecutor {
                         .region_kernel_name(region_id)
                         .context("Missing compiled pointwise region kernel")?
                 ),
-                PtxPlanAction::ReductionRegion(region_id) => format!(
-                    "kernel {}",
-                    ptx_graph
-                        .reduction_region_kernel_name(region_id)
-                        .context("Missing compiled reduction region kernel")?
-                ),
+                PtxPlanAction::ReductionRegion(region_id) => {
+                    let schedule = plan
+                        .reduction_regions()
+                        .get(region_id)
+                        .context("Missing reduction region schedule")?
+                        .schedule;
+                    format!(
+                        "kernel {} schedule={schedule:?}",
+                        ptx_graph
+                            .reduction_region_kernel_name(region_id)
+                            .context("Missing compiled reduction region kernel")?
+                    )
+                }
             };
             writeln!(
                 description,
@@ -252,8 +282,9 @@ impl PtxExecutor {
     pub fn compile_owned<G>(&mut self, graph: TensorGraph<f32, G>) -> Result<()> {
         let started = Instant::now();
         let graph_nodes = graph.graph.node_count();
-        let signature = graph_compilation_signature(&graph);
-        let execution_plan = PtxExecutionPlan::build(&graph)?;
+        let signature = graph_compilation_signature(&graph, self.reduction_mode);
+        let execution_plan =
+            PtxExecutionPlan::build_with_reduction_mode(&graph, self.reduction_mode)?;
         let mut tile_graph: TileGraph = graph.into();
         tile_graph.add_fusion_regions(execution_plan.regions())?;
         tile_graph.add_reduction_regions(execution_plan.reduction_regions())?;
@@ -544,7 +575,15 @@ impl PtxExecutor {
                 launcher.arg(output);
             }
             self.record_kernel_launch();
-            unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+            let config = match region.schedule {
+                crate::tile::ReductionSchedule::Serial => LaunchConfig::for_num_elems(launch_len),
+                crate::tile::ReductionSchedule::Subgroup { width } => LaunchConfig {
+                    grid_dim: (launch_len, 1, 1),
+                    block_dim: (width, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+            };
+            unsafe { launcher.launch(config) }
                 .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
         }
         Ok(step
@@ -563,7 +602,7 @@ impl PtxExecutor {
     ) -> Result<Vec<f32>> {
         self.execution_metrics = PtxExecutionMetrics::default();
         self.kernel_launches.set(0);
-        let supplied_signature = graph_compilation_signature(graph);
+        let supplied_signature = graph_compilation_signature(graph, self.reduction_mode);
         let compiled_signature = self
             .compilation_signature
             .as_deref()
@@ -1540,9 +1579,17 @@ fn signature_str(signature: &mut Vec<u8>, value: &str) {
     signature.extend_from_slice(value.as_bytes());
 }
 
-fn graph_compilation_signature<G>(graph: &TensorGraph<f32, G>) -> Vec<u8> {
+fn graph_compilation_signature<G>(
+    graph: &TensorGraph<f32, G>,
+    reduction_mode: PtxReductionMode,
+) -> Vec<u8> {
     let mut signature = Vec::new();
-    signature.extend_from_slice(b"tnsr-ptx-graph-v1");
+    signature.extend_from_slice(PTX_GRAPH_SIGNATURE_MAGIC);
+    signature.push(PTX_GRAPH_SIGNATURE_VERSION);
+    signature.push(match reduction_mode {
+        PtxReductionMode::Strict => 0,
+        PtxReductionMode::DeterministicTree => 1,
+    });
     signature_usize(&mut signature, graph.graph.node_count());
     for node_index in graph.graph.node_indices() {
         let node = &graph.graph[node_index];
@@ -1706,7 +1753,7 @@ impl Executor<f32> for PtxExecutor {
     where
         TensorGraph<f32, G>: Clone,
     {
-        let signature = graph_compilation_signature(graph);
+        let signature = graph_compilation_signature(graph, self.reduction_mode);
         let needs_compilation = self.module.is_none()
             || self.ptx_graph.is_none()
             || self.compilation_signature.as_deref() != Some(signature.as_slice());

@@ -4,7 +4,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
 use tnsr::nn::{layer_norm, softmax};
-use tnsr::ptx::PtxExecutor;
+use tnsr::ptx::{PtxExecutor, PtxReductionMode};
 use tnsr::tensor::{Parameter, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
 
@@ -78,6 +78,25 @@ fn fusion_benchmarks(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("tile_ptx", name), |benchmark| {
             benchmark.iter(|| ptx.execute_compiled(&graph, HashMap::new()).unwrap())
         });
+
+        if matches!(
+            name,
+            "reduction_chain" | "softmax_reduction_region" | "layer_norm_reduction_region"
+        ) {
+            let mut cooperative =
+                PtxExecutor::new_with_reduction_mode(PtxReductionMode::DeterministicTree);
+            cooperative.compile_owned(graph.clone()).unwrap();
+            group.bench_function(
+                BenchmarkId::new("tile_ptx_cooperative", name),
+                |benchmark| {
+                    benchmark.iter(|| {
+                        cooperative
+                            .execute_compiled(&graph, HashMap::new())
+                            .unwrap()
+                    })
+                },
+            );
+        }
     }
     group.finish();
 }

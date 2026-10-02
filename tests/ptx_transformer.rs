@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use tnsr::graph::TensorGraph;
 use tnsr::nn::{TransformerBlock, layer_norm, softmax};
-use tnsr::ptx::PtxExecutor;
+use tnsr::ptx::{PtxExecutor, PtxReductionMode};
 use tnsr::tensor::{Parameter, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
 
@@ -21,6 +21,81 @@ fn ptx_executor() -> Option<PtxExecutor> {
             None
         }
         Err(error) => panic!("PtxExecutor initialization failed: {error:#}"),
+    }
+}
+
+fn cooperative_ptx_executor() -> Option<PtxExecutor> {
+    match PtxExecutor::try_new_with_reduction_mode(PtxReductionMode::DeterministicTree) {
+        Ok(executor) => Some(executor),
+        Err(error)
+            if std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1")
+                && error
+                    .to_string()
+                    .starts_with("Failed to initialize CUDA device 0") =>
+        {
+            eprintln!("skipping CUDA test: {error:#}");
+            None
+        }
+        Err(error) => panic!("PtxExecutor initialization failed: {error:#}"),
+    }
+}
+
+#[test]
+fn ptx_cooperative_warp_reduction_matches_cpu() {
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    let values: Vec<_> = (0..2 * 1024)
+        .map(|index| (index as f32 * 0.001).sin())
+        .collect();
+    let input = TensorExpr::constant(values, vec![2, 1024]);
+    let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
+    let expected = execute_cpu(&graph);
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(
+        ptx.execution_plan().unwrap().reduction_regions()[0].schedule,
+        tnsr::tile::ReductionSchedule::Subgroup { width: 32 }
+    );
+    let source = ptx.module_source().unwrap();
+    assert!(source.contains("reduction_partials[128]"));
+    assert!(!source.contains("shfl.sync"));
+    assert!(
+        ptx.describe_plan(&graph)
+            .unwrap()
+            .contains("schedule=Subgroup { width: 32 }")
+    );
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_close(&actual, &expected, 1e-3);
+}
+
+#[test]
+fn ptx_cooperative_reductions_cover_partial_warps_and_middle_axes() {
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    for width in [32, 33, 127] {
+        let values: Vec<_> = (0..2 * width * 3)
+            .map(|index| ((index % 29) as f32 - 14.0) * 0.125)
+            .collect();
+        let input = || TensorExpr::constant(values.clone(), vec![2, width, 3]);
+        let zero = || TensorExpr::constant(vec![0.0; 2 * width * 3], vec![2, width, 3]);
+        let graphs: [TensorGraph<f32>; 3] = [
+            (input() + zero()).reduce_sum(1).into(),
+            (input() + zero()).reduce_mean(1).into(),
+            (input() + zero()).reduce_max(1).into(),
+        ];
+
+        for graph in graphs {
+            let expected = execute_cpu(&graph);
+            ptx.compile_owned(graph.clone()).unwrap();
+            assert!(matches!(
+                ptx.execution_plan().unwrap().reduction_regions()[0].schedule,
+                tnsr::tile::ReductionSchedule::Subgroup { .. }
+            ));
+            let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+            assert_close(&actual, &expected, 1e-5);
+        }
     }
 }
 

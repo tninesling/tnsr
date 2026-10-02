@@ -9,7 +9,7 @@ use petgraph::visit::EdgeRef;
 
 use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::Shape;
-use crate::tile::{DType, FusionRegion, ReductionRegion, VirtualTensor};
+use crate::tile::{DType, FusionRegion, ReductionRegion, ReductionSchedule, VirtualTensor};
 
 const MAX_POINTWISE_REGION_OPS: usize = 64;
 const MAX_VIRTUAL_INDEX_OPS: usize = 64;
@@ -19,6 +19,17 @@ const MAX_NON_IDENTITY_VIRTUAL_FANOUT: usize = 2;
 // workloads; larger axes keep their broadcast-back epilogue parallel until a
 // warp/block reduction schedule is available.
 const MAX_SERIAL_FULL_EPILOGUE_AXIS: usize = 32;
+const CUDA_WARP_SIZE: u32 = 32;
+
+/// Floating-point ordering policy used when planning PTX reductions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PtxReductionMode {
+    /// Preserve the existing increasing-index accumulation order.
+    #[default]
+    Strict,
+    /// Permit a fixed warp reduction tree for eligible regions.
+    DeterministicTree,
+}
 
 /// Physical action used to produce values in a PTX execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,10 +76,18 @@ enum PlanUnit {
 }
 
 impl PtxExecutionPlan {
+    #[cfg(test)]
     pub(crate) fn build<G>(graph: &TensorGraph<f32, G>) -> Result<Self> {
+        Self::build_with_reduction_mode(graph, PtxReductionMode::Strict)
+    }
+
+    pub(crate) fn build_with_reduction_mode<G>(
+        graph: &TensorGraph<f32, G>,
+        reduction_mode: PtxReductionMode,
+    ) -> Result<Self> {
         let order = graph.toposort();
         let graph_output = order.last().copied();
-        let (reduction_regions, claimed) = form_reduction_regions(graph, &order)?;
+        let (reduction_regions, claimed) = form_reduction_regions(graph, &order, reduction_mode)?;
         let regions = form_pointwise_regions(graph, &order, &claimed)?;
         match Self::build_with_regions(graph, &order, regions, reduction_regions, graph_output) {
             Ok(plan) => Ok(plan),
@@ -403,6 +422,7 @@ fn is_pointwise(node: &TensorGraphNode<f32>) -> bool {
 fn form_reduction_regions<G>(
     graph: &TensorGraph<f32, G>,
     order: &[NodeIndex],
+    reduction_mode: PtxReductionMode,
 ) -> Result<(Vec<ReductionRegion>, HashSet<NodeIndex>)> {
     let positions: HashMap<_, _> = order
         .iter()
@@ -540,7 +560,7 @@ fn form_reduction_regions<G>(
             .copied()
             .collect();
         outputs.sort_by_key(|node| positions[node]);
-        let region = ReductionRegion::from_graph(
+        let mut region = ReductionRegion::from_graph(
             graph,
             producer_members,
             anchor,
@@ -549,6 +569,14 @@ fn form_reduction_regions<G>(
             full_epilogue_members,
             outputs,
         )?;
+        if reduction_mode == PtxReductionMode::DeterministicTree
+            && region.input_shape[region.axis] >= CUDA_WARP_SIZE as usize
+            && region.full_epilogue_operations.is_empty()
+        {
+            region.schedule = ReductionSchedule::Subgroup {
+                width: CUDA_WARP_SIZE,
+            };
+        }
         claimed.extend(region.members.iter().copied());
         regions.push(region);
     }
@@ -809,6 +837,30 @@ mod tests {
             plan.steps
                 .iter()
                 .any(|step| { step.operation == "Div" && step.action == PtxPlanAction::Kernel })
+        );
+    }
+
+    #[test]
+    fn cooperative_mode_selects_warp_schedule_without_changing_strict_default() {
+        let input = TensorExpr::constant(vec![0.25; 2 * 64], vec![2, 64]);
+        let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
+
+        let strict = PtxExecutionPlan::build(&graph).unwrap();
+        assert_eq!(
+            strict.reduction_regions[0].schedule,
+            ReductionSchedule::Serial
+        );
+
+        let cooperative = PtxExecutionPlan::build_with_reduction_mode(
+            &graph,
+            PtxReductionMode::DeterministicTree,
+        )
+        .unwrap();
+        assert_eq!(
+            cooperative.reduction_regions[0].schedule,
+            ReductionSchedule::Subgroup {
+                width: CUDA_WARP_SIZE
+            }
         );
     }
 }

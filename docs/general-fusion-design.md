@@ -2,11 +2,19 @@
 
 Tracking issue: [#15 Implement operator fusion](https://github.com/tninesling/tnsr/issues/15)
 
-Status: accepted; implementation in progress.
+Status: accepted; Stages 0-4 and Stage 5b are complete. Stage 5 parallel
+reduction scheduling is next.
 
-Implemented through Stage 4: PTX execution plans, observability, structural
-access maps, virtual view paths, general same-shape pointwise DAG regions, and
-composed broadcast/reindex loads with materialization costing.
+Implemented through Stage 5b: PTX execution plans, observability, structural
+access maps, virtual view paths, general same-shape pointwise DAG regions,
+composed broadcast/reindex loads, and strict-order single-anchor reduction
+regions with producer, reduced-shape epilogue, and costed broadcast-back
+full-shape epilogue fusion. Stage 5b deliberately uses a strict-order serial
+schedule with one reduction anchor per region. Full-shape serial epilogues are
+limited to axes of at most 32 elements; larger axes keep a parallel pointwise
+epilogue because lost parallelism and producer recomputation outweigh the saved
+launch. Warp, block, and persistent reduction schedules are not implemented
+yet.
 
 Primary reference: [DNNFusion, PLDI 2021](references/dnnfusion-pldi-2021.pdf).
 
@@ -669,10 +677,14 @@ usually virtual or fused, with no regressions on adversarial layouts.
 
 ### Stage 5: Reduction fusion
 
-- Represent parallel/reduction domains and reduction identities.
-- Fuse pointwise producers into reductions and pointwise epilogues out.
-- Add warp/block and persistent reduction schedule families.
-- Enforce numerical-mode reduction ordering.
+- Complete: represent parallel/reduction domains and reduction identities.
+- Complete through Stage 5b: fuse pointwise producers, reduced-shape
+  epilogues, and cost-effective broadcast-back full-shape epilogues around one
+  reduction anchor.
+- Next: add warp/block and persistent reduction schedule families and select
+  among them using reduction extent and target resource limits.
+- Preserve the serial schedule for strict numerical ordering; require an
+  explicit numerical policy before selecting reassociating tree reductions.
 
 Acceptance: softmax components, LayerNorm/RMSNorm statistics, and reduction
 gradients match references and improve launch/global-byte metrics.

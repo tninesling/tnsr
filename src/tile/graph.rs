@@ -1,20 +1,24 @@
-#[cfg(feature = "cuda")]
-use super::FusionRegion;
 use super::builder::TileIRBuilder;
 use super::ir::{
     Conv2dGeometry, DType, Dim, Expr, MatMulLayout, MatMulPlan, MatrixLayout, MaxPool2dGeometry,
     ReduceOp, TileIR,
 };
+#[cfg(feature = "cuda")]
+use super::{FusionRegion, ReductionRegion};
 use crate::graph::{TensorGraph, TensorGraphNode};
 use crate::tensor;
 use petgraph::{Graph, graph::NodeIndex};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(feature = "cuda")]
+use std::collections::HashSet;
 
 #[allow(dead_code)]
 pub struct TileGraph {
     pub graph: Graph<TileIR, usize>,
     #[cfg(feature = "cuda")]
     pub(crate) region_kernels: Vec<TileRegionKernel>,
+    #[cfg(feature = "cuda")]
+    pub(crate) reduction_region_kernels: Vec<TileRegionKernel>,
     #[cfg(feature = "cuda")]
     pub(crate) physical_nodes: Option<HashSet<NodeIndex>>,
 }
@@ -117,6 +121,8 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
             #[cfg(feature = "cuda")]
             region_kernels: Vec::new(),
             #[cfg(feature = "cuda")]
+            reduction_region_kernels: Vec::new(),
+            #[cfg(feature = "cuda")]
             physical_nodes: None,
         }
     }
@@ -126,6 +132,24 @@ impl TileGraph {
     #[cfg(feature = "cuda")]
     pub(crate) fn add_fusion_regions(&mut self, regions: &[FusionRegion]) -> anyhow::Result<()> {
         self.region_kernels = regions
+            .iter()
+            .enumerate()
+            .map(|(region_id, region)| {
+                Ok(TileRegionKernel {
+                    region_id,
+                    ir: region.lower_to_tile_ir(region_id)?,
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn add_reduction_regions(
+        &mut self,
+        regions: &[ReductionRegion],
+    ) -> anyhow::Result<()> {
+        self.reduction_region_kernels = regions
             .iter()
             .enumerate()
             .map(|(region_id, region)| {

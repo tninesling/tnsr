@@ -83,3 +83,68 @@ measured 408.60-410.08 us versus 411.85-414.12 us for static CUDA; its
 non-coalesced source access largely offsets the removed materialization. A
 repeat pointwise-diamond run measured 311.16-313.10 us, showing no regression
 for identity access maps.
+
+- Stage 5a adds strict-order `ReductionRegion` kernels. One thread owns each
+  output fiber, evaluates full-shape producer SSA in an increasing-index runtime
+  loop, accumulates sum/mean/max without reassociation, and evaluates
+  reduced-shape epilogues before storing. Escaping producer values may be stored
+  during the loop as additional full-shape outputs. This supports arbitrary
+  reduction axes while preserving the existing PTX serial reduction order.
+
+The `relu -> exp -> sum -> log` reduction benchmark now executes as one kernel
+at 257.83-258.81 us, compared with Stage 4's 263.64-265.04 us. At the Stage 5a
+boundary, the stable-softmax graph used the reduction region for shifted
+exponential plus sum and measured 843.62-845.63 us; broadcast-back epilogue
+fusion was added in Stage 5b.
+
+- Stage 5b contracts compatible reduction-result broadcasts and evaluates
+  full-shape epilogues in a second per-fiber loop with pure producer
+  recomputation. This reduces small-width softmax to two kernels and supports a
+  complete one-kernel RMS-like normalization. LayerNorm's variance reduction,
+  inverse-standard-deviation chain, broadcast, and affine output are one region;
+  its first mean remains separate.
+- The serial full-epilogue schedule is limited to reduction axes of at most 32
+  elements because one thread performs both per-fiber loops; beyond that width,
+  recomputation and lost parallelism can cost more than the eliminated launch
+  and materialization. Larger axes therefore retain a parallel pointwise
+  epilogue. Non-identity virtual inputs to large serial reductions are
+  materialized to avoid repeated index decoding inside the reduction loop.
+
+At width 1024, the guarded softmax path measured 838.48-839.03 us and LayerNorm
+measured 1.2379-1.2451 ms. An unguarded serial full epilogue measured about
+2.005 ms for softmax and 7.44 ms for LayerNorm, demonstrating why launch-count
+reduction is not sufficient as a profitability criterion. Parallel warp/block
+reduction schedules are the next reduction milestone.
+
+Stage 5b is complete within its intended scope. Its reduction regions have one
+anchor and preserve strict serial accumulation order; they do not yet provide
+warp-, block-, or persistent-reduction schedules. The next Stage 5 work is to
+add those cooperative schedules, select them by reduction extent and target
+limits, and keep the serial schedule available when numerical ordering requires
+it.
+
+## Stage 5b Landing Validation
+
+Measured on 2026-10-01 with an NVIDIA GeForce RTX 4080 and driver 580.178.04.
+Criterion reports 95% confidence intervals.
+
+| Graph | Static CUDA | Tile PTX |
+| --- | ---: | ---: |
+| Pointwise diamond | 321.50-329.04 us | 307.58-311.11 us |
+| Reduction chain | 264.42-266.84 us | 252.25-253.69 us |
+| Bias broadcast region | 349.84-363.17 us | 321.91-323.07 us |
+| Permutation region | 402.72-405.46 us | 397.12-397.82 us |
+| Softmax, `[256, 1024]` | 536.51-538.98 us | 805.81-810.08 us |
+| LayerNorm, `[256, 1024]` | 716.52-723.71 us | 842.54-848.18 us |
+
+The pointwise, view, and reduction-chain paths show no regression. The
+width-1024 normalization cases remain slower than static CUDA because the Tile
+PTX reduction itself is serial per output fiber; the Stage 5b guard prevents an
+additional serial full-epilogue regression but does not replace the need for a
+cooperative reduction schedule.
+
+The same run measured warm Tile PTX transformer forward at 379.59-383.06 us
+(tiny), 391.78-395.76 us (small), and 565.89-567.20 us (medium). Cold compile/JIT
+measured 2.2368-2.3078 ms, 2.6260-2.6708 ms, and 3.2633-3.3733 ms respectively.
+These are improvements over the pre-fusion warm baselines recorded in issue
+#36 and keep compilation within the previously observed range.

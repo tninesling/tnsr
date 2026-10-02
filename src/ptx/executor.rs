@@ -193,6 +193,12 @@ impl PtxExecutor {
                         .region_kernel_name(region_id)
                         .context("Missing compiled pointwise region kernel")?
                 ),
+                PtxPlanAction::ReductionRegion(region_id) => format!(
+                    "kernel {}",
+                    ptx_graph
+                        .reduction_region_kernel_name(region_id)
+                        .context("Missing compiled reduction region kernel")?
+                ),
             };
             writeln!(
                 description,
@@ -250,6 +256,7 @@ impl PtxExecutor {
         let execution_plan = PtxExecutionPlan::build(&graph)?;
         let mut tile_graph: TileGraph = graph.into();
         tile_graph.add_fusion_regions(execution_plan.regions())?;
+        tile_graph.add_reduction_regions(execution_plan.reduction_regions())?;
         tile_graph.set_physical_nodes(
             execution_plan
                 .steps()
@@ -265,7 +272,9 @@ impl PtxExecutor {
             .filter(|step| {
                 matches!(
                     step.action,
-                    PtxPlanAction::Kernel | PtxPlanAction::PointwiseRegion(_)
+                    PtxPlanAction::Kernel
+                        | PtxPlanAction::PointwiseRegion(_)
+                        | PtxPlanAction::ReductionRegion(_)
                 )
             })
             .count();
@@ -308,11 +317,7 @@ impl PtxExecutor {
                 .ok()?;
             let plan = self.execution_plan.as_ref()?;
             let view = plan.virtual_value(node_idx)?;
-            let source_shape = &plan
-                .steps()
-                .iter()
-                .find(|source| source.outputs.contains(&view.source))?
-                .shape;
+            let source_shape = plan.value_shape(view.source)?;
             materialize_host_view(storage, view, source_shape).ok()
         })
     }
@@ -459,6 +464,97 @@ impl PtxExecutor {
             .collect())
     }
 
+    fn execute_reduction_region(
+        &self,
+        module: &Arc<CudaModule>,
+        ptx_graph: &PtxGraph,
+        region_id: usize,
+        step: &super::plan::PtxPlanStep,
+    ) -> Result<Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<f32>>)>> {
+        let kernel_name = ptx_graph
+            .reduction_region_kernel_name(region_id)
+            .context("Missing compiled reduction region kernel")?;
+        let region = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.reduction_regions().get(region_id))
+            .context("Reduction region metadata is unavailable")?;
+        anyhow::ensure!(
+            step.outputs
+                == region
+                    .outputs
+                    .iter()
+                    .map(|output| output.node)
+                    .collect::<Vec<_>>(),
+            "Reduction region output bindings do not match the execution plan"
+        );
+        anyhow::ensure!(
+            step.output_shapes == region.output_shapes,
+            "Reduction region output shapes do not match the execution plan"
+        );
+        anyhow::ensure!(
+            step.shape == region.output_shape,
+            "Reduction region launch shape does not match the execution plan"
+        );
+        let input_values: Vec<_> = step
+            .inputs
+            .iter()
+            .map(|input| {
+                self.values.get(input).cloned().with_context(|| {
+                    format!(
+                        "Reduction region input node {} is unavailable",
+                        input.index()
+                    )
+                })
+            })
+            .collect::<Result<_>>()?;
+        anyhow::ensure!(
+            region.inputs.len() == input_values.len(),
+            "Reduction region input binding count mismatch"
+        );
+        for (input, descriptor) in input_values.iter().zip(&region.inputs) {
+            let expected =
+                checked_element_count(&descriptor.source_shape, "Reduction region input storage")?;
+            anyhow::ensure!(
+                input.len() == expected,
+                "Reduction region input length {} does not match storage length {expected}",
+                input.len(),
+            );
+        }
+        let len = checked_element_count(&step.shape, "Reduction region")?;
+        anyhow::ensure!(
+            step.output_shapes.len() == step.outputs.len(),
+            "Reduction region output shape binding count mismatch"
+        );
+        let mut outputs = Vec::with_capacity(step.outputs.len());
+        for shape in &step.output_shapes {
+            outputs
+                .push(self.take_buffer(checked_element_count(shape, "Reduction region output")?)?);
+        }
+        if len != 0 {
+            let launch_len = u32::try_from(len)
+                .context("Reduction region output is too large for a CUDA launch")?;
+            let function = module.load_function(kernel_name)?;
+            let stream = self.device.default_stream();
+            let mut launcher = stream.launch_builder(&function);
+            for input in &input_values {
+                launcher.arg(input.as_ref());
+            }
+            for output in &mut outputs {
+                launcher.arg(output);
+            }
+            self.record_kernel_launch();
+            unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+                .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
+        }
+        Ok(step
+            .outputs
+            .iter()
+            .copied()
+            .zip(outputs.into_iter().map(Arc::new))
+            .collect())
+    }
+
     /// Execute a compiled graph with the given inputs
     pub fn execute_compiled<G>(
         &mut self,
@@ -505,6 +601,27 @@ impl PtxExecutor {
             if let PtxPlanAction::PointwiseRegion(region_id) = plan_step.action {
                 let region_outputs =
                     self.execute_pointwise_region(module, ptx_graph, region_id, plan_step)?;
+                for (output_node, output) in region_outputs {
+                    let bytes = output.len() * std::mem::size_of::<f32>();
+                    self.execution_metrics.materialized_values += 1;
+                    self.execution_metrics.materialized_bytes += bytes;
+                    if output_node != graph_output {
+                        self.execution_metrics.intermediate_materialized_bytes += bytes;
+                    }
+                    self.values.insert(output_node, output);
+                    live_bytes += bytes;
+                }
+                self.stats.record_live(live_bytes);
+                for &dead in &plan_step.release_after {
+                    if let Some(value) = self.values.remove(&dead) {
+                        live_bytes -= self.recycle_value(value);
+                    }
+                }
+                continue;
+            }
+            if let PtxPlanAction::ReductionRegion(region_id) = plan_step.action {
+                let region_outputs =
+                    self.execute_reduction_region(module, ptx_graph, region_id, plan_step)?;
                 for (output_node, output) in region_outputs {
                     let bytes = output.len() * std::mem::size_of::<f32>();
                     self.execution_metrics.materialized_values += 1;
@@ -1312,11 +1429,11 @@ impl PtxExecutor {
             .as_ref()
             .and_then(|plan| plan.virtual_value(graph_output))
             .context("Graph output has no virtual value")?;
-        let source_shape = &plan_steps
-            .iter()
-            .find(|step| step.outputs.contains(&output_view.source))
-            .context("Virtual output source is absent from the execution plan")?
-            .shape;
+        let source_shape = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.value_shape(output_view.source))
+            .context("Virtual output source is absent from the execution plan")?;
         materialize_host_view(storage_host, output_view, source_shape)
     }
 

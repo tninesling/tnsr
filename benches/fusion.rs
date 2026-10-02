@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
+use tnsr::nn::{layer_norm, softmax};
 use tnsr::ptx::PtxExecutor;
 use tnsr::tensor::{Parameter, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
@@ -39,6 +40,18 @@ fn permutation_region() -> TensorGraph<f32> {
         .into()
 }
 
+fn softmax_reduction_region() -> TensorGraph<f32> {
+    let input = Parameter::new(vec![0.25; 256 * 1024], vec![256, 1024]);
+    softmax(TensorExpr::from(input), 1).into()
+}
+
+fn layer_norm_reduction_region() -> TensorGraph<f32> {
+    let input = Parameter::new(vec![0.25; 256 * 1024], vec![256, 1024]);
+    let weight = Parameter::new(vec![1.0; 1024], vec![1024]);
+    let bias = Parameter::new(vec![0.0; 1024], vec![1024]);
+    layer_norm(input, 1, weight, bias, 1e-5).into()
+}
+
 fn fusion_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("fusion_baseline");
     group.sample_size(10);
@@ -47,6 +60,8 @@ fn fusion_benchmarks(c: &mut Criterion) {
         ("reduction_chain", reduction_chain()),
         ("bias_broadcast_region", bias_broadcast_region()),
         ("permutation_region", permutation_region()),
+        ("softmax_reduction_region", softmax_reduction_region()),
+        ("layer_norm_reduction_region", layer_norm_reduction_region()),
     ] {
         let mut cpu = SimpleExecutor::new();
         group.bench_function(BenchmarkId::new("cpu", name), |benchmark| {

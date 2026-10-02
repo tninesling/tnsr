@@ -9,11 +9,16 @@ use petgraph::visit::EdgeRef;
 
 use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::Shape;
-use crate::tile::{DType, FusionRegion, VirtualTensor};
+use crate::tile::{DType, FusionRegion, ReductionRegion, VirtualTensor};
 
 const MAX_POINTWISE_REGION_OPS: usize = 64;
 const MAX_VIRTUAL_INDEX_OPS: usize = 64;
 const MAX_NON_IDENTITY_VIRTUAL_FANOUT: usize = 2;
+// A full-shape epilogue is evaluated serially by each output-fiber thread.
+// Recomputing more than one warp of elements this way regresses normalization
+// workloads; larger axes keep their broadcast-back epilogue parallel until a
+// warp/block reduction schedule is available.
+const MAX_SERIAL_FULL_EPILOGUE_AXIS: usize = 32;
 
 /// Physical action used to produce values in a PTX execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +28,7 @@ pub enum PtxPlanAction {
     DeviceCopy,
     VirtualView,
     PointwiseRegion(usize),
+    ReductionRegion(usize),
 }
 
 /// One physical step in a PTX execution plan.
@@ -33,6 +39,7 @@ pub struct PtxPlanStep {
     pub members: Vec<NodeIndex>,
     pub inputs: Vec<NodeIndex>,
     pub outputs: Vec<NodeIndex>,
+    pub output_shapes: Vec<Shape>,
     pub operation: &'static str,
     pub shape: Shape,
     pub action: PtxPlanAction,
@@ -46,6 +53,7 @@ pub struct PtxPlanStep {
 pub struct PtxExecutionPlan {
     steps: Vec<PtxPlanStep>,
     regions: Vec<FusionRegion>,
+    reduction_regions: Vec<ReductionRegion>,
     graph_output: Option<NodeIndex>,
 }
 
@@ -53,21 +61,23 @@ pub struct PtxExecutionPlan {
 enum PlanUnit {
     Node(NodeIndex),
     Region(usize),
+    ReductionRegion(usize),
 }
 
 impl PtxExecutionPlan {
     pub(crate) fn build<G>(graph: &TensorGraph<f32, G>) -> Result<Self> {
         let order = graph.toposort();
         let graph_output = order.last().copied();
-        let regions = form_pointwise_regions(graph, &order)?;
-        match Self::build_with_regions(graph, &order, regions, graph_output) {
+        let (reduction_regions, claimed) = form_reduction_regions(graph, &order)?;
+        let regions = form_pointwise_regions(graph, &order, &claimed)?;
+        match Self::build_with_regions(graph, &order, regions, reduction_regions, graph_output) {
             Ok(plan) => Ok(plan),
             Err(error)
                 if error
                     .to_string()
                     .contains("fusion plan contraction contains a cycle") =>
             {
-                Self::build_with_regions(graph, &order, Vec::new(), graph_output)
+                Self::build_with_regions(graph, &order, Vec::new(), Vec::new(), graph_output)
             }
             Err(error) => Err(error),
         }
@@ -77,23 +87,50 @@ impl PtxExecutionPlan {
         graph: &TensorGraph<f32, G>,
         order: &[NodeIndex],
         mut regions: Vec<FusionRegion>,
+        mut reduction_regions: Vec<ReductionRegion>,
         graph_output: Option<NodeIndex>,
     ) -> Result<Self> {
         let mut node_to_region = HashMap::new();
         for (region_id, region) in regions.iter().enumerate() {
             for &member in &region.members {
-                node_to_region.insert(member, region_id);
+                anyhow::ensure!(
+                    node_to_region.insert(member, region_id).is_none(),
+                    "pointwise fusion regions overlap at node {}",
+                    member.index()
+                );
+            }
+        }
+        let mut node_to_reduction_region = HashMap::new();
+        for (region_id, region) in reduction_regions.iter().enumerate() {
+            for &member in &region.members {
+                anyhow::ensure!(
+                    !node_to_region.contains_key(&member),
+                    "pointwise and reduction fusion regions overlap at node {}",
+                    member.index()
+                );
+                anyhow::ensure!(
+                    node_to_reduction_region.insert(member, region_id).is_none(),
+                    "reduction fusion regions overlap at node {}",
+                    member.index()
+                );
             }
         }
 
         let mut units = Vec::new();
         let mut region_units = HashMap::new();
+        let mut reduction_region_units = HashMap::new();
         let mut node_units = HashMap::new();
         for &node in order {
             if let Some(&region_id) = node_to_region.get(&node) {
                 region_units.entry(region_id).or_insert_with(|| {
                     let unit = units.len();
                     units.push(PlanUnit::Region(region_id));
+                    unit
+                });
+            } else if let Some(&region_id) = node_to_reduction_region.get(&node) {
+                reduction_region_units.entry(region_id).or_insert_with(|| {
+                    let unit = units.len();
+                    units.push(PlanUnit::ReductionRegion(region_id));
                     unit
                 });
             } else {
@@ -104,10 +141,13 @@ impl PtxExecutionPlan {
         }
 
         let unit_for = |node: NodeIndex| -> usize {
-            node_to_region
-                .get(&node)
-                .map(|region| region_units[region])
-                .unwrap_or_else(|| node_units[&node])
+            if let Some(region) = node_to_region.get(&node) {
+                region_units[region]
+            } else if let Some(region) = node_to_reduction_region.get(&node) {
+                reduction_region_units[region]
+            } else {
+                node_units[&node]
+            }
         };
         let mut quotient = Graph::<usize, ()>::new();
         let quotient_nodes: Vec<_> = (0..units.len())
@@ -124,7 +164,8 @@ impl PtxExecutionPlan {
         let physical_order = toposort(&quotient, None)
             .map_err(|_| anyhow::anyhow!("fusion plan contraction contains a cycle"))?;
 
-        let virtual_view_path = virtual_view_paths(graph, order, &node_to_region);
+        let virtual_view_path =
+            virtual_view_paths(graph, order, &node_to_region, &node_to_reduction_region);
         let mut virtual_values: HashMap<NodeIndex, VirtualTensor> = HashMap::new();
         let mut steps = Vec::with_capacity(units.len());
         for unit_index in physical_order.into_iter().map(|node| quotient[node]) {
@@ -162,9 +203,64 @@ impl PtxExecutionPlan {
                             .map(|input| input.tensor.source)
                             .collect(),
                         outputs,
+                        output_shapes: region
+                            .outputs
+                            .iter()
+                            .map(|_| region.shape.clone())
+                            .collect(),
                         operation: "PointwiseRegion",
                         shape: region.shape.clone(),
                         action: PtxPlanAction::PointwiseRegion(region_id),
+                        materialize: true,
+                        release_after: Vec::new(),
+                        virtual_outputs,
+                    });
+                }
+                PlanUnit::ReductionRegion(region_id) => {
+                    let region = &mut reduction_regions[region_id];
+                    anyhow::ensure!(
+                        region.outputs.len() == region.output_shapes.len(),
+                        "reduction region {region_id} output metadata is inconsistent"
+                    );
+                    for input in &mut region.inputs {
+                        let tensor =
+                            virtual_values.get(&input.node).cloned().unwrap_or_else(|| {
+                                VirtualTensor::identity(
+                                    input.node,
+                                    graph[input.node].shape().clone(),
+                                    DType::F32,
+                                )
+                            });
+                        input.source_shape = graph[tensor.source].shape().clone();
+                        input.tensor = tensor;
+                    }
+                    let outputs: Vec<_> = region.outputs.iter().map(|output| output.node).collect();
+                    let virtual_outputs: Vec<_> = outputs
+                        .iter()
+                        .map(|&output| {
+                            VirtualTensor::identity(
+                                output,
+                                graph[output].shape().clone(),
+                                DType::F32,
+                            )
+                        })
+                        .collect();
+                    for output in &virtual_outputs {
+                        virtual_values.insert(output.source, output.clone());
+                    }
+                    steps.push(PtxPlanStep {
+                        node: *outputs.last().context("reduction region has no outputs")?,
+                        members: region.members.clone(),
+                        inputs: region
+                            .inputs
+                            .iter()
+                            .map(|input| input.tensor.source)
+                            .collect(),
+                        outputs,
+                        output_shapes: region.output_shapes.clone(),
+                        operation: "ReductionRegion",
+                        shape: region.output_shape.clone(),
+                        action: PtxPlanAction::ReductionRegion(region_id),
                         materialize: true,
                         release_after: Vec::new(),
                         virtual_outputs,
@@ -210,9 +306,19 @@ impl PtxExecutionPlan {
                     } else {
                         consumer_regions.len()
                     };
+                    let expensive_reduction_access = graph
+                        .graph
+                        .neighbors_directed(node_index, Direction::Outgoing)
+                        .filter_map(|consumer| node_to_reduction_region.get(&consumer))
+                        .any(|&region_id| {
+                            let region = &reduction_regions[region_id];
+                            region.input_shape[region.axis] > MAX_SERIAL_FULL_EPILOGUE_AXIS
+                                && !view_output.access.is_identity()
+                        });
                     if action == PtxPlanAction::VirtualView
                         && consumer_count != 0
-                        && (view_output.access.operation_count() > MAX_VIRTUAL_INDEX_OPS
+                        && (expensive_reduction_access
+                            || view_output.access.operation_count() > MAX_VIRTUAL_INDEX_OPS
                             || (!view_output.access.is_identity()
                                 && consumer_count > MAX_NON_IDENTITY_VIRTUAL_FANOUT))
                     {
@@ -229,6 +335,7 @@ impl PtxExecutionPlan {
                         members: vec![node_index],
                         inputs,
                         outputs: vec![node_index],
+                        output_shapes: vec![node.shape().clone()],
                         operation: node.name(),
                         shape: node.shape().clone(),
                         action,
@@ -243,6 +350,7 @@ impl PtxExecutionPlan {
         Ok(Self {
             steps,
             regions,
+            reduction_regions,
             graph_output,
         })
     }
@@ -253,6 +361,10 @@ impl PtxExecutionPlan {
 
     pub fn regions(&self) -> &[FusionRegion] {
         &self.regions
+    }
+
+    pub fn reduction_regions(&self) -> &[ReductionRegion] {
+        &self.reduction_regions
     }
 
     pub fn graph_output(&self) -> Option<NodeIndex> {
@@ -267,6 +379,15 @@ impl PtxExecutionPlan {
                 .map(|position| &step.virtual_outputs[position])
         })
     }
+
+    pub fn value_shape(&self, node: NodeIndex) -> Option<&Shape> {
+        self.steps.iter().find_map(|step| {
+            step.outputs
+                .iter()
+                .position(|&output| output == node)
+                .map(|position| &step.output_shapes[position])
+        })
+    }
 }
 
 fn is_pointwise(node: &TensorGraphNode<f32>) -> bool {
@@ -279,13 +400,171 @@ fn is_pointwise(node: &TensorGraphNode<f32>) -> bool {
     )
 }
 
+fn form_reduction_regions<G>(
+    graph: &TensorGraph<f32, G>,
+    order: &[NodeIndex],
+) -> Result<(Vec<ReductionRegion>, HashSet<NodeIndex>)> {
+    let positions: HashMap<_, _> = order
+        .iter()
+        .enumerate()
+        .map(|(position, &node)| (node, position))
+        .collect();
+    let mut regions = Vec::new();
+    let mut claimed = HashSet::new();
+    for &anchor in order.iter().rev() {
+        let output_shape = match &graph[anchor] {
+            TensorGraphNode::ReduceAxis { shape, .. } if !claimed.contains(&anchor) => shape,
+            _ => continue,
+        };
+        let anchor_inputs = graph.inputs(anchor);
+        if anchor_inputs.len() != 1 {
+            continue;
+        }
+        let input_shape = graph[anchor_inputs[0]].shape();
+
+        let mut producer_set = HashSet::new();
+        let mut producer_stack = vec![anchor_inputs[0]];
+        while let Some(node) = producer_stack.pop() {
+            if claimed.contains(&node)
+                || !is_pointwise(&graph[node])
+                || graph[node].shape() != input_shape
+                || !producer_set.insert(node)
+            {
+                continue;
+            }
+            producer_stack.extend(graph.inputs(node));
+        }
+        let mut producer_members: Vec<_> = producer_set.iter().copied().collect();
+        producer_members.sort_by_key(|node| positions[node]);
+        let producer_escapes = producer_set.iter().any(|&member| {
+            graph
+                .graph
+                .neighbors_directed(member, Direction::Outgoing)
+                .any(|consumer| consumer != anchor && !producer_set.contains(&consumer))
+        });
+
+        let mut epilogue_set = HashSet::new();
+        let mut epilogue_stack: Vec<_> = graph
+            .graph
+            .neighbors_directed(anchor, Direction::Outgoing)
+            .collect();
+        while let Some(node) = epilogue_stack.pop() {
+            if claimed.contains(&node)
+                || !is_pointwise(&graph[node])
+                || graph[node].shape() != output_shape
+                || !epilogue_set.insert(node)
+            {
+                continue;
+            }
+            epilogue_stack.extend(graph.graph.neighbors_directed(node, Direction::Outgoing));
+        }
+        if producer_escapes {
+            epilogue_set.clear();
+        }
+        let mut epilogue_members: Vec<_> = epilogue_set.iter().copied().collect();
+        epilogue_members.sort_by_key(|node| positions[node]);
+
+        let mut broadcast_members = Vec::new();
+        let mut full_epilogue_set = HashSet::new();
+        if input_shape
+            .get(match &graph[anchor] {
+                TensorGraphNode::ReduceAxis { axis, .. } => *axis,
+                _ => unreachable!(),
+            })
+            .is_some_and(|&extent| extent <= MAX_SERIAL_FULL_EPILOGUE_AXIS)
+        {
+            for &reduced_source in std::iter::once(&anchor).chain(epilogue_members.iter()) {
+                for consumer in graph
+                    .graph
+                    .neighbors_directed(reduced_source, Direction::Outgoing)
+                {
+                    if matches!(graph[consumer], TensorGraphNode::BroadcastAxis { axis, ref shape } if axis < shape.len() && shape == input_shape)
+                    {
+                        broadcast_members.push(consumer);
+                    }
+                }
+            }
+        }
+        broadcast_members.sort_by_key(|node| positions[node]);
+        broadcast_members.dedup();
+        if !broadcast_members.is_empty() {
+            let mut stack: Vec<_> = broadcast_members
+                .iter()
+                .flat_map(|&bridge| graph.graph.neighbors_directed(bridge, Direction::Outgoing))
+                .collect();
+            while let Some(node) = stack.pop() {
+                if claimed.contains(&node)
+                    || !is_pointwise(&graph[node])
+                    || graph[node].shape() != input_shape
+                    || !full_epilogue_set.insert(node)
+                {
+                    continue;
+                }
+                stack.extend(graph.graph.neighbors_directed(node, Direction::Outgoing));
+            }
+        }
+        let mut full_epilogue_members: Vec<_> = full_epilogue_set.iter().copied().collect();
+        full_epilogue_members.sort_by_key(|node| positions[node]);
+        if producer_members.is_empty()
+            && epilogue_members.is_empty()
+            && full_epilogue_members.is_empty()
+        {
+            continue;
+        }
+        if producer_members.len() + epilogue_members.len() + full_epilogue_members.len()
+            > MAX_POINTWISE_REGION_OPS
+        {
+            continue;
+        }
+
+        let member_set: HashSet<_> = producer_members
+            .iter()
+            .chain(std::iter::once(&anchor))
+            .chain(&epilogue_members)
+            .chain(&broadcast_members)
+            .chain(&full_epilogue_members)
+            .copied()
+            .collect();
+        let mut outputs: Vec<_> = member_set
+            .iter()
+            .filter(|&&member| {
+                let mut consumers = graph.graph.neighbors_directed(member, Direction::Outgoing);
+                match consumers.next() {
+                    None => true,
+                    Some(first) => {
+                        !member_set.contains(&first)
+                            || consumers.any(|consumer| !member_set.contains(&consumer))
+                    }
+                }
+            })
+            .copied()
+            .collect();
+        outputs.sort_by_key(|node| positions[node]);
+        let region = ReductionRegion::from_graph(
+            graph,
+            producer_members,
+            anchor,
+            epilogue_members,
+            broadcast_members,
+            full_epilogue_members,
+            outputs,
+        )?;
+        claimed.extend(region.members.iter().copied());
+        regions.push(region);
+    }
+    regions.sort_by_key(|region| positions[&region.members[0]]);
+    Ok((regions, claimed))
+}
+
 fn form_pointwise_regions<G>(
     graph: &TensorGraph<f32, G>,
     order: &[NodeIndex],
+    claimed: &HashSet<NodeIndex>,
 ) -> Result<Vec<FusionRegion>> {
     let mut eligible = HashSet::new();
     for &node in order {
-        if is_pointwise(&graph[node])
+        if !claimed.contains(&node)
+            && is_pointwise(&graph[node])
             && graph
                 .inputs(node)
                 .iter()
@@ -355,6 +634,7 @@ fn virtual_view_paths<G>(
     graph: &TensorGraph<f32, G>,
     order: &[NodeIndex],
     node_to_region: &HashMap<NodeIndex, usize>,
+    node_to_reduction_region: &HashMap<NodeIndex, usize>,
 ) -> HashMap<NodeIndex, bool> {
     let mut trailing = HashMap::new();
     for &node_index in order.iter().rev() {
@@ -370,7 +650,9 @@ fn virtual_view_paths<G>(
             .graph
             .neighbors_directed(node_index, Direction::Outgoing)
             .all(|consumer| {
-                node_to_region.contains_key(&consumer) || trailing.get(&consumer) == Some(&true)
+                node_to_region.contains_key(&consumer)
+                    || node_to_reduction_region.contains_key(&consumer)
+                    || trailing.get(&consumer) == Some(&true)
             });
         trailing.insert(node_index, is_view && consumers_accept_virtual);
     }
@@ -468,5 +750,65 @@ mod tests {
             .map(|region| region.members.len())
             .collect();
         assert_eq!(sizes, vec![64, 64, 2]);
+    }
+
+    #[test]
+    fn reduction_region_claims_producer_and_reduced_epilogue() {
+        let input = TensorExpr::constant(vec![0.25; 8], vec![2, 4]);
+        let graph: TensorGraph<f32> = input.relu().exp().reduce_sum(1).log().into();
+
+        let plan = PtxExecutionPlan::build(&graph).unwrap();
+        assert!(plan.regions.is_empty());
+        assert_eq!(plan.reduction_regions.len(), 1);
+        let region = &plan.reduction_regions[0];
+        assert_eq!(region.producer_operations.len(), 2);
+        assert_eq!(region.epilogue_operations.len(), 1);
+        assert_eq!(region.members.len(), 4);
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| matches!(step.action, PtxPlanAction::ReductionRegion(0)))
+        );
+    }
+
+    #[test]
+    fn serial_full_epilogue_stops_at_one_warp() {
+        for (width, expected_full_epilogue_operations) in [(32, 1), (33, 0)] {
+            let input = TensorExpr::constant(vec![0.25; 2 * width], vec![2, width]);
+            let producer = input.exp();
+            let sum = producer.clone().reduce_sum(1).broadcast(vec![2, width]);
+            let graph: TensorGraph<f32> = (producer / sum).into();
+
+            let plan = PtxExecutionPlan::build(&graph).unwrap();
+            assert_eq!(plan.reduction_regions.len(), 1);
+            assert_eq!(
+                plan.reduction_regions[0].full_epilogue_operations.len(),
+                expected_full_epilogue_operations
+            );
+        }
+    }
+
+    #[test]
+    fn large_reduction_keeps_full_epilogue_parallel() {
+        let input = TensorExpr::constant(vec![0.25; 128], vec![2, 64]);
+        let producer = input.exp();
+        let sum = producer.clone().reduce_sum(1).broadcast(vec![2, 64]);
+        let graph: TensorGraph<f32> = (producer / sum).into();
+
+        let plan = PtxExecutionPlan::build(&graph).unwrap();
+        assert_eq!(plan.reduction_regions.len(), 1);
+        assert!(
+            plan.reduction_regions[0]
+                .full_epilogue_operations
+                .is_empty()
+        );
+        assert!(plan.steps.iter().any(|step| {
+            step.operation == "BroadcastAxis" && step.action == PtxPlanAction::Kernel
+        }));
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| { step.operation == "Div" && step.action == PtxPlanAction::Kernel })
+        );
     }
 }

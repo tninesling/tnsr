@@ -195,6 +195,10 @@ pub enum Stmt {
         output_shape: Vec<usize>,
     },
 
+    ReductionRegion {
+        region: Box<super::ReductionRegion>,
+    },
+
     /// Greater than comparison
     Gt {
         dest: TileVar,

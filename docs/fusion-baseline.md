@@ -263,3 +263,19 @@ intermediate, and is 57.6% faster than static CUDA at interval midpoints. The
 next anchor work is batched epilogue binding, tiled operand-producer fusion, and
 the equivalent convolution epilogue model; target-aware matmul schedule metadata
 is the next tile-selection prerequisite.
+
+## Stage 6b Target-Aware TF32 Gating
+
+Stage 6b queries the CUDA compute capability once when the PTX executor is
+created and carries it through compilation. Tensor-core TF32 matmul is selected
+only for SM80-or-newer targets; older targets retain the scalar FP32 plan. The
+generated module header now names the actual target instead of always declaring
+SM80, and compute capability is part of the compilation signature so cached code
+cannot be reused across incompatible targets.
+
+Synthetic SM75 and SM80 codegen tests verify both the PTX header and the absence
+or presence of TF32 conversion and WMMA instructions. On the RTX 4080, the
+`[128, 128]` fused matmul epilogue remeasured at 40.270-40.624 us. Criterion
+classified the 1.6% midpoint movement from Stage 6a as within its noise
+threshold. This establishes safe target plumbing; multiple tile shapes and
+resource-aware schedule selection remain follow-on work.

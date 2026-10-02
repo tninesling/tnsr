@@ -237,14 +237,31 @@ impl<'a> fmt::Display for Function<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Module<'a> {
     pub functions: Vec<Function<'a>>,
+    target: (u32, u32),
+}
+
+impl Default for Module<'_> {
+    fn default() -> Self {
+        Self {
+            functions: Vec::new(),
+            target: (8, 0),
+        }
+    }
 }
 
 impl<'a> Module<'a> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn new_with_target(target: (u32, u32)) -> Self {
+        Self {
+            functions: Vec::new(),
+            target,
+        }
     }
 
     pub fn add_function(&mut self, func: Function<'a>) {
@@ -255,7 +272,7 @@ impl<'a> Module<'a> {
 impl<'a> fmt::Display for Module<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, ".version 8.0")?;
-        writeln!(f, ".target sm_80")?;
+        writeln!(f, ".target sm_{}{}", self.target.0, self.target.1)?;
         writeln!(f, ".address_size 64")?;
         writeln!(f)?;
 

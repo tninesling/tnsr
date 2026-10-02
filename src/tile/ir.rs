@@ -295,8 +295,13 @@ pub enum MatMulPlan {
 
 impl MatMulPlan {
     pub fn for_shape(m: usize, n: usize, k: usize) -> Self {
+        Self::for_shape_with_tf32(m, n, k, true)
+    }
+
+    pub fn for_shape_with_tf32(m: usize, n: usize, k: usize, supports_tf32: bool) -> Self {
         const MIN_TENSOR_CORE_WORK: usize = 32 * 32 * 32;
-        if m >= 16
+        if supports_tf32
+            && m >= 16
             && n >= 16
             && k >= 8
             && m.saturating_mul(n).saturating_mul(k) >= MIN_TENSOR_CORE_WORK

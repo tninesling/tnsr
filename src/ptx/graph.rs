@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::instructions::{Inst, Operand};
+use super::target::PtxTarget;
 use super::types::{B32, F32, I32, U64};
 use super::{Function, Module};
 use crate::tile::{Expr, TileGraph, TileIR, TileVar};
@@ -15,13 +16,14 @@ pub(crate) struct PtxGraph {
     reduction_region_functions: Vec<(usize, Function<'static>)>,
     matmul_region_functions: Vec<(usize, Function<'static>)>,
     physical_nodes: Option<HashSet<NodeIndex>>,
+    target: PtxTarget,
     #[allow(dead_code)]
     arena: Box<bumpalo::Bump>,
 }
 
 impl PtxGraph {
     pub(crate) fn module_source(&self) -> String {
-        let mut module = Module::new();
+        let mut module = Module::new_with_target(self.target.compute_capability);
         for node in self.graph.node_indices() {
             if self
                 .physical_nodes
@@ -66,6 +68,11 @@ impl PtxGraph {
             .iter()
             .find(|(id, _)| *id == region_id)
             .map(|(_, function)| function.name)
+    }
+
+    pub(crate) fn with_target(mut self, target: PtxTarget) -> Self {
+        self.target = target;
+        self
     }
 }
 
@@ -147,6 +154,7 @@ impl From<TileGraph> for PtxGraph {
             reduction_region_functions,
             matmul_region_functions,
             physical_nodes,
+            target: PtxTarget::sm80(),
             arena,
         }
     }
@@ -3577,6 +3585,50 @@ mod tests {
     }
 
     #[test]
+    fn matmul_plan_and_ptx_header_follow_target_capability() {
+        for (target, expect_tf32) in [
+            (
+                PtxTarget {
+                    compute_capability: (7, 5),
+                },
+                false,
+            ),
+            (
+                PtxTarget {
+                    compute_capability: (8, 0),
+                },
+                true,
+            ),
+        ] {
+            let lhs = TensorExpr::constant(vec![0.25; 32 * 32], vec![32, 32]);
+            let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
+            let graph: TensorGraph<f32> = lhs.matmul(rhs).into();
+            let plan =
+                PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict)
+                    .unwrap();
+            let mut tile_graph = TileGraph::from_with_tf32_support(graph, target.supports_tf32());
+            tile_graph.set_physical_nodes(
+                plan.steps()
+                    .iter()
+                    .filter_map(|step| {
+                        (step.action == crate::ptx::PtxPlanAction::Kernel).then_some(step.node)
+                    })
+                    .collect(),
+            );
+            let source = PtxGraph::from(tile_graph)
+                .with_target(target)
+                .module_source();
+
+            assert!(source.contains(&format!(
+                ".target sm_{}{}",
+                target.compute_capability.0, target.compute_capability.1
+            )));
+            assert_eq!(source.contains("wmma.mma.sync"), expect_tf32);
+            assert_eq!(source.contains("cvt.rna.tf32.f32"), expect_tf32);
+        }
+    }
+
+    #[test]
     fn fused_matmul_epilogue_keeps_tf32_and_one_entry() {
         let lhs = TensorExpr::constant(vec![0.25; 32 * 32], vec![32, 32]);
         let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
@@ -3588,7 +3640,7 @@ mod tests {
 
         let mut tile_graph = TileGraph::from(graph);
         tile_graph
-            .add_matmul_regions(plan.matmul_regions())
+            .add_matmul_regions(plan.matmul_regions(), true)
             .unwrap();
         tile_graph.set_physical_nodes(
             plan.steps()

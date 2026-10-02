@@ -78,6 +78,15 @@ fn max_pool2d_geometry(
 
 impl<G> From<TensorGraph<f32, G>> for TileGraph {
     fn from(tensor_graph: TensorGraph<f32, G>) -> Self {
+        Self::from_with_tf32_support(tensor_graph, true)
+    }
+}
+
+impl TileGraph {
+    pub(crate) fn from_with_tf32_support<G>(
+        tensor_graph: TensorGraph<f32, G>,
+        supports_tf32: bool,
+    ) -> Self {
         // Pre-compute input shapes for MatMul, BroadcastAxis, ReduceAxis, and Transpose nodes
         let mut op_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
         for idx in tensor_graph.graph.node_indices() {
@@ -116,7 +125,7 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
                         .get(&idx)
                         .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
                         .unwrap_or_default();
-                    Self::lower_node(node, &shape, &input_shapes)
+                    Self::lower_node(node, &shape, &input_shapes, supports_tf32)
                 },
                 |_, e| e,
             ),
@@ -130,9 +139,7 @@ impl<G> From<TensorGraph<f32, G>> for TileGraph {
             physical_nodes: None,
         }
     }
-}
 
-impl TileGraph {
     #[cfg(feature = "cuda")]
     pub(crate) fn add_fusion_regions(&mut self, regions: &[FusionRegion]) -> anyhow::Result<()> {
         self.region_kernels = regions
@@ -167,13 +174,17 @@ impl TileGraph {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn add_matmul_regions(&mut self, regions: &[MatMulRegion]) -> anyhow::Result<()> {
+    pub(crate) fn add_matmul_regions(
+        &mut self,
+        regions: &[MatMulRegion],
+        supports_tf32: bool,
+    ) -> anyhow::Result<()> {
         self.matmul_region_kernels = regions
             .iter()
             .enumerate()
             .map(|(region_id, region)| TileRegionKernel {
                 region_id,
-                ir: Self::lower_matmul_region(region, region_id),
+                ir: Self::lower_matmul_region(region, region_id, supports_tf32),
             })
             .collect();
         Ok(())
@@ -189,6 +200,7 @@ impl TileGraph {
         node: TensorGraphNode<f32>,
         shape: &[usize],
         input_shapes: &[&[usize]],
+        supports_tf32: bool,
     ) -> TileIR {
         match node {
             TensorGraphNode::Constant { data, .. } => Self::lower_constant(data, shape),
@@ -206,7 +218,7 @@ impl TileGraph {
                 let m = shape[shape.len() - 2];
                 let n = shape[shape.len() - 1];
                 let k = input_shapes[0][input_shapes[0].len() - 1];
-                Self::lower_matmul(m, n, k, false, false)
+                Self::lower_matmul(m, n, k, false, false, supports_tf32)
             }
             TensorGraphNode::Embedding { .. } => {
                 let weight_shape = input_shapes[0];
@@ -435,18 +447,30 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_matmul(m: usize, n: usize, k: usize, transpose_a: bool, transpose_b: bool) -> TileIR {
-        Self::lower_matmul_impl(m, n, k, transpose_a, transpose_b, None)
+    fn lower_matmul(
+        m: usize,
+        n: usize,
+        k: usize,
+        transpose_a: bool,
+        transpose_b: bool,
+        supports_tf32: bool,
+    ) -> TileIR {
+        Self::lower_matmul_impl(m, n, k, transpose_a, transpose_b, supports_tf32, None)
     }
 
     #[cfg(feature = "cuda")]
-    fn lower_matmul_region(region: &super::MatMulRegion, region_id: usize) -> TileIR {
+    fn lower_matmul_region(
+        region: &super::MatMulRegion,
+        region_id: usize,
+        supports_tf32: bool,
+    ) -> TileIR {
         Self::lower_matmul_impl(
             region.m,
             region.n,
             region.k,
             false,
             false,
+            supports_tf32,
             Some((region, region_id)),
         )
     }
@@ -457,6 +481,7 @@ impl TileGraph {
         k: usize,
         transpose_a: bool,
         transpose_b: bool,
+        supports_tf32: bool,
         region: Option<(&super::MatMulRegion, usize)>,
     ) -> TileIR {
         let mut builder = TileIRBuilder::new();
@@ -485,7 +510,7 @@ impl TileGraph {
         let tile_m = 16;
         let tile_n = 16;
         let tile_k = 16;
-        let plan = MatMulPlan::for_shape(m, n, k);
+        let plan = MatMulPlan::for_shape_with_tf32(m, n, k, supports_tf32);
 
         // Allocate shared memory for input tiles
         let operand_dtype = match plan {

@@ -324,6 +324,12 @@ impl TileIRBuilder {
         });
     }
 
+    pub fn reduction_region(&mut self, region: super::ReductionRegion) {
+        self.stmts.push(Stmt::ReductionRegion {
+            region: Box::new(region),
+        });
+    }
+
     #[allow(dead_code)]
     pub fn gt(&mut self, dest: TileVar, a: TileVar, b: TileVar) {
         self.stmts.push(Stmt::Gt { dest, a, b });

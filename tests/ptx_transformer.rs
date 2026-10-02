@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use tnsr::graph::TensorGraph;
-use tnsr::nn::TransformerBlock;
+use tnsr::nn::{TransformerBlock, layer_norm, softmax};
 use tnsr::ptx::PtxExecutor;
 use tnsr::tensor::{Parameter, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
@@ -38,6 +38,557 @@ fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
             "element {index}: expected {expected}, got {actual} (tolerance {tolerance})"
         );
     }
+}
+
+#[test]
+fn ptx_reports_fused_pointwise_plan_metrics() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![0.25, 0.5, 1.0, 2.0], vec![4]);
+    let shared = input.exp();
+    let graph: TensorGraph<f32> = (shared.clone().log() + shared.relu()).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let compile = ptx.compile_metrics();
+    assert_eq!(compile.graph_nodes, 5);
+    assert_eq!(compile.generated_kernels, 1);
+    assert!(compile.ptx_source_bytes > 0);
+    assert!(!compile.compile_time.is_zero());
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.steps().len(), 2);
+    assert!(plan.steps().iter().all(|step| step.materialize));
+    assert_eq!(
+        plan.steps()
+            .iter()
+            .filter(|step| matches!(step.action, tnsr::ptx::PtxPlanAction::PointwiseRegion(_)))
+            .count(),
+        1
+    );
+
+    let description = ptx.describe_plan(&graph).unwrap();
+    assert!(description.contains("PTX plan: 5 graph nodes, 1 physical kernels"));
+    assert!(description.contains("action=upload"));
+    assert_eq!(description.matches("action=kernel").count(), 1);
+
+    ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_eq!(
+        ptx.execution_metrics(),
+        &tnsr::ptx::PtxExecutionMetrics {
+            kernel_launches: 1,
+            materialized_values: 2,
+            materialized_bytes: 32,
+            intermediate_materialized_bytes: 0,
+            device_copies: 2,
+        }
+    );
+}
+
+#[test]
+fn ptx_fuses_multi_output_reduction_region() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![0.25, 0.5, 1.0, 2.0], vec![4]);
+    let shared = input.exp();
+    let branch = shared.clone().log();
+    let graph: TensorGraph<f32> = (shared.reduce_sum(0) + branch.reduce_sum(0)).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert!(plan.regions().is_empty());
+    assert_eq!(plan.reduction_regions().len(), 2);
+    assert!(
+        plan.reduction_regions()
+            .iter()
+            .any(|region| region.outputs.len() == 2)
+    );
+    assert_eq!(ptx.compile_metrics().generated_kernels, 2);
+
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-4);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 2);
+}
+
+#[test]
+fn ptx_fuses_pointwise_producer_reduction_and_epilogue() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-2.0, -1.0, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0], vec![2, 4]);
+    let graph: TensorGraph<f32> = input.relu().exp().reduce_sum(1).log().into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.reduction_regions().len(), 1);
+    let region = &plan.reduction_regions()[0];
+    assert_eq!(region.producer_operations.len(), 2);
+    assert_eq!(region.epilogue_operations.len(), 1);
+    assert_eq!(region.input_shape, vec![2, 4]);
+    assert_eq!(region.output_shape, vec![2, 1]);
+    assert_eq!(ptx.compile_metrics().generated_kernels, 1);
+
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-4);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+    assert_eq!(ptx.execution_metrics().materialized_values, 2);
+}
+
+#[test]
+fn ptx_reduction_regions_support_mean_max_and_middle_axis() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let values = || {
+        TensorExpr::constant(
+            vec![
+                -2.0, 1.0, 4.0, 3.0, -1.0, 2.0, 5.0, 6.0, -3.0, 8.0, 7.0, 9.0,
+            ],
+            vec![2, 3, 2],
+        )
+    };
+    let graphs: Vec<TensorGraph<f32>> = vec![
+        values().relu().reduce_mean(1).exp().into(),
+        (-values()).reduce_max(1).relu().into(),
+    ];
+
+    for graph in graphs {
+        ptx.compile_owned(graph.clone()).unwrap();
+        assert_eq!(ptx.execution_plan().unwrap().reduction_regions().len(), 1);
+        let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+        let expected = execute_cpu(&graph);
+        assert_close(&actual, &expected, 1e-3);
+        assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+    }
+}
+
+#[test]
+fn ptx_reduction_regions_support_rank_one_first_and_final_axes() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let cases: Vec<TensorGraph<f32>> = vec![
+        TensorExpr::constant(vec![-0.2, 0.1, 0.3, 0.4], vec![4])
+            .relu()
+            .reduce_sum(0)
+            .exp()
+            .into(),
+        TensorExpr::constant(
+            (1..=24).map(|value| value as f32 * 0.1).collect(),
+            vec![2, 3, 4],
+        )
+        .relu()
+        .reduce_mean(0)
+        .exp()
+        .into(),
+        TensorExpr::constant(
+            (1..=24).map(|value| value as f32 * 0.1).collect(),
+            vec![2, 3, 4],
+        )
+        .relu()
+        .reduce_max(2)
+        .log()
+        .into(),
+    ];
+    for graph in cases {
+        ptx.compile_owned(graph.clone()).unwrap();
+        assert_eq!(ptx.execution_plan().unwrap().reduction_regions().len(), 1);
+        assert_eq!(ptx.compile_metrics().generated_kernels, 1);
+        let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+        assert_close(&actual, &execute_cpu(&graph), 1e-4);
+        assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+    }
+}
+
+#[test]
+fn ptx_empty_reduced_axis_preserves_reduction_identities() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let empty = || TensorExpr::constant(Vec::new(), vec![3, 0]).relu();
+    type EmptyReductionCase = (TensorGraph<f32>, fn(f32) -> bool);
+    let cases: Vec<EmptyReductionCase> = vec![
+        (empty().reduce_sum(1).into(), |value| value == 0.0),
+        (empty().reduce_mean(1).into(), |value| value == 0.0),
+        (empty().reduce_max(1).into(), |value| {
+            value == f32::NEG_INFINITY
+        }),
+    ];
+    for (graph, valid) in cases {
+        ptx.compile_owned(graph.clone()).unwrap();
+        let plan = ptx.execution_plan().unwrap();
+        assert_eq!(plan.reduction_regions().len(), 1);
+        assert_eq!(plan.reduction_regions()[0].input_shape, vec![3, 0]);
+        assert_eq!(plan.reduction_regions()[0].output_shape, vec![3, 1]);
+        let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+        let expected = execute_cpu(&graph);
+        assert!(actual.iter().copied().all(valid));
+        assert!(expected.iter().copied().all(valid));
+        assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+    }
+}
+
+#[test]
+fn ptx_plans_independent_reduction_regions_deterministically() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let left = TensorExpr::constant(vec![-2.0, 1.0, 3.0, 4.0, -1.0, 2.0], vec![2, 3]);
+    let right = TensorExpr::constant(vec![0.5, -1.0, 2.0, 3.0, 4.0, -2.0, 1.0, 5.0], vec![2, 4]);
+    let graph: TensorGraph<f32> =
+        (left.relu().reduce_sum(1).log() + right.exp().reduce_mean(1).relu()).into();
+    ptx.compile_owned(graph.clone()).unwrap();
+    let first_plan = ptx.execution_plan().unwrap().clone();
+    assert_eq!(first_plan.reduction_regions().len(), 2);
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(ptx.execution_plan().unwrap(), &first_plan);
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_close(&actual, &execute_cpu(&graph), 1e-4);
+}
+
+#[test]
+fn ptx_reduction_region_exports_producer_and_reduced_values() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-2.0, 1.0, 3.0, 4.0, -1.0, 2.0], vec![2, 3]);
+    let producer = input.relu();
+    let reduced = producer.clone().reduce_sum(1);
+    let weight = TensorExpr::constant(vec![0.5, -1.0, 2.0], vec![3, 1]);
+    let graph: TensorGraph<f32> = (producer.matmul(weight) + reduced).into();
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.reduction_regions().len(), 1);
+    assert_eq!(plan.reduction_regions()[0].outputs.len(), 2);
+    for output in &plan.reduction_regions()[0].outputs {
+        assert!(
+            plan.steps()
+                .iter()
+                .any(|step| step.release_after.contains(&output.node)),
+            "escaping region output {} was not assigned a release point",
+            output.node.index()
+        );
+    }
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_close(&actual, &execute_cpu(&graph), 1e-5);
+}
+
+#[test]
+fn ptx_reduction_region_backward_graph_matches_cpu() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let parameter = Parameter::new(vec![-2.0, 1.0, 3.0, 4.0, -1.0, 2.0], vec![2, 3]);
+    let parameter_id = parameter.id();
+    let loss = TensorExpr::from(parameter)
+        .relu()
+        .exp()
+        .reduce_mean(1)
+        .reduce_sum(0);
+    let graph: TensorGraph<f32> = loss.into();
+    let loss_node = *graph.toposort().last().unwrap();
+    let graph = graph.with_gradients(loss_node);
+    let mut cpu = SimpleExecutor::new();
+    cpu.execute(&graph, HashMap::new()).unwrap();
+    ptx.execute(&graph, HashMap::new()).unwrap();
+    assert!(!ptx.execution_plan().unwrap().reduction_regions().is_empty());
+    assert_close(
+        &ptx.get_gradients(&graph)[&parameter_id],
+        &cpu.get_gradients(&graph)[&parameter_id],
+        1e-5,
+    );
+}
+
+#[test]
+fn ptx_reduction_region_preserves_serial_sum_order() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let values = [1.0e20f32, 1.0, -1.0e20, 3.0];
+    let expected_sum = values
+        .into_iter()
+        .fold(0.0f32, |accumulator, value| accumulator + value);
+    for mean in [false, true] {
+        let input = TensorExpr::constant(values.to_vec(), vec![1, 4]);
+        let zero = TensorExpr::constant(vec![0.0; 4], vec![1, 4]);
+        let producer = input + zero;
+        let graph: TensorGraph<f32> = if mean {
+            producer.reduce_mean(1).into()
+        } else {
+            producer.reduce_sum(1).into()
+        };
+        ptx.compile_owned(graph.clone()).unwrap();
+        let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap()[0];
+        let expected = if mean {
+            expected_sum / 4.0
+        } else {
+            expected_sum
+        };
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+}
+
+#[test]
+fn ptx_softmax_uses_reduction_region_for_exponential_sum() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let logits = TensorExpr::constant(
+        vec![
+            1000.0, 1001.0, 999.0, 998.0, -1000.0, -999.0, -1001.0, -998.0,
+        ],
+        vec![2, 4],
+    );
+    let graph: TensorGraph<f32> = softmax(logits, 1).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.reduction_regions().len(), 1);
+    assert_eq!(plan.reduction_regions()[0].outputs.len(), 1);
+    assert_eq!(
+        plan.reduction_regions()[0].full_epilogue_operations.len(),
+        1
+    );
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-5);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 2);
+    for row in actual.chunks_exact(4) {
+        assert!((row.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn ptx_layer_norm_fuses_variance_and_full_epilogue() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-2.0, -1.0, 1.0, 2.0, 3.0, 4.0, 6.0, 7.0], vec![2, 4]);
+    let weight = TensorExpr::constant(vec![1.0, 0.5, 1.5, 2.0], vec![4]);
+    let bias = TensorExpr::constant(vec![0.0, 0.25, -0.5, 1.0], vec![4]);
+    let graph: TensorGraph<f32> = layer_norm(input, 1, weight, bias, 1e-5).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.reduction_regions().len(), 1);
+    let variance = &plan.reduction_regions()[0];
+    assert!(!variance.producer_operations.is_empty());
+    assert!(!variance.full_epilogue_operations.is_empty());
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 2e-4);
+}
+
+#[test]
+fn ptx_rms_like_normalization_fuses_complete_epilogue() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-2.0, -1.0, 1.0, 2.0, 3.0, 4.0, 6.0, 7.0], vec![2, 4]);
+    let square = input.clone() * input.clone();
+    let mean_square = square.reduce_mean(1);
+    let inv_rms = ((mean_square + 1e-5).log() * -0.5)
+        .exp()
+        .broadcast(vec![2, 4]);
+    let graph: TensorGraph<f32> = (input * inv_rms).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.reduction_regions().len(), 1);
+    let region = &plan.reduction_regions()[0];
+    assert_eq!(region.producer_operations.len(), 1);
+    assert!(!region.epilogue_operations.is_empty());
+    assert_eq!(region.full_epilogue_operations.len(), 1);
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 2e-4);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+}
+
+#[test]
+fn ptx_fused_region_preserves_operand_and_mask_order() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let lhs = TensorExpr::constant(vec![4.0, 2.0, 9.0, 1.0], vec![4]);
+    let rhs = TensorExpr::constant(vec![2.0, 3.0, 3.0, 4.0], vec![4]);
+    let ratio = (lhs.clone() - rhs.clone()) / (lhs.clone() + rhs.clone());
+    let graph: TensorGraph<f32> = ratio.mask(lhs.gt(rhs)).relu().into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(ptx.execution_plan().unwrap().regions().len(), 1);
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-6);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+}
+
+#[test]
+fn ptx_zero_size_pointwise_region_does_not_launch() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let graph: TensorGraph<f32> = TensorExpr::constant(Vec::new(), vec![0, 3])
+        .exp()
+        .relu()
+        .into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(ptx.execution_plan().unwrap().regions().len(), 1);
+    assert!(
+        ptx.execute_compiled(&graph, HashMap::new())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(ptx.execution_metrics().kernel_launches, 0);
+}
+
+#[test]
+fn ptx_region_composes_bias_broadcast_access() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let matrix = TensorExpr::constant(vec![-3.0, -2.0, -1.0, 1.0, 2.0, 3.0], vec![2, 3]);
+    let bias = TensorExpr::constant(vec![0.5, 1.0, 1.5], vec![3]);
+    let graph: TensorGraph<f32> = (matrix + bias).relu().into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.regions().len(), 1);
+    assert_eq!(
+        plan.steps()
+            .iter()
+            .filter(|step| step.action == tnsr::ptx::PtxPlanAction::VirtualView)
+            .count(),
+        2
+    );
+    assert_eq!(ptx.compile_metrics().generated_kernels, 1);
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 0.0);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+    assert_eq!(ptx.execution_metrics().materialized_values, 3);
+}
+
+#[test]
+fn ptx_region_composes_permutation_access() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-3.0, -2.0, -1.0, 1.0, 2.0, 3.0], vec![2, 3]);
+    let residual = TensorExpr::constant(vec![0.5; 6], vec![3, 2]);
+    let graph: TensorGraph<f32> = (input.permute(vec![1, 0]) + residual).relu().into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert!(plan.steps().iter().any(|step| {
+        step.operation == "Permute" && step.action == tnsr::ptx::PtxPlanAction::VirtualView
+    }));
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 0.0);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+}
+
+#[test]
+fn ptx_materializes_permutation_for_opaque_shared_consumer() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-3.0, -2.0, -1.0, 1.0, 2.0, 3.0], vec![2, 3]);
+    let residual = TensorExpr::constant(vec![0.5; 6], vec![3, 2]);
+    let permuted = input.permute(vec![1, 0]);
+    let branch = (permuted.clone() + residual).relu().reduce_sum(0);
+    let graph: TensorGraph<f32> = (branch + permuted.reduce_sum(0)).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert!(plan.steps().iter().any(|step| {
+        step.operation == "Permute" && step.action == tnsr::ptx::PtxPlanAction::Kernel
+    }));
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-6);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 3);
+}
+
+#[test]
+fn ptx_materializes_non_identity_view_for_high_region_fanout() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let input = TensorExpr::constant(vec![-3.0, -2.0, -1.0, 1.0, 2.0, 3.0], vec![2, 3]);
+    let permuted = input.permute(vec![1, 0]);
+    let one = || TensorExpr::constant(vec![1.0; 6], vec![3, 2]);
+    let first = (permuted.clone() + one()).relu().reduce_sum(0);
+    let second = (permuted.clone() * one()).exp().reduce_sum(0);
+    let third = (permuted - one()).relu().reduce_sum(0);
+    let graph: TensorGraph<f32> = (first + second + third).into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert!(plan.steps().iter().any(|step| {
+        step.operation == "Permute" && step.action == tnsr::ptx::PtxPlanAction::Kernel
+    }));
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 1e-4);
+}
+
+#[test]
+fn ptx_reports_virtual_view_baseline() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let graph: TensorGraph<f32> =
+        TensorExpr::constant((0..6).map(|value| value as f32).collect(), vec![6])
+            .reshape(vec![2, 3])
+            .flatten()
+            .into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let description = ptx.describe_plan(&graph).unwrap();
+    assert_eq!(description.matches("action=virtual-view").count(), 2);
+
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_eq!(actual, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+    let execution = ptx.execution_metrics();
+    assert_eq!(execution.kernel_launches, 0);
+    assert_eq!(execution.materialized_values, 1);
+    assert_eq!(execution.materialized_bytes, 24);
+    assert_eq!(execution.intermediate_materialized_bytes, 0);
+    assert_eq!(execution.device_copies, 2);
+}
+
+#[test]
+fn ptx_plan_normalizes_composed_virtual_views() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let graph: TensorGraph<f32> =
+        TensorExpr::constant((0..24).map(|value| value as f32).collect(), vec![2, 3, 4])
+            .reshape(vec![1, 4, 6])
+            .permute(vec![0, 2, 1])
+            .broadcast_axis(0, 5)
+            .into();
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    let source = plan.steps().first().unwrap().node;
+    let graph_output = *graph.toposort().last().unwrap();
+    let output = plan.virtual_value(graph_output).unwrap();
+    assert_eq!(output.source, source);
+    assert_eq!(output.shape, vec![5, 6, 4]);
+    assert_eq!(output.source_index(&[4, 5, 3]).unwrap(), vec![1, 2, 3]);
+    let first_plan = plan.clone();
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(ptx.execution_plan().unwrap(), &first_plan);
+
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    let expected = execute_cpu(&graph);
+    assert_close(&actual, &expected, 0.0);
 }
 
 #[test]

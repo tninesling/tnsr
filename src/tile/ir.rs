@@ -195,6 +195,10 @@ pub enum Stmt {
         output_shape: Vec<usize>,
     },
 
+    ReductionRegion {
+        region: Box<super::ReductionRegion>,
+    },
+
     /// Greater than comparison
     Gt {
         dest: TileVar,
@@ -288,7 +292,7 @@ impl MatMulPlan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
     F16,
     BF16,
@@ -339,6 +343,9 @@ pub enum Expr {
     ThreadIdx(Dim),
     Mul(Box<Expr>, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr>, Box<Expr>),
+    FloorDiv(Box<Expr>, usize),
+    Mod(Box<Expr>, usize),
 }
 
 impl std::ops::Mul<usize> for Expr {

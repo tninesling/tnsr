@@ -9,7 +9,9 @@ use petgraph::visit::EdgeRef;
 
 use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::Shape;
-use crate::tile::{DType, FusionRegion, ReductionRegion, ReductionSchedule, VirtualTensor};
+use crate::tile::{
+    DType, FusionRegion, MatMulRegion, ReductionRegion, ReductionSchedule, VirtualTensor,
+};
 
 const MAX_POINTWISE_REGION_OPS: usize = 64;
 const MAX_VIRTUAL_INDEX_OPS: usize = 64;
@@ -23,6 +25,7 @@ const CUDA_WARP_SIZE: u32 = 32;
 const CUDA_BLOCK_REDUCTION_THREADS: u32 = 128;
 const MIN_BLOCK_REDUCTION_AXIS: usize = 256;
 const MAX_COOPERATIVE_FULL_EPILOGUE_OPS: usize = 2;
+const MAX_MATMUL_EPILOGUE_OPS: usize = 16;
 
 /// Floating-point ordering policy used when planning PTX reductions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -43,6 +46,7 @@ pub enum PtxPlanAction {
     VirtualView,
     PointwiseRegion(usize),
     ReductionRegion(usize),
+    MatMulRegion(usize),
 }
 
 /// One physical step in a PTX execution plan.
@@ -68,6 +72,7 @@ pub struct PtxExecutionPlan {
     steps: Vec<PtxPlanStep>,
     regions: Vec<FusionRegion>,
     reduction_regions: Vec<ReductionRegion>,
+    matmul_regions: Vec<MatMulRegion>,
     graph_output: Option<NodeIndex>,
 }
 
@@ -76,6 +81,7 @@ enum PlanUnit {
     Node(NodeIndex),
     Region(usize),
     ReductionRegion(usize),
+    MatMulRegion(usize),
 }
 
 impl PtxExecutionPlan {
@@ -90,16 +96,33 @@ impl PtxExecutionPlan {
     ) -> Result<Self> {
         let order = graph.toposort();
         let graph_output = order.last().copied();
-        let (reduction_regions, claimed) = form_reduction_regions(graph, &order, reduction_mode)?;
+        let (reduction_regions, mut claimed) =
+            form_reduction_regions(graph, &order, reduction_mode)?;
+        let (matmul_regions, matmul_claimed) = form_matmul_regions(graph, &order, &claimed)?;
+        claimed.extend(matmul_claimed);
         let regions = form_pointwise_regions(graph, &order, &claimed)?;
-        match Self::build_with_regions(graph, &order, regions, reduction_regions, graph_output) {
+        match Self::build_with_regions(
+            graph,
+            &order,
+            regions,
+            reduction_regions,
+            matmul_regions,
+            graph_output,
+        ) {
             Ok(plan) => Ok(plan),
             Err(error)
                 if error
                     .to_string()
                     .contains("fusion plan contraction contains a cycle") =>
             {
-                Self::build_with_regions(graph, &order, Vec::new(), Vec::new(), graph_output)
+                Self::build_with_regions(
+                    graph,
+                    &order,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    graph_output,
+                )
             }
             Err(error) => Err(error),
         }
@@ -110,6 +133,7 @@ impl PtxExecutionPlan {
         order: &[NodeIndex],
         mut regions: Vec<FusionRegion>,
         mut reduction_regions: Vec<ReductionRegion>,
+        mut matmul_regions: Vec<MatMulRegion>,
         graph_output: Option<NodeIndex>,
     ) -> Result<Self> {
         let mut node_to_region = HashMap::new();
@@ -137,10 +161,27 @@ impl PtxExecutionPlan {
                 );
             }
         }
+        let mut node_to_matmul_region = HashMap::new();
+        for (region_id, region) in matmul_regions.iter().enumerate() {
+            for &member in &region.members {
+                anyhow::ensure!(
+                    !node_to_region.contains_key(&member)
+                        && !node_to_reduction_region.contains_key(&member),
+                    "matmul and existing fusion regions overlap at node {}",
+                    member.index()
+                );
+                anyhow::ensure!(
+                    node_to_matmul_region.insert(member, region_id).is_none(),
+                    "matmul fusion regions overlap at node {}",
+                    member.index()
+                );
+            }
+        }
 
         let mut units = Vec::new();
         let mut region_units = HashMap::new();
         let mut reduction_region_units = HashMap::new();
+        let mut matmul_region_units = HashMap::new();
         let mut node_units = HashMap::new();
         for &node in order {
             if let Some(&region_id) = node_to_region.get(&node) {
@@ -155,6 +196,12 @@ impl PtxExecutionPlan {
                     units.push(PlanUnit::ReductionRegion(region_id));
                     unit
                 });
+            } else if let Some(&region_id) = node_to_matmul_region.get(&node) {
+                matmul_region_units.entry(region_id).or_insert_with(|| {
+                    let unit = units.len();
+                    units.push(PlanUnit::MatMulRegion(region_id));
+                    unit
+                });
             } else {
                 let unit = units.len();
                 units.push(PlanUnit::Node(node));
@@ -167,6 +214,8 @@ impl PtxExecutionPlan {
                 region_units[region]
             } else if let Some(region) = node_to_reduction_region.get(&node) {
                 reduction_region_units[region]
+            } else if let Some(region) = node_to_matmul_region.get(&node) {
+                matmul_region_units[region]
             } else {
                 node_units[&node]
             }
@@ -186,8 +235,14 @@ impl PtxExecutionPlan {
         let physical_order = toposort(&quotient, None)
             .map_err(|_| anyhow::anyhow!("fusion plan contraction contains a cycle"))?;
 
-        let virtual_view_path =
-            virtual_view_paths(graph, order, &node_to_region, &node_to_reduction_region);
+        let virtual_view_path = virtual_view_paths(
+            graph,
+            order,
+            &node_to_region,
+            &node_to_reduction_region,
+            &node_to_matmul_region,
+            &matmul_regions,
+        );
         let mut virtual_values: HashMap<NodeIndex, VirtualTensor> = HashMap::new();
         let mut steps = Vec::with_capacity(units.len());
         for unit_index in physical_order.into_iter().map(|node| quotient[node]) {
@@ -288,6 +343,52 @@ impl PtxExecutionPlan {
                         virtual_outputs,
                     });
                 }
+                PlanUnit::MatMulRegion(region_id) => {
+                    let region = &mut matmul_regions[region_id];
+                    for input in &mut region.inputs {
+                        let tensor =
+                            virtual_values.get(&input.node).cloned().unwrap_or_else(|| {
+                                VirtualTensor::identity(
+                                    input.node,
+                                    graph[input.node].shape().clone(),
+                                    DType::F32,
+                                )
+                            });
+                        input.source_shape = graph[tensor.source].shape().clone();
+                        input.tensor = tensor;
+                    }
+                    let outputs: Vec<_> = region.outputs.iter().map(|output| output.node).collect();
+                    let virtual_outputs: Vec<_> = outputs
+                        .iter()
+                        .map(|&output| {
+                            VirtualTensor::identity(output, region.output_shape.clone(), DType::F32)
+                        })
+                        .collect();
+                    for output in &virtual_outputs {
+                        virtual_values.insert(output.source, output.clone());
+                    }
+                    steps.push(PtxPlanStep {
+                        node: *outputs.last().context("matmul region has no outputs")?,
+                        members: region.members.clone(),
+                        inputs: region
+                            .inputs
+                            .iter()
+                            .map(|input| input.tensor.source)
+                            .collect(),
+                        outputs,
+                        output_shapes: region
+                            .outputs
+                            .iter()
+                            .map(|_| region.output_shape.clone())
+                            .collect(),
+                        operation: "MatMulRegion",
+                        shape: region.output_shape.clone(),
+                        action: PtxPlanAction::MatMulRegion(region_id),
+                        materialize: true,
+                        release_after: Vec::new(),
+                        virtual_outputs,
+                    });
+                }
                 PlanUnit::Node(node_index) => {
                     let node = &graph[node_index];
                     let inputs = graph.inputs(node_index);
@@ -373,6 +474,7 @@ impl PtxExecutionPlan {
             steps,
             regions,
             reduction_regions,
+            matmul_regions,
             graph_output,
         })
     }
@@ -387,6 +489,10 @@ impl PtxExecutionPlan {
 
     pub fn reduction_regions(&self) -> &[ReductionRegion] {
         &self.reduction_regions
+    }
+
+    pub fn matmul_regions(&self) -> &[MatMulRegion] {
+        &self.matmul_regions
     }
 
     pub fn graph_output(&self) -> Option<NodeIndex> {
@@ -600,6 +706,89 @@ fn form_reduction_regions<G>(
     Ok((regions, claimed))
 }
 
+fn form_matmul_regions<G>(
+    graph: &TensorGraph<f32, G>,
+    order: &[NodeIndex],
+    already_claimed: &HashSet<NodeIndex>,
+) -> Result<(Vec<MatMulRegion>, HashSet<NodeIndex>)> {
+    let positions: HashMap<_, _> = order
+        .iter()
+        .enumerate()
+        .map(|(position, &node)| (node, position))
+        .collect();
+    let mut regions = Vec::new();
+    let mut claimed = already_claimed.clone();
+
+    for &anchor in order {
+        let output_shape = match &graph[anchor] {
+            TensorGraphNode::MatMul { shape }
+                if !claimed.contains(&anchor)
+                    && shape.len() == 2
+                    && shape.iter().all(|&x| x > 0) =>
+            {
+                shape
+            }
+            _ => continue,
+        };
+        let anchor_inputs = graph.inputs(anchor);
+        if anchor_inputs.len() != 2
+            || graph[anchor_inputs[0]].shape().len() != 2
+            || graph[anchor_inputs[1]].shape().len() != 2
+            || graph[anchor_inputs[0]].shape()[1] == 0
+        {
+            continue;
+        }
+
+        let mut epilogue_set = HashSet::new();
+        let mut stack: Vec<_> = graph
+            .graph
+            .neighbors_directed(anchor, Direction::Outgoing)
+            .collect();
+        while let Some(node) = stack.pop() {
+            if claimed.contains(&node)
+                || !is_pointwise(&graph[node])
+                || graph[node].shape() != output_shape
+                || !epilogue_set.insert(node)
+            {
+                continue;
+            }
+            stack.extend(graph.graph.neighbors_directed(node, Direction::Outgoing));
+        }
+        if epilogue_set.is_empty() || epilogue_set.len() > MAX_MATMUL_EPILOGUE_OPS {
+            continue;
+        }
+        let mut epilogue_members: Vec<_> = epilogue_set.iter().copied().collect();
+        epilogue_members.sort_by_key(|node| positions[node]);
+        let member_set: HashSet<_> = std::iter::once(anchor)
+            .chain(epilogue_members.iter().copied())
+            .collect();
+        let mut outputs: Vec<_> = member_set
+            .iter()
+            .filter(|&&member| {
+                let mut consumers = graph.graph.neighbors_directed(member, Direction::Outgoing);
+                match consumers.next() {
+                    None => true,
+                    Some(first) => {
+                        !member_set.contains(&first)
+                            || consumers.any(|consumer| !member_set.contains(&consumer))
+                    }
+                }
+            })
+            .copied()
+            .collect();
+        outputs.sort_by_key(|node| positions[node]);
+        let region = MatMulRegion::from_graph(graph, anchor, epilogue_members, outputs)?;
+        claimed.extend(region.members.iter().copied());
+        regions.push(region);
+    }
+
+    let newly_claimed = claimed
+        .difference(already_claimed)
+        .copied()
+        .collect::<HashSet<_>>();
+    Ok((regions, newly_claimed))
+}
+
 fn form_pointwise_regions<G>(
     graph: &TensorGraph<f32, G>,
     order: &[NodeIndex],
@@ -679,6 +868,8 @@ fn virtual_view_paths<G>(
     order: &[NodeIndex],
     node_to_region: &HashMap<NodeIndex, usize>,
     node_to_reduction_region: &HashMap<NodeIndex, usize>,
+    node_to_matmul_region: &HashMap<NodeIndex, usize>,
+    matmul_regions: &[MatMulRegion],
 ) -> HashMap<NodeIndex, bool> {
     let mut trailing = HashMap::new();
     for &node_index in order.iter().rev() {
@@ -696,6 +887,16 @@ fn virtual_view_paths<G>(
             .all(|consumer| {
                 node_to_region.contains_key(&consumer)
                     || node_to_reduction_region.contains_key(&consumer)
+                    || node_to_matmul_region
+                        .get(&consumer)
+                        .is_some_and(|&region_id| {
+                            let region = &matmul_regions[region_id];
+                            region.inputs.iter().any(|input| {
+                                input.node == node_index
+                                    && input.value != region.lhs_value
+                                    && input.value != region.rhs_value
+                            })
+                        })
                     || trailing.get(&consumer) == Some(&true)
             });
         trailing.insert(node_index, is_view && consumers_accept_virtual);
@@ -777,6 +978,62 @@ mod tests {
         assert_eq!(plan.regions[0].outputs.len(), 1);
         assert_eq!(graph.graph.node_count(), node_count);
         assert_eq!(graph.graph.edge_count(), edge_count);
+    }
+
+    #[test]
+    fn rank_two_matmul_claims_same_shape_pointwise_epilogue() {
+        let lhs = TensorExpr::constant(vec![0.25; 4 * 8], vec![4, 8]);
+        let rhs = TensorExpr::constant(vec![0.5; 8 * 6], vec![8, 6]);
+        let bias = TensorExpr::constant(vec![0.1; 4 * 6], vec![4, 6]);
+        let graph: TensorGraph<f32> = (lhs.matmul(rhs) + bias).relu().into();
+
+        let plan = PtxExecutionPlan::build(&graph).unwrap();
+        assert!(plan.regions.is_empty());
+        assert_eq!(plan.matmul_regions.len(), 1);
+        assert_eq!(plan.matmul_regions[0].epilogue_operations.len(), 2);
+        assert_eq!(plan.matmul_regions[0].members.len(), 3);
+        assert_eq!(
+            plan.steps
+                .iter()
+                .filter(|step| matches!(step.action, PtxPlanAction::MatMulRegion(0)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn standalone_batched_and_zero_k_matmuls_remain_unfused() {
+        let standalone: TensorGraph<f32> = TensorExpr::constant(vec![0.25; 2 * 3], vec![2, 3])
+            .matmul(TensorExpr::constant(vec![0.5; 3 * 4], vec![3, 4]))
+            .into();
+        assert!(
+            PtxExecutionPlan::build(&standalone)
+                .unwrap()
+                .matmul_regions
+                .is_empty()
+        );
+
+        let batched: TensorGraph<f32> = TensorExpr::constant(vec![0.25; 2 * 2 * 3], vec![2, 2, 3])
+            .matmul(TensorExpr::constant(vec![0.5; 2 * 3 * 4], vec![2, 3, 4]))
+            .relu()
+            .into();
+        assert!(
+            PtxExecutionPlan::build(&batched)
+                .unwrap()
+                .matmul_regions
+                .is_empty()
+        );
+
+        let zero_k: TensorGraph<f32> = TensorExpr::constant(Vec::new(), vec![2, 0])
+            .matmul(TensorExpr::constant(Vec::new(), vec![0, 4]))
+            .relu()
+            .into();
+        assert!(
+            PtxExecutionPlan::build(&zero_k)
+                .unwrap()
+                .matmul_regions
+                .is_empty()
+        );
     }
 
     #[test]

@@ -104,6 +104,29 @@ impl TileIRBuilder {
         });
     }
 
+    pub fn load_tile_element(&mut self, dest: TileVar, src: TileVar) {
+        self.stmts.push(Stmt::LoadTileElement { dest, src });
+    }
+
+    pub fn load_global_predicated(
+        &mut self,
+        dest: TileVar,
+        src_param: &str,
+        element_index: Expr,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
+    ) {
+        self.stmts.push(Stmt::LoadGlobalPredicated {
+            dest,
+            src_param: src_param.to_string(),
+            element_index,
+            row,
+            col,
+            layout,
+        });
+    }
+
     pub fn embedding(&mut self, vocabulary: usize, width: usize, index_count: usize) {
         self.stmts.push(Stmt::Embedding {
             vocabulary,

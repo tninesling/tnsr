@@ -13,6 +13,7 @@ pub(crate) struct PtxGraph {
     graph: Graph<Function<'static>, usize>,
     region_functions: Vec<(usize, Function<'static>)>,
     reduction_region_functions: Vec<(usize, Function<'static>)>,
+    matmul_region_functions: Vec<(usize, Function<'static>)>,
     physical_nodes: Option<HashSet<NodeIndex>>,
     #[allow(dead_code)]
     arena: Box<bumpalo::Bump>,
@@ -36,6 +37,9 @@ impl PtxGraph {
         for (_, function) in &self.reduction_region_functions {
             module.add_function(function.clone());
         }
+        for (_, function) in &self.matmul_region_functions {
+            module.add_function(function.clone());
+        }
         module.to_string()
     }
 
@@ -56,6 +60,13 @@ impl PtxGraph {
             .find(|(id, _)| *id == region_id)
             .map(|(_, function)| function.name)
     }
+
+    pub(crate) fn matmul_region_kernel_name(&self, region_id: usize) -> Option<&str> {
+        self.matmul_region_functions
+            .iter()
+            .find(|(id, _)| *id == region_id)
+            .map(|(_, function)| function.name)
+    }
 }
 
 impl From<TileGraph> for PtxGraph {
@@ -67,6 +78,7 @@ impl From<TileGraph> for PtxGraph {
             graph: tile_nodes,
             region_kernels,
             reduction_region_kernels,
+            matmul_region_kernels,
             physical_nodes,
         } = tile_graph;
         let graph = tile_nodes.map_owned(
@@ -110,12 +122,30 @@ impl From<TileGraph> for PtxGraph {
                     ),
                 )
             })
+            .collect::<Vec<_>>();
+        let matmul_region_offset = reduction_region_offset + reduction_region_functions.len();
+        let matmul_region_functions = matmul_region_kernels
+            .into_iter()
+            .map(|kernel| {
+                // SAFETY: Same arena ownership and drop-order invariant as graph functions.
+                let arena_ref: &'static bumpalo::Bump =
+                    unsafe { &*(arena.as_ref() as *const bumpalo::Bump) };
+                (
+                    kernel.region_id,
+                    tile_ir_to_function(
+                        kernel.ir,
+                        arena_ref,
+                        matmul_region_offset + kernel.region_id,
+                    ),
+                )
+            })
             .collect();
 
         Self {
             graph,
             region_functions,
             reduction_region_functions,
+            matmul_region_functions,
             physical_nodes,
             arena,
         }
@@ -476,6 +506,52 @@ fn lower_stmt<'a>(
                 });
             }
         }
+        Stmt::LoadGlobalPredicated {
+            dest,
+            src_param,
+            element_index,
+            row,
+            col,
+            layout,
+        } => {
+            let row = lower_expr(func, ctx, row);
+            let col = lower_expr(func, ctx, col);
+            let value = ctx.get_or_alloc_reg(func, *dest);
+            func.add_inst(Inst::mov_f32(value.clone(), Operand::imm_f32(0.0)));
+            let skip_load =
+                bumpalo::format!(in ctx.arena, "matmul_epilogue_load_skip_{}", ctx.label_counter)
+                    .into_bump_str();
+            ctx.label_counter += 1;
+            let row_outside = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                row_outside.clone(),
+                row.clone(),
+                Operand::imm_u64(layout.rows as u64),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: row_outside,
+                target: skip_load,
+            });
+            let col_outside = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                col_outside.clone(),
+                col.clone(),
+                Operand::imm_u64(layout.cols as u64),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: col_outside,
+                target: skip_load,
+            });
+            let element_offset = lower_expr(func, ctx, element_index);
+            let source = ctx
+                .param_ptrs
+                .get(src_param)
+                .expect("Parameter not found in context")
+                .clone();
+            let address = global_f32_address(func, source, element_offset);
+            func.add_inst(Inst::load_global_scalar_f32(value, address));
+            func.add_inst(Inst::Label(skip_load));
+        }
         Stmt::Store {
             dest_param,
             src,
@@ -790,6 +866,22 @@ fn lower_stmt<'a>(
 
             // Loop end label
             func.add_inst(Inst::Label(loop_end));
+        }
+        Stmt::LoadTileElement { dest, src } => {
+            let value = if ctx.fragment_regs.contains_key(src) {
+                let shared = ctx
+                    .reg_to_shared
+                    .get(src)
+                    .expect("WMMA accumulator has no shared-memory backing");
+                let address = shared_thread_address(func, ctx, *shared);
+                let value = func.add_f32_register();
+                func.add_inst(Inst::load_shared_scalar_f32(value.clone(), address));
+                value
+            } else {
+                ctx.get_or_alloc_reg(func, *src)
+            };
+            let output = ctx.get_or_alloc_reg(func, *dest);
+            func.add_inst(Inst::mov_f32(output, value));
         }
         Stmt::Embedding {
             vocabulary: _,
@@ -3482,6 +3574,36 @@ mod tests {
         assert!(source.contains("cvt.rna.tf32.f32"));
         assert!(source.contains("wmma.mma.sync.aligned.m16n16k8"));
         assert!(source.contains("wmma.store.d.sync.aligned.m16n16k8"));
+    }
+
+    #[test]
+    fn fused_matmul_epilogue_keeps_tf32_and_one_entry() {
+        let lhs = TensorExpr::constant(vec![0.25; 32 * 32], vec![32, 32]);
+        let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
+        let bias = TensorExpr::constant(vec![0.1; 32 * 32], vec![32, 32]);
+        let graph: TensorGraph<f32> = (lhs.matmul(rhs) + bias).relu().into();
+        let plan =
+            PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict).unwrap();
+        assert_eq!(plan.matmul_regions().len(), 1);
+
+        let mut tile_graph = TileGraph::from(graph);
+        tile_graph
+            .add_matmul_regions(plan.matmul_regions())
+            .unwrap();
+        tile_graph.set_physical_nodes(
+            plan.steps()
+                .iter()
+                .filter_map(|step| {
+                    (step.action == crate::ptx::PtxPlanAction::Kernel).then_some(step.node)
+                })
+                .collect(),
+        );
+        let source = PtxGraph::from(tile_graph).module_source();
+
+        assert_eq!(source.matches(".visible .entry").count(), 1);
+        assert!(source.contains("wmma.mma.sync.aligned.m16n16k8"));
+        assert!(source.contains("add.f32"));
+        assert!(source.contains("max.f32"));
     }
 
     #[test]

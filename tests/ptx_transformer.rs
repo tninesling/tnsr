@@ -1016,6 +1016,51 @@ fn ptx_tf32_matmul_matches_cpu() {
 }
 
 #[test]
+fn ptx_fuses_rank_two_matmul_epilogues_for_scalar_and_tf32_plans() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    for (m, k, n, tolerance, expect_tf32) in [(15, 17, 16, 2e-4, false), (32, 32, 32, 2e-3, true)] {
+        let left = TensorExpr::constant(
+            (0..m * k)
+                .map(|index| (index % 29) as f32 / 29.0 - 0.5)
+                .collect(),
+            vec![m, k],
+        );
+        let right = TensorExpr::constant(
+            (0..k * n)
+                .map(|index| (index % 31) as f32 / 31.0 - 0.5)
+                .collect(),
+            vec![k, n],
+        );
+        let bias = TensorExpr::constant(
+            (0..n)
+                .map(|index| (index % 7) as f32 * 0.01 - 0.02)
+                .collect(),
+            vec![n],
+        );
+        let graph: TensorGraph<f32> = (left.matmul(right) + bias).relu().into();
+        let expected = execute_cpu(&graph);
+
+        ptx.compile_owned(graph.clone()).unwrap();
+        let plan = ptx.execution_plan().unwrap();
+        assert_eq!(plan.matmul_regions().len(), 1);
+        assert_eq!(plan.matmul_regions()[0].epilogue_operations.len(), 2);
+        assert_eq!(ptx.compile_metrics().generated_kernels, 1);
+        assert_eq!(
+            ptx.module_source().unwrap().contains("wmma.mma.sync"),
+            expect_tf32
+        );
+
+        let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+        assert_close(&actual, &expected, tolerance);
+        assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+        assert_eq!(ptx.execution_metrics().materialized_values, 4);
+        assert_eq!(ptx.execution_metrics().intermediate_materialized_bytes, 0);
+    }
+}
+
+#[test]
 fn ptx_broadcasted_batched_matmul_matches_cpu() {
     let Some(mut ptx) = ptx_executor() else {
         return;

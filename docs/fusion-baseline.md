@@ -232,3 +232,34 @@ The shuffle schedule is 21.6% faster than strict Tile PTX at interval
 midpoints and 26.6% faster than static CUDA. Remaining work is target-aware
 schedule tuning and broader reduction strategy selection rather than another
 missing CUDA reduction primitive.
+
+## Stage 6a Matmul Epilogue Fusion
+
+Stage 6a introduces a dedicated matmul anchor region for rank-2, nonzero-inner-
+dimension matrix multiplications. Same-shape pointwise descendants are evaluated
+inside the existing 16x16 scalar or TF32 matmul kernel, so the raw matmul result
+does not need a global intermediate or a separate pointwise launch. External
+epilogue inputs retain composed virtual indexing; the common vector-bias pattern
+therefore remains a virtual broadcast and is loaded directly by the matmul
+epilogue.
+
+The first slice deliberately excludes batched matmul, zero-K matmul, and
+pointwise producers on either matrix operand. Those cases keep their existing
+execution paths until batch pointer binding and predicated tiled producer
+evaluation are represented explicitly. Both scalar and tensor-core plans are
+covered, including partial 16x16 edge tiles.
+
+Measured on 2026-10-02 with the same RTX 4080. The graph is a `[128, 128]`
+matmul followed by a `[128]` vector bias and ReLU:
+
+| Backend | Time |
+| --- | ---: |
+| CPU | 503.92-577.63 us |
+| Static CUDA | 93.753-95.091 us |
+| Tile PTX, fused | 39.726-40.162 us |
+
+The fused Tile PTX path uses one physical kernel, materializes no raw matmul
+intermediate, and is 57.6% faster than static CUDA at interval midpoints. The
+next anchor work is batched epilogue binding, tiled operand-producer fusion, and
+the equivalent convolution epilogue model; target-aware matmul schedule metadata
+is the next tile-selection prerequisite.

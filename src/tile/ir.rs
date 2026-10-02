@@ -47,6 +47,16 @@ pub enum Stmt {
         layout: MatrixLayout,
     },
 
+    /// Load one logical matrix element into a scalar register, or zero outside bounds.
+    LoadGlobalPredicated {
+        dest: TileVar,
+        src_param: String,
+        element_index: Expr,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
+    },
+
     /// Store from register/shared to global
     Store {
         dest_param: String, // Parameter name
@@ -83,6 +93,12 @@ pub enum Stmt {
         b: TileVar,
         layout: MatMulLayout, // NN, NT, TN, TT
         plan: MatMulPlan,
+    },
+
+    /// Expose the calling thread's scalar from a register or fragment tile.
+    LoadTileElement {
+        dest: TileVar,
+        src: TileVar,
     },
 
     /// Gather rows from a contiguous [vocabulary, width] table.

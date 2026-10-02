@@ -34,6 +34,15 @@ fn subgroup_reduction_chain() -> TensorGraph<f32> {
         .into()
 }
 
+fn matmul_epilogue() -> TensorGraph<f32> {
+    let input = Parameter::new(vec![0.25; 128 * 128], vec![128, 128]);
+    let weight = Parameter::new(vec![0.5; 128 * 128], vec![128, 128]);
+    let bias = Parameter::new(vec![0.1; 128], vec![128]);
+    (TensorExpr::from(input).matmul(TensorExpr::from(weight)) + TensorExpr::from(bias))
+        .relu()
+        .into()
+}
+
 fn bias_broadcast_region() -> TensorGraph<f32> {
     let input = Parameter::new(vec![0.25; 256 * 1024], vec![256, 1024]);
     let bias = Parameter::new(vec![0.5; 1024], vec![1024]);
@@ -69,6 +78,7 @@ fn fusion_benchmarks(c: &mut Criterion) {
         ("pointwise_diamond", pointwise_diamond()),
         ("reduction_chain", reduction_chain()),
         ("subgroup_reduction_chain", subgroup_reduction_chain()),
+        ("matmul_epilogue", matmul_epilogue()),
         ("bias_broadcast_region", bias_broadcast_region()),
         ("permutation_region", permutation_region()),
         ("softmax_reduction_region", softmax_reduction_region()),

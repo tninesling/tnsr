@@ -41,7 +41,7 @@ fn cooperative_ptx_executor() -> Option<PtxExecutor> {
 }
 
 #[test]
-fn ptx_cooperative_warp_reduction_matches_cpu() {
+fn ptx_cooperative_block_reduction_matches_cpu() {
     let Some(mut ptx) = cooperative_ptx_executor() else {
         return;
     };
@@ -89,11 +89,20 @@ fn ptx_cooperative_reductions_cover_schedule_boundaries_and_middle_axes() {
         for graph in graphs {
             let expected = execute_cpu(&graph);
             ptx.compile_owned(graph.clone()).unwrap();
-            assert!(matches!(
+            let expected_schedule = if width < 256 {
+                tnsr::tile::ReductionSchedule::Subgroup { width: 32 }
+            } else {
+                tnsr::tile::ReductionSchedule::Block { threads: 128 }
+            };
+            assert_eq!(
                 ptx.execution_plan().unwrap().reduction_regions()[0].schedule,
-                tnsr::tile::ReductionSchedule::Subgroup { .. }
-                    | tnsr::tile::ReductionSchedule::Block { .. }
-            ));
+                expected_schedule
+            );
+            let source = ptx.module_source().unwrap();
+            assert_eq!(
+                source.matches("shfl.sync.down.b32").count(),
+                if width < 256 { 5 } else { 0 }
+            );
             let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
             assert_close(&actual, &expected, 1e-5);
         }

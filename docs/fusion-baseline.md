@@ -203,3 +203,32 @@ Measured on 2026-10-02 with the same RTX 4080:
 
 The remaining reduction work is a validated warp-shuffle finalization path and
 target-aware tuning beyond the initial CUDA thresholds.
+
+## Stage 5e Warp-Shuffle Finalization
+
+Stage 5e replaces the subgroup schedule's lane-zero shared-memory fold with a
+five-stage CUDA warp shuffle tree. Predicate-aware shuffle results select the
+reduction identity for lanes beyond each stage's valid source range, preserving
+correct sum, mean, and max behavior for non-power-of-two extents. Shared memory
+is reduced from 32 partial values to one value used only to broadcast the final
+result before epilogue evaluation. The block schedule continues to use its
+128-thread shared-memory tree.
+
+The generated PTX is checked for the five offsets 1, 2, 4, 8, and 16, while
+CUDA correctness coverage exercises widths 32, 33, and 127 on a middle axis.
+The benchmark uses shape `[2048, 128]`, preserving the 262,144-element workload
+of the existing `[256, 1024]` reduction benchmark while selecting the subgroup
+schedule.
+
+Measured on 2026-10-02 with the same RTX 4080:
+
+| Path, `[2048, 128]` | Time |
+| --- | ---: |
+| Static CUDA | 213.98-214.36 us |
+| Strict Tile PTX | 200.27-200.81 us |
+| Cooperative Tile PTX | 156.96-157.64 us |
+
+The shuffle schedule is 21.6% faster than strict Tile PTX at interval
+midpoints and 26.6% faster than static CUDA. Remaining work is target-aware
+schedule tuning and broader reduction strategy selection rather than another
+missing CUDA reduction primitive.

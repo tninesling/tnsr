@@ -24,6 +24,16 @@ fn reduction_chain() -> TensorGraph<f32> {
         .into()
 }
 
+fn subgroup_reduction_chain() -> TensorGraph<f32> {
+    let input = Parameter::new(vec![0.25; 2048 * 128], vec![2048, 128]);
+    TensorExpr::from(input)
+        .relu()
+        .exp()
+        .reduce_sum(1)
+        .log()
+        .into()
+}
+
 fn bias_broadcast_region() -> TensorGraph<f32> {
     let input = Parameter::new(vec![0.25; 256 * 1024], vec![256, 1024]);
     let bias = Parameter::new(vec![0.5; 1024], vec![1024]);
@@ -58,6 +68,7 @@ fn fusion_benchmarks(c: &mut Criterion) {
     for (name, graph) in [
         ("pointwise_diamond", pointwise_diamond()),
         ("reduction_chain", reduction_chain()),
+        ("subgroup_reduction_chain", subgroup_reduction_chain()),
         ("bias_broadcast_region", bias_broadcast_region()),
         ("permutation_region", permutation_region()),
         ("softmax_reduction_region", softmax_reduction_region()),
@@ -81,7 +92,10 @@ fn fusion_benchmarks(c: &mut Criterion) {
 
         if matches!(
             name,
-            "reduction_chain" | "softmax_reduction_region" | "layer_norm_reduction_region"
+            "reduction_chain"
+                | "subgroup_reduction_chain"
+                | "softmax_reduction_region"
+                | "layer_norm_reduction_region"
         ) {
             let mut cooperative =
                 PtxExecutor::new_with_reduction_mode(PtxReductionMode::DeterministicTree);

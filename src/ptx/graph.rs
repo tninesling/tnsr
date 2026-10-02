@@ -2227,35 +2227,26 @@ fn lower_cooperative_reduction_region<'a>(
     func.add_inst(Inst::Label(loop_end));
 
     let shared_name = ctx.arena.alloc_str("reduction_partials");
+    let shared_value_count = if tree_reduce { thread_count } else { 1 };
     func.add_shared_memory(
         shared_name,
-        thread_count as usize * std::mem::size_of::<f32>(),
+        shared_value_count as usize * std::mem::size_of::<f32>(),
     );
     let shared_base = func.add_u64_register();
     func.add_inst(Inst::mov_u64(
         shared_base.clone(),
         Operand::symbol(shared_name),
     ));
-    let shared_byte_offset = func.add_u64_register();
-    func.add_inst(Inst::mul_u64(
-        shared_byte_offset.clone(),
-        lane.clone(),
-        Operand::imm_u64(std::mem::size_of::<f32>() as u64),
-    ));
-    let shared_address = func.add_u64_register();
-    func.add_inst(Inst::add_u64(
-        shared_address.clone(),
-        shared_base.clone(),
-        shared_byte_offset,
-    ));
-    func.add_inst(Inst::StSharedF32 {
-        addr: shared_address,
-        src: vec![accumulator.clone()],
-        vec: super::instructions::VecWidth::Scalar,
-    });
-    func.add_inst(Inst::BarSync { barrier_id: 0 });
 
     if tree_reduce {
+        let shared_address = shared_address_for_lane(func, shared_base.clone(), lane.clone());
+        func.add_inst(Inst::StSharedF32 {
+            addr: shared_address,
+            src: vec![accumulator.clone()],
+            vec: super::instructions::VecWidth::Scalar,
+        });
+        func.add_inst(Inst::BarSync { barrier_id: 0 });
+
         let mut stride = thread_count / 2;
         while stride != 0 {
             let skip = next_label(ctx, "block_reduction_skip");
@@ -2314,7 +2305,43 @@ fn lower_cooperative_reduction_region<'a>(
             stride /= 2;
         }
     } else {
-        let partials_done = next_label(ctx, "subgroup_reduction_partials_done");
+        assert_eq!(
+            thread_count, 32,
+            "PTX subgroup reductions require one CUDA warp"
+        );
+        for offset in [1, 2, 4, 8, 16] {
+            let accumulator_bits = func.add_b32_register();
+            func.add_inst(Inst::mov_b32(accumulator_bits.clone(), accumulator.clone()));
+            let shuffled_bits = func.add_b32_register();
+            let valid = func.add_predicate_register();
+            func.add_inst(Inst::shfl_sync_down_b32(
+                shuffled_bits.clone(),
+                valid.clone(),
+                accumulator_bits,
+                offset,
+            ));
+            let shuffled = func.add_f32_register();
+            func.add_inst(Inst::mov_f32_b32(shuffled.clone(), shuffled_bits));
+            let peer = func.add_f32_register();
+            func.add_inst(Inst::selp_f32(
+                peer.clone(),
+                shuffled,
+                Operand::imm_f32(identity),
+                valid,
+            ));
+            match region.op {
+                crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
+                    Inst::add_f32(accumulator.clone(), accumulator.clone(), peer),
+                ),
+                crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
+                    accumulator.clone(),
+                    accumulator.clone(),
+                    peer,
+                )),
+            }
+        }
+
+        let shuffle_done = next_label(ctx, "subgroup_reduction_shuffle_done");
         let not_leader = func.add_predicate_register();
         func.add_inst(Inst::setp_ne_u64(
             not_leader.clone(),
@@ -2323,43 +2350,14 @@ fn lower_cooperative_reduction_region<'a>(
         ));
         func.add_inst(Inst::Bra {
             condition: not_leader,
-            target: partials_done,
+            target: shuffle_done,
         });
-        func.add_inst(Inst::mov_f32(
-            accumulator.clone(),
-            Operand::imm_f32(identity),
-        ));
-        let partial = begin_counted_loop(
-            func,
-            ctx,
-            "subgroup_reduction_partials",
-            thread_count as usize,
-        );
-        let partial_address =
-            shared_address_for_lane(func, shared_base.clone(), partial.counter.clone());
-        let partial_value = func.add_f32_register();
-        func.add_inst(Inst::LdSharedF32 {
-            dst: vec![partial_value.clone()],
-            addr: partial_address,
-            vec: super::instructions::VecWidth::Scalar,
-        });
-        match region.op {
-            crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
-                Inst::add_f32(accumulator.clone(), accumulator.clone(), partial_value),
-            ),
-            crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
-                accumulator.clone(),
-                accumulator.clone(),
-                partial_value,
-            )),
-        }
-        end_counted_loop(func, partial);
         func.add_inst(Inst::StSharedF32 {
             addr: shared_base.clone(),
             src: vec![accumulator.clone()],
             vec: super::instructions::VecWidth::Scalar,
         });
-        func.add_inst(Inst::Label(partials_done));
+        func.add_inst(Inst::Label(shuffle_done));
         func.add_inst(Inst::BarSync { barrier_id: 0 });
     }
 
@@ -3502,6 +3500,39 @@ mod tests {
     }
 
     #[test]
+    fn subgroup_reduction_emits_shuffle_tree() {
+        let input = TensorExpr::constant(vec![0.25; 2 * 127], vec![2, 127]);
+        let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
+        let plan = PtxExecutionPlan::build_with_reduction_mode(
+            &graph,
+            PtxReductionMode::DeterministicTree,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.reduction_regions()[0].schedule,
+            crate::tile::ReductionSchedule::Subgroup { width: 32 }
+        );
+        let mut tile_graph = TileGraph::from(graph);
+        tile_graph
+            .add_reduction_regions(plan.reduction_regions())
+            .unwrap();
+        let source = PtxGraph::from(tile_graph).module_source();
+
+        assert_eq!(source.matches("shfl.sync.down.b32").count(), 5);
+        for offset in [1, 2, 4, 8, 16] {
+            assert!(
+                source.lines().any(|line| {
+                    line.contains("shfl.sync.down.b32")
+                        && line.contains(&format!(", {offset}, 0x1f, 0xffffffff;"))
+                }),
+                "missing shuffle stage for offset {offset}"
+            );
+        }
+        assert!(source.contains(".shared .align 16 .b8 reduction_partials[4];"));
+        assert_eq!(source.matches("bar.sync 0;").count(), 1);
+    }
+
+    #[test]
     fn block_reduction_emits_shared_tree() {
         let input = TensorExpr::constant(vec![0.25; 2 * 1024], vec![2, 1024]);
         let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
@@ -3519,6 +3550,7 @@ mod tests {
         assert!(source.contains(".shared .align 16 .b8 reduction_partials[512];"));
         assert_eq!(source.matches("bar.sync 0;").count(), 8);
         assert!(source.contains("ld.shared.f32"));
+        assert!(!source.contains("shfl.sync"));
     }
 
     #[test]

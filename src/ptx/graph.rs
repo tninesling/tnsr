@@ -1767,14 +1767,12 @@ fn lower_reduction_region<'a>(
     region: &crate::tile::ReductionRegion,
 ) {
     match region.schedule {
-        crate::tile::ReductionSchedule::Subgroup { width }
-            if region.full_epilogue_operations.is_empty() =>
-        {
-            lower_subgroup_reduction_region(func, ctx, region, width)
+        crate::tile::ReductionSchedule::Serial => lower_serial_reduction_region(func, ctx, region),
+        crate::tile::ReductionSchedule::Subgroup { width } => {
+            lower_cooperative_reduction_region(func, ctx, region, width, false)
         }
-        crate::tile::ReductionSchedule::Serial
-        | crate::tile::ReductionSchedule::Subgroup { .. } => {
-            lower_serial_reduction_region(func, ctx, region)
+        crate::tile::ReductionSchedule::Block { threads } => {
+            lower_cooperative_reduction_region(func, ctx, region, threads, true)
         }
     }
 }
@@ -2079,22 +2077,23 @@ fn lower_serial_reduction_region<'a>(
     }
 }
 
-fn lower_subgroup_reduction_region<'a>(
+fn lower_cooperative_reduction_region<'a>(
     func: &mut Function<'a>,
     ctx: &mut LoweringContext<'a>,
     region: &crate::tile::ReductionRegion,
-    subgroup_width: u32,
+    thread_count: u32,
+    tree_reduce: bool,
 ) {
     use crate::tile::{ReductionInputDomain, RegionOpKind};
 
-    let subgroup_width = u64::from(subgroup_width);
+    let thread_count = u64::from(thread_count);
 
     let global_tid = global_linear_tid(func);
     let fiber = func.add_u64_register();
     func.add_inst(Inst::div_u64(
         fiber.clone(),
         global_tid.clone(),
-        Operand::imm_u64(subgroup_width),
+        Operand::imm_u64(thread_count),
     ));
     let outside = func.add_predicate_register();
     func.add_inst(Inst::setp_ge_u64(
@@ -2111,7 +2110,7 @@ fn lower_subgroup_reduction_region<'a>(
     func.add_inst(Inst::mul_u64(
         warp_base.clone(),
         fiber.clone(),
-        Operand::imm_u64(subgroup_width),
+        Operand::imm_u64(thread_count),
     ));
     let lane = func.add_u64_register();
     func.add_inst(Inst::sub_u64(lane.clone(), global_tid, warp_base));
@@ -2175,7 +2174,7 @@ fn lower_subgroup_reduction_region<'a>(
     let input_offset = func.add_u64_register();
     func.add_inst(Inst::add_u64(
         input_offset.clone(),
-        base_offset,
+        base_offset.clone(),
         contribution,
     ));
     let mut values = HashMap::new();
@@ -2222,7 +2221,7 @@ fn lower_subgroup_reduction_region<'a>(
     func.add_inst(Inst::add_u64(
         counter.clone(),
         counter,
-        Operand::imm_u64(subgroup_width),
+        Operand::imm_u64(thread_count),
     ));
     func.add_inst(Inst::BraUni { target: loop_start });
     func.add_inst(Inst::Label(loop_end));
@@ -2230,7 +2229,7 @@ fn lower_subgroup_reduction_region<'a>(
     let shared_name = ctx.arena.alloc_str("reduction_partials");
     func.add_shared_memory(
         shared_name,
-        subgroup_width as usize * std::mem::size_of::<f32>(),
+        thread_count as usize * std::mem::size_of::<f32>(),
     );
     let shared_base = func.add_u64_register();
     func.add_inst(Inst::mov_u64(
@@ -2256,69 +2255,133 @@ fn lower_subgroup_reduction_region<'a>(
     });
     func.add_inst(Inst::BarSync { barrier_id: 0 });
 
-    let partials_done = next_label(ctx, "warp_reduction_partials_done");
-    let not_leader = func.add_predicate_register();
-    func.add_inst(Inst::setp_ne_u64(
-        not_leader.clone(),
-        lane.clone(),
-        Operand::imm_u64(0),
-    ));
-    func.add_inst(Inst::Bra {
-        condition: not_leader,
-        target: partials_done,
-    });
-    func.add_inst(Inst::mov_f32(
-        accumulator.clone(),
-        Operand::imm_f32(identity),
-    ));
-    let partial = begin_counted_loop(
-        func,
-        ctx,
-        "subgroup_reduction_partials",
-        subgroup_width as usize,
-    );
-    let partial_byte_offset = func.add_u64_register();
-    func.add_inst(Inst::mul_u64(
-        partial_byte_offset.clone(),
-        partial.counter.clone(),
-        Operand::imm_u64(std::mem::size_of::<f32>() as u64),
-    ));
-    let partial_address = func.add_u64_register();
-    func.add_inst(Inst::add_u64(
-        partial_address.clone(),
-        shared_base,
-        partial_byte_offset,
-    ));
-    let shuffled = func.add_f32_register();
+    if tree_reduce {
+        let mut stride = thread_count / 2;
+        while stride != 0 {
+            let skip = next_label(ctx, "block_reduction_skip");
+            let inactive = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                inactive.clone(),
+                lane.clone(),
+                Operand::imm_u64(stride),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: inactive,
+                target: skip,
+            });
+            let peer_lane = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                peer_lane.clone(),
+                lane.clone(),
+                Operand::imm_u64(stride),
+            ));
+            let peer_byte_offset = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                peer_byte_offset.clone(),
+                peer_lane,
+                Operand::imm_u64(std::mem::size_of::<f32>() as u64),
+            ));
+            let peer_address = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                peer_address.clone(),
+                shared_base.clone(),
+                peer_byte_offset,
+            ));
+            let peer = func.add_f32_register();
+            func.add_inst(Inst::LdSharedF32 {
+                dst: vec![peer.clone()],
+                addr: peer_address,
+                vec: super::instructions::VecWidth::Scalar,
+            });
+            match region.op {
+                crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
+                    Inst::add_f32(accumulator.clone(), accumulator.clone(), peer),
+                ),
+                crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
+                    accumulator.clone(),
+                    accumulator.clone(),
+                    peer,
+                )),
+            }
+            let lane_address = shared_address_for_lane(func, shared_base.clone(), lane.clone());
+            func.add_inst(Inst::StSharedF32 {
+                addr: lane_address,
+                src: vec![accumulator.clone()],
+                vec: super::instructions::VecWidth::Scalar,
+            });
+            func.add_inst(Inst::Label(skip));
+            func.add_inst(Inst::BarSync { barrier_id: 0 });
+            stride /= 2;
+        }
+    } else {
+        let partials_done = next_label(ctx, "subgroup_reduction_partials_done");
+        let not_leader = func.add_predicate_register();
+        func.add_inst(Inst::setp_ne_u64(
+            not_leader.clone(),
+            lane.clone(),
+            Operand::imm_u64(0),
+        ));
+        func.add_inst(Inst::Bra {
+            condition: not_leader,
+            target: partials_done,
+        });
+        func.add_inst(Inst::mov_f32(
+            accumulator.clone(),
+            Operand::imm_f32(identity),
+        ));
+        let partial = begin_counted_loop(
+            func,
+            ctx,
+            "subgroup_reduction_partials",
+            thread_count as usize,
+        );
+        let partial_address =
+            shared_address_for_lane(func, shared_base.clone(), partial.counter.clone());
+        let partial_value = func.add_f32_register();
+        func.add_inst(Inst::LdSharedF32 {
+            dst: vec![partial_value.clone()],
+            addr: partial_address,
+            vec: super::instructions::VecWidth::Scalar,
+        });
+        match region.op {
+            crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
+                Inst::add_f32(accumulator.clone(), accumulator.clone(), partial_value),
+            ),
+            crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
+                accumulator.clone(),
+                accumulator.clone(),
+                partial_value,
+            )),
+        }
+        end_counted_loop(func, partial);
+        func.add_inst(Inst::StSharedF32 {
+            addr: shared_base.clone(),
+            src: vec![accumulator.clone()],
+            vec: super::instructions::VecWidth::Scalar,
+        });
+        func.add_inst(Inst::Label(partials_done));
+        func.add_inst(Inst::BarSync { barrier_id: 0 });
+    }
+
+    let reduced_accumulator = func.add_f32_register();
     func.add_inst(Inst::LdSharedF32 {
-        dst: vec![shuffled.clone()],
-        addr: partial_address,
+        dst: vec![reduced_accumulator.clone()],
+        addr: shared_base,
         vec: super::instructions::VecWidth::Scalar,
     });
-    match region.op {
-        crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
-            Inst::add_f32(accumulator.clone(), accumulator.clone(), shuffled),
-        ),
-        crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
-            accumulator.clone(),
-            accumulator.clone(),
-            shuffled,
-        )),
-    }
-    end_counted_loop(func, partial);
-    func.add_inst(Inst::Label(partials_done));
 
-    let reduced = if region.op == crate::tensor::ReduceOp::Mean {
-        let value = func.add_f32_register();
-        func.add_inst(Inst::div_f32(
-            value.clone(),
-            accumulator,
-            Operand::imm_f32(region.input_shape[region.axis] as f32),
-        ));
-        value
-    } else {
-        accumulator
-    };
+    let reduced =
+        if region.op == crate::tensor::ReduceOp::Mean && region.input_shape[region.axis] != 0 {
+            let value = func.add_f32_register();
+            func.add_inst(Inst::div_f32(
+                value.clone(),
+                reduced_accumulator,
+                Operand::imm_f32(region.input_shape[region.axis] as f32),
+            ));
+            value
+        } else {
+            reduced_accumulator
+        };
     values.clear();
     values.insert(region.reduced_value, reduced);
     for (index, input) in region.inputs.iter().enumerate() {
@@ -2332,12 +2395,13 @@ fn lower_subgroup_reduction_region<'a>(
     for operation in &region.epilogue_operations {
         emit_cooperative_reduction_region_op(func, operation, &mut values);
     }
+    let reduced_values = values.clone();
 
     let skip_store = next_label(ctx, "warp_reduction_skip_store");
     let not_leader = func.add_predicate_register();
     func.add_inst(Inst::setp_ne_u64(
         not_leader.clone(),
-        lane,
+        lane.clone(),
         Operand::imm_u64(0),
     ));
     func.add_inst(Inst::Bra {
@@ -2354,6 +2418,79 @@ fn lower_subgroup_reduction_region<'a>(
         }
     }
     func.add_inst(Inst::Label(skip_store));
+
+    if !region.full_epilogue_operations.is_empty() {
+        let full_counter = func.add_u64_register();
+        func.add_inst(Inst::mov_u64(full_counter.clone(), lane));
+        let full_start = next_label(ctx, "cooperative_full_epilogue_loop");
+        let full_end = next_label(ctx, "cooperative_full_epilogue_end");
+        func.add_inst(Inst::Label(full_start));
+        let done = func.add_predicate_register();
+        func.add_inst(Inst::setp_ge_u64(
+            done.clone(),
+            full_counter.clone(),
+            Operand::imm_u64(region.input_shape[region.axis] as u64),
+        ));
+        func.add_inst(Inst::Bra {
+            condition: done,
+            target: full_end,
+        });
+        let contribution = func.add_u64_register();
+        func.add_inst(Inst::mul_u64(
+            contribution.clone(),
+            full_counter.clone(),
+            Operand::imm_u64(input_strides[region.axis] as u64),
+        ));
+        let full_offset = func.add_u64_register();
+        func.add_inst(Inst::add_u64(
+            full_offset.clone(),
+            base_offset,
+            contribution,
+        ));
+        values.clear();
+        values.extend(reduced_values);
+        for (index, input) in region.inputs.iter().enumerate() {
+            if input.domain == ReductionInputDomain::Full {
+                let offset = reduction_region_input_offset(
+                    func,
+                    input,
+                    &region.input_shape,
+                    full_offset.clone(),
+                );
+                let value = load_param_f32_at(func, ctx, &format!("input_{index}"), offset);
+                values.insert(input.value, value);
+            }
+        }
+        for operation in &region.producer_operations {
+            emit_cooperative_reduction_region_op(func, operation, &mut values);
+        }
+        for operation in &region.full_epilogue_operations {
+            emit_cooperative_reduction_region_op(func, operation, &mut values);
+        }
+        for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate()
+        {
+            if shape == &region.input_shape {
+                let value = values
+                    .get(&output.value)
+                    .expect("full reduction epilogue output SSA value is unavailable")
+                    .clone();
+                store_param_f32_at(
+                    func,
+                    ctx,
+                    &format!("output_{index}"),
+                    full_offset.clone(),
+                    value,
+                );
+            }
+        }
+        func.add_inst(Inst::add_u64(
+            full_counter.clone(),
+            full_counter,
+            Operand::imm_u64(thread_count),
+        ));
+        func.add_inst(Inst::BraUni { target: full_start });
+        func.add_inst(Inst::Label(full_end));
+    }
 
     fn emit_cooperative_reduction_region_op<'a>(
         func: &mut Function<'a>,
@@ -2440,6 +2577,22 @@ fn lower_subgroup_reduction_region<'a>(
         }
         values.insert(operation.output, output);
     }
+}
+
+fn shared_address_for_lane<'a>(
+    func: &mut Function<'a>,
+    shared_base: Operand<'a, U64>,
+    lane: Operand<'a, U64>,
+) -> Operand<'a, U64> {
+    let byte_offset = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        byte_offset.clone(),
+        lane,
+        Operand::imm_u64(std::mem::size_of::<f32>() as u64),
+    ));
+    let address = func.add_u64_register();
+    func.add_inst(Inst::add_u64(address.clone(), shared_base, byte_offset));
+    address
 }
 
 fn reduction_region_input_offset<'a>(
@@ -3349,7 +3502,7 @@ mod tests {
     }
 
     #[test]
-    fn cooperative_reduction_emits_shared_partial_reduction() {
+    fn block_reduction_emits_shared_tree() {
         let input = TensorExpr::constant(vec![0.25; 2 * 1024], vec![2, 1024]);
         let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
         let plan = PtxExecutionPlan::build_with_reduction_mode(
@@ -3363,8 +3516,8 @@ mod tests {
             .unwrap();
         let source = PtxGraph::from(tile_graph).module_source();
 
-        assert!(source.contains(".shared .align 16 .b8 reduction_partials[128];"));
-        assert!(source.contains("bar.sync 0;"));
+        assert!(source.contains(".shared .align 16 .b8 reduction_partials[512];"));
+        assert_eq!(source.matches("bar.sync 0;").count(), 8);
         assert!(source.contains("ld.shared.f32"));
     }
 

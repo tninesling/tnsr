@@ -178,3 +178,28 @@ Cooperative softmax and LayerNorm now outperform the Stage 5b static-CUDA
 ranges. The next reduction work is to replace the lane-zero partial fold with a
 validated shuffle tree, support cooperative full-shape epilogues, and add a
 multi-warp block schedule for wider or lower-fiber-count reductions.
+
+## Stage 5d Block Reductions and Cooperative Full Epilogues
+
+Stage 5d adds a 128-thread block schedule for axes of at least 256 elements and
+for profitable broadcast-back epilogues. Threads accumulate strided local
+partials, then combine them through a deterministic power-of-two shared-memory
+tree. The final reduced value is broadcast through shared memory so the entire
+block can evaluate a full-shape epilogue in parallel.
+
+The planner fuses cooperative full epilogues containing at most two pointwise
+operations. More complex epilogues remain separate pointwise regions: this
+guard preserves LayerNorm parallelism while still fusing the simple final
+division in softmax. Schedule metadata uses backend-neutral subgroup widths;
+the PTX planner supplies CUDA's 32-lane subgroup and 128-thread block sizes.
+
+Measured on 2026-10-02 with the same RTX 4080:
+
+| Graph | Stage 5c cooperative | Stage 5d cooperative | Change |
+| --- | ---: | ---: | ---: |
+| Reduction chain | 159.93-160.84 us | 152.81-153.33 us | 5.0% faster |
+| Softmax, `[256, 1024]` | 442.21-448.96 us | 418.07-422.22 us | 5.1% faster |
+| LayerNorm, `[256, 1024]` | 460.19-474.07 us | 449.18-452.09 us | 4.0% faster at interval midpoints |
+
+The remaining reduction work is a validated warp-shuffle finalization path and
+target-aware tuning beyond the initial CUDA thresholds.

@@ -582,6 +582,11 @@ impl PtxExecutor {
                     block_dim: (width, 1, 1),
                     shared_mem_bytes: 0,
                 },
+                crate::tile::ReductionSchedule::Block { threads } => LaunchConfig {
+                    grid_dim: (launch_len, 1, 1),
+                    block_dim: (threads, 1, 1),
+                    shared_mem_bytes: 0,
+                },
             };
             unsafe { launcher.launch(config) }
                 .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;

@@ -55,26 +55,26 @@ fn ptx_cooperative_warp_reduction_matches_cpu() {
     ptx.compile_owned(graph.clone()).unwrap();
     assert_eq!(
         ptx.execution_plan().unwrap().reduction_regions()[0].schedule,
-        tnsr::tile::ReductionSchedule::Subgroup { width: 32 }
+        tnsr::tile::ReductionSchedule::Block { threads: 128 }
     );
     let source = ptx.module_source().unwrap();
-    assert!(source.contains("reduction_partials[128]"));
+    assert!(source.contains("reduction_partials[512]"));
     assert!(!source.contains("shfl.sync"));
     assert!(
         ptx.describe_plan(&graph)
             .unwrap()
-            .contains("schedule=Subgroup { width: 32 }")
+            .contains("schedule=Block { threads: 128 }")
     );
     let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
     assert_close(&actual, &expected, 1e-3);
 }
 
 #[test]
-fn ptx_cooperative_reductions_cover_partial_warps_and_middle_axes() {
+fn ptx_cooperative_reductions_cover_schedule_boundaries_and_middle_axes() {
     let Some(mut ptx) = cooperative_ptx_executor() else {
         return;
     };
-    for width in [32, 33, 127] {
+    for width in [32, 33, 127, 256] {
         let values: Vec<_> = (0..2 * width * 3)
             .map(|index| ((index % 29) as f32 - 14.0) * 0.125)
             .collect();
@@ -92,11 +92,37 @@ fn ptx_cooperative_reductions_cover_partial_warps_and_middle_axes() {
             assert!(matches!(
                 ptx.execution_plan().unwrap().reduction_regions()[0].schedule,
                 tnsr::tile::ReductionSchedule::Subgroup { .. }
+                    | tnsr::tile::ReductionSchedule::Block { .. }
             ));
             let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
             assert_close(&actual, &expected, 1e-5);
         }
     }
+}
+
+#[test]
+fn ptx_cooperative_block_fuses_large_softmax_epilogue() {
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    let values: Vec<_> = (0..2 * 1024)
+        .map(|index| ((index % 97) as f32 - 48.0) * 0.03125)
+        .collect();
+    let graph: TensorGraph<f32> = softmax(TensorExpr::constant(values, vec![2, 1024]), 1).into();
+    let expected = execute_cpu(&graph);
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.reduction_regions().len(), 1);
+    let region = &plan.reduction_regions()[0];
+    assert_eq!(
+        region.schedule,
+        tnsr::tile::ReductionSchedule::Block { threads: 128 }
+    );
+    assert!(!region.full_epilogue_operations.is_empty());
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_close(&actual, &expected, 2e-5);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 3);
 }
 
 fn execute_cpu(graph: &TensorGraph<f32>) -> Vec<f32> {

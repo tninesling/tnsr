@@ -23,6 +23,8 @@ pub enum ReductionSchedule {
     Serial,
     /// One hardware subgroup cooperatively reduces each output fiber.
     Subgroup { width: u32 },
+    /// One thread block cooperatively reduces each output fiber.
+    Block { threads: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -309,6 +311,12 @@ impl ReductionRegion {
     fn validate_lowering_inputs(&self) -> Result<()> {
         if let ReductionSchedule::Subgroup { width } = self.schedule {
             anyhow::ensure!(width > 0, "reduction subgroup width must be non-zero");
+        }
+        if let ReductionSchedule::Block { threads } = self.schedule {
+            anyhow::ensure!(
+                threads.is_power_of_two() && threads <= 1024,
+                "reduction block size must be a non-zero power of two at most 1024"
+            );
         }
         anyhow::ensure!(
             self.outputs.len() == self.output_shapes.len(),

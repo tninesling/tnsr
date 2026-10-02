@@ -20,6 +20,9 @@ const MAX_NON_IDENTITY_VIRTUAL_FANOUT: usize = 2;
 // warp/block reduction schedule is available.
 const MAX_SERIAL_FULL_EPILOGUE_AXIS: usize = 32;
 const CUDA_WARP_SIZE: u32 = 32;
+const CUDA_BLOCK_REDUCTION_THREADS: u32 = 128;
+const MIN_BLOCK_REDUCTION_AXIS: usize = 256;
+const MAX_COOPERATIVE_FULL_EPILOGUE_OPS: usize = 2;
 
 /// Floating-point ordering policy used when planning PTX reductions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -486,12 +489,13 @@ fn form_reduction_regions<G>(
 
         let mut broadcast_members = Vec::new();
         let mut full_epilogue_set = HashSet::new();
-        if input_shape
-            .get(match &graph[anchor] {
-                TensorGraphNode::ReduceAxis { axis, .. } => *axis,
-                _ => unreachable!(),
-            })
-            .is_some_and(|&extent| extent <= MAX_SERIAL_FULL_EPILOGUE_AXIS)
+        if reduction_mode == PtxReductionMode::DeterministicTree
+            || input_shape
+                .get(match &graph[anchor] {
+                    TensorGraphNode::ReduceAxis { axis, .. } => *axis,
+                    _ => unreachable!(),
+                })
+                .is_some_and(|&extent| extent <= MAX_SERIAL_FULL_EPILOGUE_AXIS)
         {
             for &reduced_source in std::iter::once(&anchor).chain(epilogue_members.iter()) {
                 for consumer in graph
@@ -525,6 +529,12 @@ fn form_reduction_regions<G>(
         }
         let mut full_epilogue_members: Vec<_> = full_epilogue_set.iter().copied().collect();
         full_epilogue_members.sort_by_key(|node| positions[node]);
+        if reduction_mode == PtxReductionMode::DeterministicTree
+            && full_epilogue_members.len() > MAX_COOPERATIVE_FULL_EPILOGUE_OPS
+        {
+            broadcast_members.clear();
+            full_epilogue_members.clear();
+        }
         if producer_members.is_empty()
             && epilogue_members.is_empty()
             && full_epilogue_members.is_empty()
@@ -569,13 +579,19 @@ fn form_reduction_regions<G>(
             full_epilogue_members,
             outputs,
         )?;
-        if reduction_mode == PtxReductionMode::DeterministicTree
-            && region.input_shape[region.axis] >= CUDA_WARP_SIZE as usize
-            && region.full_epilogue_operations.is_empty()
-        {
-            region.schedule = ReductionSchedule::Subgroup {
-                width: CUDA_WARP_SIZE,
-            };
+        if reduction_mode == PtxReductionMode::DeterministicTree {
+            let reduction_extent = region.input_shape[region.axis];
+            if reduction_extent >= MIN_BLOCK_REDUCTION_AXIS
+                || !region.full_epilogue_operations.is_empty()
+            {
+                region.schedule = ReductionSchedule::Block {
+                    threads: CUDA_BLOCK_REDUCTION_THREADS,
+                };
+            } else if reduction_extent >= CUDA_WARP_SIZE as usize {
+                region.schedule = ReductionSchedule::Subgroup {
+                    width: CUDA_WARP_SIZE,
+                };
+            }
         }
         claimed.extend(region.members.iter().copied());
         regions.push(region);
@@ -841,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn cooperative_mode_selects_warp_schedule_without_changing_strict_default() {
+    fn cooperative_mode_selects_subgroup_schedule_without_changing_strict_default() {
         let input = TensorExpr::constant(vec![0.25; 2 * 64], vec![2, 64]);
         let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
 
@@ -861,6 +877,82 @@ mod tests {
             ReductionSchedule::Subgroup {
                 width: CUDA_WARP_SIZE
             }
+        );
+    }
+
+    #[test]
+    fn cooperative_mode_selects_block_at_extent_boundary() {
+        for (width, expected) in [
+            (
+                MIN_BLOCK_REDUCTION_AXIS - 1,
+                ReductionSchedule::Subgroup {
+                    width: CUDA_WARP_SIZE,
+                },
+            ),
+            (
+                MIN_BLOCK_REDUCTION_AXIS,
+                ReductionSchedule::Block {
+                    threads: CUDA_BLOCK_REDUCTION_THREADS,
+                },
+            ),
+        ] {
+            let input = TensorExpr::constant(vec![0.25; 2 * width], vec![2, width]);
+            let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
+            let plan = PtxExecutionPlan::build_with_reduction_mode(
+                &graph,
+                PtxReductionMode::DeterministicTree,
+            )
+            .unwrap();
+            assert_eq!(plan.reduction_regions[0].schedule, expected);
+        }
+    }
+
+    #[test]
+    fn cooperative_mode_fuses_large_full_epilogue_with_block_schedule() {
+        let width = 64;
+        let input = TensorExpr::constant(vec![0.25; 2 * width], vec![2, width]);
+        let producer = input.exp();
+        let sum = producer.clone().reduce_sum(1).broadcast(vec![2, width]);
+        let graph: TensorGraph<f32> = (producer / sum).into();
+        let plan = PtxExecutionPlan::build_with_reduction_mode(
+            &graph,
+            PtxReductionMode::DeterministicTree,
+        )
+        .unwrap();
+
+        assert_eq!(plan.reduction_regions.len(), 1);
+        assert_eq!(
+            plan.reduction_regions[0].schedule,
+            ReductionSchedule::Block {
+                threads: CUDA_BLOCK_REDUCTION_THREADS
+            }
+        );
+        assert_eq!(plan.reduction_regions[0].full_epilogue_operations.len(), 1);
+    }
+
+    #[test]
+    fn cooperative_mode_rejects_expensive_full_epilogue() {
+        let width = MIN_BLOCK_REDUCTION_AXIS;
+        let input = TensorExpr::constant(vec![0.25; 2 * width], vec![2, width]);
+        let producer = input.exp();
+        let sum = producer.clone().reduce_sum(1).broadcast(vec![2, width]);
+        let graph: TensorGraph<f32> = (producer / sum).relu().exp().into();
+        let plan = PtxExecutionPlan::build_with_reduction_mode(
+            &graph,
+            PtxReductionMode::DeterministicTree,
+        )
+        .unwrap();
+
+        assert_eq!(plan.reduction_regions.len(), 1);
+        assert!(
+            plan.reduction_regions[0]
+                .full_epilogue_operations
+                .is_empty()
+        );
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| matches!(step.action, PtxPlanAction::PointwiseRegion(_)))
         );
     }
 }

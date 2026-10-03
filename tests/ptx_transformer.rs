@@ -1230,3 +1230,61 @@ fn ptx_matmul_shared_operand_and_residual_bindings_are_not_duplicated() {
     assert_close(&actual, &execute_cpu(&graph), 2e-4);
     assert_eq!(ptx.execution_metrics().kernel_launches, 1);
 }
+
+#[test]
+fn ptx_index_optimization_hoists_irregular_batch_decoding_and_preserves_precision() {
+    use tnsr::tile::MatMulPrecision;
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    for batch in [1, 2, 3, 8] {
+        let (m, k, n) = (33, 37, 35);
+        let lhs = TensorExpr::constant(
+            (0..batch * m * k)
+                .map(|i| ((i % 17) as f32 - 8.0) / 32.0)
+                .collect(),
+            vec![batch, m, k],
+        );
+        let rhs = TensorExpr::constant(
+            (0..k * n).map(|i| ((i % 13) as f32 - 6.0) / 32.0).collect(),
+            vec![k, n],
+        );
+        let graph: TensorGraph<f32> = (lhs.matmul(rhs)
+            + TensorExpr::constant(vec![0.125; n], vec![n]))
+        .relu()
+        .into();
+        let expected = execute_cpu(&graph);
+        for precision in [MatMulPrecision::StrictF32, MatMulPrecision::AllowTf32] {
+            ptx.set_matmul_precision(precision);
+            let actual = ptx.execute(&graph, HashMap::new()).unwrap();
+            assert_close(&actual, &expected, 1e-6);
+            assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+            let source = ptx.module_source().unwrap();
+            let body = source
+                .split("loop_body_k_tile:")
+                .nth(1)
+                .unwrap()
+                .split("bra.uni loop_start_k_tile;")
+                .next()
+                .unwrap();
+            assert!(
+                !body.contains("div.u64"),
+                "batch decoding remained inside K loop: batch={batch}"
+            );
+            assert!(
+                !source
+                    .lines()
+                    .any(|line| line.contains("div.u64") && line.trim_end().ends_with(", 1;"))
+            );
+            if batch == 3 {
+                assert!(
+                    source
+                        .split("loop_start_k_tile:")
+                        .next()
+                        .unwrap()
+                        .contains("div.u64")
+                );
+            }
+        }
+    }
+}

@@ -221,6 +221,7 @@ struct LoweringContext<'a> {
     param_dtypes: HashMap<String, crate::tile::DType>,
     /// Maps loop variable names to their i32 register operands
     loop_vars: HashMap<String, Operand<'a, I32>>,
+    index_vars: HashMap<String, Operand<'a, U64>>,
     /// Current offset into shared memory for allocation
     shared_mem_offset: usize,
     /// Maps TileVar to its dimensions (rows, cols)
@@ -245,6 +246,7 @@ impl<'a> LoweringContext<'a> {
             param_ptrs: HashMap::new(),
             param_dtypes: HashMap::new(),
             loop_vars: HashMap::new(),
+            index_vars: HashMap::new(),
             shared_mem_offset: 0,
             tile_dims: HashMap::new(),
             fragment_regs: HashMap::new(),
@@ -388,9 +390,11 @@ fn lower_block<'a>(
     ctx: &mut LoweringContext<'a>,
     block: &crate::tile::Block,
 ) {
+    let outer_bindings = ctx.index_vars.clone();
     for stmt in &block.stmts {
         lower_stmt(func, ctx, stmt);
     }
+    ctx.index_vars = outer_bindings;
 }
 
 fn lower_stmt<'a>(
@@ -401,6 +405,10 @@ fn lower_stmt<'a>(
     use crate::tile::Stmt;
 
     match stmt {
+        Stmt::LetIndex { name, value } => {
+            let value = lower_expr(func, ctx, value);
+            ctx.index_vars.insert(name.clone(), value);
+        }
         Stmt::BoundsCheck { extent } => {
             let tid = global_linear_tid(func);
             let outside = func.add_predicate_register();
@@ -1535,7 +1543,7 @@ fn lower_stmt<'a>(
             ));
 
             // Track the loop variable in context
-            ctx.loop_vars.insert(loop_var.clone(), loop_counter.clone());
+            let outer_loop_var = ctx.loop_vars.insert(loop_var.clone(), loop_counter.clone());
 
             // Create labels
             let loop_start_label =
@@ -1597,7 +1605,11 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::Label(loop_end_label));
 
             // Remove loop variable from context
-            ctx.loop_vars.remove(loop_var);
+            if let Some(outer) = outer_loop_var {
+                ctx.loop_vars.insert(loop_var.clone(), outer);
+            } else {
+                ctx.loop_vars.remove(loop_var);
+            }
         }
     }
 }
@@ -3633,6 +3645,9 @@ fn lower_expr<'a>(
     match expr {
         Expr::Const(val) => Operand::imm_u64(*val as u64),
         Expr::Var(name) => {
+            if let Some(value) = ctx.index_vars.get(name) {
+                return value.clone();
+            }
             // Check if it's a loop variable
             if let Some(loop_var_i32) = ctx.loop_vars.get(name) {
                 // Convert from i32 to u64
@@ -3706,9 +3721,7 @@ fn lower_expr<'a>(
             result
         }
         Expr::FloorDiv(value, divisor) => {
-            // TODO(#61): Consume simplified/index-egraph expressions so identity
-            // and power-of-two divisions avoid general division calls. Keep
-            // instruction emission here; optimize and place expressions upstream.
+            // The tile index pass normalizes and places expressions upstream.
             let value = lower_expr(func, ctx, value);
             let result = func.add_u64_register();
             func.add_inst(Inst::div_u64(
@@ -3716,6 +3729,28 @@ fn lower_expr<'a>(
                 value,
                 Operand::imm_u64(*divisor as u64),
             ));
+            result
+        }
+        Expr::ShiftRight(value, shift) => {
+            let value = lower_expr(func, ctx, value);
+            let result = func.add_u64_register();
+            func.add_inst(Inst::ShiftRightU64(
+                super::instructions::ShiftRightInst::new(
+                    result.clone(),
+                    value,
+                    Operand::imm_i32(*shift as i32),
+                ),
+            ));
+            result
+        }
+        Expr::BitAnd(value, mask) => {
+            let value = lower_expr(func, ctx, value);
+            let result = func.add_u64_register();
+            func.add_inst(Inst::AndU64(super::instructions::AndInst::new(
+                result.clone(),
+                value,
+                Operand::imm_u64(*mask),
+            )));
             result
         }
         Expr::Mod(value, modulus) => {
@@ -3748,6 +3783,11 @@ fn lower_expr_i32<'a>(
     match expr {
         Expr::Const(val) => Operand::imm_i32(*val as i32),
         Expr::Var(name) => {
+            if let Some(value) = ctx.index_vars.get(name) {
+                let result = func.add_i32_register();
+                func.add_inst(Inst::convert_i32_u64(result.clone(), value.clone()));
+                return result;
+            }
             // Check if it's a loop variable
             if let Some(loop_var) = ctx.loop_vars.get(name) {
                 loop_var.clone()

@@ -22,7 +22,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 5;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 6;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -31,6 +31,7 @@ pub struct PtxCompileMetrics {
     pub generated_kernels: usize,
     pub ptx_source_bytes: usize,
     pub compile_time: Duration,
+    pub index_optimization_time: Duration,
 }
 
 /// Measurements from the most recent successful graph execution.
@@ -361,6 +362,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                 .filter_map(|step| (step.action == PtxPlanAction::Kernel).then_some(step.node))
                 .collect(),
         );
+        let index_started = Instant::now();
+        tile_graph.optimize_indices()?;
+        let index_optimization_time = index_started.elapsed();
         let ptx_graph = PtxGraph::from(tile_graph).with_target(self.target);
         let ptx_src = ptx_graph.module_source();
         let generated_kernels = execution_plan
@@ -392,6 +396,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             generated_kernels,
             ptx_source_bytes,
             compile_time: started.elapsed(),
+            index_optimization_time,
         };
 
         Ok(())

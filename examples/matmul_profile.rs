@@ -265,6 +265,15 @@ fn main() -> Result<()> {
     } else {
         end_to_end.push(0.0);
     }
+    let compile = executor.compile_metrics();
+    let execution = executor.execution_metrics();
+    println!(
+        "METRICS,{:.3},{:.3},{},{}",
+        compile.compile_time.as_secs_f64() * 1e6,
+        compile.index_optimization_time.as_secs_f64() * 1e6,
+        execution.kernel_launches,
+        execution.intermediate_materialized_bytes
+    );
     println!(
         "RESULT,{},{stage},{batches},{m},{k},{n},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{error}",
         if flat { "flat" } else { "batch" },

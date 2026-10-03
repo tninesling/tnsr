@@ -260,7 +260,7 @@ fn main() {
 
     // Dispatch based on dtype
     match args.dtype.as_str() {
-        "f32" => run_mnist::<f32>(&args, &mnist_data, &mut rng, Runtime::new()),
+        "f32" => run_mnist::<f32>(&args, &mnist_data, &mut rng, Runtime::<f32>::new()),
         "f16" => run_mnist::<f16>(
             &args,
             &mnist_data,

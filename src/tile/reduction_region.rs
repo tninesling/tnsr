@@ -57,8 +57,8 @@ pub struct ReductionRegion {
 }
 
 impl ReductionRegion {
-    pub fn from_graph<G>(
-        graph: &TensorGraph<f32, G>,
+    pub fn from_graph<D: crate::tile::TileDType, G>(
+        graph: &TensorGraph<D, G>,
         producer_members: Vec<NodeIndex>,
         anchor: NodeIndex,
         epilogue_members: Vec<NodeIndex>,
@@ -296,10 +296,18 @@ impl ReductionRegion {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel(&format!("reduction_region_{region_id}"));
         for index in 0..self.inputs.len() {
-            builder.add_param(&format!("input_{index}"), DType::F32, true);
+            builder.add_param(
+                &format!("input_{index}"),
+                self.inputs[index].tensor.dtype,
+                true,
+            );
         }
         for index in 0..self.outputs.len() {
-            builder.add_param(&format!("output_{index}"), DType::F32, false);
+            builder.add_param(
+                &format!("output_{index}"),
+                self.inputs[0].tensor.dtype,
+                false,
+            );
         }
         if self.schedule == ReductionSchedule::Serial {
             builder.bounds_check(extent);
@@ -333,7 +341,7 @@ impl ReductionRegion {
                 input.node.index()
             );
             anyhow::ensure!(
-                input.tensor.dtype == DType::F32,
+                matches!(input.tensor.dtype, DType::F32 | DType::F16 | DType::BF16),
                 "reduction input {} must have f32 dtype",
                 input.node.index()
             );
@@ -360,8 +368,8 @@ impl ReductionRegion {
     }
 }
 
-fn add_external_input<G>(
-    graph: &TensorGraph<f32, G>,
+fn add_external_input<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
     node: NodeIndex,
     domain: ReductionInputDomain,
     expected_shape: &[usize],
@@ -393,7 +401,7 @@ fn add_external_input<G>(
         node,
         value,
         domain,
-        tensor: VirtualTensor::identity(node, graph[node].shape().clone(), DType::F32),
+        tensor: VirtualTensor::identity(node, graph[node].shape().clone(), D::TILE_DTYPE),
         source_shape: graph[node].shape().clone(),
     });
     Ok(value)
@@ -425,8 +433,8 @@ fn validate_index_expression(expression: &IndexExpr, rank: usize) -> Result<()> 
     Ok(())
 }
 
-fn build_pointwise_operation<G>(
-    graph: &TensorGraph<f32, G>,
+fn build_pointwise_operation<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
     node: NodeIndex,
     values: &HashMap<NodeIndex, RegionValue>,
     next_value: &mut usize,

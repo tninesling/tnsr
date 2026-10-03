@@ -172,30 +172,33 @@ impl<D> BufferPool<D> {
 /// Reusable CUDA buffer store, bucketed by exact element count.
 #[cfg(feature = "cuda")]
 #[derive(Debug, Default)]
-pub struct CudaBufferPool {
-    inner: ExactSizePool<cudarc::driver::CudaSlice<f32>>,
+pub struct CudaBufferPool<D = f32> {
+    inner: ExactSizePool<cudarc::driver::CudaSlice<D>>,
 }
 
 #[cfg(feature = "cuda")]
-impl CudaBufferPool {
+impl<D> CudaBufferPool<D>
+where
+    D: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits,
+{
     /// Take a device buffer of exactly `len` elements.
     pub fn take(
         &mut self,
         stream: &std::sync::Arc<cudarc::driver::CudaStream>,
         len: usize,
-    ) -> anyhow::Result<cudarc::driver::CudaSlice<f32>> {
+    ) -> anyhow::Result<cudarc::driver::CudaSlice<D>> {
         self.inner
-            .take_or_try_with(len, len * std::mem::size_of::<f32>(), || {
+            .take_or_try_with(len, len * std::mem::size_of::<D>(), || {
                 if len == 0 {
-                    stream.null::<f32>().map_err(anyhow::Error::from)
+                    stream.null::<D>().map_err(anyhow::Error::from)
                 } else {
-                    stream.alloc_zeros::<f32>(len).map_err(anyhow::Error::from)
+                    stream.alloc_zeros::<D>(len).map_err(anyhow::Error::from)
                 }
             })
     }
 
     /// Return a device buffer to the pool for reuse on the same stream.
-    pub fn give(&mut self, buf: cudarc::driver::CudaSlice<f32>) {
+    pub fn give(&mut self, buf: cudarc::driver::CudaSlice<D>) {
         self.inner.give(buf.len(), buf);
     }
 

@@ -1,7 +1,7 @@
 use super::builder::TileIRBuilder;
 use super::ir::{
     Conv2dGeometry, DType, Dim, Expr, MatMulLayout, MatMulPlan, MatrixLayout, MaxPool2dGeometry,
-    ReduceOp, TileIR,
+    ReduceOp, TileDType, TileIR,
 };
 #[cfg(feature = "cuda")]
 use super::{FusionRegion, MatMulRegion, ReductionRegion};
@@ -76,16 +76,29 @@ fn max_pool2d_geometry(
     }
 }
 
-impl<G> From<TensorGraph<f32, G>> for TileGraph {
-    fn from(tensor_graph: TensorGraph<f32, G>) -> Self {
+impl<D: TileDType, G> From<TensorGraph<D, G>> for TileGraph {
+    fn from(tensor_graph: TensorGraph<D, G>) -> Self {
         Self::from_with_tf32_support(tensor_graph, true)
     }
 }
 
 impl TileGraph {
-    pub(crate) fn from_with_tf32_support<G>(
-        tensor_graph: TensorGraph<f32, G>,
+    /// Lower a graph while preserving its host storage dtype.
+    pub fn from_graph<D: TileDType, G>(graph: &TensorGraph<D, G>) -> Self {
+        Self::from_with_matmul_schedules(graph, true, &HashMap::new())
+    }
+
+    pub(crate) fn from_with_tf32_support<D: TileDType, G>(
+        tensor_graph: TensorGraph<D, G>,
         supports_tf32: bool,
+    ) -> Self {
+        Self::from_with_matmul_schedules(&tensor_graph, supports_tf32, &HashMap::new())
+    }
+
+    pub(crate) fn from_with_matmul_schedules<D: TileDType, G>(
+        tensor_graph: &TensorGraph<D, G>,
+        supports_tf32: bool,
+        schedules: &HashMap<NodeIndex, super::MatMulSchedule>,
     ) -> Self {
         // Pre-compute input shapes for MatMul, BroadcastAxis, ReduceAxis, and Transpose nodes
         let mut op_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
@@ -117,7 +130,7 @@ impl TileGraph {
         }
 
         Self {
-            graph: tensor_graph.graph.map_owned(
+            graph: tensor_graph.graph.map(
                 |idx, node| {
                     let shape = node.shape().clone();
                     // Get input shapes for operations that need them
@@ -125,9 +138,16 @@ impl TileGraph {
                         .get(&idx)
                         .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
                         .unwrap_or_default();
-                    Self::lower_node(node, &shape, &input_shapes, supports_tf32)
+                    Self::lower_node(
+                        node.clone(),
+                        D::TILE_DTYPE,
+                        &shape,
+                        &input_shapes,
+                        supports_tf32,
+                        schedules.get(&idx).copied(),
+                    )
                 },
-                |_, e| e,
+                |_, e| *e,
             ),
             #[cfg(feature = "cuda")]
             region_kernels: Vec::new(),
@@ -174,17 +194,13 @@ impl TileGraph {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn add_matmul_regions(
-        &mut self,
-        regions: &[MatMulRegion],
-        supports_tf32: bool,
-    ) -> anyhow::Result<()> {
+    pub(crate) fn add_matmul_regions(&mut self, regions: &[MatMulRegion]) -> anyhow::Result<()> {
         self.matmul_region_kernels = regions
             .iter()
             .enumerate()
             .map(|(region_id, region)| TileRegionKernel {
                 region_id,
-                ir: Self::lower_matmul_region(region, region_id, supports_tf32),
+                ir: Self::lower_matmul_region(region, region_id),
             })
             .collect();
         Ok(())
@@ -196,20 +212,24 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_node(
-        node: TensorGraphNode<f32>,
+    fn lower_node<D: TileDType>(
+        node: TensorGraphNode<D>,
+        dtype: DType,
         shape: &[usize],
         input_shapes: &[&[usize]],
         supports_tf32: bool,
+        schedule: Option<super::MatMulSchedule>,
     ) -> TileIR {
         match node {
-            TensorGraphNode::Constant { data, .. } => Self::lower_constant(data, shape),
-            TensorGraphNode::Input { name, .. } => Self::lower_input(name, shape),
-            TensorGraphNode::Parameter { id, data, .. } => Self::lower_parameter(id, data, shape),
-            TensorGraphNode::Unary { op, .. } => Self::lower_unary(op, shape),
+            TensorGraphNode::Constant { data, .. } => Self::lower_constant(dtype, data, shape),
+            TensorGraphNode::Input { name, .. } => Self::lower_input(dtype, name, shape),
+            TensorGraphNode::Parameter { id, data, .. } => {
+                Self::lower_parameter(dtype, id, data, shape)
+            }
+            TensorGraphNode::Unary { op, .. } => Self::lower_unary(dtype, op, shape),
             #[cfg(feature = "fusion")]
-            TensorGraphNode::FusedUnary { ops, .. } => Self::lower_fused_unary(&ops, shape),
-            TensorGraphNode::Binary { op, .. } => Self::lower_binary(op, shape),
+            TensorGraphNode::FusedUnary { ops, .. } => Self::lower_fused_unary(dtype, &ops, shape),
+            TensorGraphNode::Binary { op, .. } => Self::lower_binary(dtype, op, shape),
             TensorGraphNode::MatMul { .. } => {
                 assert!(
                     shape.len() >= 2 && input_shapes.iter().all(|input| input.len() >= 2),
@@ -218,29 +238,51 @@ impl TileGraph {
                 let m = shape[shape.len() - 2];
                 let n = shape[shape.len() - 1];
                 let k = input_shapes[0][input_shapes[0].len() - 1];
-                Self::lower_matmul(m, n, k, false, false, supports_tf32)
+                Self::lower_matmul_impl(
+                    m,
+                    n,
+                    k,
+                    false,
+                    false,
+                    schedule.unwrap_or_else(|| {
+                        super::MatMulSchedule::select_for_dtype(
+                            m,
+                            n,
+                            k,
+                            dtype,
+                            super::MatMulCapabilities {
+                                tf32: supports_tf32,
+                                f16: supports_tf32,
+                                bf16: supports_tf32,
+                            },
+                            super::MatMulPrecision::AllowTf32,
+                        )
+                    }),
+                    None,
+                )
             }
             TensorGraphNode::Embedding { .. } => {
                 let weight_shape = input_shapes[0];
                 assert_eq!(weight_shape.len(), 2, "embedding weight must have rank 2");
-                Self::lower_embedding(weight_shape[0], weight_shape[1], input_shapes[1])
+                Self::lower_embedding(dtype, weight_shape[0], weight_shape[1], input_shapes[1])
             }
             TensorGraphNode::EmbeddingBackward { .. } => {
                 assert_eq!(shape.len(), 2, "embedding gradient must have rank 2");
-                Self::lower_embedding_backward(shape[0], shape[1], input_shapes[0])
+                Self::lower_embedding_backward(dtype, shape[0], shape[1], input_shapes[0])
             }
             TensorGraphNode::IndexedCrossEntropy { .. } => {
                 let logits_shape = input_shapes[0];
                 let vocabulary = *logits_shape
                     .last()
                     .expect("indexed cross entropy logits must have rank >= 1");
-                Self::lower_indexed_cross_entropy(vocabulary, shape.iter().product())
+                Self::lower_indexed_cross_entropy(dtype, vocabulary, shape.iter().product())
             }
             TensorGraphNode::IndexedCrossEntropyBackward { .. } => {
                 let vocabulary = *shape
                     .last()
                     .expect("indexed cross entropy gradient must have rank >= 1");
                 Self::lower_indexed_cross_entropy_backward(
+                    dtype,
                     vocabulary,
                     input_shapes[1].iter().product(),
                 )
@@ -251,28 +293,36 @@ impl TileGraph {
                 let rank = axes.len();
                 assert!(rank >= 2, "transpose requires rank >= 2");
                 axes.swap(rank - 2, rank - 1);
-                Self::lower_reindex(input_shape, shape, axes)
+                Self::lower_reindex(dtype, input_shape, shape, axes)
             }
             TensorGraphNode::Permute { axes, .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
-                Self::lower_reindex(input_shape, shape, axes)
+                Self::lower_reindex(dtype, input_shape, shape, axes)
             }
             TensorGraphNode::BroadcastAxis { axis, .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
-                Self::lower_broadcast_axis(axis, input_shape, shape)
+                Self::lower_broadcast_axis(dtype, axis, input_shape, shape)
             }
             TensorGraphNode::ReduceAxis { op, axis, .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();
-                Self::lower_reduce_axis(op, axis, input_shape, shape)
+                Self::lower_reduce_axis(dtype, op, axis, input_shape, shape)
             }
-            TensorGraphNode::Gt { .. } => Self::lower_gt(shape),
-            TensorGraphNode::Mask { .. } => Self::lower_mask(shape),
+            TensorGraphNode::Gt { .. } => Self::lower_gt(dtype, shape),
+            TensorGraphNode::Mask { .. } => Self::lower_mask(dtype, shape),
             TensorGraphNode::Conv2d {
                 stride, padding, ..
-            } => Self::lower_conv2d(input_shapes[0], input_shapes[1], shape, stride, padding),
+            } => Self::lower_conv2d(
+                dtype,
+                input_shapes[0],
+                input_shapes[1],
+                shape,
+                stride,
+                padding,
+            ),
             TensorGraphNode::ConvTranspose2d {
                 stride, padding, ..
             } => Self::lower_conv_transpose2d(
+                dtype,
                 input_shapes[0],
                 input_shapes[1],
                 shape,
@@ -282,6 +332,7 @@ impl TileGraph {
             TensorGraphNode::Conv2dBackwardWeight {
                 stride, padding, ..
             } => Self::lower_conv2d_backward_weight(
+                dtype,
                 input_shapes[0],
                 input_shapes[1],
                 shape,
@@ -292,12 +343,13 @@ impl TileGraph {
                 kernel_size,
                 stride,
                 ..
-            } => Self::lower_max_pool2d(input_shapes[0], shape, kernel_size, stride),
+            } => Self::lower_max_pool2d(dtype, input_shapes[0], shape, kernel_size, stride),
             TensorGraphNode::MaxPool2dBackward {
                 kernel_size,
                 stride,
                 ..
             } => Self::lower_max_pool2d_backward(
+                dtype,
                 input_shapes[0],
                 input_shapes[1],
                 kernel_size,
@@ -307,19 +359,29 @@ impl TileGraph {
         }
     }
 
-    fn lower_embedding(vocabulary: usize, width: usize, indices_shape: &[usize]) -> TileIR {
+    fn lower_embedding(
+        dtype: DType,
+        vocabulary: usize,
+        width: usize,
+        indices_shape: &[usize],
+    ) -> TileIR {
         let index_count = indices_shape.iter().product();
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("embedding");
-        builder.add_param("weight", DType::F32, true);
-        builder.add_param("indices", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
-        builder.bounds_check(index_count * width);
+        builder.add_param("weight", dtype, true);
+        builder.add_param("indices", dtype, true);
+        builder.add_param("output", dtype, false);
+        builder.bounds_check(if dtype == DType::F32 {
+            index_count * width
+        } else {
+            vocabulary * width
+        });
         builder.embedding(vocabulary, width, index_count);
         builder.finish()
     }
 
     fn lower_embedding_backward(
+        dtype: DType,
         vocabulary: usize,
         width: usize,
         indices_shape: &[usize],
@@ -327,38 +389,47 @@ impl TileGraph {
         let index_count = indices_shape.iter().product();
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("embedding_backward");
-        builder.add_param("indices", DType::F32, true);
-        builder.add_param("grad_output", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
-        builder.bounds_check(index_count * width);
+        builder.add_param("indices", dtype, true);
+        builder.add_param("grad_output", dtype, true);
+        builder.add_param("output", dtype, false);
+        builder.bounds_check(if dtype == DType::F32 {
+            index_count * width
+        } else {
+            vocabulary * width
+        });
         builder.embedding_backward(vocabulary, width, index_count);
         builder.finish()
     }
 
-    fn lower_indexed_cross_entropy(vocabulary: usize, row_count: usize) -> TileIR {
+    fn lower_indexed_cross_entropy(dtype: DType, vocabulary: usize, row_count: usize) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("indexed_cross_entropy");
-        builder.add_param("logits", DType::F32, true);
-        builder.add_param("targets", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("logits", dtype, true);
+        builder.add_param("targets", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(row_count);
         builder.indexed_cross_entropy(vocabulary, row_count);
         builder.finish()
     }
 
-    fn lower_indexed_cross_entropy_backward(vocabulary: usize, row_count: usize) -> TileIR {
+    fn lower_indexed_cross_entropy_backward(
+        dtype: DType,
+        vocabulary: usize,
+        row_count: usize,
+    ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("indexed_cross_entropy_backward");
-        builder.add_param("logits", DType::F32, true);
-        builder.add_param("targets", DType::F32, true);
-        builder.add_param("grad_output", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("logits", dtype, true);
+        builder.add_param("targets", dtype, true);
+        builder.add_param("grad_output", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(row_count * vocabulary);
         builder.indexed_cross_entropy_backward(vocabulary, row_count);
         builder.finish()
     }
 
     fn lower_conv2d(
+        dtype: DType,
         input: &[usize],
         weight: &[usize],
         output: &[usize],
@@ -368,15 +439,16 @@ impl TileGraph {
         let geometry = conv2d_geometry(input, weight, output, stride, padding);
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("conv2d");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("weight", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("weight", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(output.iter().product());
         builder.conv2d(geometry);
         builder.finish()
     }
 
     fn lower_conv_transpose2d(
+        dtype: DType,
         grad_output: &[usize],
         weight: &[usize],
         output: &[usize],
@@ -386,15 +458,16 @@ impl TileGraph {
         let geometry = conv2d_geometry(output, weight, grad_output, stride, padding);
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("conv_transpose2d");
-        builder.add_param("grad_output", DType::F32, true);
-        builder.add_param("weight", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("grad_output", dtype, true);
+        builder.add_param("weight", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(output.iter().product());
         builder.conv_transpose2d(geometry);
         builder.finish()
     }
 
     fn lower_conv2d_backward_weight(
+        dtype: DType,
         input: &[usize],
         grad_output: &[usize],
         output: &[usize],
@@ -404,15 +477,16 @@ impl TileGraph {
         let geometry = conv2d_geometry(input, output, grad_output, stride, padding);
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("conv2d_backward_weight");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("grad_output", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("grad_output", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(output.iter().product());
         builder.conv2d_backward_weight(geometry);
         builder.finish()
     }
 
     fn lower_max_pool2d(
+        dtype: DType,
         input: &[usize],
         output: &[usize],
         kernel_size: usize,
@@ -421,14 +495,15 @@ impl TileGraph {
         let geometry = max_pool2d_geometry(input, output, kernel_size, stride);
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("max_pool2d");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(output.iter().product());
         builder.max_pool2d(geometry);
         builder.finish()
     }
 
     fn lower_max_pool2d_backward(
+        dtype: DType,
         input: &[usize],
         pooled: &[usize],
         kernel_size: usize,
@@ -437,40 +512,25 @@ impl TileGraph {
         let geometry = max_pool2d_geometry(input, pooled, kernel_size, stride);
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("max_pool2d_backward");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("pooled", DType::F32, true);
-        builder.add_param("grad_output", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("pooled", dtype, true);
+        builder.add_param("grad_output", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(input.iter().product());
         builder.max_pool2d_backward(geometry);
         builder.finish()
     }
 
     #[allow(dead_code)]
-    fn lower_matmul(
-        m: usize,
-        n: usize,
-        k: usize,
-        transpose_a: bool,
-        transpose_b: bool,
-        supports_tf32: bool,
-    ) -> TileIR {
-        Self::lower_matmul_impl(m, n, k, transpose_a, transpose_b, supports_tf32, None)
-    }
-
     #[cfg(feature = "cuda")]
-    fn lower_matmul_region(
-        region: &super::MatMulRegion,
-        region_id: usize,
-        supports_tf32: bool,
-    ) -> TileIR {
+    fn lower_matmul_region(region: &super::MatMulRegion, region_id: usize) -> TileIR {
         Self::lower_matmul_impl(
             region.m,
             region.n,
             region.k,
             false,
             false,
-            supports_tf32,
+            region.schedule,
             Some((region, region_id)),
         )
     }
@@ -481,9 +541,10 @@ impl TileGraph {
         k: usize,
         transpose_a: bool,
         transpose_b: bool,
-        supports_tf32: bool,
+        schedule: super::MatMulSchedule,
         region: Option<(&super::MatMulRegion, usize)>,
     ) -> TileIR {
+        let dtype = schedule.storage_dtype;
         let mut builder = TileIRBuilder::new();
         if let Some((_, region_id)) = region {
             builder.start_kernel(&format!("matmul_region_{region_id}"));
@@ -493,35 +554,60 @@ impl TileGraph {
 
         let (a_param, b_param) = if let Some((region, _)) = region {
             for index in 0..region.inputs.len() {
-                builder.add_param(&format!("input_{index}"), DType::F32, true);
+                builder.add_param(&format!("input_{index}"), dtype, true);
             }
             for index in 0..region.outputs.len() {
-                builder.add_param(&format!("output_{index}"), DType::F32, false);
+                builder.add_param(&format!("output_{index}"), dtype, false);
             }
-            ("input_0", "input_1")
+            // Region construction guarantees that both operand SSA values are
+            // represented in the input table, including when they alias.
+            let names: HashMap<_, _> = region
+                .inputs
+                .iter()
+                .enumerate()
+                .map(|(index, input)| (input.value, format!("input_{index}")))
+                .collect();
+            (
+                names[&region.lhs_value].clone(),
+                names[&region.rhs_value].clone(),
+            )
         } else {
-            builder.add_param("A", DType::F32, true);
-            builder.add_param("B", DType::F32, true);
-            builder.add_param("C", DType::F32, false);
-            ("A", "B")
+            builder.add_param("A", dtype, true);
+            builder.add_param("B", dtype, true);
+            builder.add_param("C", dtype, false);
+            ("A".to_string(), "B".to_string())
         };
 
-        // Tile sizes for shared memory
-        let tile_m = 16;
-        let tile_n = 16;
-        let tile_k = 16;
-        let plan = MatMulPlan::for_shape_with_tf32(m, n, k, supports_tf32);
-
-        // Allocate shared memory for input tiles
-        let operand_dtype = match plan {
-            MatMulPlan::ScalarF32 => DType::F32,
-            MatMulPlan::TensorCoreTf32 => DType::TF32,
+        let (tile_m, tile_n, tile_k) = (
+            schedule.block_tile.m,
+            schedule.block_tile.n,
+            schedule.block_tile.k,
+        );
+        let plan = schedule.plan;
+        let operand_dtype = if schedule.plan == MatMulPlan::ScalarF32 {
+            dtype
+        } else {
+            schedule.operand_dtype
         };
+        let a_batch = region
+            .map(|(region, _)| batch_element_offset(&region.batch_shape, &region.lhs_shape))
+            .unwrap_or(Expr::Const(0));
+        let b_batch = region
+            .map(|(region, _)| batch_element_offset(&region.batch_shape, &region.rhs_shape))
+            .unwrap_or(Expr::Const(0));
+        let output_batch = if region.is_some() {
+            Expr::BlockIdx(Dim::Z) * (m * n)
+        } else {
+            Expr::Const(0)
+        };
+
         let a_smem = builder.alloc_shared(operand_dtype, tile_m, tile_k);
         let b_smem = builder.alloc_shared(operand_dtype, tile_k, tile_n);
         let c_smem = match plan {
             MatMulPlan::ScalarF32 => None,
-            MatMulPlan::TensorCoreTf32 => Some(builder.alloc_shared(DType::F32, tile_m, tile_n)),
+            MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreF16 | MatMulPlan::TensorCoreBF16 => {
+                Some(builder.alloc_shared(DType::F32, tile_m, tile_n))
+            }
         };
 
         // Allocate register tiles for computation
@@ -529,7 +615,9 @@ impl TileGraph {
         let b_reg = builder.alloc_register(DType::F32, tile_k, tile_n);
         let c_reg = match plan {
             MatMulPlan::ScalarF32 => builder.alloc_register(DType::F32, tile_m, tile_n),
-            MatMulPlan::TensorCoreTf32 => builder.alloc_fragment(DType::F32, tile_m, tile_n),
+            MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreF16 | MatMulPlan::TensorCoreBF16 => {
+                builder.alloc_fragment(DType::F32, tile_m, tile_n)
+            }
         };
         if let Some(c_smem) = c_smem {
             builder.load_shared_to_register(c_reg, c_smem);
@@ -551,11 +639,11 @@ impl TileGraph {
                 Box::new(Expr::Var(k_var.clone()) * tile_k),
                 Box::new(Expr::ThreadIdx(Dim::X)),
             );
-            builder.load_global_to_shared_predicated(
+            builder.load_global_to_shared_indexed(
                 a_smem,
-                a_param,
-                a_row,
-                a_col,
+                &a_param,
+                a_batch.clone() + a_row.clone() * k + a_col.clone(),
+                (a_row, a_col),
                 MatrixLayout {
                     rows: m,
                     cols: k,
@@ -571,11 +659,11 @@ impl TileGraph {
                 Box::new(Expr::BlockIdx(Dim::X) * tile_n),
                 Box::new(Expr::ThreadIdx(Dim::X)),
             );
-            builder.load_global_to_shared_predicated(
+            builder.load_global_to_shared_indexed(
                 b_smem,
-                b_param,
-                b_row,
-                b_col,
+                &b_param,
+                b_batch.clone() + b_row.clone() * n + b_col.clone(),
+                (b_row, b_col),
                 MatrixLayout {
                     rows: k,
                     cols: n,
@@ -597,7 +685,7 @@ impl TileGraph {
                 (true, true) => MatMulLayout::TT,
             };
 
-            builder.matmul(c_reg, a_reg, b_reg, layout, plan);
+            builder.matmul(c_reg, a_reg, b_reg, layout, schedule);
 
             builder.barrier();
         });
@@ -627,14 +715,28 @@ impl TileGraph {
             builder.load_tile_element(matmul_element, c_reg);
             let mut registers = HashMap::new();
             registers.insert(region.matmul_value, matmul_element);
-            let linear_element = Expr::Add(
-                Box::new(Expr::Mul(
-                    Box::new(global_row.clone()),
-                    Box::new(Expr::Const(n as i64)),
-                )),
-                Box::new(global_col.clone()),
-            );
-            for (index, input) in region.inputs.iter().enumerate().skip(2) {
+            let linear_element = output_batch.clone()
+                + Expr::Add(
+                    Box::new(Expr::Mul(
+                        Box::new(global_row.clone()),
+                        Box::new(Expr::Const(n as i64)),
+                    )),
+                    Box::new(global_col.clone()),
+                );
+            for (index, input) in region.inputs.iter().enumerate().filter(|(_, input)| {
+                region
+                    .epilogue_operations
+                    .iter()
+                    .any(|operation| match operation.kind {
+                        RegionOpKind::Unary { input: value, .. } => value == input.value,
+                        RegionOpKind::Binary { lhs, rhs, .. } | RegionOpKind::Gt { lhs, rhs } => {
+                            lhs == input.value || rhs == input.value
+                        }
+                        RegionOpKind::Mask { values, condition } => {
+                            values == input.value || condition == input.value
+                        }
+                    })
+            }) {
                 let value = builder.alloc_register(DType::F32, 1, 1);
                 let element_index = super::region::input_element_index(
                     input,
@@ -682,11 +784,11 @@ impl TileGraph {
                 registers.insert(operation.output, output);
             }
             for (index, output) in region.outputs.iter().enumerate() {
-                builder.store_global_predicated(
+                builder.store_global_indexed(
                     &format!("output_{index}"),
                     registers[&output.value],
-                    global_row.clone(),
-                    global_col.clone(),
+                    linear_element.clone(),
+                    (global_row.clone(), global_col.clone()),
                     output_layout,
                 );
             }
@@ -698,15 +800,19 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_constant(_data: std::sync::Arc<Vec<f32>>, shape: &[usize]) -> TileIR {
+    fn lower_constant<D: TileDType>(
+        dtype: DType,
+        _data: std::sync::Arc<Vec<D>>,
+        shape: &[usize],
+    ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("constant");
-        builder.add_param("constant_data", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("constant_data", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = shape.iter().product();
-        let tile_const = builder.alloc_register(DType::F32, total_elements, 1);
-        let tile_out = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_const = builder.alloc_register(dtype, total_elements, 1);
+        let tile_out = builder.alloc_register(dtype, total_elements, 1);
 
         builder.load_global_to_shared(tile_const, "constant_data", Expr::Const(0), Expr::Const(0));
         builder.add(tile_out, tile_const, tile_const);
@@ -716,14 +822,14 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_input(name: &'static str, shape: &[usize]) -> TileIR {
+    fn lower_input(dtype: DType, name: &'static str, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel(&format!("input_{}", name));
-        builder.add_param(name, DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param(name, dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = shape.iter().product();
-        let tile_in = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_in = builder.alloc_register(dtype, total_elements, 1);
 
         builder.load_global_to_shared(tile_in, name, Expr::Const(0), Expr::Const(0));
         builder.store("output", tile_in, Expr::Const(0), Expr::Const(0));
@@ -732,18 +838,19 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_parameter(
+    fn lower_parameter<D: TileDType>(
+        dtype: DType,
         _id: usize,
-        _data: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
+        _data: std::sync::Arc<std::sync::Mutex<Vec<D>>>,
         shape: &[usize],
     ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("parameter");
-        builder.add_param("param", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("param", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = shape.iter().product();
-        let tile_param = builder.alloc_register(DType::F32, total_elements, 1);
+        let tile_param = builder.alloc_register(dtype, total_elements, 1);
 
         builder.load_global_to_shared(tile_param, "param", Expr::Const(0), Expr::Const(0));
         builder.store("output", tile_param, Expr::Const(0), Expr::Const(0));
@@ -752,7 +859,7 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_unary(op: tensor::UnaryOp, _shape: &[usize]) -> TileIR {
+    fn lower_unary(dtype: DType, op: tensor::UnaryOp, _shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         let kernel_name = match op {
             tensor::UnaryOp::Neg => "neg",
@@ -761,22 +868,15 @@ impl TileGraph {
             tensor::UnaryOp::Relu => "relu",
         };
         builder.start_kernel(kernel_name);
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(_shape.iter().product());
 
         // Each thread processes one scalar element
-        let tile_in = builder.alloc_register(DType::F32, 1, 1);
-        let tile_out = builder.alloc_register(DType::F32, 1, 1);
+        let tile_in = builder.alloc_register(dtype, 1, 1);
+        let tile_out = builder.alloc_register(dtype, 1, 1);
 
-        // Calculate global thread ID: blockIdx.x * blockDim.x + threadIdx.x
-        let global_tid = Expr::Add(
-            Box::new(Expr::Mul(
-                Box::new(Expr::BlockIdx(Dim::X)),
-                Box::new(Expr::BlockDim(Dim::X)),
-            )),
-            Box::new(Expr::ThreadIdx(Dim::X)),
-        );
+        let global_tid = Self::global_tid();
 
         builder.load_global_to_shared(tile_in, "input", global_tid.clone(), Expr::Const(0));
 
@@ -794,32 +894,25 @@ impl TileGraph {
 
     #[allow(dead_code)]
     #[cfg(feature = "fusion")]
-    fn lower_fused_unary(ops: &[tensor::UnaryOp], _shape: &[usize]) -> TileIR {
+    fn lower_fused_unary(dtype: DType, ops: &[tensor::UnaryOp], _shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("fused_unary");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(_shape.iter().product());
 
         // Each thread processes one scalar element
         // Allocate scalar registers (1 element per thread)
-        let tile_in = builder.alloc_register(DType::F32, 1, 1);
+        let tile_in = builder.alloc_register(dtype, 1, 1);
         let mut current_tile = tile_in;
 
-        // Calculate global thread ID: blockIdx.x * blockDim.x + threadIdx.x
-        let global_tid = Expr::Add(
-            Box::new(Expr::Mul(
-                Box::new(Expr::BlockIdx(Dim::X)),
-                Box::new(Expr::BlockDim(Dim::X)),
-            )),
-            Box::new(Expr::ThreadIdx(Dim::X)),
-        );
+        let global_tid = Self::global_tid();
 
         builder.load_global_to_shared(tile_in, "input", global_tid.clone(), Expr::Const(0));
 
         // Apply each operation in sequence
         for op in ops.iter() {
-            let next_tile = builder.alloc_register(DType::F32, 1, 1);
+            let next_tile = builder.alloc_register(dtype, 1, 1);
 
             match op {
                 tensor::UnaryOp::Neg => builder.neg(next_tile, current_tile),
@@ -837,7 +930,7 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_binary(op: tensor::BinaryOp, _shape: &[usize]) -> TileIR {
+    fn lower_binary(dtype: DType, op: tensor::BinaryOp, _shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         let kernel_name = match op {
             tensor::BinaryOp::Add => "add",
@@ -846,24 +939,17 @@ impl TileGraph {
             tensor::BinaryOp::Div => "div",
         };
         builder.start_kernel(kernel_name);
-        builder.add_param("a", DType::F32, true);
-        builder.add_param("b", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("a", dtype, true);
+        builder.add_param("b", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(_shape.iter().product());
 
         // Each thread processes one scalar element
-        let tile_a = builder.alloc_register(DType::F32, 1, 1);
-        let tile_b = builder.alloc_register(DType::F32, 1, 1);
-        let tile_out = builder.alloc_register(DType::F32, 1, 1);
+        let tile_a = builder.alloc_register(dtype, 1, 1);
+        let tile_b = builder.alloc_register(dtype, 1, 1);
+        let tile_out = builder.alloc_register(dtype, 1, 1);
 
-        // Calculate global thread ID: blockIdx.x * blockDim.x + threadIdx.x
-        let global_tid = Expr::Add(
-            Box::new(Expr::Mul(
-                Box::new(Expr::BlockIdx(Dim::X)),
-                Box::new(Expr::BlockDim(Dim::X)),
-            )),
-            Box::new(Expr::ThreadIdx(Dim::X)),
-        );
+        let global_tid = Self::global_tid();
 
         builder.load_global_to_shared(tile_a, "a", global_tid.clone(), Expr::Const(0));
         builder.load_global_to_shared(tile_b, "b", global_tid.clone(), Expr::Const(0));
@@ -881,16 +967,21 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_reindex(input_shape: Vec<usize>, output_shape: &[usize], axes: Vec<usize>) -> TileIR {
+    fn lower_reindex(
+        dtype: DType,
+        input_shape: Vec<usize>,
+        output_shape: &[usize],
+        axes: Vec<usize>,
+    ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("reindex");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = output_shape.iter().product();
         builder.bounds_check(total_elements);
-        let tile_in = builder.alloc_register(DType::F32, 1, 1);
-        let tile_out = builder.alloc_register(DType::F32, 1, 1);
+        let tile_in = builder.alloc_register(dtype, 1, 1);
+        let tile_out = builder.alloc_register(dtype, 1, 1);
 
         // Don't load here - Transpose will load directly from global memory with transposed addressing
         // Each thread handles one output element
@@ -905,19 +996,20 @@ impl TileGraph {
 
     #[allow(dead_code)]
     fn lower_broadcast_axis(
+        dtype: DType,
         axis: usize,
         input_shape: Vec<usize>,
         output_shape: &[usize],
     ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("broadcast_axis");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = output_shape.iter().product();
         builder.bounds_check(total_elements);
-        let tile_in = builder.alloc_register(DType::F32, 1, 1);
-        let tile_out = builder.alloc_register(DType::F32, 1, 1);
+        let tile_in = builder.alloc_register(dtype, 1, 1);
+        let tile_out = builder.alloc_register(dtype, 1, 1);
 
         // Don't load here - BroadcastAxis will load directly from global memory
         // Each thread handles one output element
@@ -932,6 +1024,7 @@ impl TileGraph {
 
     #[allow(dead_code)]
     fn lower_reduce_axis(
+        dtype: DType,
         op: tensor::ReduceOp,
         axis: usize,
         input_shape: Vec<usize>,
@@ -939,12 +1032,13 @@ impl TileGraph {
     ) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("reduce_axis");
-        builder.add_param("input", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("input", dtype, true);
+        builder.add_param("output", dtype, false);
 
         let total_elements: usize = output_shape.iter().product();
         builder.bounds_check(total_elements);
-        let tile_in = builder.alloc_register(DType::F32, 1, 1);
+        let tile_in = builder.alloc_register(dtype, 1, 1);
+        // Reductions use an f32 accumulator and narrow only at the output boundary.
         let tile_out = builder.alloc_register(DType::F32, 1, 1);
 
         // Don't load here - ReduceAxis will load directly from global memory
@@ -972,17 +1066,17 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_gt(shape: &[usize]) -> TileIR {
+    fn lower_gt(dtype: DType, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("gt");
-        builder.add_param("a", DType::F32, true);
-        builder.add_param("b", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("a", dtype, true);
+        builder.add_param("b", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(shape.iter().product());
 
-        let tile_a = builder.alloc_register(DType::F32, 1, 1);
-        let tile_b = builder.alloc_register(DType::F32, 1, 1);
-        let tile_out = builder.alloc_register(DType::F32, 1, 1);
+        let tile_a = builder.alloc_register(dtype, 1, 1);
+        let tile_b = builder.alloc_register(dtype, 1, 1);
+        let tile_out = builder.alloc_register(dtype, 1, 1);
 
         // Each thread processes one element using thread index
         let offset = Self::global_tid();
@@ -995,17 +1089,17 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_mask(shape: &[usize]) -> TileIR {
+    fn lower_mask(dtype: DType, shape: &[usize]) -> TileIR {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("mask");
-        builder.add_param("values", DType::F32, true);
-        builder.add_param("condition", DType::F32, true);
-        builder.add_param("output", DType::F32, false);
+        builder.add_param("values", dtype, true);
+        builder.add_param("condition", dtype, true);
+        builder.add_param("output", dtype, false);
         builder.bounds_check(shape.iter().product());
 
-        let tile_values = builder.alloc_register(DType::F32, 1, 1);
-        let tile_cond = builder.alloc_register(DType::F32, 1, 1);
-        let tile_out = builder.alloc_register(DType::F32, 1, 1);
+        let tile_values = builder.alloc_register(dtype, 1, 1);
+        let tile_cond = builder.alloc_register(dtype, 1, 1);
+        let tile_out = builder.alloc_register(dtype, 1, 1);
 
         // Each thread processes one element using thread index
         let offset = Self::global_tid();
@@ -1032,4 +1126,34 @@ impl TileGraph {
             Box::new(Expr::ThreadIdx(Dim::X)),
         )
     }
+}
+
+/// Decode the output batch coordinate and drop broadcast dimensions before
+/// computing an operand's contiguous matrix offset.
+fn batch_element_offset(output_batch: &[usize], input_shape: &[usize]) -> Expr {
+    // TODO(#61): Replace local address simplifications with shared egg index
+    // optimization, then extract batch-invariant bindings outside the K loop.
+    let input_batch = &input_shape[..input_shape.len() - 2];
+    let padding = output_batch.len() - input_batch.len();
+    let mut offset = Expr::Const(0);
+    let mut output_stride = 1;
+    let mut input_stride = input_shape[input_shape.len() - 2] * input_shape[input_shape.len() - 1];
+    for dimension in (0..output_batch.len()).rev() {
+        if dimension >= padding {
+            let extent = input_batch[dimension - padding];
+            if extent != 1 {
+                let coordinate = Expr::Mod(
+                    Box::new(Expr::FloorDiv(
+                        Box::new(Expr::BlockIdx(Dim::Z)),
+                        output_stride,
+                    )),
+                    output_batch[dimension],
+                );
+                offset = offset + coordinate * input_stride;
+            }
+            input_stride *= extent;
+        }
+        output_stride *= output_batch[dimension];
+    }
+    offset
 }

@@ -63,8 +63,8 @@ pub struct FusionRegion {
 }
 
 impl FusionRegion {
-    pub fn from_graph<G>(
-        graph: &TensorGraph<f32, G>,
+    pub fn from_graph<D: crate::tile::TileDType, G>(
+        graph: &TensorGraph<D, G>,
         members: Vec<NodeIndex>,
         output_nodes: Vec<NodeIndex>,
     ) -> Result<Self> {
@@ -97,7 +97,7 @@ impl FusionRegion {
                         tensor: VirtualTensor::identity(
                             input,
                             graph[input].shape().clone(),
-                            DType::F32,
+                            D::TILE_DTYPE,
                         ),
                         source_shape: graph[input].shape().clone(),
                     });
@@ -200,10 +200,18 @@ impl FusionRegion {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel(&format!("pointwise_region_{region_id}"));
         for index in 0..self.inputs.len() {
-            builder.add_param(&format!("input_{index}"), DType::F32, true);
+            builder.add_param(
+                &format!("input_{index}"),
+                self.inputs[index].tensor.dtype,
+                true,
+            );
         }
         for index in 0..self.outputs.len() {
-            builder.add_param(&format!("output_{index}"), DType::F32, false);
+            builder.add_param(
+                &format!("output_{index}"),
+                self.inputs[0].tensor.dtype,
+                false,
+            );
         }
         builder.bounds_check(extent);
         let thread_index = Expr::Add(

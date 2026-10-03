@@ -63,6 +63,22 @@ cargo run --release --features cuda --example gpt
 
 For GPU hardware targets, we take advantage of tiling to improve memory access patterns. Tiling breaks down large tensor operations into smaller blocks (tiles) that fit into the faster shared memory of the GPU. This allows threads within a block to cooperate and share data, reducing the number of global memory accesses. It also allows coalesced memory accesses, which improves bandwidth utilization. The smallest primitive is a register tile, which corresponds to the size of a warp. The 16x16 register tile comes directly from the [ThunderKittens] project, which provides high-performance C++ templates for CUDA kernels.
 
+The PTX backend selects a `MatMulSchedule` from target capabilities and uses
+it for both lowering and launch configuration. Nonzero-K batched matmuls can
+fuse bias, activation, and residual epilogues into one launch, including batch
+broadcasts. TF32 is available on SM80+; select full F32 operands explicitly with:
+
+```rust
+use tnsr::ptx::PtxExecutor;
+use tnsr::tile::MatMulPrecision;
+
+let mut executor = PtxExecutor::try_new()?;
+executor.set_matmul_precision(MatMulPrecision::StrictF32);
+```
+
+See [fusion measurements](docs/fusion-baseline.md#stage-6c-target-aware-schedules-and-batched-epilogues)
+for schedule limits, numerical parity, and transformer/GPT benchmarks.
+
 # Comparison to candle
 
 HuggingFace's [candle] is a library focused on inference. It uses C++ implementations of CUDA kernels for GPU execution. In `candle`, each tensor operation is fallible and thus returns a `Result`. This means that instead of writing `a + b + c`, you need to propagate errors with `((a + b)? + c)?`.
@@ -103,3 +119,23 @@ start of your program. The resulting trace file can be loaded in Perfetto.
 
 [candle]: https://github.com/huggingface/candle
 [ThunderKittens]: https://github.com/HazyResearch/ThunderKittens
+
+### Half precision
+
+`Runtime::<half::f16>` and `Runtime::<half::bf16>` support CPU, CUDA, and PTX
+execution. CPU matmul and reductions accumulate in f32. The static CUDA backend
+converts graphs and inputs to f32, runs its existing kernels, and narrows results
+at the host boundary.
+
+The PTX backend keeps graph buffers in native 16-bit storage, including fused
+pointwise, reduction, and batched matmul regions, with f32 scalar computation and
+accumulation. Eligible matmuls use native FP16 tensor cores on SM70+ or BF16 tensor
+cores on SM80+, including fused epilogues. Small shapes and
+`MatMulPrecision::StrictF32` use increasing-K scalar f32 accumulation.
+`AllowTf32` permits these native half tensor-core schedules as well as TF32 for
+f32 graphs; it never converts an f32 graph to FP16/BF16.
+
+Native BF16 PTX requires SM80+. On older GPUs, automatic runtime selection falls
+back to the static CUDA backend's f32 conversion path. Half embedding gradients
+sum repeated indices in f32 per output element and narrow once, avoiding atomics
+on half buffers; this correctness fallback can be slower for large vocabularies.

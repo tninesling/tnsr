@@ -9,7 +9,9 @@ const EPSILON: f32 = 1e-5;
 
 fn run(expr: TensorExpr<f32>) -> Vec<f32> {
     let graph: TensorGraph<f32> = expr.into();
-    Runtime::new().execute(&graph, HashMap::new()).unwrap()
+    Runtime::<f32>::new()
+        .execute(&graph, HashMap::new())
+        .unwrap()
 }
 
 fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
@@ -198,7 +200,7 @@ fn softmax_gradient_matches_closed_form() {
     let graph: TensorGraph<f32> = loss.into();
     let loss_node = *graph.toposort().last().unwrap();
     let gradient_graph = graph.with_gradients(loss_node);
-    let mut runtime = Runtime::new();
+    let mut runtime = Runtime::<f32>::new();
     runtime.execute(&gradient_graph, HashMap::new()).unwrap();
     let gradients = runtime.get_gradients(&gradient_graph);
 
@@ -230,7 +232,7 @@ fn transformer_block_executes_and_differentiates_all_parameters() {
     let graph: TensorGraph<f32> = output.mean_all().into();
     let loss_node = *graph.toposort().last().unwrap();
     let gradient_graph = graph.with_gradients(loss_node);
-    let mut runtime = Runtime::new();
+    let mut runtime = Runtime::<f32>::new();
     runtime.execute(&gradient_graph, HashMap::new()).unwrap();
     let gradients = runtime.get_gradients(&gradient_graph);
     let parameter_ids = [

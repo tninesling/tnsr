@@ -26,7 +26,7 @@ macro_rules! assert_approx_eq {
 ///
 /// The Runtime will prefer CUDA if available, otherwise falls back to CPU.
 fn create_runtime() -> Runtime {
-    Runtime::new()
+    Runtime::<f32>::new()
 }
 
 // ============================================================================
@@ -1297,7 +1297,7 @@ fn fusion_ptx_executor_simple_chain() {
 
     // Create runtime with explicit PTX backend
     let mut runtime =
-        Runtime::with_backend(Backend::Ptx).expect("Failed to initialize PTX runtime");
+        Runtime::<f32>::with_backend(Backend::Ptx).expect("Failed to initialize PTX runtime");
 
     eprintln!("Using backend: {:?}", runtime.backend());
 

@@ -9,9 +9,7 @@ use petgraph::visit::EdgeRef;
 
 use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::Shape;
-use crate::tile::{
-    DType, FusionRegion, MatMulRegion, ReductionRegion, ReductionSchedule, VirtualTensor,
-};
+use crate::tile::{FusionRegion, MatMulRegion, ReductionRegion, ReductionSchedule, VirtualTensor};
 
 const MAX_POINTWISE_REGION_OPS: usize = 64;
 const MAX_VIRTUAL_INDEX_OPS: usize = 64;
@@ -73,6 +71,7 @@ pub struct PtxExecutionPlan {
     regions: Vec<FusionRegion>,
     reduction_regions: Vec<ReductionRegion>,
     matmul_regions: Vec<MatMulRegion>,
+    matmul_schedules: HashMap<NodeIndex, crate::tile::MatMulSchedule>,
     graph_output: Option<NodeIndex>,
 }
 
@@ -86,12 +85,12 @@ enum PlanUnit {
 
 impl PtxExecutionPlan {
     #[cfg(test)]
-    pub(crate) fn build<G>(graph: &TensorGraph<f32, G>) -> Result<Self> {
+    pub(crate) fn build<D: crate::tile::TileDType, G>(graph: &TensorGraph<D, G>) -> Result<Self> {
         Self::build_with_reduction_mode(graph, PtxReductionMode::Strict)
     }
 
-    pub(crate) fn build_with_reduction_mode<G>(
-        graph: &TensorGraph<f32, G>,
+    pub(crate) fn build_with_reduction_mode<D: crate::tile::TileDType, G>(
+        graph: &TensorGraph<D, G>,
         reduction_mode: PtxReductionMode,
     ) -> Result<Self> {
         let order = graph.toposort();
@@ -128,8 +127,8 @@ impl PtxExecutionPlan {
         }
     }
 
-    fn build_with_regions<G>(
-        graph: &TensorGraph<f32, G>,
+    fn build_with_regions<D: crate::tile::TileDType, G>(
+        graph: &TensorGraph<D, G>,
         order: &[NodeIndex],
         mut regions: Vec<FusionRegion>,
         mut reduction_regions: Vec<ReductionRegion>,
@@ -255,7 +254,7 @@ impl PtxExecutionPlan {
                                 VirtualTensor::identity(
                                     input.node,
                                     graph[input.node].shape().clone(),
-                                    DType::F32,
+                                    D::TILE_DTYPE,
                                 )
                             });
                         input.source_shape = graph[tensor.source].shape().clone();
@@ -265,7 +264,7 @@ impl PtxExecutionPlan {
                     let virtual_outputs: Vec<_> = outputs
                         .iter()
                         .map(|&output| {
-                            VirtualTensor::identity(output, region.shape.clone(), DType::F32)
+                            VirtualTensor::identity(output, region.shape.clone(), D::TILE_DTYPE)
                         })
                         .collect();
                     for output in &virtual_outputs {
@@ -305,7 +304,7 @@ impl PtxExecutionPlan {
                                 VirtualTensor::identity(
                                     input.node,
                                     graph[input.node].shape().clone(),
-                                    DType::F32,
+                                    D::TILE_DTYPE,
                                 )
                             });
                         input.source_shape = graph[tensor.source].shape().clone();
@@ -318,7 +317,7 @@ impl PtxExecutionPlan {
                             VirtualTensor::identity(
                                 output,
                                 graph[output].shape().clone(),
-                                DType::F32,
+                                D::TILE_DTYPE,
                             )
                         })
                         .collect();
@@ -351,7 +350,7 @@ impl PtxExecutionPlan {
                                 VirtualTensor::identity(
                                     input.node,
                                     graph[input.node].shape().clone(),
-                                    DType::F32,
+                                    D::TILE_DTYPE,
                                 )
                             });
                         input.source_shape = graph[tensor.source].shape().clone();
@@ -361,7 +360,11 @@ impl PtxExecutionPlan {
                     let virtual_outputs: Vec<_> = outputs
                         .iter()
                         .map(|&output| {
-                            VirtualTensor::identity(output, region.output_shape.clone(), DType::F32)
+                            VirtualTensor::identity(
+                                output,
+                                region.output_shape.clone(),
+                                D::TILE_DTYPE,
+                            )
                         })
                         .collect();
                     for output in &virtual_outputs {
@@ -414,7 +417,9 @@ impl PtxExecutionPlan {
                         TensorGraphNode::BroadcastAxis { axis, shape } => {
                             input_view()?.broadcast_axis(*axis, shape[*axis])?
                         }
-                        _ => VirtualTensor::identity(node_index, node.shape().clone(), DType::F32),
+                        _ => {
+                            VirtualTensor::identity(node_index, node.shape().clone(), D::TILE_DTYPE)
+                        }
                     };
                     let consumer_regions: HashSet<_> = graph
                         .graph
@@ -450,7 +455,7 @@ impl PtxExecutionPlan {
                     let virtual_output = if action == PtxPlanAction::VirtualView {
                         view_output
                     } else {
-                        VirtualTensor::identity(node_index, node.shape().clone(), DType::F32)
+                        VirtualTensor::identity(node_index, node.shape().clone(), D::TILE_DTYPE)
                     };
                     virtual_values.insert(node_index, virtual_output.clone());
                     steps.push(PtxPlanStep {
@@ -470,11 +475,37 @@ impl PtxExecutionPlan {
             }
         }
         assign_plan_liveness(graph, &mut steps);
+        let mut matmul_schedules = HashMap::new();
+        for step in &steps {
+            if step.action == PtxPlanAction::Kernel
+                && matches!(graph[step.node], TensorGraphNode::MatMul { .. })
+            {
+                let inputs = graph.inputs(step.node);
+                let shape = graph[step.node].shape();
+                let lhs = graph[inputs[0]].shape();
+                matmul_schedules.insert(
+                    step.node,
+                    crate::tile::MatMulSchedule::select_for_dtype(
+                        shape[shape.len() - 2],
+                        shape[shape.len() - 1],
+                        lhs[lhs.len() - 1],
+                        D::TILE_DTYPE,
+                        crate::tile::MatMulCapabilities {
+                            tf32: true,
+                            f16: false,
+                            bf16: false,
+                        },
+                        crate::tile::MatMulPrecision::AllowTf32,
+                    ),
+                );
+            }
+        }
         Ok(Self {
             steps,
             regions,
             reduction_regions,
             matmul_regions,
+            matmul_schedules,
             graph_output,
         })
     }
@@ -489,6 +520,38 @@ impl PtxExecutionPlan {
 
     pub fn reduction_regions(&self) -> &[ReductionRegion] {
         &self.reduction_regions
+    }
+
+    pub(crate) fn schedule_matmuls(
+        &mut self,
+        capabilities: crate::tile::MatMulCapabilities,
+        precision: crate::tile::MatMulPrecision,
+    ) {
+        for schedule in self.matmul_schedules.values_mut() {
+            let shape = schedule.logical_shape;
+            *schedule = crate::tile::MatMulSchedule::select_for_dtype(
+                shape.m,
+                shape.n,
+                shape.k,
+                schedule.storage_dtype,
+                capabilities,
+                precision,
+            );
+        }
+        for region in &mut self.matmul_regions {
+            region.schedule = crate::tile::MatMulSchedule::select_for_dtype(
+                region.m,
+                region.n,
+                region.k,
+                region.inputs[0].tensor.dtype,
+                capabilities,
+                precision,
+            );
+        }
+    }
+
+    pub fn matmul_schedules(&self) -> &HashMap<NodeIndex, crate::tile::MatMulSchedule> {
+        &self.matmul_schedules
     }
 
     pub fn matmul_regions(&self) -> &[MatMulRegion] {
@@ -518,7 +581,7 @@ impl PtxExecutionPlan {
     }
 }
 
-fn is_pointwise(node: &TensorGraphNode<f32>) -> bool {
+fn is_pointwise<D: crate::tile::TileDType>(node: &TensorGraphNode<D>) -> bool {
     matches!(
         node,
         TensorGraphNode::Unary { .. }
@@ -528,8 +591,8 @@ fn is_pointwise(node: &TensorGraphNode<f32>) -> bool {
     )
 }
 
-fn form_reduction_regions<G>(
-    graph: &TensorGraph<f32, G>,
+fn form_reduction_regions<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
     order: &[NodeIndex],
     reduction_mode: PtxReductionMode,
 ) -> Result<(Vec<ReductionRegion>, HashSet<NodeIndex>)> {
@@ -706,8 +769,8 @@ fn form_reduction_regions<G>(
     Ok((regions, claimed))
 }
 
-fn form_matmul_regions<G>(
-    graph: &TensorGraph<f32, G>,
+fn form_matmul_regions<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
     order: &[NodeIndex],
     already_claimed: &HashSet<NodeIndex>,
 ) -> Result<(Vec<MatMulRegion>, HashSet<NodeIndex>)> {
@@ -723,18 +786,26 @@ fn form_matmul_regions<G>(
         let output_shape = match &graph[anchor] {
             TensorGraphNode::MatMul { shape }
                 if !claimed.contains(&anchor)
-                    && shape.len() == 2
+                    && shape.len() >= 2
                     && shape.iter().all(|&x| x > 0) =>
             {
                 shape
             }
             _ => continue,
         };
+        // CUDA grid.z is limited to 65535. Larger batches retain the existing
+        // per-matrix path instead of constructing an unlaunchable fused kernel.
+        let batch_count = output_shape[..output_shape.len() - 2]
+            .iter()
+            .try_fold(1usize, |count, &extent| count.checked_mul(extent));
+        if batch_count.is_none_or(|count| count > 65535) {
+            continue;
+        }
         let anchor_inputs = graph.inputs(anchor);
         if anchor_inputs.len() != 2
-            || graph[anchor_inputs[0]].shape().len() != 2
-            || graph[anchor_inputs[1]].shape().len() != 2
-            || graph[anchor_inputs[0]].shape()[1] == 0
+            || graph[anchor_inputs[0]].shape().len() < 2
+            || graph[anchor_inputs[1]].shape().len() < 2
+            || graph[anchor_inputs[0]].shape().last() == Some(&0)
         {
             continue;
         }
@@ -789,8 +860,8 @@ fn form_matmul_regions<G>(
     Ok((regions, newly_claimed))
 }
 
-fn form_pointwise_regions<G>(
-    graph: &TensorGraph<f32, G>,
+fn form_pointwise_regions<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
     order: &[NodeIndex],
     claimed: &HashSet<NodeIndex>,
 ) -> Result<Vec<FusionRegion>> {
@@ -863,8 +934,8 @@ fn form_pointwise_regions<G>(
     Ok(regions)
 }
 
-fn virtual_view_paths<G>(
-    graph: &TensorGraph<f32, G>,
+fn virtual_view_paths<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
     order: &[NodeIndex],
     node_to_region: &HashMap<NodeIndex, usize>,
     node_to_reduction_region: &HashMap<NodeIndex, usize>,
@@ -904,8 +975,8 @@ fn virtual_view_paths<G>(
     trailing
 }
 
-fn node_action(
-    node: &TensorGraphNode<f32>,
+fn node_action<D: crate::tile::TileDType>(
+    node: &TensorGraphNode<D>,
     node_index: NodeIndex,
     virtual_view_path: &HashMap<NodeIndex, bool>,
 ) -> PtxPlanAction {
@@ -927,7 +998,10 @@ fn node_action(
     }
 }
 
-fn assign_plan_liveness<G>(graph: &TensorGraph<f32, G>, steps: &mut [PtxPlanStep]) {
+fn assign_plan_liveness<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
+    steps: &mut [PtxPlanStep],
+) {
     let pinned: HashSet<_> = graph
         .graph
         .node_indices()
@@ -1002,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn standalone_batched_and_zero_k_matmuls_remain_unfused() {
+    fn standalone_and_zero_k_remain_unfused_batched_epilogue_fuses() {
         let standalone: TensorGraph<f32> = TensorExpr::constant(vec![0.25; 2 * 3], vec![2, 3])
             .matmul(TensorExpr::constant(vec![0.5; 3 * 4], vec![3, 4]))
             .into();
@@ -1017,11 +1091,12 @@ mod tests {
             .matmul(TensorExpr::constant(vec![0.5; 2 * 3 * 4], vec![2, 3, 4]))
             .relu()
             .into();
-        assert!(
+        assert_eq!(
             PtxExecutionPlan::build(&batched)
                 .unwrap()
                 .matmul_regions
-                .is_empty()
+                .len(),
+            1
         );
 
         let zero_k: TensorGraph<f32> = TensorExpr::constant(Vec::new(), vec![2, 0])
@@ -1034,6 +1109,16 @@ mod tests {
                 .matmul_regions
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn batched_matmul_grid_limit_keeps_per_matrix_fallback() {
+        let lhs = TensorExpr::constant(vec![0.25; 65536], vec![65536, 1, 1]);
+        let rhs = TensorExpr::constant(vec![0.5], vec![1, 1]);
+        let graph: TensorGraph<f32> = lhs.matmul(rhs).relu().into();
+        let plan = PtxExecutionPlan::build(&graph).unwrap();
+        assert!(plan.matmul_regions().is_empty());
+        assert_eq!(plan.matmul_schedules().len(), 1);
     }
 
     #[test]

@@ -73,7 +73,7 @@ fn main() -> Result<()> {
     let graph: TensorGraph<f32> = loss.into();
     let loss_node = *graph.toposort().last().context("GPT graph is empty")?;
     let graph = graph.with_gradients(loss_node);
-    let mut runtime = Runtime::new();
+    let mut runtime = Runtime::<f32>::new();
     let mut optimizer = Adam::new(args.learning_rate);
     let mut loader = DataLoader::new(sample_count)
         .with("tokens", &token_data, args.sequence_length)

@@ -19,6 +19,8 @@ pub struct Function<'a> {
     pub labels: bumpalo::collections::Vec<'a, Label<'a>>,
     pub predicate_registers: bumpalo::collections::Vec<'a, &'a str>,
     pub f32_registers: bumpalo::collections::Vec<'a, &'a str>,
+    pub f16_registers: bumpalo::collections::Vec<'a, &'a str>,
+    pub bf16_registers: bumpalo::collections::Vec<'a, &'a str>,
     pub i32_registers: bumpalo::collections::Vec<'a, &'a str>,
     pub i64_registers: bumpalo::collections::Vec<'a, &'a str>,
     pub shared_memory: bumpalo::collections::Vec<'a, (&'a str, usize)>,
@@ -34,6 +36,8 @@ impl<'a> Function<'a> {
             labels: bumpalo::collections::Vec::new_in(arena),
             predicate_registers: bumpalo::collections::Vec::new_in(arena),
             f32_registers: bumpalo::collections::Vec::new_in(arena),
+            f16_registers: bumpalo::collections::Vec::new_in(arena),
+            bf16_registers: bumpalo::collections::Vec::new_in(arena),
             i32_registers: bumpalo::collections::Vec::new_in(arena),
             i64_registers: bumpalo::collections::Vec::new_in(arena),
             shared_memory: bumpalo::collections::Vec::new_in(arena),
@@ -67,6 +71,22 @@ impl<'a> Function<'a> {
         let name = bumpalo::format!(in self.arena, "%f{}", idx);
         let name_str = name.into_bump_str();
         self.f32_registers.push(name_str);
+        Operand::reg(name_str)
+    }
+
+    pub fn add_f16_register(&mut self) -> Operand<'a, F16> {
+        let idx = self.f16_registers.len();
+        let name = bumpalo::format!(in self.arena, "%h{}", idx);
+        let name_str = name.into_bump_str();
+        self.f16_registers.push(name_str);
+        Operand::reg(name_str)
+    }
+
+    pub fn add_bf16_register(&mut self) -> Operand<'a, BF16> {
+        let idx = self.bf16_registers.len();
+        let name = bumpalo::format!(in self.arena, "%b{}", idx);
+        let name_str = name.into_bump_str();
+        self.bf16_registers.push(name_str);
         Operand::reg(name_str)
     }
 
@@ -200,6 +220,12 @@ impl<'a> fmt::Display for Function<'a> {
         if !self.f32_registers.is_empty() {
             writeln!(f, "    .reg .f32 %f<{}>;", self.f32_registers.len())?;
         }
+        if !self.f16_registers.is_empty() {
+            writeln!(f, "    .reg .b16 %h<{}>;", self.f16_registers.len())?;
+        }
+        if !self.bf16_registers.is_empty() {
+            writeln!(f, "    .reg .b16 %b<{}>;", self.bf16_registers.len())?;
+        }
         if !self.i32_registers.is_empty() {
             writeln!(f, "    .reg .b32 %r<{}>;", self.i32_registers.len())?;
         }
@@ -329,10 +355,16 @@ impl<'a, T: PtxType> fmt::Display for Operand<'a, T> {
 
 impl<'a, DstT: PtxType, SrcT: PtxType> fmt::Display for ConvertInst<'a, DstT, SrcT> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let dst = self.dst.ty();
+        let rounding = if matches!(dst, Type::F16 | Type::BF16) {
+            ".rn"
+        } else {
+            ""
+        };
         write!(
             f,
-            "cvt.{}.{} {}, {};",
-            self.dst.ty(),
+            "cvt{rounding}.{}.{} {}, {};",
+            dst,
             self.src.ty(),
             self.dst,
             self.src
@@ -542,6 +574,10 @@ impl<'a> fmt::Display for Inst<'a> {
                 write!(f, "cvt.rzi.u64.f32 {}, {};", inst.dst, inst.src)
             }
             Inst::ConvertI32U64(inst) => write!(f, "{inst}"),
+            Inst::ConvertF32F16(inst) => write!(f, "{inst}"),
+            Inst::ConvertF16F32(inst) => write!(f, "{inst}"),
+            Inst::ConvertF32BF16(inst) => write!(f, "{inst}"),
+            Inst::ConvertBF16F32(inst) => write!(f, "{inst}"),
             Inst::ConvertToGlobal { dst, src } => write!(f, "cvta.to.global.u64 {dst}, {src};"),
             Inst::MovI32 { dst, src } => write!(f, "mov.u32 {dst}, {src};"),
             Inst::MovU32 { dst, src } => write!(f, "mov.u32 {dst}, {src};"),
@@ -562,6 +598,8 @@ impl<'a> fmt::Display for Inst<'a> {
                     dst.iter().join(", ")
                 ),
             },
+            Inst::LdGlobalF16 { dst, addr } => write!(f, "ld.global.b16 {dst}, [{addr}];"),
+            Inst::LdGlobalBF16 { dst, addr } => write!(f, "ld.global.b16 {dst}, [{addr}];"),
             Inst::LdParamU64 { dst, addr } => write!(f, "ld.param.u64 {dst}, {addr};"),
             Inst::StGlobalF32 { addr, src, vec } => match vec {
                 VecWidth::Scalar => write!(f, "st.global.f32 [{addr}], {};", src.iter().join(", ")),
@@ -571,6 +609,8 @@ impl<'a> fmt::Display for Inst<'a> {
                     src.iter().join(", ")
                 ),
             },
+            Inst::StGlobalF16 { addr, src } => write!(f, "st.global.b16 [{addr}], {src};"),
+            Inst::StGlobalBF16 { addr, src } => write!(f, "st.global.b16 [{addr}], {src};"),
             Inst::AtomicAddGlobalF32(inst) => write!(
                 f,
                 "atom.global.add.f32 {}, [{}], {};",
@@ -629,6 +669,8 @@ impl<'a> fmt::Display for Inst<'a> {
                     dst.iter().join(", ")
                 ),
             },
+            Inst::LdSharedF16 { dst, addr } => write!(f, "ld.shared.b16 {dst}, [{addr}];"),
+            Inst::LdSharedBF16 { dst, addr } => write!(f, "ld.shared.b16 {dst}, [{addr}];"),
             Inst::StSharedF32 { addr, src, vec } => match vec {
                 VecWidth::Scalar => write!(f, "st.shared.f32 [{addr}], {};", src.iter().join(", ")),
                 _ => write!(
@@ -637,6 +679,8 @@ impl<'a> fmt::Display for Inst<'a> {
                     src.iter().join(", ")
                 ),
             },
+            Inst::StSharedF16 { addr, src } => write!(f, "st.shared.b16 [{addr}], {src};"),
+            Inst::StSharedBF16 { addr, src } => write!(f, "st.shared.b16 [{addr}], {src};"),
             Inst::StSharedB32 { addr, src } => write!(f, "st.shared.b32 [{addr}], {src};"),
             Inst::ConvertTf32F32 { dst, src } => {
                 write!(f, "cvt.rna.tf32.f32 {dst}, {src};")
@@ -650,32 +694,47 @@ impl<'a> fmt::Display for Inst<'a> {
             }
 
             Inst::WmmaLoadA {
+                dtype,
                 frags,
                 addr,
                 stride,
             } => {
                 write!(
                     f,
-                    "wmma.load.a.sync.aligned.m16n16k8.row.shared.tf32 {{{}}}, [{}], {};",
+                    "wmma.load.a.sync.aligned.m16n16k{}.row.shared.{} {{{}}}, [{}], {};",
+                    if *dtype == crate::tile::DType::TF32 {
+                        8
+                    } else {
+                        16
+                    },
+                    wmma_dtype(*dtype),
                     frags.iter().join(", "),
                     addr,
                     stride
                 )
             }
             Inst::WmmaLoadB {
+                dtype,
                 frags,
                 addr,
                 stride,
             } => {
                 write!(
                     f,
-                    "wmma.load.b.sync.aligned.m16n16k8.row.shared.tf32 {{{}}}, [{}], {};",
+                    "wmma.load.b.sync.aligned.m16n16k{}.row.shared.{} {{{}}}, [{}], {};",
+                    if *dtype == crate::tile::DType::TF32 {
+                        8
+                    } else {
+                        16
+                    },
+                    wmma_dtype(*dtype),
                     frags.iter().join(", "),
                     addr,
                     stride
                 )
             }
             Inst::WmmaMma {
+                dtype,
                 d_frags,
                 a_frags,
                 b_frags,
@@ -683,7 +742,17 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.mma.sync.aligned.m16n16k8.row.row.f32.tf32.tf32.f32 {{{}}}, {{{}}}, {{{}}}, {{{}}};",
+                    "wmma.mma.sync.aligned.m16n16k{}.row.row.{} {{{}}}, {{{}}}, {{{}}}, {{{}}};",
+                    if *dtype == crate::tile::DType::TF32 {
+                        8
+                    } else {
+                        16
+                    },
+                    match dtype {
+                        crate::tile::DType::F16 => "f32.f32",
+                        crate::tile::DType::BF16 => "f32.bf16.bf16.f32",
+                        _ => "f32.tf32.tf32.f32",
+                    },
                     d_frags.iter().join(", "),
                     a_frags.iter().join(", "),
                     b_frags.iter().join(", "),
@@ -721,18 +790,32 @@ impl<'a> fmt::Display for Inst<'a> {
                 )
             }
             Inst::WmmaStore {
+                dtype,
                 addr,
                 frags,
                 stride,
             } => {
                 write!(
                     f,
-                    "wmma.store.d.sync.aligned.m16n16k8.row.shared.f32 [{}], {{{}}}, {};",
+                    "wmma.store.d.sync.aligned.m16n16k{}.row.shared.f32 [{}], {{{}}}, {};",
+                    if *dtype == crate::tile::DType::TF32 {
+                        8
+                    } else {
+                        16
+                    },
                     addr,
                     frags.iter().join(", "),
                     stride
                 )
             }
         }
+    }
+}
+
+fn wmma_dtype(dtype: crate::tile::DType) -> &'static str {
+    match dtype {
+        crate::tile::DType::F16 => "f16",
+        crate::tile::DType::BF16 => "bf16",
+        _ => "tf32",
     }
 }

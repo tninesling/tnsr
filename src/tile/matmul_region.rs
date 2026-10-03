@@ -6,11 +6,10 @@ use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::Shape;
 
 use super::{
-    DType, FusionRegion, RegionInput, RegionOp, RegionOpKind, RegionOutput, RegionValue,
-    VirtualTensor,
+    FusionRegion, RegionInput, RegionOp, RegionOpKind, RegionOutput, RegionValue, VirtualTensor,
 };
 
-/// One rank-2 matrix multiplication followed by same-shape pointwise operations.
+/// One broadcast-aware batched matrix multiplication followed by same-shape pointwise operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatMulRegion {
     pub members: Vec<NodeIndex>,
@@ -23,14 +22,16 @@ pub struct MatMulRegion {
     pub lhs_shape: Shape,
     pub rhs_shape: Shape,
     pub output_shape: Shape,
+    pub batch_shape: Shape,
+    pub schedule: super::MatMulSchedule,
     pub m: usize,
     pub n: usize,
     pub k: usize,
 }
 
 impl MatMulRegion {
-    pub fn from_graph<G>(
-        graph: &TensorGraph<f32, G>,
+    pub fn from_graph<D: crate::tile::TileDType, G>(
+        graph: &TensorGraph<D, G>,
         anchor: NodeIndex,
         epilogue_members: Vec<NodeIndex>,
         output_nodes: Vec<NodeIndex>,
@@ -72,19 +73,48 @@ impl MatMulRegion {
         let lhs_shape = graph[lhs_node].shape().clone();
         let rhs_shape = graph[rhs_node].shape().clone();
         anyhow::ensure!(
-            lhs_shape.len() == 2 && rhs_shape.len() == 2 && output_shape.len() == 2,
-            "matmul region supports only rank-2 matrices"
+            lhs_shape.len() >= 2 && rhs_shape.len() >= 2 && output_shape.len() >= 2,
+            "matmul region requires rank >= 2"
         );
-        let (m, k) = (lhs_shape[0], lhs_shape[1]);
-        let n = rhs_shape[1];
+        let (m, k) = (
+            lhs_shape[lhs_shape.len() - 2],
+            lhs_shape[lhs_shape.len() - 1],
+        );
+        let n = rhs_shape[rhs_shape.len() - 1];
         anyhow::ensure!(k > 0, "matmul region requires a non-zero inner dimension");
         anyhow::ensure!(
-            rhs_shape[0] == k,
+            rhs_shape[rhs_shape.len() - 2] == k,
             "matmul region inner dimensions do not match"
         );
         anyhow::ensure!(
-            output_shape == [m, n],
+            output_shape[output_shape.len() - 2..] == [m, n],
             "matmul output shape is incompatible with its inputs"
+        );
+        let batch_shape = output_shape[..output_shape.len() - 2].to_vec();
+        for shape in [&lhs_shape, &rhs_shape] {
+            let batch = &shape[..shape.len() - 2];
+            anyhow::ensure!(
+                batch.len() <= batch_shape.len(),
+                "matmul input batch rank exceeds output rank"
+            );
+            for (&input, &output) in batch.iter().rev().zip(batch_shape.iter().rev()) {
+                anyhow::ensure!(
+                    input == 1 || input == output,
+                    "matmul batch dimension cannot broadcast"
+                );
+            }
+        }
+        let schedule = super::MatMulSchedule::select_for_dtype(
+            m,
+            n,
+            k,
+            D::TILE_DTYPE,
+            super::MatMulCapabilities {
+                tf32: true,
+                f16: false,
+                bf16: false,
+            },
+            super::MatMulPrecision::AllowTf32,
         );
 
         let mut values = HashMap::new();
@@ -153,6 +183,8 @@ impl MatMulRegion {
             lhs_shape,
             rhs_shape,
             output_shape,
+            batch_shape,
+            schedule,
             m,
             n,
             k,
@@ -160,8 +192,8 @@ impl MatMulRegion {
     }
 }
 
-fn add_input<G>(
-    graph: &TensorGraph<f32, G>,
+fn add_input<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
     node: NodeIndex,
     values: &mut HashMap<NodeIndex, RegionValue>,
     inputs: &mut Vec<RegionInput>,
@@ -176,14 +208,14 @@ fn add_input<G>(
     inputs.push(RegionInput {
         node,
         value,
-        tensor: VirtualTensor::identity(node, graph[node].shape().clone(), DType::F32),
+        tensor: VirtualTensor::identity(node, graph[node].shape().clone(), D::TILE_DTYPE),
         source_shape: graph[node].shape().clone(),
     });
     value
 }
 
-fn build_pointwise_operation<G>(
-    graph: &TensorGraph<f32, G>,
+fn build_pointwise_operation<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
     node: NodeIndex,
     values: &HashMap<NodeIndex, RegionValue>,
     next_value: &mut usize,
@@ -343,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_batched_matmul() {
+    fn builds_batched_matmul() {
         let mut graph = TensorGraph::new();
         let lhs = graph.graph.add_node(TensorGraphNode::Input {
             name: "lhs",
@@ -361,10 +393,8 @@ mod tests {
             &[lhs, rhs],
         );
 
-        let error = MatMulRegion::from_graph(&graph, matmul, vec![], vec![matmul])
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("rank-2"));
+        let region = MatMulRegion::from_graph(&graph, matmul, vec![], vec![matmul]).unwrap();
+        assert_eq!(region.batch_shape, vec![2]);
+        assert_eq!((region.m, region.n, region.k), (3, 5, 4));
     }
 }

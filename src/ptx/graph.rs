@@ -7,7 +7,7 @@ use super::{Function, Module};
 use crate::tile::{Expr, TileGraph, TileIR, TileVar};
 use petgraph::{Graph, graph::NodeIndex};
 
-pub(crate) struct PtxGraph {
+pub struct PtxGraph {
     // SAFETY INVARIANT: Functions contain references into `arena` whose lifetimes are
     // forged to 'static. `graph` is private, is declared before `arena` so it drops
     // first, and no API may return an owned Function or a borrow not tied to `&self`.
@@ -45,6 +45,11 @@ impl PtxGraph {
         module.to_string()
     }
 
+    /// Render this graph as a complete PTX module.
+    pub fn to_ptx(&self) -> String {
+        self.module_source()
+    }
+
     pub(crate) fn kernel_name(&self, node: NodeIndex) -> Option<&str> {
         self.graph.node_weight(node).map(|function| function.name)
     }
@@ -79,6 +84,9 @@ impl PtxGraph {
 impl From<TileGraph> for PtxGraph {
     fn from(tile_graph: TileGraph) -> Self {
         // Create a single arena for all functions in the graph
+        // Keep the arena at a stable address. Bump-backed vectors retain a
+        // pointer to the allocator, so moving a stack-allocated Bump here
+        // would invalidate cloned functions.
         let arena = Box::new(bumpalo::Bump::new());
 
         let crate::tile::TileGraph {
@@ -182,6 +190,7 @@ fn tile_ir_to_function<'a>(
         // All parameters are pointers, so they're u64 in PTX
         let ptr = func.add_global_ptr_param(param_name);
         ctx.param_ptrs.insert(param.name.clone(), ptr);
+        ctx.param_dtypes.insert(param.name.clone(), param.dtype);
     }
 
     // Allocate shared memory if needed
@@ -208,6 +217,8 @@ struct LoweringContext<'a> {
     shared_mem_ptrs: HashMap<TileVar, Operand<'a, U64>>,
     /// Tracks loaded parameter pointers (global addresses)
     param_ptrs: HashMap<String, Operand<'a, U64>>,
+    /// Storage dtype for global-memory parameters.
+    param_dtypes: HashMap<String, crate::tile::DType>,
     /// Maps loop variable names to their i32 register operands
     loop_vars: HashMap<String, Operand<'a, I32>>,
     /// Current offset into shared memory for allocation
@@ -229,12 +240,13 @@ impl<'a> LoweringContext<'a> {
         Self {
             arena,
             tile_to_reg: HashMap::new(),
+            tile_dtypes: HashMap::new(),
             shared_mem_ptrs: HashMap::new(),
             param_ptrs: HashMap::new(),
+            param_dtypes: HashMap::new(),
             loop_vars: HashMap::new(),
             shared_mem_offset: 0,
             tile_dims: HashMap::new(),
-            tile_dtypes: HashMap::new(),
             fragment_regs: HashMap::new(),
             reg_to_shared: HashMap::new(),
             label_counter: 0,
@@ -260,6 +272,114 @@ fn dtype_to_ptx_type(dtype: crate::tile::DType) -> super::types::Type {
         crate::tile::DType::BF16 => super::types::Type::BF16,
         crate::tile::DType::TF32 => super::types::Type::TF32,
         crate::tile::DType::F32 => super::types::Type::F32,
+    }
+}
+
+fn load_global_as_f32<'a>(
+    func: &mut Function<'a>,
+    dtype: crate::tile::DType,
+    dst: Operand<'a, F32>,
+    addr: Operand<'a, U64>,
+) {
+    match dtype {
+        crate::tile::DType::F32 | crate::tile::DType::TF32 => {
+            func.add_inst(Inst::load_global_scalar_f32(dst, addr));
+        }
+        crate::tile::DType::F16 => {
+            let value = func.add_f16_register();
+            func.add_inst(Inst::LdGlobalF16 {
+                dst: value.clone(),
+                addr,
+            });
+            func.add_inst(Inst::convert_f32_f16(dst, value));
+        }
+        crate::tile::DType::BF16 => {
+            let value = func.add_bf16_register();
+            func.add_inst(Inst::LdGlobalBF16 {
+                dst: value.clone(),
+                addr,
+            });
+            func.add_inst(Inst::convert_f32_bf16(dst, value));
+        }
+    }
+}
+
+fn store_global_from_f32<'a>(
+    func: &mut Function<'a>,
+    dtype: crate::tile::DType,
+    addr: Operand<'a, U64>,
+    src: Operand<'a, F32>,
+) {
+    match dtype {
+        crate::tile::DType::F32 | crate::tile::DType::TF32 => {
+            func.add_inst(Inst::store_global_scalar_f32(addr, src));
+        }
+        crate::tile::DType::F16 => {
+            let value = func.add_f16_register();
+            func.add_inst(Inst::convert_f16_f32(value.clone(), src));
+            func.add_inst(Inst::StGlobalF16 { addr, src: value });
+        }
+        crate::tile::DType::BF16 => {
+            let value = func.add_bf16_register();
+            func.add_inst(Inst::convert_bf16_f32(value.clone(), src));
+            func.add_inst(Inst::StGlobalBF16 { addr, src: value });
+        }
+    }
+}
+
+fn load_shared_as_f32<'a>(
+    func: &mut Function<'a>,
+    dtype: crate::tile::DType,
+    dst: Operand<'a, F32>,
+    addr: Operand<'a, U64>,
+) {
+    match dtype {
+        crate::tile::DType::F32 | crate::tile::DType::TF32 => {
+            func.add_inst(Inst::load_shared_scalar_f32(dst, addr));
+        }
+        crate::tile::DType::F16 => {
+            let value = func.add_f16_register();
+            func.add_inst(Inst::LdSharedF16 {
+                dst: value.clone(),
+                addr,
+            });
+            func.add_inst(Inst::convert_f32_f16(dst, value));
+        }
+        crate::tile::DType::BF16 => {
+            let value = func.add_bf16_register();
+            func.add_inst(Inst::LdSharedBF16 {
+                dst: value.clone(),
+                addr,
+            });
+            func.add_inst(Inst::convert_f32_bf16(dst, value));
+        }
+    }
+}
+
+fn store_shared_from_f32<'a>(
+    func: &mut Function<'a>,
+    dtype: crate::tile::DType,
+    addr: Operand<'a, U64>,
+    src: Operand<'a, F32>,
+) {
+    match dtype {
+        crate::tile::DType::F32 | crate::tile::DType::TF32 => {
+            func.add_inst(Inst::StSharedF32 {
+                addr,
+                src: vec![src],
+                vec: super::instructions::VecWidth::Scalar,
+            });
+        }
+        crate::tile::DType::F16 => {
+            let value = func.add_f16_register();
+            func.add_inst(Inst::convert_f16_f32(value.clone(), src));
+            func.add_inst(Inst::StSharedF16 { addr, src: value });
+        }
+        crate::tile::DType::BF16 => {
+            let value = func.add_bf16_register();
+            func.add_inst(Inst::convert_bf16_f32(value.clone(), src));
+            func.add_inst(Inst::StSharedBF16 { addr, src: value });
+        }
     }
 }
 
@@ -349,6 +469,10 @@ fn lower_stmt<'a>(
             row_offset,
             col_offset,
         } => {
+            let dtype = *ctx
+                .param_dtypes
+                .get(src_param)
+                .expect("Parameter dtype not found in context");
             // Load from global memory to register or shared memory
             // Get parameter pointer from cache (already loaded during initialization)
             let param_ptr = ctx
@@ -369,12 +493,12 @@ fn lower_stmt<'a>(
                 col_offset_reg,
             ));
 
-            // Byte offset = element offset * sizeof(f32) = element offset * 4
+            // Byte offset uses the global parameter's storage dtype.
             let byte_offset = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 byte_offset.clone(),
                 elem_offset,
-                Operand::imm_u64(4),
+                Operand::imm_u64(dtype.size_bytes() as u64),
             ));
 
             // Add offset to base pointer
@@ -389,7 +513,7 @@ fn lower_stmt<'a>(
             if let Some(shared_ptr) = ctx.shared_mem_ptrs.get(dest).cloned() {
                 // Destination is shared memory: load to temp register, then store to shared
                 let temp_reg = func.add_f32_register();
-                func.add_inst(Inst::load_global_scalar_f32(temp_reg.clone(), addr));
+                load_global_as_f32(func, dtype, temp_reg.clone(), addr);
 
                 // Calculate offset within shared memory tile: threadIdx.y * cols + threadIdx.x
                 let (_, cols) = ctx.tile_dims.get(dest).expect("Tile dimensions not found");
@@ -423,32 +547,30 @@ fn lower_stmt<'a>(
                 let elem_idx_u64 = func.add_u64_register();
                 func.add_inst(Inst::convert_u64_i32(elem_idx_u64.clone(), elem_idx));
 
-                // byte_offset = elem_idx * 4
+                // Offset within shared memory uses the destination tile dtype.
+                let dest_dtype = *ctx.tile_dtypes.get(dest).expect("Tile dtype not found");
                 let byte_offset = func.add_u64_register();
                 func.add_inst(Inst::mul_u64(
                     byte_offset.clone(),
                     elem_idx_u64,
-                    Operand::imm_u64(4),
+                    Operand::imm_u64(dest_dtype.size_bytes() as u64),
                 ));
 
                 // Add offset to base pointer
                 let final_addr = func.add_u64_register();
                 func.add_inst(Inst::add_u64(final_addr.clone(), shared_ptr, byte_offset));
 
-                func.add_inst(Inst::StSharedF32 {
-                    addr: final_addr,
-                    src: vec![temp_reg],
-                    vec: super::instructions::VecWidth::Scalar,
-                });
+                store_shared_from_f32(func, dest_dtype, final_addr, temp_reg);
             } else {
                 // Destination is register: load directly
                 let dest_reg = ctx.get_or_alloc_reg(func, *dest);
-                func.add_inst(Inst::load_global_scalar_f32(dest_reg, addr));
+                load_global_as_f32(func, dtype, dest_reg, addr);
             }
         }
         Stmt::LoadGlobalToSharedPredicated {
             dest,
             src_param,
+            element_index,
             row,
             col,
             layout,
@@ -481,21 +603,15 @@ fn lower_stmt<'a>(
                 condition: col_outside,
                 target: skip_load,
             });
-            let row_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                row_offset.clone(),
-                row,
-                Operand::imm_u64(layout.row_stride as u64),
-            ));
-            let element_offset = func.add_u64_register();
-            func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, col));
+            let element_offset = lower_expr(func, ctx, element_index);
             let source = ctx
                 .param_ptrs
                 .get(src_param)
                 .expect("Parameter not found in context")
                 .clone();
-            let address = global_f32_address(func, source, element_offset);
-            func.add_inst(Inst::load_global_scalar_f32(value.clone(), address));
+            let address =
+                element_address(func, source, element_offset, ctx.param_dtypes[src_param]);
+            load_global_as_f32(func, ctx.param_dtypes[src_param], value.clone(), address);
             func.add_inst(Inst::Label(skip_load));
 
             let shared_address = shared_thread_address(func, ctx, *dest);
@@ -507,11 +623,7 @@ fn lower_stmt<'a>(
                     src: tf32,
                 });
             } else {
-                func.add_inst(Inst::StSharedF32 {
-                    addr: shared_address,
-                    src: vec![value],
-                    vec: super::instructions::VecWidth::Scalar,
-                });
+                store_shared_from_f32(func, ctx.tile_dtypes[dest], shared_address, value);
             }
         }
         Stmt::LoadGlobalPredicated {
@@ -556,8 +668,9 @@ fn lower_stmt<'a>(
                 .get(src_param)
                 .expect("Parameter not found in context")
                 .clone();
-            let address = global_f32_address(func, source, element_offset);
-            func.add_inst(Inst::load_global_scalar_f32(value, address));
+            let address =
+                element_address(func, source, element_offset, ctx.param_dtypes[src_param]);
+            load_global_as_f32(func, ctx.param_dtypes[src_param], value, address);
             func.add_inst(Inst::Label(skip_load));
         }
         Stmt::Store {
@@ -590,12 +703,16 @@ fn lower_stmt<'a>(
                 col_offset_reg,
             ));
 
-            // Byte offset = element offset * sizeof(f32) = element offset * 4
+            let dtype = *ctx
+                .param_dtypes
+                .get(dest_param)
+                .expect("Parameter dtype not found in context");
+            // Byte offset uses the global parameter's storage dtype.
             let byte_offset = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 byte_offset.clone(),
                 elem_offset,
-                Operand::imm_u64(4),
+                Operand::imm_u64(dtype.size_bytes() as u64),
             ));
 
             // Add offset to base pointer
@@ -607,11 +724,12 @@ fn lower_stmt<'a>(
             )));
 
             // Store to global memory
-            func.add_inst(Inst::store_global_scalar_f32(addr, src_reg));
+            store_global_from_f32(func, dtype, addr, src_reg);
         }
         Stmt::StoreGlobalPredicated {
             dest_param,
             src,
+            element_index,
             row,
             col,
             layout,
@@ -642,20 +760,18 @@ fn lower_stmt<'a>(
                 condition: col_outside,
                 target: skip_store,
             });
-            let row_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                row_offset.clone(),
-                row,
-                Operand::imm_u64(layout.row_stride as u64),
-            ));
-            let element_offset = func.add_u64_register();
-            func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, col));
+            let element_offset = lower_expr(func, ctx, element_index);
             let destination = ctx
                 .param_ptrs
                 .get(dest_param)
                 .expect("Parameter not found in context")
                 .clone();
-            let address = global_f32_address(func, destination, element_offset);
+            let address = element_address(
+                func,
+                destination,
+                element_offset,
+                ctx.param_dtypes[dest_param],
+            );
             let value = if ctx.fragment_regs.contains_key(src) {
                 let shared = ctx
                     .reg_to_shared
@@ -668,7 +784,7 @@ fn lower_stmt<'a>(
             } else {
                 ctx.get_or_alloc_reg(func, *src)
             };
-            func.add_inst(Inst::store_global_scalar_f32(address, value));
+            store_global_from_f32(func, ctx.param_dtypes[dest_param], address, value);
             func.add_inst(Inst::Label(skip_store));
         }
         Stmt::LoadSharedToReg { dest, src } => {
@@ -697,10 +813,10 @@ fn lower_stmt<'a>(
             a,
             b,
             layout: _,
-            plan,
+            schedule,
         } => {
-            if *plan == crate::tile::MatMulPlan::TensorCoreTf32 {
-                lower_tf32_matmul(func, ctx, *dest, *a, *b);
+            if schedule.plan != crate::tile::MatMulPlan::ScalarF32 {
+                lower_tensor_core_matmul(func, ctx, *dest, *a, *b, schedule);
                 return;
             }
             // Matrix multiply: each thread computes one output element
@@ -734,6 +850,14 @@ fn lower_stmt<'a>(
                 .get(&b_smem)
                 .expect("Tile dimensions not found for B");
             let tile_k = *a_cols; // K dimension of the tile
+            let a_dtype = *ctx
+                .tile_dtypes
+                .get(&a_smem)
+                .expect("Tile dtype not found for A");
+            let b_dtype = *ctx
+                .tile_dtypes
+                .get(&b_smem)
+                .expect("Tile dtype not found for B");
 
             // Get threadIdx.y and threadIdx.x (this thread's position in the output tile)
             let tid_y = func.add_u32_register();
@@ -754,7 +878,7 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::convert_u64_u32(tid_y_u64.clone(), tid_y.clone()));
             func.add_inst(Inst::convert_u64_u32(tid_x_u64.clone(), tid_x.clone()));
 
-            // Compute A row base offset: threadIdx.y * a_cols * 4 (in bytes)
+            // Compute A row base offset in bytes.
             let a_row_base = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 a_row_base.clone(),
@@ -764,17 +888,17 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::mul_u64(
                 a_row_base.clone(),
                 a_row_base.clone(),
-                Operand::imm_u64(4),
+                Operand::imm_u64(a_dtype.size_bytes() as u64),
             ));
             let a_row_ptr = func.add_u64_register();
             func.add_inst(Inst::add_u64(a_row_ptr.clone(), a_ptr.clone(), a_row_base));
 
-            // Compute B column base offset: threadIdx.x * 4 (in bytes)
+            // Compute B column base offset in bytes.
             let b_col_base = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 b_col_base.clone(),
                 tid_x_u64.clone(),
-                Operand::imm_u64(4),
+                Operand::imm_u64(b_dtype.size_bytes() as u64),
             ));
             let b_col_ptr = func.add_u64_register();
             func.add_inst(Inst::add_u64(b_col_ptr.clone(), b_ptr.clone(), b_col_base));
@@ -828,18 +952,18 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::convert_u64_i32(k_u64.clone(), k_idx.clone()));
 
             // Load A[threadIdx.y][k] from shared memory
-            // Address = a_row_ptr + k * 4
+            // Address = a_row_ptr + k * sizeof(A)
             let k_offset_a = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 k_offset_a.clone(),
                 k_u64.clone(),
-                Operand::imm_u64(4),
+                Operand::imm_u64(a_dtype.size_bytes() as u64),
             ));
             func.add_inst(Inst::add_u64(a_addr.clone(), a_row_ptr.clone(), k_offset_a));
-            func.add_inst(Inst::load_shared_scalar_f32(a_val.clone(), a_addr.clone()));
+            load_shared_as_f32(func, a_dtype, a_val.clone(), a_addr.clone());
 
             // Load B[k][threadIdx.x] from shared memory
-            // Address = b_col_ptr + k * b_cols * 4
+            // Address = b_col_ptr + k * b_cols * sizeof(B)
             let k_offset_b = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 k_offset_b.clone(),
@@ -849,10 +973,10 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::mul_u64(
                 k_offset_b.clone(),
                 k_offset_b.clone(),
-                Operand::imm_u64(4),
+                Operand::imm_u64(b_dtype.size_bytes() as u64),
             ));
             func.add_inst(Inst::add_u64(b_addr.clone(), b_col_ptr.clone(), k_offset_b));
-            func.add_inst(Inst::load_shared_scalar_f32(b_val.clone(), b_addr.clone()));
+            load_shared_as_f32(func, b_dtype, b_val.clone(), b_addr.clone());
 
             // Multiply and accumulate: dest += a_val * b_val
             func.add_inst(Inst::mul_f32(prod.clone(), a_val.clone(), b_val.clone()));
@@ -931,8 +1055,12 @@ fn lower_stmt<'a>(
         Stmt::EmbeddingBackward {
             vocabulary: _,
             width,
-            index_count: _,
+            index_count,
         } => {
+            if ctx.param_dtypes["output"] != crate::tile::DType::F32 {
+                lower_half_embedding_backward(func, ctx, *width, *index_count);
+                return;
+            }
             let tid = global_linear_tid(func);
             let width = (*width).max(1);
             let index_position = func.add_u64_register();
@@ -970,7 +1098,12 @@ fn lower_stmt<'a>(
                 .get("output")
                 .expect("Output parameter not found")
                 .clone();
-            let destination = global_f32_address(func, output_ptr, destination_offset);
+            let destination = element_address(
+                func,
+                output_ptr,
+                destination_offset,
+                crate::tile::DType::F32,
+            );
             let discarded = func.add_f32_register();
             func.add_inst(Inst::atomic_add_global_f32(
                 discarded,
@@ -1141,6 +1274,10 @@ fn lower_stmt<'a>(
                 .get("input")
                 .expect("Input parameter not found")
                 .clone();
+            let dtype = *ctx
+                .param_dtypes
+                .get("input")
+                .expect("Input parameter dtype not found");
             let tid = global_linear_tid(func);
             let input_strides = contiguous_strides(input_shape);
             let output_strides = contiguous_strides(output_shape);
@@ -1165,7 +1302,7 @@ fn lower_stmt<'a>(
                     contribution,
                 ));
             }
-            load_f32_at(func, dest_reg, src_ptr, input_offset);
+            load_at(func, dtype, dest_reg, src_ptr, input_offset);
         }
         Stmt::BroadcastAxis {
             dest,
@@ -1180,6 +1317,10 @@ fn lower_stmt<'a>(
                 .get("input")
                 .expect("Input parameter not found")
                 .clone();
+            let dtype = *ctx
+                .param_dtypes
+                .get("input")
+                .expect("Input parameter dtype not found");
 
             let tid = global_linear_tid(func);
             let input_strides = contiguous_strides(input_shape);
@@ -1208,7 +1349,7 @@ fn lower_stmt<'a>(
                     contribution,
                 ));
             }
-            load_f32_at(func, dest_reg, src_ptr, input_offset);
+            load_at(func, dtype, dest_reg, src_ptr, input_offset);
         }
         Stmt::ReduceAxis {
             dest,
@@ -1231,6 +1372,10 @@ fn lower_stmt<'a>(
                 .get("input")
                 .expect("Input parameter not found")
                 .clone();
+            let dtype = *ctx
+                .param_dtypes
+                .get("input")
+                .expect("Input parameter dtype not found");
             let input_strides = contiguous_strides(input_shape);
             let output_strides = contiguous_strides(output_shape);
             let tid = global_linear_tid(func);
@@ -1296,7 +1441,7 @@ fn lower_stmt<'a>(
                 func.add_inst(Inst::mul_u64(
                     byte_offset.clone(),
                     input_offset,
-                    Operand::imm_u64(4),
+                    Operand::imm_u64(dtype.size_bytes() as u64),
                 ));
 
                 // Load input element
@@ -1304,7 +1449,7 @@ fn lower_stmt<'a>(
                 func.add_inst(Inst::add_u64(addr.clone(), src_ptr.clone(), byte_offset));
 
                 let value = func.add_f32_register();
-                func.add_inst(Inst::load_global_scalar_f32(value.clone(), addr));
+                load_global_as_f32(func, dtype, value.clone(), addr);
 
                 // Accumulate based on operation
                 match op {
@@ -1859,6 +2004,39 @@ fn end_counted_loop<'a>(func: &mut Function<'a>, state: CountedLoop<'a>) {
         target: state.start,
     });
     func.add_inst(Inst::Label(state.end));
+}
+
+/// One thread owns each output element, accumulating repeated indices in f32.
+/// This avoids f32 atomics on b16 storage and rounds only after the complete sum.
+fn lower_half_embedding_backward<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    width: usize,
+    index_count: usize,
+) {
+    let tid = global_linear_tid(func);
+    let row = quotient_u64(func, tid.clone(), width.max(1));
+    let column = decode_coordinate(func, tid.clone(), 1, width.max(1));
+    let sum = func.add_f32_register();
+    func.add_inst(Inst::mov_f32(sum.clone(), Operand::imm_f32(0.0)));
+    let state = begin_counted_loop(func, ctx, "half_embedding_backward", index_count);
+    let index_value = load_param_f32_at(func, ctx, "indices", state.counter.clone());
+    let index = func.add_u64_register();
+    func.add_inst(Inst::convert_u64_f32(index.clone(), index_value));
+    let skip = next_label(ctx, "half_embedding_skip");
+    let different = func.add_predicate_register();
+    func.add_inst(Inst::setp_ne_u64(different.clone(), index, row));
+    func.add_inst(Inst::Bra {
+        condition: different,
+        target: skip,
+    });
+    let offset = multiply_u64(func, state.counter.clone(), width);
+    func.add_inst(Inst::add_u64(offset.clone(), offset.clone(), column));
+    let gradient = load_param_f32_at(func, ctx, "grad_output", offset);
+    func.add_inst(Inst::add_f32(sum.clone(), sum.clone(), gradient));
+    func.add_inst(Inst::Label(skip));
+    end_counted_loop(func, state);
+    store_param_f32_at(func, ctx, "output", tid, sum);
 }
 
 fn lower_reduction_region<'a>(
@@ -3031,12 +3209,13 @@ fn accumulate_product<'a>(
     func.add_inst(Inst::add_f32(accumulator.clone(), accumulator, product));
 }
 
-fn lower_tf32_matmul<'a>(
+fn lower_tensor_core_matmul<'a>(
     func: &mut Function<'a>,
     ctx: &mut LoweringContext<'a>,
     dest: TileVar,
     a: TileVar,
     b: TileVar,
+    schedule: &crate::tile::MatMulSchedule,
 ) {
     let accumulators = ctx
         .fragment_regs
@@ -3076,7 +3255,7 @@ fn lower_tf32_matmul<'a>(
     func.add_inst(Inst::setp_ge_u64(
         inactive.clone(),
         thread_y,
-        Operand::imm_u64(2),
+        Operand::imm_u64(32 / u64::from(schedule.block_threads.0)),
     ));
     let done =
         bumpalo::format!(in ctx.arena, "tf32_matmul_done_{}", ctx.label_counter).into_bump_str();
@@ -3086,29 +3265,60 @@ fn lower_tf32_matmul<'a>(
         target: done,
     });
 
-    for k_offset in [0_u64, 8] {
-        let a_address = shared_address_with_byte_offset(func, a_ptr.clone(), k_offset * 4);
-        let b_address = shared_address_with_byte_offset(func, b_ptr.clone(), k_offset * 16 * 4);
-        let a_fragments: Vec<Operand<'a, B32>> = (0..4).map(|_| func.add_b32_register()).collect();
-        let b_fragments: Vec<Operand<'a, B32>> = (0..4).map(|_| func.add_b32_register()).collect();
-        func.add_inst(Inst::wmma_load_a(
-            a_fragments.clone(),
-            a_address,
-            Operand::imm_i32(16),
-        ));
-        func.add_inst(Inst::wmma_load_b(
-            b_fragments.clone(),
-            b_address,
-            Operand::imm_i32(16),
-        ));
-        func.add_inst(Inst::wmma_mma(
-            accumulators.clone(),
-            a_fragments,
-            b_fragments,
-            accumulators.clone(),
-        ));
+    for k_offset in (0..schedule.block_tile.k).step_by(schedule.instruction_tile.k) {
+        let k_offset = k_offset as u64;
+        let a_address = shared_address_with_byte_offset(
+            func,
+            a_ptr.clone(),
+            k_offset * schedule.operand_dtype.size_bytes() as u64,
+        );
+        let b_address = shared_address_with_byte_offset(
+            func,
+            b_ptr.clone(),
+            k_offset * schedule.block_tile.n as u64 * schedule.operand_dtype.size_bytes() as u64,
+        );
+        let a_fragments: Vec<Operand<'a, B32>> =
+            (0..if schedule.operand_dtype == crate::tile::DType::F16 {
+                8
+            } else {
+                4
+            })
+                .map(|_| func.add_b32_register())
+                .collect();
+        let b_fragments: Vec<Operand<'a, B32>> =
+            (0..if schedule.operand_dtype == crate::tile::DType::F16 {
+                8
+            } else {
+                4
+            })
+                .map(|_| func.add_b32_register())
+                .collect();
+        func.add_inst(Inst::WmmaLoadA {
+            dtype: schedule.operand_dtype,
+            frags: a_fragments.clone(),
+            addr: a_address,
+            stride: Operand::imm_i32(schedule.block_tile.k as i32),
+        });
+        func.add_inst(Inst::WmmaLoadB {
+            dtype: schedule.operand_dtype,
+            frags: b_fragments.clone(),
+            addr: b_address,
+            stride: Operand::imm_i32(schedule.block_tile.n as i32),
+        });
+        func.add_inst(Inst::WmmaMma {
+            dtype: schedule.operand_dtype,
+            d_frags: accumulators.clone(),
+            a_frags: a_fragments,
+            b_frags: b_fragments,
+            c_frags: accumulators.clone(),
+        });
     }
-    func.add_inst(Inst::wmma_store(c_ptr, accumulators, Operand::imm_i32(16)));
+    func.add_inst(Inst::WmmaStore {
+        dtype: schedule.operand_dtype,
+        addr: c_ptr,
+        frags: accumulators,
+        stride: Operand::imm_i32(schedule.block_tile.n as i32),
+    });
     func.add_inst(Inst::Label(done));
 }
 
@@ -3188,23 +3398,24 @@ fn shared_thread_address<'a>(
     func.add_inst(Inst::mul_u64(
         byte_offset.clone(),
         element_offset,
-        Operand::imm_u64(4),
+        Operand::imm_u64(ctx.tile_dtypes[&tile].size_bytes() as u64),
     ));
     let address = func.add_u64_register();
     func.add_inst(Inst::add_u64(address.clone(), shared, byte_offset));
     address
 }
 
-fn global_f32_address<'a>(
+fn element_address<'a>(
     func: &mut Function<'a>,
     base: Operand<'a, U64>,
     element_offset: Operand<'a, U64>,
+    dtype: crate::tile::DType,
 ) -> Operand<'a, U64> {
     let byte_offset = func.add_u64_register();
     func.add_inst(Inst::mul_u64(
         byte_offset.clone(),
         element_offset,
-        Operand::imm_u64(4),
+        Operand::imm_u64(dtype.size_bytes() as u64),
     ));
     let address = func.add_u64_register();
     func.add_inst(Inst::add_u64(address.clone(), base, byte_offset));
@@ -3222,9 +3433,9 @@ fn load_param_f32_at<'a>(
         .get(parameter)
         .unwrap_or_else(|| panic!("Parameter {parameter} not found"))
         .clone();
-    let address = global_f32_address(func, base, element_offset);
+    let address = element_address(func, base, element_offset, ctx.param_dtypes[parameter]);
     let value = func.add_f32_register();
-    func.add_inst(Inst::load_global_scalar_f32(value.clone(), address));
+    load_global_as_f32(func, ctx.param_dtypes[parameter], value.clone(), address);
     value
 }
 
@@ -3240,8 +3451,8 @@ fn store_param_f32_at<'a>(
         .get(parameter)
         .unwrap_or_else(|| panic!("Parameter {parameter} not found"))
         .clone();
-    let address = global_f32_address(func, base, element_offset);
-    func.add_inst(Inst::store_global_scalar_f32(address, value));
+    let address = element_address(func, base, element_offset, ctx.param_dtypes[parameter]);
+    store_global_from_f32(func, ctx.param_dtypes[parameter], address, value);
 }
 
 fn emit_exp<'a>(func: &mut Function<'a>, value: Operand<'a, F32>) -> Operand<'a, F32> {
@@ -3395,8 +3606,9 @@ fn decode_coordinate<'a>(
     coordinate
 }
 
-fn load_f32_at<'a>(
+fn load_at<'a>(
     func: &mut Function<'a>,
+    dtype: crate::tile::DType,
     destination: Operand<'a, F32>,
     base: Operand<'a, U64>,
     element_offset: Operand<'a, U64>,
@@ -3405,11 +3617,11 @@ fn load_f32_at<'a>(
     func.add_inst(Inst::mul_u64(
         byte_offset.clone(),
         element_offset,
-        Operand::imm_u64(4),
+        Operand::imm_u64(dtype.size_bytes() as u64),
     ));
     let address = func.add_u64_register();
     func.add_inst(Inst::add_u64(address.clone(), base, byte_offset));
-    func.add_inst(Inst::load_global_scalar_f32(destination, address));
+    load_global_as_f32(func, dtype, destination, address);
 }
 
 /// Lower an expression to a U64 operand (for address calculations)
@@ -3494,6 +3706,9 @@ fn lower_expr<'a>(
             result
         }
         Expr::FloorDiv(value, divisor) => {
+            // TODO(#61): Consume simplified/index-egraph expressions so identity
+            // and power-of-two divisions avoid general division calls. Keep
+            // instruction emission here; optimize and place expressions upstream.
             let value = lower_expr(func, ctx, value);
             let result = func.add_u64_register();
             func.add_inst(Inst::div_u64(
@@ -3559,16 +3774,37 @@ mod tests {
     use crate::tensor::TensorExpr;
     use crate::tile::{Block, DType, KernelParam, MemorySpace, Stmt, TileIR};
 
-    // Helper function to convert TileIR to Function for testing
-    // Returns arena wrapped in Box to ensure stable address
-    fn tile_ir_into_function(tile_ir: TileIR) -> (Box<bumpalo::Bump>, Function<'static>) {
+    struct TestFunction {
+        // Drop the arena after the function and its bump-backed collections.
+        function: Function<'static>,
+        _arena: Box<bumpalo::Bump>,
+    }
+
+    impl std::ops::Deref for TestFunction {
+        type Target = Function<'static>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.function
+        }
+    }
+
+    impl std::fmt::Display for TestFunction {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.function.fmt(formatter)
+        }
+    }
+
+    fn tile_ir_into_function(tile_ir: TileIR) -> TestFunction {
         let arena = Box::new(bumpalo::Bump::new());
-        // SAFETY: We're using 'static lifetime and keeping the arena alive via Box
-        // The arena address is stable since it's heap-allocated
+        // SAFETY: The boxed arena has a stable address and TestFunction drops the
+        // function before the arena.
         let arena_ref: &'static bumpalo::Bump =
             unsafe { &*(arena.as_ref() as *const bumpalo::Bump) };
-        let func = tile_ir_to_function(tile_ir, arena_ref, 0);
-        (arena, func)
+        let function = tile_ir_to_function(tile_ir, arena_ref, 0);
+        TestFunction {
+            function,
+            _arena: arena,
+        }
     }
 
     #[test]
@@ -3629,33 +3865,53 @@ mod tests {
     }
 
     #[test]
-    fn fused_matmul_epilogue_keeps_tf32_and_one_entry() {
-        let lhs = TensorExpr::constant(vec![0.25; 32 * 32], vec![32, 32]);
-        let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
-        let bias = TensorExpr::constant(vec![0.1; 32 * 32], vec![32, 32]);
-        let graph: TensorGraph<f32> = (lhs.matmul(rhs) + bias).relu().into();
-        let plan =
-            PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict).unwrap();
-        assert_eq!(plan.matmul_regions().len(), 1);
-
-        let mut tile_graph = TileGraph::from(graph);
-        tile_graph
-            .add_matmul_regions(plan.matmul_regions(), true)
-            .unwrap();
-        tile_graph.set_physical_nodes(
-            plan.steps()
-                .iter()
-                .filter_map(|step| {
-                    (step.action == crate::ptx::PtxPlanAction::Kernel).then_some(step.node)
-                })
-                .collect(),
-        );
-        let source = PtxGraph::from(tile_graph).module_source();
-
-        assert_eq!(source.matches(".visible .entry").count(), 1);
-        assert!(source.contains("wmma.mma.sync.aligned.m16n16k8"));
-        assert!(source.contains("add.f32"));
-        assert!(source.contains("max.f32"));
+    fn fused_batched_matmul_codegen_uses_target_schedule_and_one_entry() {
+        use crate::tile::{MatMulPlan, MatMulPrecision};
+        for compute_capability in [(6, 1), (7, 5), (8, 0), (8, 9)] {
+            for precision in [MatMulPrecision::AllowTf32, MatMulPrecision::StrictF32] {
+                let target = super::super::target::PtxTarget { compute_capability };
+                let lhs = TensorExpr::constant(vec![0.25; 2 * 32 * 32], vec![2, 32, 32]);
+                let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
+                let bias = TensorExpr::constant(vec![0.1; 32], vec![32]);
+                let graph: TensorGraph<f32> = (lhs.matmul(rhs) + bias).relu().into();
+                let mut plan =
+                    PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict)
+                        .unwrap();
+                plan.schedule_matmuls(target.matmul_capabilities(), precision);
+                assert_eq!(plan.matmul_regions().len(), 1);
+                let schedule = plan.matmul_regions()[0].schedule;
+                let expect_tf32 = target.supports_tf32() && precision == MatMulPrecision::AllowTf32;
+                assert_eq!(schedule.plan == MatMulPlan::TensorCoreTf32, expect_tf32);
+                let mut tile_graph = TileGraph::from_with_matmul_schedules(
+                    &graph,
+                    expect_tf32,
+                    plan.matmul_schedules(),
+                );
+                tile_graph
+                    .add_matmul_regions(plan.matmul_regions())
+                    .unwrap();
+                tile_graph.set_physical_nodes(
+                    plan.steps()
+                        .iter()
+                        .filter_map(|step| {
+                            (step.action == crate::ptx::PtxPlanAction::Kernel).then_some(step.node)
+                        })
+                        .collect(),
+                );
+                let source = PtxGraph::from(tile_graph)
+                    .with_target(target)
+                    .module_source();
+                assert_eq!(source.matches(".visible .entry").count(), 1);
+                assert_eq!(
+                    source.contains("wmma.mma.sync.aligned.m16n16k8"),
+                    expect_tf32
+                );
+                assert_eq!(source.contains("cvt.rna.tf32.f32"), expect_tf32);
+                assert!(source.contains("%ctaid.z"));
+                assert!(source.contains("add.f32"));
+                assert!(source.contains("max.f32"));
+            }
+        }
     }
 
     #[test]
@@ -3767,7 +4023,7 @@ mod tests {
         };
 
         // Convert to PTX
-        let (_arena, func) = tile_ir_into_function(tile_ir);
+        let func = tile_ir_into_function(tile_ir);
 
         // Check that we have the right number of f32 registers
         assert_eq!(func.f32_registers.len(), 3);
@@ -3857,7 +4113,7 @@ mod tests {
             },
         };
 
-        let (_arena, func) = tile_ir_into_function(tile_ir);
+        let func = tile_ir_into_function(tile_ir);
 
         // Count instruction types
         let add_count = func
@@ -3911,7 +4167,7 @@ mod tests {
             },
         };
 
-        let (_arena, func) = tile_ir_into_function(tile_ir);
+        let func = tile_ir_into_function(tile_ir);
 
         // Relu is implemented as max(0, x)
         let has_max = func.body.iter().any(|inst| matches!(inst, Inst::MaxF32(_)));
@@ -3959,7 +4215,7 @@ mod tests {
             },
         };
 
-        let (_arena, func) = tile_ir_into_function(tile_ir);
+        let func = tile_ir_into_function(tile_ir);
 
         // Exp uses ex2 (2^x), Log uses lg2 (log2(x))
         let has_ex2 = func.body.iter().any(|inst| matches!(inst, Inst::Ex2F32(_)));
@@ -3986,7 +4242,7 @@ mod tests {
             },
         };
 
-        let (_arena, func) = tile_ir_into_function(tile_ir);
+        let func = tile_ir_into_function(tile_ir);
 
         // Check that shared memory was allocated
         assert_eq!(func.shared_memory.len(), 1);
@@ -4008,7 +4264,7 @@ mod tests {
             },
         };
 
-        let (_arena, func) = tile_ir_into_function(tile_ir);
+        let func = tile_ir_into_function(tile_ir);
 
         let has_barrier = func
             .body
@@ -4055,7 +4311,7 @@ mod tests {
             },
         };
 
-        let (_arena, func) = tile_ir_into_function(tile_ir);
+        let func = tile_ir_into_function(tile_ir);
 
         // Gt uses setp and selp
         let has_setp = func
@@ -4099,7 +4355,7 @@ mod tests {
             },
         };
 
-        let (_arena, func) = tile_ir_into_function(tile_ir);
+        let func = tile_ir_into_function(tile_ir);
 
         // This should not panic
         let ptx_str = format!("{}", func);
@@ -4210,7 +4466,7 @@ mod tests {
             },
         };
 
-        let (_arena, func) = tile_ir_into_function(tile_ir);
+        let func = tile_ir_into_function(tile_ir);
 
         // Verify the function has all expected components
         assert_eq!(func.params.len(), 4);

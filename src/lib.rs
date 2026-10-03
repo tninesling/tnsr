@@ -344,7 +344,7 @@ impl<D: Float + Send + Sync> SimpleExecutor<D> {
 
 impl<D> Executor<D> for SimpleExecutor<D>
 where
-    D: Float + Send + Sync,
+    D: Float + Send + Sync + 'static,
 {
     fn execute<G>(
         &mut self,
@@ -940,7 +940,7 @@ fn matmul_forward<D, G>(
     node_idx: petgraph::graph::NodeIndex,
 ) -> Result<Vec<D>>
 where
-    D: Float + Send + Sync,
+    D: Float + Send + Sync + 'static,
 {
     let inputs_idx = graph.inputs(node_idx);
     let a_idx = inputs_idx[0];
@@ -972,15 +972,69 @@ where
 
     let mut out = pool.take(batch_count * m * n);
     a_val.with_pair(b_val, |a, b| {
+        if uses_f32_accumulation::<D>() {
+            let a_f32: Vec<f32> = a.iter().map(|value| value.to_f32().unwrap()).collect();
+            let b_f32: Vec<f32> = b.iter().map(|value| value.to_f32().unwrap()).collect();
+
+            #[cfg(feature = "parallel")]
+            if batch_count == 1 && m >= parallel_config::MATMUL_THRESHOLD {
+                out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+                    for (j, value) in row.iter_mut().enumerate() {
+                        *value = D::from(dot_product(&a_f32, &b_f32, i, j, k, n)).unwrap();
+                    }
+                });
+                return;
+            }
+
+            let a_batch_shape = &a_shape[..a_shape.len() - 2];
+            let b_batch_shape = &b_shape[..b_shape.len() - 2];
+            let out_batch_strides = rowmajor_strides(out_batch_shape);
+            let a_batch_strides = rowmajor_strides(a_batch_shape);
+            let b_batch_strides = rowmajor_strides(b_batch_shape);
+            for batch in 0..batch_count {
+                let a_batch = broadcast_batch_index(
+                    batch,
+                    out_batch_shape,
+                    &out_batch_strides,
+                    a_batch_shape,
+                    &a_batch_strides,
+                );
+                let b_batch = broadcast_batch_index(
+                    batch,
+                    out_batch_shape,
+                    &out_batch_strides,
+                    b_batch_shape,
+                    &b_batch_strides,
+                );
+                let a_offset = a_batch * m * k;
+                let b_offset = b_batch * k * n;
+                let out_offset = batch * m * n;
+                for i in 0..m {
+                    for j in 0..n {
+                        out[out_offset + i * n + j] = D::from(dot_product(
+                            &a_f32[a_offset..a_offset + m * k],
+                            &b_f32[b_offset..b_offset + k * n],
+                            i,
+                            j,
+                            k,
+                            n,
+                        ))
+                        .unwrap();
+                    }
+                }
+            }
+            return;
+        }
+
         #[cfg(feature = "parallel")]
         if batch_count == 1 && m >= parallel_config::MATMUL_THRESHOLD {
             out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
-                for j in 0..n {
+                for (j, value) in row.iter_mut().enumerate() {
                     let mut sum = D::zero();
                     for p in 0..k {
                         sum = sum + a[i * k + p] * b[p * n + j];
                     }
-                    row[j] = sum;
+                    *value = sum;
                 }
             });
             return;
@@ -1021,6 +1075,10 @@ where
         }
     });
     Ok(out)
+}
+
+fn dot_product(a: &[f32], b: &[f32], row: usize, col: usize, k: usize, n: usize) -> f32 {
+    (0..k).map(|p| a[row * k + p] * b[p * n + col]).sum()
 }
 
 fn broadcast_batch_index(
@@ -1492,7 +1550,7 @@ fn reduce_axis_forward<D, G>(
     axis: usize,
 ) -> Result<Vec<D>>
 where
-    D: Float,
+    D: Float + 'static,
 {
     let in_idx = graph.inputs(node_idx)[0];
     let x = values
@@ -1510,6 +1568,33 @@ where
     match op {
         tensor::ReduceOp::Max => out.fill(D::neg_infinity()),
         _ => out.fill(D::zero()),
+    }
+
+    if uses_f32_accumulation::<D>() && !matches!(op, tensor::ReduceOp::Max) {
+        let mut accum = vec![0.0f32; out_size];
+        x.with(|x| {
+            let total: usize = in_shape.iter().product();
+            for (idx, &val) in x.iter().enumerate().take(total) {
+                let mut rem = idx;
+                let mut out_linear = 0usize;
+                for (dim, &stride) in in_strides.iter().enumerate() {
+                    let coord = rem / stride;
+                    rem %= stride;
+                    let out_coord = if dim == axis { 0 } else { coord };
+                    out_linear += out_coord * out_strides[dim];
+                }
+                accum[out_linear] += val.to_f32().unwrap();
+            }
+        });
+        let divisor = if matches!(op, tensor::ReduceOp::Mean) {
+            axis_size as f32
+        } else {
+            1.0
+        };
+        for (result, sum) in out.iter_mut().zip(accum) {
+            *result = D::from(sum / divisor).unwrap();
+        }
+        return Ok(out);
     }
 
     x.with(|x| {
@@ -1537,6 +1622,13 @@ where
         }
     });
     Ok(out)
+}
+
+fn uses_f32_accumulation<D: 'static>() -> bool {
+    use std::any::TypeId;
+
+    TypeId::of::<D>() == TypeId::of::<half::f16>()
+        || TypeId::of::<D>() == TypeId::of::<half::bf16>()
 }
 
 /// Get an iterator over a slice, parallel if the `parallel` feature is enabled.

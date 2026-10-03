@@ -7,7 +7,7 @@ use tnsr::{Executor, Runtime, SimpleExecutor, nn};
 const EPSILON: f32 = 1e-4;
 
 fn create_runtime() -> Runtime {
-    Runtime::new()
+    Runtime::<f32>::new()
 }
 
 /// Naive reference conv2d on the host, used to cross-check the backend.

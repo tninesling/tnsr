@@ -196,7 +196,7 @@ fn runtime_ptx_gpt_optimizer_steps_decrease_loss() {
     let graph: TensorGraph<f32> = gpt.loss(tokens, targets).into();
     let loss_node = *graph.toposort().last().unwrap();
     let graph = graph.with_gradients(loss_node);
-    let mut runtime = Runtime::with_backend(Backend::Ptx).unwrap();
+    let mut runtime = Runtime::<f32>::with_backend(Backend::Ptx).unwrap();
     let mut optimizer = Adam::new(0.02);
 
     runtime.execute(&graph, HashMap::new()).unwrap();

@@ -42,6 +42,7 @@ pub enum Stmt {
     LoadGlobalToSharedPredicated {
         dest: TileVar,
         src_param: String,
+        element_index: Expr,
         row: Expr,
         col: Expr,
         layout: MatrixLayout,
@@ -69,6 +70,7 @@ pub enum Stmt {
     StoreGlobalPredicated {
         dest_param: String,
         src: TileVar,
+        element_index: Expr,
         row: Expr,
         col: Expr,
         layout: MatrixLayout,
@@ -92,7 +94,7 @@ pub enum Stmt {
         a: TileVar,
         b: TileVar,
         layout: MatMulLayout, // NN, NT, TN, TT
-        plan: MatMulPlan,
+        schedule: super::MatMulSchedule,
     },
 
     /// Expose the calling thread's scalar from a register or fragment tile.
@@ -291,6 +293,8 @@ pub enum MemorySpace {
 pub enum MatMulPlan {
     ScalarF32,
     TensorCoreTf32,
+    TensorCoreF16,
+    TensorCoreBF16,
 }
 
 impl MatMulPlan {
@@ -334,6 +338,23 @@ impl DType {
     }
 }
 
+/// Host scalar types that can be represented by the tile IR.
+pub trait TileDType: crate::tensor::DType + 'static {
+    const TILE_DTYPE: DType;
+}
+
+impl TileDType for f32 {
+    const TILE_DTYPE: DType = DType::F32;
+}
+
+impl TileDType for half::f16 {
+    const TILE_DTYPE: DType = DType::F16;
+}
+
+impl TileDType for half::bf16 {
+    const TILE_DTYPE: DType = DType::BF16;
+}
+
 /// Matrix multiply layout
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
@@ -367,6 +388,14 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     FloorDiv(Box<Expr>, usize),
     Mod(Box<Expr>, usize),
+}
+
+impl std::ops::Add for Expr {
+    type Output = Expr;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Expr::Add(Box::new(self), Box::new(rhs))
+    }
 }
 
 impl std::ops::Mul<usize> for Expr {

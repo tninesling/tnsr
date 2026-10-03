@@ -141,3 +141,27 @@ impl ArithmeticType for U64 {}
 impl FloatType for F32 {}
 impl FloatType for F16 {}
 impl FloatType for BF16 {}
+
+/// PTX scalar marker and its corresponding host storage type.
+pub trait CudaDType: PtxType + Clone + Copy + 'static {
+    type HostType: crate::tile::TileDType
+        + num_traits::Float
+        + cudarc::driver::DeviceRepr
+        + cudarc::driver::ValidAsZeroBits
+        + Default
+        + Send
+        + Sync
+        + 'static;
+}
+
+impl CudaDType for F32 {
+    type HostType = f32;
+}
+
+impl CudaDType for F16 {
+    type HostType = half::f16;
+}
+
+impl CudaDType for BF16 {
+    type HostType = half::bf16;
+}

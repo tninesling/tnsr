@@ -447,6 +447,10 @@ pub enum Inst<'a> {
     ConvertU64I32(ConvertInst<'a, U64, I32>),
     ConvertU64F32(ConvertInst<'a, U64, F32>),
     ConvertI32U64(ConvertInst<'a, I32, U64>),
+    ConvertF32F16(ConvertInst<'a, F32, F16>),
+    ConvertF16F32(ConvertInst<'a, F16, F32>),
+    ConvertF32BF16(ConvertInst<'a, F32, BF16>),
+    ConvertBF16F32(ConvertInst<'a, BF16, F32>),
     ConvertToGlobal {
         dst: Operand<'a, U64>,
         src: Operand<'a, U64>,
@@ -480,6 +484,14 @@ pub enum Inst<'a> {
         addr: Operand<'a, U64>,
         vec: VecWidth,
     },
+    LdGlobalF16 {
+        dst: Operand<'a, F16>,
+        addr: Operand<'a, U64>,
+    },
+    LdGlobalBF16 {
+        dst: Operand<'a, BF16>,
+        addr: Operand<'a, U64>,
+    },
     LdParamU64 {
         dst: Operand<'a, U64>,
         addr: Operand<'a, U64>,
@@ -488,6 +500,14 @@ pub enum Inst<'a> {
         addr: Operand<'a, U64>,
         src: Vec<Operand<'a, F32>>,
         vec: VecWidth,
+    },
+    StGlobalF16 {
+        addr: Operand<'a, U64>,
+        src: Operand<'a, F16>,
+    },
+    StGlobalBF16 {
+        addr: Operand<'a, U64>,
+        src: Operand<'a, BF16>,
     },
     AtomicAddGlobalF32(AtomicAddInst<'a, F32>),
 
@@ -544,10 +564,26 @@ pub enum Inst<'a> {
         addr: Operand<'a, U64>,
         vec: VecWidth,
     },
+    LdSharedF16 {
+        dst: Operand<'a, F16>,
+        addr: Operand<'a, U64>,
+    },
+    LdSharedBF16 {
+        dst: Operand<'a, BF16>,
+        addr: Operand<'a, U64>,
+    },
     StSharedF32 {
         addr: Operand<'a, U64>,
         src: Vec<Operand<'a, F32>>,
         vec: VecWidth,
+    },
+    StSharedF16 {
+        addr: Operand<'a, U64>,
+        src: Operand<'a, F16>,
+    },
+    StSharedBF16 {
+        addr: Operand<'a, U64>,
+        src: Operand<'a, BF16>,
     },
     StSharedB32 {
         addr: Operand<'a, U64>,
@@ -563,16 +599,19 @@ pub enum Inst<'a> {
     },
 
     WmmaLoadA {
+        dtype: crate::tile::DType,
         frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     },
     WmmaLoadB {
+        dtype: crate::tile::DType,
         frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     },
     WmmaMma {
+        dtype: crate::tile::DType,
         d_frags: Vec<Operand<'a, F32>>,
         a_frags: Vec<Operand<'a, B32>>,
         b_frags: Vec<Operand<'a, B32>>,
@@ -591,6 +630,7 @@ pub enum Inst<'a> {
         c_frags: Vec<Operand<'a, F32>>,
     },
     WmmaStore {
+        dtype: crate::tile::DType,
         addr: Operand<'a, U64>,
         frags: Vec<Operand<'a, F32>>,
         stride: Operand<'a, I32>,
@@ -612,6 +652,22 @@ impl<'a> Inst<'a> {
 
     pub fn convert_i32_u64(dst: Operand<'a, I32>, src: Operand<'a, U64>) -> Self {
         Inst::ConvertI32U64(ConvertInst::new(dst, src))
+    }
+
+    pub fn convert_f32_f16(dst: Operand<'a, F32>, src: Operand<'a, F16>) -> Self {
+        Inst::ConvertF32F16(ConvertInst::new(dst, src))
+    }
+
+    pub fn convert_f16_f32(dst: Operand<'a, F16>, src: Operand<'a, F32>) -> Self {
+        Inst::ConvertF16F32(ConvertInst::new(dst, src))
+    }
+
+    pub fn convert_f32_bf16(dst: Operand<'a, F32>, src: Operand<'a, BF16>) -> Self {
+        Inst::ConvertF32BF16(ConvertInst::new(dst, src))
+    }
+
+    pub fn convert_bf16_f32(dst: Operand<'a, BF16>, src: Operand<'a, F32>) -> Self {
+        Inst::ConvertBF16F32(ConvertInst::new(dst, src))
     }
 
     pub fn convert_to_global(dst: Operand<'a, U64>, src: Operand<'a, U64>) -> Self {
@@ -841,6 +897,7 @@ impl<'a> Inst<'a> {
         stride: Operand<'a, I32>,
     ) -> Self {
         Inst::WmmaLoadA {
+            dtype: crate::tile::DType::TF32,
             frags,
             addr,
             stride,
@@ -853,6 +910,7 @@ impl<'a> Inst<'a> {
         stride: Operand<'a, I32>,
     ) -> Self {
         Inst::WmmaLoadB {
+            dtype: crate::tile::DType::TF32,
             frags,
             addr,
             stride,
@@ -866,6 +924,7 @@ impl<'a> Inst<'a> {
         c_frags: Vec<Operand<'a, F32>>,
     ) -> Self {
         Inst::WmmaMma {
+            dtype: crate::tile::DType::TF32,
             d_frags,
             a_frags,
             b_frags,
@@ -939,6 +998,7 @@ impl<'a> Inst<'a> {
         stride: Operand<'a, I32>,
     ) -> Self {
         Inst::WmmaStore {
+            dtype: crate::tile::DType::TF32,
             addr,
             frags,
             stride,

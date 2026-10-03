@@ -67,57 +67,7 @@ impl IndexExpr {
     }
 
     pub fn normalize(self) -> Result<Self> {
-        let normalized = match self {
-            Self::Add(lhs, rhs) => match (lhs.normalize()?, rhs.normalize()?) {
-                (Self::Const(0), rhs) => rhs,
-                (lhs, Self::Const(0)) => lhs,
-                (Self::Const(lhs), Self::Const(rhs)) => {
-                    lhs.checked_add(rhs).map(Self::Const).unwrap_or_else(|| {
-                        Self::Add(Box::new(Self::Const(lhs)), Box::new(Self::Const(rhs)))
-                    })
-                }
-                (lhs, rhs) => Self::Add(Box::new(lhs), Box::new(rhs)),
-            },
-            Self::Sub(lhs, rhs) => match (lhs.normalize()?, rhs.normalize()?) {
-                (lhs, Self::Const(0)) => lhs,
-                (lhs, rhs) if lhs == rhs => Self::Const(0),
-                (Self::Const(lhs), Self::Const(rhs)) => {
-                    lhs.checked_sub(rhs).map(Self::Const).unwrap_or_else(|| {
-                        Self::Sub(Box::new(Self::Const(lhs)), Box::new(Self::Const(rhs)))
-                    })
-                }
-                (lhs, rhs) => Self::Sub(Box::new(lhs), Box::new(rhs)),
-            },
-            Self::Mul(lhs, rhs) => match (lhs.normalize()?, rhs.normalize()?) {
-                (Self::Const(0), _) | (_, Self::Const(0)) => Self::Const(0),
-                (Self::Const(1), rhs) => rhs,
-                (lhs, Self::Const(1)) => lhs,
-                (Self::Const(lhs), Self::Const(rhs)) => {
-                    lhs.checked_mul(rhs).map(Self::Const).unwrap_or_else(|| {
-                        Self::Mul(Box::new(Self::Const(lhs)), Box::new(Self::Const(rhs)))
-                    })
-                }
-                (lhs, rhs) => Self::Mul(Box::new(lhs), Box::new(rhs)),
-            },
-            Self::FloorDiv(value, divisor) => {
-                anyhow::ensure!(divisor > 0, "index floor-divisor must be positive");
-                match value.normalize()? {
-                    Self::Const(value) => Self::Const(value.div_euclid(divisor)),
-                    value if divisor == 1 => value,
-                    value => Self::FloorDiv(Box::new(value), divisor),
-                }
-            }
-            Self::Mod(value, modulus) => {
-                anyhow::ensure!(modulus > 0, "index modulus must be positive");
-                match value.normalize()? {
-                    Self::Const(value) => Self::Const(value.rem_euclid(modulus)),
-                    _ if modulus == 1 => Self::Const(0),
-                    value => Self::Mod(Box::new(value), modulus),
-                }
-            }
-            expression => expression,
-        };
-        Ok(normalized)
+        super::index_egraph::normalize_map(self)
     }
 
     pub fn evaluate(&self, iteration: &[i64], symbols: &[i64]) -> Result<i64> {

@@ -1,6 +1,8 @@
 pub mod access;
 pub mod builder;
 pub mod graph;
+mod index_egraph;
+mod index_optimization;
 pub mod ir;
 pub mod matmul_region;
 pub mod matmul_schedule;

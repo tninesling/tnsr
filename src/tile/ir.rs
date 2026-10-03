@@ -21,6 +21,12 @@ pub enum Stmt {
         extent: usize,
     },
 
+    /// Bind a pure wrapping-u64 index expression in its dependency scope.
+    LetIndex {
+        name: String,
+        value: Expr,
+    },
+
     /// Allocate a tile variable
     AllocTile {
         var: TileVar,
@@ -375,7 +381,7 @@ pub enum ReduceOp {
 }
 
 /// Simple expressions for indices and loop bounds
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[allow(dead_code)]
 pub enum Expr {
     Const(i64),
@@ -388,6 +394,8 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     FloorDiv(Box<Expr>, usize),
     Mod(Box<Expr>, usize),
+    ShiftRight(Box<Expr>, u64),
+    BitAnd(Box<Expr>, u64),
 }
 
 impl std::ops::Add for Expr {
@@ -414,7 +422,7 @@ impl std::ops::Mul<i64> for Expr {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[allow(dead_code)]
 pub enum Dim {
     X,

@@ -530,6 +530,8 @@ pub enum Inst<'a> {
     ShiftLeftB64(ShiftLeftInst<'a, B64, U64>),
     ShiftLeftU64(ShiftLeftInst<'a, U64, U64>),
     ShiftLeftI32(ShiftLeftInst<'a, I32, I32>),
+    ShiftRightU64(ShiftRightInst<'a, U64, U64>),
+    AndU64(AndInst<'a, U64>),
     ShiftRightI32(ShiftRightInst<'a, I32, I32>),
     AndI32(AndInst<'a, I32>),
     SetpU64(SetpInst<'a, U64>),

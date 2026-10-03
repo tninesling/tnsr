@@ -83,6 +83,23 @@ impl<D: TileDType, G> From<TensorGraph<D, G>> for TileGraph {
 }
 
 impl TileGraph {
+    /// Optimize index expressions in all physical and diagnostic tile kernels.
+    pub fn optimize_indices(&mut self) -> anyhow::Result<()> {
+        for ir in self.graph.node_weights_mut() {
+            ir.optimize_indices()?;
+        }
+        #[cfg(feature = "cuda")]
+        for kernel in self
+            .region_kernels
+            .iter_mut()
+            .chain(&mut self.reduction_region_kernels)
+            .chain(&mut self.matmul_region_kernels)
+        {
+            kernel.ir.optimize_indices()?;
+        }
+        Ok(())
+    }
+
     /// Lower a graph while preserving its host storage dtype.
     pub fn from_graph<D: TileDType, G>(graph: &TensorGraph<D, G>) -> Self {
         Self::from_with_matmul_schedules(graph, true, &HashMap::new())
@@ -1131,8 +1148,7 @@ impl TileGraph {
 /// Decode the output batch coordinate and drop broadcast dimensions before
 /// computing an operand's contiguous matrix offset.
 fn batch_element_offset(output_batch: &[usize], input_shape: &[usize]) -> Expr {
-    // TODO(#61): Replace local address simplifications with shared egg index
-    // optimization, then extract batch-invariant bindings outside the K loop.
+    // General index normalization and invariant binding happen after scheduling.
     let input_batch = &input_shape[..input_shape.len() - 2];
     let padding = output_batch.len() - input_batch.len();
     let mut offset = Expr::Const(0);

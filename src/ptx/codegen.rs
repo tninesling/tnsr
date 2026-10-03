@@ -494,6 +494,18 @@ impl<'a> fmt::Display for ShiftLeftInst<'a, I32, I32> {
     }
 }
 
+impl<'a> fmt::Display for ShiftRightInst<'a, U64, U64> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "shr.u64 {}, {}, {};", self.dst, self.a, self.b)
+    }
+}
+
+impl<'a> fmt::Display for AndInst<'a, U64> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "and.b64 {}, {}, {};", self.dst, self.a, self.b)
+    }
+}
+
 impl<'a> fmt::Display for ShiftRightInst<'a, I32, I32> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "shr.s32 {}, {}, {};", self.dst, self.a, self.b)
@@ -636,6 +648,8 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::ShiftLeftB64(inst) => write!(f, "{inst}"),
             Inst::ShiftLeftU64(inst) => write!(f, "{inst}"),
             Inst::ShiftLeftI32(inst) => write!(f, "{inst}"),
+            Inst::ShiftRightU64(inst) => write!(f, "{inst}"),
+            Inst::AndU64(inst) => write!(f, "{inst}"),
             Inst::ShiftRightI32(inst) => write!(f, "{inst}"),
             Inst::AndI32(inst) => write!(f, "{inst}"),
             Inst::SetpU64(inst) => write!(f, "{inst}"),

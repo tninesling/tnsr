@@ -48,6 +48,11 @@ name = "convolution"
 harness = false
 required-features = ["cuda"]
 
+[[bench]]
+name = "fusion"
+harness = false
+required-features = ["cuda"]
+
 [dev-dependencies]
 clap = { version = "4.3.7", features = ["derive"] }
 criterion = "0.7.0"
@@ -57,3 +62,7 @@ reqwest = { version = "0.12.24", default-features = false, features = ["blocking
 rstest = "0.26.1"
 stats_alloc = "0.1.10"
 test-log = "0.2.18"
+
+[[example]]
+name = "matmul_profile"
+required-features = ["cuda"]

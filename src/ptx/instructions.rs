@@ -475,6 +475,10 @@ pub enum Inst<'a> {
         dst: Operand<'a, B32>,
         src: Operand<'a, F32>,
     },
+    MovF32B32 {
+        dst: Operand<'a, F32>,
+        src: Operand<'a, B32>,
+    },
     LdGlobalF32 {
         dst: Vec<Operand<'a, F32>>,
         addr: Operand<'a, U64>,
@@ -533,6 +537,12 @@ pub enum Inst<'a> {
     SetpF32(SetpInst<'a, F32>),
     SelpF32(SelpInst<'a, F32>),
     SelpU64(SelpInst<'a, U64>),
+    ShflSyncDownB32 {
+        dst: Operand<'a, B32>,
+        predicate: Operand<'a, Pred>,
+        src: Operand<'a, B32>,
+        offset: u32,
+    },
 
     Bra {
         condition: Operand<'a, Pred>,
@@ -589,16 +599,19 @@ pub enum Inst<'a> {
     },
 
     WmmaLoadA {
+        dtype: crate::tile::DType,
         frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     },
     WmmaLoadB {
+        dtype: crate::tile::DType,
         frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     },
     WmmaMma {
+        dtype: crate::tile::DType,
         d_frags: Vec<Operand<'a, F32>>,
         a_frags: Vec<Operand<'a, B32>>,
         b_frags: Vec<Operand<'a, B32>>,
@@ -617,6 +630,7 @@ pub enum Inst<'a> {
         c_frags: Vec<Operand<'a, F32>>,
     },
     WmmaStore {
+        dtype: crate::tile::DType,
         addr: Operand<'a, U64>,
         frags: Vec<Operand<'a, F32>>,
         stride: Operand<'a, I32>,
@@ -678,6 +692,10 @@ impl<'a> Inst<'a> {
 
     pub fn mov_b32(dst: Operand<'a, B32>, src: Operand<'a, F32>) -> Self {
         Inst::MovB32 { dst, src }
+    }
+
+    pub fn mov_f32_b32(dst: Operand<'a, F32>, src: Operand<'a, B32>) -> Self {
+        Inst::MovF32B32 { dst, src }
     }
 
     pub fn load_global_scalar_f32(dst: Operand<'a, F32>, addr: Operand<'a, U64>) -> Self {
@@ -842,6 +860,20 @@ impl<'a> Inst<'a> {
         Inst::SelpF32(SelpInst::new(dst, a, b, pred))
     }
 
+    pub fn shfl_sync_down_b32(
+        dst: Operand<'a, B32>,
+        predicate: Operand<'a, Pred>,
+        src: Operand<'a, B32>,
+        offset: u32,
+    ) -> Self {
+        Inst::ShflSyncDownB32 {
+            dst,
+            predicate,
+            src,
+            offset,
+        }
+    }
+
     pub fn selp_u64(
         dst: Operand<'a, U64>,
         a: Operand<'a, U64>,
@@ -865,6 +897,7 @@ impl<'a> Inst<'a> {
         stride: Operand<'a, I32>,
     ) -> Self {
         Inst::WmmaLoadA {
+            dtype: crate::tile::DType::TF32,
             frags,
             addr,
             stride,
@@ -877,6 +910,7 @@ impl<'a> Inst<'a> {
         stride: Operand<'a, I32>,
     ) -> Self {
         Inst::WmmaLoadB {
+            dtype: crate::tile::DType::TF32,
             frags,
             addr,
             stride,
@@ -890,6 +924,7 @@ impl<'a> Inst<'a> {
         c_frags: Vec<Operand<'a, F32>>,
     ) -> Self {
         Inst::WmmaMma {
+            dtype: crate::tile::DType::TF32,
             d_frags,
             a_frags,
             b_frags,
@@ -963,6 +998,7 @@ impl<'a> Inst<'a> {
         stride: Operand<'a, I32>,
     ) -> Self {
         Inst::WmmaStore {
+            dtype: crate::tile::DType::TF32,
             addr,
             frags,
             stride,

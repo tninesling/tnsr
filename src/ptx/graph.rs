@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::instructions::{Inst, Operand};
+use super::target::PtxTarget;
 use super::types::{B32, F32, I32, U64};
 use super::{Function, Module};
 use crate::tile::{Expr, TileGraph, TileIR, TileVar};
@@ -11,26 +12,72 @@ pub struct PtxGraph {
     // forged to 'static. `graph` is private, is declared before `arena` so it drops
     // first, and no API may return an owned Function or a borrow not tied to `&self`.
     graph: Graph<Function<'static>, usize>,
+    region_functions: Vec<(usize, Function<'static>)>,
+    reduction_region_functions: Vec<(usize, Function<'static>)>,
+    matmul_region_functions: Vec<(usize, Function<'static>)>,
+    physical_nodes: Option<HashSet<NodeIndex>>,
+    target: PtxTarget,
     #[allow(dead_code)]
     arena: Box<bumpalo::Bump>,
 }
 
 impl PtxGraph {
-    /// Render this graph as a complete PTX module.
-    pub fn to_ptx(&self) -> String {
-        let mut module = Module::new();
-        for function in self.graph.node_weights() {
+    pub(crate) fn module_source(&self) -> String {
+        let mut module = Module::new_with_target(self.target.compute_capability);
+        for node in self.graph.node_indices() {
+            if self
+                .physical_nodes
+                .as_ref()
+                .is_none_or(|physical| physical.contains(&node))
+            {
+                module.add_function(self.graph[node].clone());
+            }
+        }
+        for (_, function) in &self.region_functions {
+            module.add_function(function.clone());
+        }
+        for (_, function) in &self.reduction_region_functions {
+            module.add_function(function.clone());
+        }
+        for (_, function) in &self.matmul_region_functions {
             module.add_function(function.clone());
         }
         module.to_string()
     }
 
-    pub(crate) fn module_source(&self) -> String {
-        self.to_ptx()
+    /// Render this graph as a complete PTX module.
+    pub fn to_ptx(&self) -> String {
+        self.module_source()
     }
 
     pub(crate) fn kernel_name(&self, node: NodeIndex) -> Option<&str> {
         self.graph.node_weight(node).map(|function| function.name)
+    }
+
+    pub(crate) fn region_kernel_name(&self, region_id: usize) -> Option<&str> {
+        self.region_functions
+            .iter()
+            .find(|(id, _)| *id == region_id)
+            .map(|(_, function)| function.name)
+    }
+
+    pub(crate) fn reduction_region_kernel_name(&self, region_id: usize) -> Option<&str> {
+        self.reduction_region_functions
+            .iter()
+            .find(|(id, _)| *id == region_id)
+            .map(|(_, function)| function.name)
+    }
+
+    pub(crate) fn matmul_region_kernel_name(&self, region_id: usize) -> Option<&str> {
+        self.matmul_region_functions
+            .iter()
+            .find(|(id, _)| *id == region_id)
+            .map(|(_, function)| function.name)
+    }
+
+    pub(crate) fn with_target(mut self, target: PtxTarget) -> Self {
+        self.target = target;
+        self
     }
 }
 
@@ -42,7 +89,14 @@ impl From<TileGraph> for PtxGraph {
         // would invalidate cloned functions.
         let arena = Box::new(bumpalo::Bump::new());
 
-        let graph = tile_graph.graph.map_owned(
+        let crate::tile::TileGraph {
+            graph: tile_nodes,
+            region_kernels,
+            reduction_region_kernels,
+            matmul_region_kernels,
+            physical_nodes,
+        } = tile_graph;
+        let graph = tile_nodes.map_owned(
             |node_idx, tile_ir| {
                 // SAFETY: `arena` is boxed at a stable address and is owned by the
                 // resulting PtxGraph. Its private graph is dropped before the arena,
@@ -54,8 +108,63 @@ impl From<TileGraph> for PtxGraph {
             },
             |_, weight| weight,
         );
+        let region_offset = graph.node_count();
+        let region_functions: Vec<(usize, Function<'static>)> = region_kernels
+            .into_iter()
+            .map(|kernel| {
+                // SAFETY: Same arena ownership and drop-order invariant as graph functions.
+                let arena_ref: &'static bumpalo::Bump =
+                    unsafe { &*(arena.as_ref() as *const bumpalo::Bump) };
+                (
+                    kernel.region_id,
+                    tile_ir_to_function(kernel.ir, arena_ref, region_offset + kernel.region_id),
+                )
+            })
+            .collect();
+        let reduction_region_offset = region_offset + region_functions.len();
+        let reduction_region_functions = reduction_region_kernels
+            .into_iter()
+            .map(|kernel| {
+                // SAFETY: Same arena ownership and drop-order invariant as graph functions.
+                let arena_ref: &'static bumpalo::Bump =
+                    unsafe { &*(arena.as_ref() as *const bumpalo::Bump) };
+                (
+                    kernel.region_id,
+                    tile_ir_to_function(
+                        kernel.ir,
+                        arena_ref,
+                        reduction_region_offset + kernel.region_id,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let matmul_region_offset = reduction_region_offset + reduction_region_functions.len();
+        let matmul_region_functions = matmul_region_kernels
+            .into_iter()
+            .map(|kernel| {
+                // SAFETY: Same arena ownership and drop-order invariant as graph functions.
+                let arena_ref: &'static bumpalo::Bump =
+                    unsafe { &*(arena.as_ref() as *const bumpalo::Bump) };
+                (
+                    kernel.region_id,
+                    tile_ir_to_function(
+                        kernel.ir,
+                        arena_ref,
+                        matmul_region_offset + kernel.region_id,
+                    ),
+                )
+            })
+            .collect();
 
-        Self { graph, arena }
+        Self {
+            graph,
+            region_functions,
+            reduction_region_functions,
+            matmul_region_functions,
+            physical_nodes,
+            target: PtxTarget::sm80(),
+            arena,
+        }
     }
 }
 
@@ -461,6 +570,7 @@ fn lower_stmt<'a>(
         Stmt::LoadGlobalToSharedPredicated {
             dest,
             src_param,
+            element_index,
             row,
             col,
             layout,
@@ -493,21 +603,15 @@ fn lower_stmt<'a>(
                 condition: col_outside,
                 target: skip_load,
             });
-            let row_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                row_offset.clone(),
-                row,
-                Operand::imm_u64(layout.row_stride as u64),
-            ));
-            let element_offset = func.add_u64_register();
-            func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, col));
+            let element_offset = lower_expr(func, ctx, element_index);
             let source = ctx
                 .param_ptrs
                 .get(src_param)
                 .expect("Parameter not found in context")
                 .clone();
-            let address = global_f32_address(func, source, element_offset);
-            func.add_inst(Inst::load_global_scalar_f32(value.clone(), address));
+            let address =
+                element_address(func, source, element_offset, ctx.param_dtypes[src_param]);
+            load_global_as_f32(func, ctx.param_dtypes[src_param], value.clone(), address);
             func.add_inst(Inst::Label(skip_load));
 
             let shared_address = shared_thread_address(func, ctx, *dest);
@@ -519,12 +623,55 @@ fn lower_stmt<'a>(
                     src: tf32,
                 });
             } else {
-                func.add_inst(Inst::StSharedF32 {
-                    addr: shared_address,
-                    src: vec![value],
-                    vec: super::instructions::VecWidth::Scalar,
-                });
+                store_shared_from_f32(func, ctx.tile_dtypes[dest], shared_address, value);
             }
+        }
+        Stmt::LoadGlobalPredicated {
+            dest,
+            src_param,
+            element_index,
+            row,
+            col,
+            layout,
+        } => {
+            let row = lower_expr(func, ctx, row);
+            let col = lower_expr(func, ctx, col);
+            let value = ctx.get_or_alloc_reg(func, *dest);
+            func.add_inst(Inst::mov_f32(value.clone(), Operand::imm_f32(0.0)));
+            let skip_load =
+                bumpalo::format!(in ctx.arena, "matmul_epilogue_load_skip_{}", ctx.label_counter)
+                    .into_bump_str();
+            ctx.label_counter += 1;
+            let row_outside = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                row_outside.clone(),
+                row.clone(),
+                Operand::imm_u64(layout.rows as u64),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: row_outside,
+                target: skip_load,
+            });
+            let col_outside = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                col_outside.clone(),
+                col.clone(),
+                Operand::imm_u64(layout.cols as u64),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: col_outside,
+                target: skip_load,
+            });
+            let element_offset = lower_expr(func, ctx, element_index);
+            let source = ctx
+                .param_ptrs
+                .get(src_param)
+                .expect("Parameter not found in context")
+                .clone();
+            let address =
+                element_address(func, source, element_offset, ctx.param_dtypes[src_param]);
+            load_global_as_f32(func, ctx.param_dtypes[src_param], value, address);
+            func.add_inst(Inst::Label(skip_load));
         }
         Stmt::Store {
             dest_param,
@@ -582,6 +729,7 @@ fn lower_stmt<'a>(
         Stmt::StoreGlobalPredicated {
             dest_param,
             src,
+            element_index,
             row,
             col,
             layout,
@@ -612,20 +760,18 @@ fn lower_stmt<'a>(
                 condition: col_outside,
                 target: skip_store,
             });
-            let row_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                row_offset.clone(),
-                row,
-                Operand::imm_u64(layout.row_stride as u64),
-            ));
-            let element_offset = func.add_u64_register();
-            func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, col));
+            let element_offset = lower_expr(func, ctx, element_index);
             let destination = ctx
                 .param_ptrs
                 .get(dest_param)
                 .expect("Parameter not found in context")
                 .clone();
-            let address = global_f32_address(func, destination, element_offset);
+            let address = element_address(
+                func,
+                destination,
+                element_offset,
+                ctx.param_dtypes[dest_param],
+            );
             let value = if ctx.fragment_regs.contains_key(src) {
                 let shared = ctx
                     .reg_to_shared
@@ -638,7 +784,7 @@ fn lower_stmt<'a>(
             } else {
                 ctx.get_or_alloc_reg(func, *src)
             };
-            func.add_inst(Inst::store_global_scalar_f32(address, value));
+            store_global_from_f32(func, ctx.param_dtypes[dest_param], address, value);
             func.add_inst(Inst::Label(skip_store));
         }
         Stmt::LoadSharedToReg { dest, src } => {
@@ -667,10 +813,10 @@ fn lower_stmt<'a>(
             a,
             b,
             layout: _,
-            plan,
+            schedule,
         } => {
-            if *plan == crate::tile::MatMulPlan::TensorCoreTf32 {
-                lower_tf32_matmul(func, ctx, *dest, *a, *b);
+            if schedule.plan != crate::tile::MatMulPlan::ScalarF32 {
+                lower_tensor_core_matmul(func, ctx, *dest, *a, *b, schedule);
                 return;
             }
             // Matrix multiply: each thread computes one output element
@@ -853,6 +999,22 @@ fn lower_stmt<'a>(
             // Loop end label
             func.add_inst(Inst::Label(loop_end));
         }
+        Stmt::LoadTileElement { dest, src } => {
+            let value = if ctx.fragment_regs.contains_key(src) {
+                let shared = ctx
+                    .reg_to_shared
+                    .get(src)
+                    .expect("WMMA accumulator has no shared-memory backing");
+                let address = shared_thread_address(func, ctx, *shared);
+                let value = func.add_f32_register();
+                func.add_inst(Inst::load_shared_scalar_f32(value.clone(), address));
+                value
+            } else {
+                ctx.get_or_alloc_reg(func, *src)
+            };
+            let output = ctx.get_or_alloc_reg(func, *dest);
+            func.add_inst(Inst::mov_f32(output, value));
+        }
         Stmt::Embedding {
             vocabulary: _,
             width,
@@ -893,8 +1055,12 @@ fn lower_stmt<'a>(
         Stmt::EmbeddingBackward {
             vocabulary: _,
             width,
-            index_count: _,
+            index_count,
         } => {
+            if ctx.param_dtypes["output"] != crate::tile::DType::F32 {
+                lower_half_embedding_backward(func, ctx, *width, *index_count);
+                return;
+            }
             let tid = global_linear_tid(func);
             let width = (*width).max(1);
             let index_position = func.add_u64_register();
@@ -932,7 +1098,12 @@ fn lower_stmt<'a>(
                 .get("output")
                 .expect("Output parameter not found")
                 .clone();
-            let destination = global_f32_address(func, output_ptr, destination_offset);
+            let destination = element_address(
+                func,
+                output_ptr,
+                destination_offset,
+                crate::tile::DType::F32,
+            );
             let discarded = func.add_f32_register();
             func.add_inst(Inst::atomic_add_global_f32(
                 discarded,
@@ -1304,6 +1475,9 @@ fn lower_stmt<'a>(
             } else {
                 func.add_inst(Inst::mov_f32(dest_reg, accumulator));
             }
+        }
+        Stmt::ReductionRegion { region } => {
+            lower_reduction_region(func, ctx, region);
         }
         Stmt::Gt { dest, a, b } => {
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
@@ -1832,6 +2006,977 @@ fn end_counted_loop<'a>(func: &mut Function<'a>, state: CountedLoop<'a>) {
     func.add_inst(Inst::Label(state.end));
 }
 
+/// One thread owns each output element, accumulating repeated indices in f32.
+/// This avoids f32 atomics on b16 storage and rounds only after the complete sum.
+fn lower_half_embedding_backward<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    width: usize,
+    index_count: usize,
+) {
+    let tid = global_linear_tid(func);
+    let row = quotient_u64(func, tid.clone(), width.max(1));
+    let column = decode_coordinate(func, tid.clone(), 1, width.max(1));
+    let sum = func.add_f32_register();
+    func.add_inst(Inst::mov_f32(sum.clone(), Operand::imm_f32(0.0)));
+    let state = begin_counted_loop(func, ctx, "half_embedding_backward", index_count);
+    let index_value = load_param_f32_at(func, ctx, "indices", state.counter.clone());
+    let index = func.add_u64_register();
+    func.add_inst(Inst::convert_u64_f32(index.clone(), index_value));
+    let skip = next_label(ctx, "half_embedding_skip");
+    let different = func.add_predicate_register();
+    func.add_inst(Inst::setp_ne_u64(different.clone(), index, row));
+    func.add_inst(Inst::Bra {
+        condition: different,
+        target: skip,
+    });
+    let offset = multiply_u64(func, state.counter.clone(), width);
+    func.add_inst(Inst::add_u64(offset.clone(), offset.clone(), column));
+    let gradient = load_param_f32_at(func, ctx, "grad_output", offset);
+    func.add_inst(Inst::add_f32(sum.clone(), sum.clone(), gradient));
+    func.add_inst(Inst::Label(skip));
+    end_counted_loop(func, state);
+    store_param_f32_at(func, ctx, "output", tid, sum);
+}
+
+fn lower_reduction_region<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    region: &crate::tile::ReductionRegion,
+) {
+    match region.schedule {
+        crate::tile::ReductionSchedule::Serial => lower_serial_reduction_region(func, ctx, region),
+        crate::tile::ReductionSchedule::Subgroup { width } => {
+            lower_cooperative_reduction_region(func, ctx, region, width, false)
+        }
+        crate::tile::ReductionSchedule::Block { threads } => {
+            lower_cooperative_reduction_region(func, ctx, region, threads, true)
+        }
+    }
+}
+
+fn lower_serial_reduction_region<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    region: &crate::tile::ReductionRegion,
+) {
+    use crate::tile::{ReductionInputDomain, RegionOpKind};
+
+    let tid = global_linear_tid(func);
+    let input_strides = contiguous_strides(&region.input_shape);
+    let output_strides = contiguous_strides(&region.output_shape);
+    let base_offset = func.add_u64_register();
+    func.add_inst(Inst::mov_u64(base_offset.clone(), Operand::imm_u64(0)));
+    for dimension in 0..region.output_shape.len() {
+        if dimension == region.axis {
+            continue;
+        }
+        let coordinate = decode_coordinate(
+            func,
+            tid.clone(),
+            output_strides[dimension],
+            region.output_shape[dimension],
+        );
+        let contribution = func.add_u64_register();
+        func.add_inst(Inst::mul_u64(
+            contribution.clone(),
+            coordinate,
+            Operand::imm_u64(input_strides[dimension] as u64),
+        ));
+        func.add_inst(Inst::add_u64(
+            base_offset.clone(),
+            base_offset.clone(),
+            contribution,
+        ));
+    }
+
+    let accumulator = func.add_f32_register();
+    match region.op {
+        crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => {
+            func.add_inst(Inst::mov_f32(accumulator.clone(), Operand::imm_f32(0.0)));
+        }
+        crate::tensor::ReduceOp::Max => {
+            func.add_inst(Inst::mov_f32(
+                accumulator.clone(),
+                Operand::imm_f32(f32::NEG_INFINITY),
+            ));
+        }
+    }
+
+    let reduction = begin_counted_loop(
+        func,
+        ctx,
+        "reduction_region",
+        region.input_shape[region.axis],
+    );
+    let contribution = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        contribution.clone(),
+        reduction.counter.clone(),
+        Operand::imm_u64(input_strides[region.axis] as u64),
+    ));
+    let input_offset = func.add_u64_register();
+    func.add_inst(Inst::add_u64(
+        input_offset.clone(),
+        base_offset.clone(),
+        contribution,
+    ));
+    let mut values = HashMap::new();
+    for (index, input) in region.inputs.iter().enumerate() {
+        if input.domain == ReductionInputDomain::Full {
+            let offset = reduction_region_input_offset(
+                func,
+                input,
+                &region.input_shape,
+                input_offset.clone(),
+            );
+            let value = load_param_f32_at(func, ctx, &format!("input_{index}"), offset);
+            values.insert(input.value, value);
+        }
+    }
+    for operation in &region.producer_operations {
+        emit_reduction_region_op(func, operation, &mut values);
+    }
+    for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
+        if shape == &region.input_shape && values.contains_key(&output.value) {
+            let value = values[&output.value].clone();
+            store_param_f32_at(
+                func,
+                ctx,
+                &format!("output_{index}"),
+                input_offset.clone(),
+                value,
+            );
+        }
+    }
+    let reduction_value = values
+        .get(&region.reduction_input)
+        .expect("reduction region input SSA value is unavailable")
+        .clone();
+    match region.op {
+        crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => {
+            func.add_inst(Inst::add_f32(
+                accumulator.clone(),
+                accumulator.clone(),
+                reduction_value,
+            ));
+        }
+        crate::tensor::ReduceOp::Max => {
+            func.add_inst(Inst::max_f32(
+                accumulator.clone(),
+                accumulator.clone(),
+                reduction_value,
+            ));
+        }
+    }
+    end_counted_loop(func, reduction);
+
+    let reduced =
+        if region.op == crate::tensor::ReduceOp::Mean && region.input_shape[region.axis] != 0 {
+            let value = func.add_f32_register();
+            func.add_inst(Inst::div_f32(
+                value.clone(),
+                accumulator,
+                Operand::imm_f32(region.input_shape[region.axis] as f32),
+            ));
+            value
+        } else {
+            // Match the reference executor: an empty mean retains the initialized
+            // zero accumulator because there are no per-element divisions.
+            accumulator
+        };
+    values.clear();
+    values.insert(region.reduced_value, reduced.clone());
+    for (index, input) in region.inputs.iter().enumerate() {
+        if input.domain == ReductionInputDomain::Reduced {
+            let offset =
+                reduction_region_input_offset(func, input, &region.output_shape, tid.clone());
+            let value = load_param_f32_at(func, ctx, &format!("input_{index}"), offset);
+            values.insert(input.value, value);
+        }
+    }
+    for operation in &region.epilogue_operations {
+        emit_reduction_region_op(func, operation, &mut values);
+    }
+    let reduced_values = values.clone();
+    for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
+        if shape == &region.input_shape {
+            continue;
+        }
+        let value = values
+            .get(&output.value)
+            .expect("reduction region output SSA value is unavailable")
+            .clone();
+        store_param_f32_at(func, ctx, &format!("output_{index}"), tid.clone(), value);
+    }
+
+    if !region.full_epilogue_operations.is_empty() {
+        let full = begin_counted_loop(
+            func,
+            ctx,
+            "reduction_full_epilogue",
+            region.input_shape[region.axis],
+        );
+        let contribution = func.add_u64_register();
+        func.add_inst(Inst::mul_u64(
+            contribution.clone(),
+            full.counter.clone(),
+            Operand::imm_u64(input_strides[region.axis] as u64),
+        ));
+        let full_offset = func.add_u64_register();
+        func.add_inst(Inst::add_u64(
+            full_offset.clone(),
+            base_offset,
+            contribution,
+        ));
+        values.clear();
+        values.extend(reduced_values);
+        for (index, input) in region.inputs.iter().enumerate() {
+            if input.domain == ReductionInputDomain::Full {
+                let offset = reduction_region_input_offset(
+                    func,
+                    input,
+                    &region.input_shape,
+                    full_offset.clone(),
+                );
+                let value = load_param_f32_at(func, ctx, &format!("input_{index}"), offset);
+                values.insert(input.value, value);
+            }
+        }
+        for operation in &region.producer_operations {
+            emit_reduction_region_op(func, operation, &mut values);
+        }
+        for operation in &region.full_epilogue_operations {
+            emit_reduction_region_op(func, operation, &mut values);
+        }
+        for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate()
+        {
+            if shape == &region.input_shape {
+                let value = values
+                    .get(&output.value)
+                    .expect("full reduction epilogue output SSA value is unavailable")
+                    .clone();
+                store_param_f32_at(
+                    func,
+                    ctx,
+                    &format!("output_{index}"),
+                    full_offset.clone(),
+                    value,
+                );
+            }
+        }
+        end_counted_loop(func, full);
+    }
+
+    fn emit_reduction_region_op<'a>(
+        func: &mut Function<'a>,
+        operation: &crate::tile::RegionOp,
+        values: &mut HashMap<crate::tile::RegionValue, Operand<'a, F32>>,
+    ) {
+        let get = |value: crate::tile::RegionValue| {
+            values
+                .get(&value)
+                .expect("reduction region operand SSA value is unavailable")
+                .clone()
+        };
+        let output = func.add_f32_register();
+        match operation.kind {
+            RegionOpKind::Unary { op, input } => match op {
+                crate::tensor::UnaryOp::Neg => {
+                    func.add_inst(Inst::neg_f32(output.clone(), get(input)))
+                }
+                crate::tensor::UnaryOp::Exp => {
+                    let scaled = func.add_f32_register();
+                    func.add_inst(Inst::mul_f32(
+                        scaled.clone(),
+                        get(input),
+                        Operand::imm_f32(std::f32::consts::LOG2_E),
+                    ));
+                    func.add_inst(Inst::ex2_f32(output.clone(), scaled));
+                }
+                crate::tensor::UnaryOp::Log => {
+                    let logarithm = func.add_f32_register();
+                    func.add_inst(Inst::lg2_f32(logarithm.clone(), get(input)));
+                    func.add_inst(Inst::mul_f32(
+                        output.clone(),
+                        logarithm,
+                        Operand::imm_f32(std::f32::consts::LN_2),
+                    ));
+                }
+                crate::tensor::UnaryOp::Relu => func.add_inst(Inst::max_f32(
+                    output.clone(),
+                    get(input),
+                    Operand::imm_f32(0.0),
+                )),
+            },
+            RegionOpKind::Binary { op, lhs, rhs } => match op {
+                crate::tensor::BinaryOp::Add => {
+                    func.add_inst(Inst::add_f32(output.clone(), get(lhs), get(rhs)))
+                }
+                crate::tensor::BinaryOp::Sub => {
+                    func.add_inst(Inst::sub_f32(output.clone(), get(lhs), get(rhs)))
+                }
+                crate::tensor::BinaryOp::Mul => {
+                    func.add_inst(Inst::mul_f32(output.clone(), get(lhs), get(rhs)))
+                }
+                crate::tensor::BinaryOp::Div => {
+                    func.add_inst(Inst::div_f32(output.clone(), get(lhs), get(rhs)))
+                }
+            },
+            RegionOpKind::Gt { lhs, rhs } => {
+                let predicate = func.add_predicate_register();
+                func.add_inst(Inst::setp_gt_f32(predicate.clone(), get(lhs), get(rhs)));
+                func.add_inst(Inst::selp_f32(
+                    output.clone(),
+                    Operand::imm_f32(1.0),
+                    Operand::imm_f32(0.0),
+                    predicate,
+                ));
+            }
+            RegionOpKind::Mask {
+                values: input,
+                condition,
+            } => {
+                let predicate = func.add_predicate_register();
+                func.add_inst(Inst::setp_ne_f32(
+                    predicate.clone(),
+                    get(condition),
+                    Operand::imm_f32(0.0),
+                ));
+                func.add_inst(Inst::selp_f32(
+                    output.clone(),
+                    get(input),
+                    Operand::imm_f32(0.0),
+                    predicate,
+                ));
+            }
+        }
+        values.insert(operation.output, output);
+    }
+}
+
+fn lower_cooperative_reduction_region<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    region: &crate::tile::ReductionRegion,
+    thread_count: u32,
+    tree_reduce: bool,
+) {
+    use crate::tile::{ReductionInputDomain, RegionOpKind};
+
+    let thread_count = u64::from(thread_count);
+
+    let global_tid = global_linear_tid(func);
+    let fiber = func.add_u64_register();
+    func.add_inst(Inst::div_u64(
+        fiber.clone(),
+        global_tid.clone(),
+        Operand::imm_u64(thread_count),
+    ));
+    let outside = func.add_predicate_register();
+    func.add_inst(Inst::setp_ge_u64(
+        outside.clone(),
+        fiber.clone(),
+        Operand::imm_u64(region.output_shape.iter().product::<usize>() as u64),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: outside,
+        target: ctx.return_label,
+    });
+
+    let warp_base = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        warp_base.clone(),
+        fiber.clone(),
+        Operand::imm_u64(thread_count),
+    ));
+    let lane = func.add_u64_register();
+    func.add_inst(Inst::sub_u64(lane.clone(), global_tid, warp_base));
+
+    let input_strides = contiguous_strides(&region.input_shape);
+    let output_strides = contiguous_strides(&region.output_shape);
+    let base_offset = func.add_u64_register();
+    func.add_inst(Inst::mov_u64(base_offset.clone(), Operand::imm_u64(0)));
+    for dimension in 0..region.output_shape.len() {
+        if dimension == region.axis {
+            continue;
+        }
+        let coordinate = decode_coordinate(
+            func,
+            fiber.clone(),
+            output_strides[dimension],
+            region.output_shape[dimension],
+        );
+        let contribution = func.add_u64_register();
+        func.add_inst(Inst::mul_u64(
+            contribution.clone(),
+            coordinate,
+            Operand::imm_u64(input_strides[dimension] as u64),
+        ));
+        func.add_inst(Inst::add_u64(
+            base_offset.clone(),
+            base_offset.clone(),
+            contribution,
+        ));
+    }
+
+    let accumulator = func.add_f32_register();
+    let identity = region.op.identity_f32();
+    func.add_inst(Inst::mov_f32(
+        accumulator.clone(),
+        Operand::imm_f32(identity),
+    ));
+
+    let counter = func.add_u64_register();
+    func.add_inst(Inst::mov_u64(counter.clone(), lane.clone()));
+    let loop_start = next_label(ctx, "warp_reduction_loop");
+    let loop_end = next_label(ctx, "warp_reduction_end");
+    func.add_inst(Inst::Label(loop_start));
+    let done = func.add_predicate_register();
+    func.add_inst(Inst::setp_ge_u64(
+        done.clone(),
+        counter.clone(),
+        Operand::imm_u64(region.input_shape[region.axis] as u64),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: done,
+        target: loop_end,
+    });
+
+    let contribution = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        contribution.clone(),
+        counter.clone(),
+        Operand::imm_u64(input_strides[region.axis] as u64),
+    ));
+    let input_offset = func.add_u64_register();
+    func.add_inst(Inst::add_u64(
+        input_offset.clone(),
+        base_offset.clone(),
+        contribution,
+    ));
+    let mut values = HashMap::new();
+    for (index, input) in region.inputs.iter().enumerate() {
+        if input.domain == ReductionInputDomain::Full {
+            let offset = reduction_region_input_offset(
+                func,
+                input,
+                &region.input_shape,
+                input_offset.clone(),
+            );
+            let value = load_param_f32_at(func, ctx, &format!("input_{index}"), offset);
+            values.insert(input.value, value);
+        }
+    }
+    for operation in &region.producer_operations {
+        emit_cooperative_reduction_region_op(func, operation, &mut values);
+    }
+    for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
+        if shape == &region.input_shape && values.contains_key(&output.value) {
+            store_param_f32_at(
+                func,
+                ctx,
+                &format!("output_{index}"),
+                input_offset.clone(),
+                values[&output.value].clone(),
+            );
+        }
+    }
+    let reduction_value = values
+        .get(&region.reduction_input)
+        .expect("reduction region input SSA value is unavailable")
+        .clone();
+    match region.op {
+        crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
+            Inst::add_f32(accumulator.clone(), accumulator.clone(), reduction_value),
+        ),
+        crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
+            accumulator.clone(),
+            accumulator.clone(),
+            reduction_value,
+        )),
+    }
+    func.add_inst(Inst::add_u64(
+        counter.clone(),
+        counter,
+        Operand::imm_u64(thread_count),
+    ));
+    func.add_inst(Inst::BraUni { target: loop_start });
+    func.add_inst(Inst::Label(loop_end));
+
+    let shared_name = ctx.arena.alloc_str("reduction_partials");
+    let shared_value_count = if tree_reduce { thread_count } else { 1 };
+    func.add_shared_memory(
+        shared_name,
+        shared_value_count as usize * std::mem::size_of::<f32>(),
+    );
+    let shared_base = func.add_u64_register();
+    func.add_inst(Inst::mov_u64(
+        shared_base.clone(),
+        Operand::symbol(shared_name),
+    ));
+
+    if tree_reduce {
+        let shared_address = shared_address_for_lane(func, shared_base.clone(), lane.clone());
+        func.add_inst(Inst::StSharedF32 {
+            addr: shared_address,
+            src: vec![accumulator.clone()],
+            vec: super::instructions::VecWidth::Scalar,
+        });
+        func.add_inst(Inst::BarSync { barrier_id: 0 });
+
+        let mut stride = thread_count / 2;
+        while stride != 0 {
+            let skip = next_label(ctx, "block_reduction_skip");
+            let inactive = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                inactive.clone(),
+                lane.clone(),
+                Operand::imm_u64(stride),
+            ));
+            func.add_inst(Inst::Bra {
+                condition: inactive,
+                target: skip,
+            });
+            let peer_lane = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                peer_lane.clone(),
+                lane.clone(),
+                Operand::imm_u64(stride),
+            ));
+            let peer_byte_offset = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                peer_byte_offset.clone(),
+                peer_lane,
+                Operand::imm_u64(std::mem::size_of::<f32>() as u64),
+            ));
+            let peer_address = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                peer_address.clone(),
+                shared_base.clone(),
+                peer_byte_offset,
+            ));
+            let peer = func.add_f32_register();
+            func.add_inst(Inst::LdSharedF32 {
+                dst: vec![peer.clone()],
+                addr: peer_address,
+                vec: super::instructions::VecWidth::Scalar,
+            });
+            match region.op {
+                crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
+                    Inst::add_f32(accumulator.clone(), accumulator.clone(), peer),
+                ),
+                crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
+                    accumulator.clone(),
+                    accumulator.clone(),
+                    peer,
+                )),
+            }
+            let lane_address = shared_address_for_lane(func, shared_base.clone(), lane.clone());
+            func.add_inst(Inst::StSharedF32 {
+                addr: lane_address,
+                src: vec![accumulator.clone()],
+                vec: super::instructions::VecWidth::Scalar,
+            });
+            func.add_inst(Inst::Label(skip));
+            func.add_inst(Inst::BarSync { barrier_id: 0 });
+            stride /= 2;
+        }
+    } else {
+        assert_eq!(
+            thread_count, 32,
+            "PTX subgroup reductions require one CUDA warp"
+        );
+        for offset in [1, 2, 4, 8, 16] {
+            let accumulator_bits = func.add_b32_register();
+            func.add_inst(Inst::mov_b32(accumulator_bits.clone(), accumulator.clone()));
+            let shuffled_bits = func.add_b32_register();
+            let valid = func.add_predicate_register();
+            func.add_inst(Inst::shfl_sync_down_b32(
+                shuffled_bits.clone(),
+                valid.clone(),
+                accumulator_bits,
+                offset,
+            ));
+            let shuffled = func.add_f32_register();
+            func.add_inst(Inst::mov_f32_b32(shuffled.clone(), shuffled_bits));
+            let peer = func.add_f32_register();
+            func.add_inst(Inst::selp_f32(
+                peer.clone(),
+                shuffled,
+                Operand::imm_f32(identity),
+                valid,
+            ));
+            match region.op {
+                crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
+                    Inst::add_f32(accumulator.clone(), accumulator.clone(), peer),
+                ),
+                crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
+                    accumulator.clone(),
+                    accumulator.clone(),
+                    peer,
+                )),
+            }
+        }
+
+        let shuffle_done = next_label(ctx, "subgroup_reduction_shuffle_done");
+        let not_leader = func.add_predicate_register();
+        func.add_inst(Inst::setp_ne_u64(
+            not_leader.clone(),
+            lane.clone(),
+            Operand::imm_u64(0),
+        ));
+        func.add_inst(Inst::Bra {
+            condition: not_leader,
+            target: shuffle_done,
+        });
+        func.add_inst(Inst::StSharedF32 {
+            addr: shared_base.clone(),
+            src: vec![accumulator.clone()],
+            vec: super::instructions::VecWidth::Scalar,
+        });
+        func.add_inst(Inst::Label(shuffle_done));
+        func.add_inst(Inst::BarSync { barrier_id: 0 });
+    }
+
+    let reduced_accumulator = func.add_f32_register();
+    func.add_inst(Inst::LdSharedF32 {
+        dst: vec![reduced_accumulator.clone()],
+        addr: shared_base,
+        vec: super::instructions::VecWidth::Scalar,
+    });
+
+    let reduced =
+        if region.op == crate::tensor::ReduceOp::Mean && region.input_shape[region.axis] != 0 {
+            let value = func.add_f32_register();
+            func.add_inst(Inst::div_f32(
+                value.clone(),
+                reduced_accumulator,
+                Operand::imm_f32(region.input_shape[region.axis] as f32),
+            ));
+            value
+        } else {
+            reduced_accumulator
+        };
+    values.clear();
+    values.insert(region.reduced_value, reduced);
+    for (index, input) in region.inputs.iter().enumerate() {
+        if input.domain == ReductionInputDomain::Reduced {
+            let offset =
+                reduction_region_input_offset(func, input, &region.output_shape, fiber.clone());
+            let value = load_param_f32_at(func, ctx, &format!("input_{index}"), offset);
+            values.insert(input.value, value);
+        }
+    }
+    for operation in &region.epilogue_operations {
+        emit_cooperative_reduction_region_op(func, operation, &mut values);
+    }
+    let reduced_values = values.clone();
+
+    let skip_store = next_label(ctx, "warp_reduction_skip_store");
+    let not_leader = func.add_predicate_register();
+    func.add_inst(Inst::setp_ne_u64(
+        not_leader.clone(),
+        lane.clone(),
+        Operand::imm_u64(0),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: not_leader,
+        target: skip_store,
+    });
+    for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
+        if shape != &region.input_shape {
+            let value = values
+                .get(&output.value)
+                .expect("reduction region output SSA value is unavailable")
+                .clone();
+            store_param_f32_at(func, ctx, &format!("output_{index}"), fiber.clone(), value);
+        }
+    }
+    func.add_inst(Inst::Label(skip_store));
+
+    if !region.full_epilogue_operations.is_empty() {
+        let full_counter = func.add_u64_register();
+        func.add_inst(Inst::mov_u64(full_counter.clone(), lane));
+        let full_start = next_label(ctx, "cooperative_full_epilogue_loop");
+        let full_end = next_label(ctx, "cooperative_full_epilogue_end");
+        func.add_inst(Inst::Label(full_start));
+        let done = func.add_predicate_register();
+        func.add_inst(Inst::setp_ge_u64(
+            done.clone(),
+            full_counter.clone(),
+            Operand::imm_u64(region.input_shape[region.axis] as u64),
+        ));
+        func.add_inst(Inst::Bra {
+            condition: done,
+            target: full_end,
+        });
+        let contribution = func.add_u64_register();
+        func.add_inst(Inst::mul_u64(
+            contribution.clone(),
+            full_counter.clone(),
+            Operand::imm_u64(input_strides[region.axis] as u64),
+        ));
+        let full_offset = func.add_u64_register();
+        func.add_inst(Inst::add_u64(
+            full_offset.clone(),
+            base_offset,
+            contribution,
+        ));
+        values.clear();
+        values.extend(reduced_values);
+        for (index, input) in region.inputs.iter().enumerate() {
+            if input.domain == ReductionInputDomain::Full {
+                let offset = reduction_region_input_offset(
+                    func,
+                    input,
+                    &region.input_shape,
+                    full_offset.clone(),
+                );
+                let value = load_param_f32_at(func, ctx, &format!("input_{index}"), offset);
+                values.insert(input.value, value);
+            }
+        }
+        for operation in &region.producer_operations {
+            emit_cooperative_reduction_region_op(func, operation, &mut values);
+        }
+        for operation in &region.full_epilogue_operations {
+            emit_cooperative_reduction_region_op(func, operation, &mut values);
+        }
+        for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate()
+        {
+            if shape == &region.input_shape {
+                let value = values
+                    .get(&output.value)
+                    .expect("full reduction epilogue output SSA value is unavailable")
+                    .clone();
+                store_param_f32_at(
+                    func,
+                    ctx,
+                    &format!("output_{index}"),
+                    full_offset.clone(),
+                    value,
+                );
+            }
+        }
+        func.add_inst(Inst::add_u64(
+            full_counter.clone(),
+            full_counter,
+            Operand::imm_u64(thread_count),
+        ));
+        func.add_inst(Inst::BraUni { target: full_start });
+        func.add_inst(Inst::Label(full_end));
+    }
+
+    fn emit_cooperative_reduction_region_op<'a>(
+        func: &mut Function<'a>,
+        operation: &crate::tile::RegionOp,
+        values: &mut HashMap<crate::tile::RegionValue, Operand<'a, F32>>,
+    ) {
+        let get = |value: crate::tile::RegionValue| {
+            values
+                .get(&value)
+                .expect("reduction region operand SSA value is unavailable")
+                .clone()
+        };
+        let output = func.add_f32_register();
+        match operation.kind {
+            RegionOpKind::Unary { op, input } => match op {
+                crate::tensor::UnaryOp::Neg => {
+                    func.add_inst(Inst::neg_f32(output.clone(), get(input)))
+                }
+                crate::tensor::UnaryOp::Exp => {
+                    let scaled = func.add_f32_register();
+                    func.add_inst(Inst::mul_f32(
+                        scaled.clone(),
+                        get(input),
+                        Operand::imm_f32(std::f32::consts::LOG2_E),
+                    ));
+                    func.add_inst(Inst::ex2_f32(output.clone(), scaled));
+                }
+                crate::tensor::UnaryOp::Log => {
+                    let logarithm = func.add_f32_register();
+                    func.add_inst(Inst::lg2_f32(logarithm.clone(), get(input)));
+                    func.add_inst(Inst::mul_f32(
+                        output.clone(),
+                        logarithm,
+                        Operand::imm_f32(std::f32::consts::LN_2),
+                    ));
+                }
+                crate::tensor::UnaryOp::Relu => func.add_inst(Inst::max_f32(
+                    output.clone(),
+                    get(input),
+                    Operand::imm_f32(0.0),
+                )),
+            },
+            RegionOpKind::Binary { op, lhs, rhs } => match op {
+                crate::tensor::BinaryOp::Add => {
+                    func.add_inst(Inst::add_f32(output.clone(), get(lhs), get(rhs)))
+                }
+                crate::tensor::BinaryOp::Sub => {
+                    func.add_inst(Inst::sub_f32(output.clone(), get(lhs), get(rhs)))
+                }
+                crate::tensor::BinaryOp::Mul => {
+                    func.add_inst(Inst::mul_f32(output.clone(), get(lhs), get(rhs)))
+                }
+                crate::tensor::BinaryOp::Div => {
+                    func.add_inst(Inst::div_f32(output.clone(), get(lhs), get(rhs)))
+                }
+            },
+            RegionOpKind::Gt { lhs, rhs } => {
+                let predicate = func.add_predicate_register();
+                func.add_inst(Inst::setp_gt_f32(predicate.clone(), get(lhs), get(rhs)));
+                func.add_inst(Inst::selp_f32(
+                    output.clone(),
+                    Operand::imm_f32(1.0),
+                    Operand::imm_f32(0.0),
+                    predicate,
+                ));
+            }
+            RegionOpKind::Mask {
+                values: input,
+                condition,
+            } => {
+                let predicate = func.add_predicate_register();
+                func.add_inst(Inst::setp_ne_f32(
+                    predicate.clone(),
+                    get(condition),
+                    Operand::imm_f32(0.0),
+                ));
+                func.add_inst(Inst::selp_f32(
+                    output.clone(),
+                    get(input),
+                    Operand::imm_f32(0.0),
+                    predicate,
+                ));
+            }
+        }
+        values.insert(operation.output, output);
+    }
+}
+
+fn shared_address_for_lane<'a>(
+    func: &mut Function<'a>,
+    shared_base: Operand<'a, U64>,
+    lane: Operand<'a, U64>,
+) -> Operand<'a, U64> {
+    let byte_offset = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        byte_offset.clone(),
+        lane,
+        Operand::imm_u64(std::mem::size_of::<f32>() as u64),
+    ));
+    let address = func.add_u64_register();
+    func.add_inst(Inst::add_u64(address.clone(), shared_base, byte_offset));
+    address
+}
+
+fn reduction_region_input_offset<'a>(
+    func: &mut Function<'a>,
+    input: &crate::tile::ReductionInput,
+    logical_shape: &[usize],
+    logical_linear: Operand<'a, U64>,
+) -> Operand<'a, U64> {
+    use crate::tile::{IndexExpr, IndexMap};
+
+    if input.tensor.shape == input.source_shape
+        && input.tensor.access == IndexMap::identity(input.tensor.shape.len())
+    {
+        return logical_linear;
+    }
+    assert_eq!(input.tensor.shape, logical_shape);
+    let logical_strides = contiguous_strides(logical_shape);
+    let coordinates: Vec<_> = logical_shape
+        .iter()
+        .enumerate()
+        .map(|(dimension, &extent)| {
+            decode_coordinate(
+                func,
+                logical_linear.clone(),
+                logical_strides[dimension].max(1),
+                extent.max(1),
+            )
+        })
+        .collect();
+    let source_strides = contiguous_strides(&input.source_shape);
+    let offset = func.add_u64_register();
+    func.add_inst(Inst::mov_u64(offset.clone(), Operand::imm_u64(0)));
+    for (expression, &stride) in input
+        .tensor
+        .access
+        .results
+        .iter()
+        .zip(source_strides.iter())
+    {
+        let coordinate = lower_index(expression, func, &coordinates);
+        let contribution = func.add_u64_register();
+        func.add_inst(Inst::mul_u64(
+            contribution.clone(),
+            coordinate,
+            Operand::imm_u64(stride as u64),
+        ));
+        func.add_inst(Inst::add_u64(offset.clone(), offset.clone(), contribution));
+    }
+    return offset;
+
+    fn lower_index<'a>(
+        expression: &IndexExpr,
+        func: &mut Function<'a>,
+        coordinates: &[Operand<'a, U64>],
+    ) -> Operand<'a, U64> {
+        match expression {
+            IndexExpr::IterDim(dimension) => coordinates[*dimension].clone(),
+            IndexExpr::Symbol(symbol) => panic!("unsupported virtual index symbol {symbol}"),
+            IndexExpr::Const(value) => Operand::imm_u64(*value as u64),
+            IndexExpr::Add(lhs, rhs) => binary(func, lhs, rhs, coordinates, Inst::add_u64),
+            IndexExpr::Sub(lhs, rhs) => binary(func, lhs, rhs, coordinates, Inst::sub_u64),
+            IndexExpr::Mul(lhs, rhs) => binary(func, lhs, rhs, coordinates, Inst::mul_u64),
+            IndexExpr::FloorDiv(value, divisor) => {
+                let value = lower_index(value, func, coordinates);
+                let result = func.add_u64_register();
+                func.add_inst(Inst::div_u64(
+                    result.clone(),
+                    value,
+                    Operand::imm_u64(*divisor as u64),
+                ));
+                result
+            }
+            IndexExpr::Mod(value, modulus) => {
+                let value = lower_index(value, func, coordinates);
+                let quotient = func.add_u64_register();
+                func.add_inst(Inst::div_u64(
+                    quotient.clone(),
+                    value.clone(),
+                    Operand::imm_u64(*modulus as u64),
+                ));
+                let consumed = func.add_u64_register();
+                func.add_inst(Inst::mul_u64(
+                    consumed.clone(),
+                    quotient,
+                    Operand::imm_u64(*modulus as u64),
+                ));
+                let result = func.add_u64_register();
+                func.add_inst(Inst::sub_u64(result.clone(), value, consumed));
+                result
+            }
+        }
+    }
+
+    fn binary<'a>(
+        func: &mut Function<'a>,
+        lhs: &crate::tile::IndexExpr,
+        rhs: &crate::tile::IndexExpr,
+        coordinates: &[Operand<'a, U64>],
+        operation: impl FnOnce(Operand<'a, U64>, Operand<'a, U64>, Operand<'a, U64>) -> Inst<'a>,
+    ) -> Operand<'a, U64> {
+        let lhs = lower_index(lhs, func, coordinates);
+        let rhs = lower_index(rhs, func, coordinates);
+        let result = func.add_u64_register();
+        func.add_inst(operation(result.clone(), lhs, rhs));
+        result
+    }
+}
+
 fn next_label<'a>(ctx: &mut LoweringContext<'a>, prefix: &str) -> &'a str {
     let label = bumpalo::format!(in ctx.arena, "{}_{}", prefix, ctx.label_counter).into_bump_str();
     ctx.label_counter += 1;
@@ -2064,12 +3209,13 @@ fn accumulate_product<'a>(
     func.add_inst(Inst::add_f32(accumulator.clone(), accumulator, product));
 }
 
-fn lower_tf32_matmul<'a>(
+fn lower_tensor_core_matmul<'a>(
     func: &mut Function<'a>,
     ctx: &mut LoweringContext<'a>,
     dest: TileVar,
     a: TileVar,
     b: TileVar,
+    schedule: &crate::tile::MatMulSchedule,
 ) {
     let accumulators = ctx
         .fragment_regs
@@ -2109,7 +3255,7 @@ fn lower_tf32_matmul<'a>(
     func.add_inst(Inst::setp_ge_u64(
         inactive.clone(),
         thread_y,
-        Operand::imm_u64(2),
+        Operand::imm_u64(32 / u64::from(schedule.block_threads.0)),
     ));
     let done =
         bumpalo::format!(in ctx.arena, "tf32_matmul_done_{}", ctx.label_counter).into_bump_str();
@@ -2119,29 +3265,60 @@ fn lower_tf32_matmul<'a>(
         target: done,
     });
 
-    for k_offset in [0_u64, 8] {
-        let a_address = shared_address_with_byte_offset(func, a_ptr.clone(), k_offset * 4);
-        let b_address = shared_address_with_byte_offset(func, b_ptr.clone(), k_offset * 16 * 4);
-        let a_fragments: Vec<Operand<'a, B32>> = (0..4).map(|_| func.add_b32_register()).collect();
-        let b_fragments: Vec<Operand<'a, B32>> = (0..4).map(|_| func.add_b32_register()).collect();
-        func.add_inst(Inst::wmma_load_a(
-            a_fragments.clone(),
-            a_address,
-            Operand::imm_i32(16),
-        ));
-        func.add_inst(Inst::wmma_load_b(
-            b_fragments.clone(),
-            b_address,
-            Operand::imm_i32(16),
-        ));
-        func.add_inst(Inst::wmma_mma(
-            accumulators.clone(),
-            a_fragments,
-            b_fragments,
-            accumulators.clone(),
-        ));
+    for k_offset in (0..schedule.block_tile.k).step_by(schedule.instruction_tile.k) {
+        let k_offset = k_offset as u64;
+        let a_address = shared_address_with_byte_offset(
+            func,
+            a_ptr.clone(),
+            k_offset * schedule.operand_dtype.size_bytes() as u64,
+        );
+        let b_address = shared_address_with_byte_offset(
+            func,
+            b_ptr.clone(),
+            k_offset * schedule.block_tile.n as u64 * schedule.operand_dtype.size_bytes() as u64,
+        );
+        let a_fragments: Vec<Operand<'a, B32>> =
+            (0..if schedule.operand_dtype == crate::tile::DType::F16 {
+                8
+            } else {
+                4
+            })
+                .map(|_| func.add_b32_register())
+                .collect();
+        let b_fragments: Vec<Operand<'a, B32>> =
+            (0..if schedule.operand_dtype == crate::tile::DType::F16 {
+                8
+            } else {
+                4
+            })
+                .map(|_| func.add_b32_register())
+                .collect();
+        func.add_inst(Inst::WmmaLoadA {
+            dtype: schedule.operand_dtype,
+            frags: a_fragments.clone(),
+            addr: a_address,
+            stride: Operand::imm_i32(schedule.block_tile.k as i32),
+        });
+        func.add_inst(Inst::WmmaLoadB {
+            dtype: schedule.operand_dtype,
+            frags: b_fragments.clone(),
+            addr: b_address,
+            stride: Operand::imm_i32(schedule.block_tile.n as i32),
+        });
+        func.add_inst(Inst::WmmaMma {
+            dtype: schedule.operand_dtype,
+            d_frags: accumulators.clone(),
+            a_frags: a_fragments,
+            b_frags: b_fragments,
+            c_frags: accumulators.clone(),
+        });
     }
-    func.add_inst(Inst::wmma_store(c_ptr, accumulators, Operand::imm_i32(16)));
+    func.add_inst(Inst::WmmaStore {
+        dtype: schedule.operand_dtype,
+        addr: c_ptr,
+        frags: accumulators,
+        stride: Operand::imm_i32(schedule.block_tile.n as i32),
+    });
     func.add_inst(Inst::Label(done));
 }
 
@@ -2221,23 +3398,24 @@ fn shared_thread_address<'a>(
     func.add_inst(Inst::mul_u64(
         byte_offset.clone(),
         element_offset,
-        Operand::imm_u64(4),
+        Operand::imm_u64(ctx.tile_dtypes[&tile].size_bytes() as u64),
     ));
     let address = func.add_u64_register();
     func.add_inst(Inst::add_u64(address.clone(), shared, byte_offset));
     address
 }
 
-fn global_f32_address<'a>(
+fn element_address<'a>(
     func: &mut Function<'a>,
     base: Operand<'a, U64>,
     element_offset: Operand<'a, U64>,
+    dtype: crate::tile::DType,
 ) -> Operand<'a, U64> {
     let byte_offset = func.add_u64_register();
     func.add_inst(Inst::mul_u64(
         byte_offset.clone(),
         element_offset,
-        Operand::imm_u64(4),
+        Operand::imm_u64(dtype.size_bytes() as u64),
     ));
     let address = func.add_u64_register();
     func.add_inst(Inst::add_u64(address.clone(), base, byte_offset));
@@ -2255,9 +3433,9 @@ fn load_param_f32_at<'a>(
         .get(parameter)
         .unwrap_or_else(|| panic!("Parameter {parameter} not found"))
         .clone();
-    let address = global_f32_address(func, base, element_offset);
+    let address = element_address(func, base, element_offset, ctx.param_dtypes[parameter]);
     let value = func.add_f32_register();
-    func.add_inst(Inst::load_global_scalar_f32(value.clone(), address));
+    load_global_as_f32(func, ctx.param_dtypes[parameter], value.clone(), address);
     value
 }
 
@@ -2273,8 +3451,8 @@ fn store_param_f32_at<'a>(
         .get(parameter)
         .unwrap_or_else(|| panic!("Parameter {parameter} not found"))
         .clone();
-    let address = global_f32_address(func, base, element_offset);
-    func.add_inst(Inst::store_global_scalar_f32(address, value));
+    let address = element_address(func, base, element_offset, ctx.param_dtypes[parameter]);
+    store_global_from_f32(func, ctx.param_dtypes[parameter], address, value);
 }
 
 fn emit_exp<'a>(func: &mut Function<'a>, value: Operand<'a, F32>) -> Operand<'a, F32> {
@@ -2520,6 +3698,44 @@ fn lower_expr<'a>(
             func.add_inst(Inst::add_u64(result.clone(), a_val, b_val));
             result
         }
+        Expr::Sub(a, b) => {
+            let lhs = lower_expr(func, ctx, a);
+            let rhs = lower_expr(func, ctx, b);
+            let result = func.add_u64_register();
+            func.add_inst(Inst::sub_u64(result.clone(), lhs, rhs));
+            result
+        }
+        Expr::FloorDiv(value, divisor) => {
+            // TODO(#61): Consume simplified/index-egraph expressions so identity
+            // and power-of-two divisions avoid general division calls. Keep
+            // instruction emission here; optimize and place expressions upstream.
+            let value = lower_expr(func, ctx, value);
+            let result = func.add_u64_register();
+            func.add_inst(Inst::div_u64(
+                result.clone(),
+                value,
+                Operand::imm_u64(*divisor as u64),
+            ));
+            result
+        }
+        Expr::Mod(value, modulus) => {
+            let value = lower_expr(func, ctx, value);
+            let quotient = func.add_u64_register();
+            func.add_inst(Inst::div_u64(
+                quotient.clone(),
+                value.clone(),
+                Operand::imm_u64(*modulus as u64),
+            ));
+            let consumed = func.add_u64_register();
+            func.add_inst(Inst::mul_u64(
+                consumed.clone(),
+                quotient,
+                Operand::imm_u64(*modulus as u64),
+            ));
+            let result = func.add_u64_register();
+            func.add_inst(Inst::sub_u64(result.clone(), value, consumed));
+            result
+        }
     }
 }
 
@@ -2554,6 +3770,7 @@ fn lower_expr_i32<'a>(
 mod tests {
     use super::*;
     use crate::graph::TensorGraph;
+    use crate::ptx::{PtxExecutionPlan, PtxReductionMode};
     use crate::tensor::TensorExpr;
     use crate::tile::{Block, DType, KernelParam, MemorySpace, Stmt, TileIR};
 
@@ -2601,6 +3818,169 @@ mod tests {
         assert!(source.contains("cvt.rna.tf32.f32"));
         assert!(source.contains("wmma.mma.sync.aligned.m16n16k8"));
         assert!(source.contains("wmma.store.d.sync.aligned.m16n16k8"));
+    }
+
+    #[test]
+    fn matmul_plan_and_ptx_header_follow_target_capability() {
+        for (target, expect_tf32) in [
+            (
+                PtxTarget {
+                    compute_capability: (7, 5),
+                },
+                false,
+            ),
+            (
+                PtxTarget {
+                    compute_capability: (8, 0),
+                },
+                true,
+            ),
+        ] {
+            let lhs = TensorExpr::constant(vec![0.25; 32 * 32], vec![32, 32]);
+            let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
+            let graph: TensorGraph<f32> = lhs.matmul(rhs).into();
+            let plan =
+                PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict)
+                    .unwrap();
+            let mut tile_graph = TileGraph::from_with_tf32_support(graph, target.supports_tf32());
+            tile_graph.set_physical_nodes(
+                plan.steps()
+                    .iter()
+                    .filter_map(|step| {
+                        (step.action == crate::ptx::PtxPlanAction::Kernel).then_some(step.node)
+                    })
+                    .collect(),
+            );
+            let source = PtxGraph::from(tile_graph)
+                .with_target(target)
+                .module_source();
+
+            assert!(source.contains(&format!(
+                ".target sm_{}{}",
+                target.compute_capability.0, target.compute_capability.1
+            )));
+            assert_eq!(source.contains("wmma.mma.sync"), expect_tf32);
+            assert_eq!(source.contains("cvt.rna.tf32.f32"), expect_tf32);
+        }
+    }
+
+    #[test]
+    fn fused_batched_matmul_codegen_uses_target_schedule_and_one_entry() {
+        use crate::tile::{MatMulPlan, MatMulPrecision};
+        for compute_capability in [(6, 1), (7, 5), (8, 0), (8, 9)] {
+            for precision in [MatMulPrecision::AllowTf32, MatMulPrecision::StrictF32] {
+                let target = super::super::target::PtxTarget { compute_capability };
+                let lhs = TensorExpr::constant(vec![0.25; 2 * 32 * 32], vec![2, 32, 32]);
+                let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
+                let bias = TensorExpr::constant(vec![0.1; 32], vec![32]);
+                let graph: TensorGraph<f32> = (lhs.matmul(rhs) + bias).relu().into();
+                let mut plan =
+                    PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict)
+                        .unwrap();
+                plan.schedule_matmuls(target.matmul_capabilities(), precision);
+                assert_eq!(plan.matmul_regions().len(), 1);
+                let schedule = plan.matmul_regions()[0].schedule;
+                let expect_tf32 = target.supports_tf32() && precision == MatMulPrecision::AllowTf32;
+                assert_eq!(schedule.plan == MatMulPlan::TensorCoreTf32, expect_tf32);
+                let mut tile_graph = TileGraph::from_with_matmul_schedules(
+                    &graph,
+                    expect_tf32,
+                    plan.matmul_schedules(),
+                );
+                tile_graph
+                    .add_matmul_regions(plan.matmul_regions())
+                    .unwrap();
+                tile_graph.set_physical_nodes(
+                    plan.steps()
+                        .iter()
+                        .filter_map(|step| {
+                            (step.action == crate::ptx::PtxPlanAction::Kernel).then_some(step.node)
+                        })
+                        .collect(),
+                );
+                let source = PtxGraph::from(tile_graph)
+                    .with_target(target)
+                    .module_source();
+                assert_eq!(source.matches(".visible .entry").count(), 1);
+                assert_eq!(
+                    source.contains("wmma.mma.sync.aligned.m16n16k8"),
+                    expect_tf32
+                );
+                assert_eq!(source.contains("cvt.rna.tf32.f32"), expect_tf32);
+                assert!(source.contains("%ctaid.z"));
+                assert!(source.contains("add.f32"));
+                assert!(source.contains("max.f32"));
+            }
+        }
+    }
+
+    #[test]
+    fn shuffle_down_renders_predicate_and_full_warp_mask() {
+        let arena = bumpalo::Bump::new();
+        let mut function = Function::new("shuffle", &arena);
+        let src = function.add_b32_register();
+        let dst = function.add_b32_register();
+        let predicate = function.add_predicate_register();
+        function.add_inst(Inst::shfl_sync_down_b32(dst, predicate, src, 16));
+
+        assert!(
+            format!("{function}")
+                .contains("shfl.sync.down.b32 %r1|%p0, %r0, 16, 0x1f, 0xffffffff;")
+        );
+    }
+
+    #[test]
+    fn subgroup_reduction_emits_shuffle_tree() {
+        let input = TensorExpr::constant(vec![0.25; 2 * 127], vec![2, 127]);
+        let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
+        let plan = PtxExecutionPlan::build_with_reduction_mode(
+            &graph,
+            PtxReductionMode::DeterministicTree,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.reduction_regions()[0].schedule,
+            crate::tile::ReductionSchedule::Subgroup { width: 32 }
+        );
+        let mut tile_graph = TileGraph::from(graph);
+        tile_graph
+            .add_reduction_regions(plan.reduction_regions())
+            .unwrap();
+        let source = PtxGraph::from(tile_graph).module_source();
+
+        assert_eq!(source.matches("shfl.sync.down.b32").count(), 5);
+        for offset in [1, 2, 4, 8, 16] {
+            assert!(
+                source.lines().any(|line| {
+                    line.contains("shfl.sync.down.b32")
+                        && line.contains(&format!(", {offset}, 0x1f, 0xffffffff;"))
+                }),
+                "missing shuffle stage for offset {offset}"
+            );
+        }
+        assert!(source.contains(".shared .align 16 .b8 reduction_partials[4];"));
+        assert_eq!(source.matches("bar.sync 0;").count(), 1);
+    }
+
+    #[test]
+    fn block_reduction_emits_shared_tree() {
+        let input = TensorExpr::constant(vec![0.25; 2 * 1024], vec![2, 1024]);
+        let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
+        let plan = PtxExecutionPlan::build_with_reduction_mode(
+            &graph,
+            PtxReductionMode::DeterministicTree,
+        )
+        .unwrap();
+        let mut tile_graph = TileGraph::from(graph);
+        tile_graph
+            .add_reduction_regions(plan.reduction_regions())
+            .unwrap();
+        let source = PtxGraph::from(tile_graph).module_source();
+
+        assert!(source.contains(".shared .align 16 .b8 reduction_partials[512];"));
+        assert_eq!(source.matches("bar.sync 0;").count(), 8);
+        assert!(source.contains("ld.shared.f32"));
+        assert!(!source.contains("shfl.sync"));
     }
 
     #[test]

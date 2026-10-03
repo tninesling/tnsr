@@ -93,14 +93,37 @@ impl TileIRBuilder {
         a: TileVar,
         b: TileVar,
         layout: MatMulLayout,
-        plan: super::ir::MatMulPlan,
+        schedule: super::MatMulSchedule,
     ) {
         self.stmts.push(Stmt::MatMul {
             dest,
             a,
             b,
             layout,
-            plan,
+            schedule,
+        });
+    }
+
+    pub fn load_tile_element(&mut self, dest: TileVar, src: TileVar) {
+        self.stmts.push(Stmt::LoadTileElement { dest, src });
+    }
+
+    pub fn load_global_predicated(
+        &mut self,
+        dest: TileVar,
+        src_param: &str,
+        element_index: Expr,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
+    ) {
+        self.stmts.push(Stmt::LoadGlobalPredicated {
+            dest,
+            src_param: src_param.to_string(),
+            element_index,
+            row,
+            col,
+            layout,
         });
     }
 
@@ -190,8 +213,45 @@ impl TileIRBuilder {
         self.stmts.push(Stmt::LoadGlobalToSharedPredicated {
             dest,
             src_param: src_param.to_string(),
+            element_index: row.clone() * layout.row_stride + col.clone(),
             row,
             col,
+            layout,
+        });
+    }
+
+    pub fn load_global_to_shared_indexed(
+        &mut self,
+        dest: TileVar,
+        src_param: &str,
+        element_index: Expr,
+        bounds: (Expr, Expr),
+        layout: MatrixLayout,
+    ) {
+        self.stmts.push(Stmt::LoadGlobalToSharedPredicated {
+            dest,
+            src_param: src_param.to_string(),
+            element_index,
+            row: bounds.0,
+            col: bounds.1,
+            layout,
+        });
+    }
+
+    pub fn store_global_indexed(
+        &mut self,
+        dest_param: &str,
+        src: TileVar,
+        element_index: Expr,
+        bounds: (Expr, Expr),
+        layout: MatrixLayout,
+    ) {
+        self.stmts.push(Stmt::StoreGlobalPredicated {
+            dest_param: dest_param.to_string(),
+            src,
+            element_index,
+            row: bounds.0,
+            col: bounds.1,
             layout,
         });
     }
@@ -222,6 +282,7 @@ impl TileIRBuilder {
         self.stmts.push(Stmt::StoreGlobalPredicated {
             dest_param: dest_param.to_string(),
             src,
+            element_index: row.clone() * layout.row_stride + col.clone(),
             row,
             col,
             layout,
@@ -321,6 +382,12 @@ impl TileIRBuilder {
             axis,
             input_shape,
             output_shape,
+        });
+    }
+
+    pub fn reduction_region(&mut self, region: super::ReductionRegion) {
+        self.stmts.push(Stmt::ReductionRegion {
+            region: Box::new(region),
         });
     }
 

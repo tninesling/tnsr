@@ -319,3 +319,154 @@ fn test_ptx_executor_runs_bf16_reduction_with_f32_accumulator() {
     let result = executor.execute(&graph, inputs).unwrap();
     assert_eq!(result, vec![bf16::from_f32(512.0)]);
 }
+
+#[cfg(feature = "cuda")]
+fn check_half_fused_matmul<D: tnsr::ptx::types::CudaDType>(tolerance: f32) {
+    use tnsr::ptx::PtxExecutor;
+    use tnsr::tile::MatMulPrecision;
+    let Ok(mut executor) = PtxExecutor::<D>::try_new_for_dtype() else {
+        return;
+    };
+    // Odd extents exercise zero padding; distinct batches and broadcast RHS
+    // exercise storage-width addressing and batch strides.
+    let (m, n, k) = (33, 35, 37);
+    let a = TensorExpr::<D::HostType>::input("a", vec![2, m, k]);
+    let b = TensorExpr::<D::HostType>::input("b", vec![1, k, n]);
+    let bias = TensorExpr::<D::HostType>::input("bias", vec![n]);
+    let graph: TensorGraph<D::HostType> = (a.matmul(b) + bias).relu().into();
+    let lhs: Vec<f32> = (0..2 * m * k)
+        .map(|i| ((i % 17) as f32 - 8.0) / 16.0)
+        .collect();
+    let rhs: Vec<f32> = (0..k * n).map(|i| ((i % 13) as f32 - 6.0) / 16.0).collect();
+    let inputs = HashMap::from([
+        ("a".into(), to_dtype::<D::HostType>(&lhs)),
+        ("b".into(), to_dtype::<D::HostType>(&rhs)),
+        ("bias".into(), to_dtype::<D::HostType>(&vec![0.25; n])),
+    ]);
+    let expected = SimpleExecutor::<D::HostType>::new()
+        .execute(&graph, inputs.clone())
+        .unwrap();
+    let actual = executor
+        .compile_and_execute(&graph, inputs.clone())
+        .unwrap();
+    assert_close(&actual, &to_f32(&expected), tolerance);
+    let source = executor.module_source().unwrap();
+    assert!(source.contains("wmma.mma.sync.aligned.m16n16k16"));
+    assert_eq!(executor.execution_metrics().kernel_launches, 1);
+    assert!(executor.execution_plan().unwrap().matmul_regions().iter().all(|r| r.schedule.storage_dtype == <D::HostType as tnsr::tile::TileDType>::TILE_DTYPE));
+    // Switching to strict accumulation invalidates the compiled module.
+    executor.set_matmul_precision(MatMulPrecision::StrictF32);
+    let strict = executor.compile_and_execute(&graph, inputs).unwrap();
+    assert_close(&strict, &to_f32(&expected), tolerance);
+    assert_eq!(executor.compilation_count(), 2);
+    assert!(!executor.module_source().unwrap().contains("wmma.mma"));
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn test_ptx_f16_tensor_core_batched_fused_matmul() {
+    check_half_fused_matmul::<tnsr::ptx::types::F16>(0.004);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn test_ptx_bf16_tensor_core_batched_fused_matmul() {
+    check_half_fused_matmul::<tnsr::ptx::types::BF16>(0.032);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn test_ptx_half_fused_cooperative_reduction() {
+    use tnsr::ptx::types::BF16;
+    use tnsr::ptx::{PtxExecutor, PtxReductionMode};
+    let Ok(mut executor) =
+        PtxExecutor::<BF16>::try_new_with_reduction_mode(PtxReductionMode::DeterministicTree)
+    else {
+        return;
+    };
+    let x = TensorExpr::<bf16>::input("x", vec![3, 513]);
+    let graph: TensorGraph<bf16> = x.relu().reduce_axis_sum(1).into();
+    let inputs = HashMap::from([("x".into(), vec![bf16::from_f32(1.0); 3 * 513])]);
+    let actual = executor.compile_and_execute(&graph, inputs).unwrap();
+    assert_eq!(actual, vec![bf16::from_f32(513.0); 3]);
+    assert_eq!(executor.execution_metrics().kernel_launches, 1);
+    assert_eq!(
+        executor.execution_metrics().materialized_bytes,
+        (3 * 513 + 3) * 2
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn test_ptx_half_embedding_gradient_accumulates_repeated_ids() {
+    use tnsr::ptx::PtxExecutor;
+    use tnsr::ptx::types::F16;
+    let Ok(mut executor) = PtxExecutor::<F16>::try_new_for_dtype() else {
+        return;
+    };
+    let weight = TensorExpr::parameter(vec![f16::ZERO; 10], vec![5, 2]);
+    let weight_id = match weight.kind() {
+        tnsr::tensor::ExprKind::Parameter { id, .. } => *id,
+        _ => unreachable!(),
+    };
+    let indices = TensorExpr::constant(to_dtype::<f16>(&[1.0, 1.0, 2.0]), vec![3]);
+    let graph: TensorGraph<f16> = weight.embedding(indices).mean_all().into();
+    let loss = *graph.toposort().last().unwrap();
+    let graph = graph.with_gradients(loss);
+    executor
+        .compile_and_execute(&graph, HashMap::new())
+        .unwrap();
+    let expected = [
+        0.0,
+        0.0,
+        1.0 / 3.0,
+        1.0 / 3.0,
+        1.0 / 6.0,
+        1.0 / 6.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    ];
+    assert_close(
+        &executor.get_gradients(&graph)[&weight_id],
+        &expected,
+        0.001,
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn test_half_runtime_ptx_preserves_gradients_and_reuses_compilation() {
+    use tnsr::{Backend, Runtime};
+    let Ok(mut runtime) = Runtime::<bf16>::with_backend(Backend::Ptx) else {
+        return;
+    };
+    let weight = TensorExpr::parameter(to_dtype::<bf16>(&[-1.0, 0.5, 2.0]), vec![3]);
+    let id = match weight.kind() {
+        tnsr::tensor::ExprKind::Parameter { id, .. } => *id,
+        _ => unreachable!(),
+    };
+    let input = TensorExpr::<bf16>::input("x", vec![3]);
+    let graph: TensorGraph<bf16> = (weight * input).relu().reduce_axis_sum(0).into();
+    let loss = *graph.toposort().last().unwrap();
+    let graph = graph.with_gradients(loss);
+    for value in [1.0, 2.0] {
+        let result = runtime
+            .execute(
+                &graph,
+                HashMap::from([("x".into(), vec![bf16::from_f32(value); 3])]),
+            )
+            .unwrap();
+        assert_close(&result, &[2.5 * value], 0.01);
+        assert_close(
+            &runtime.get_gradients(&graph)[&id],
+            &[0.0, value, value],
+            0.01,
+        );
+    }
+    match &runtime {
+        Runtime::PtxBF16(executor) => assert_eq!(executor.compilation_count(), 1),
+        _ => unreachable!(),
+    }
+}

@@ -365,76 +365,11 @@ where
                     .collect()
             }
             #[cfg(feature = "cuda")]
-            Runtime::Ptx(executor) => {
-                let execute_graph = graph.clone().map_dtype(|value| value.to_f32().unwrap());
-                let inputs = inputs
-                    .into_iter()
-                    .map(|(name, values)| {
-                        (
-                            name,
-                            values
-                                .into_iter()
-                                .map(|value| value.to_f32().unwrap())
-                                .collect(),
-                        )
-                    })
-                    .collect();
-                executor
-                    .compile_and_execute(&execute_graph, inputs)?
-                    .into_iter()
-                    .map(|value| D::from(value).context("PTX result conversion failed"))
-                    .collect()
-            }
+            Runtime::Ptx(executor) => execute_native_ptx(executor, graph, inputs),
             #[cfg(feature = "cuda")]
-            Runtime::PtxF16(executor) => {
-                let execute_graph = graph
-                    .clone()
-                    .map_dtype(|value| half::f16::from_f32(value.to_f32().unwrap()));
-                let inputs = inputs
-                    .into_iter()
-                    .map(|(name, values)| {
-                        (
-                            name,
-                            values
-                                .into_iter()
-                                .map(|value| half::f16::from_f32(value.to_f32().unwrap()))
-                                .collect(),
-                        )
-                    })
-                    .collect();
-                executor
-                    .compile_and_execute(&execute_graph, inputs)?
-                    .into_iter()
-                    .map(|value| {
-                        D::from(value.to_f32()).context("PTX f16 result conversion failed")
-                    })
-                    .collect()
-            }
+            Runtime::PtxF16(executor) => execute_native_ptx(executor, graph, inputs),
             #[cfg(feature = "cuda")]
-            Runtime::PtxBF16(executor) => {
-                let execute_graph = graph
-                    .clone()
-                    .map_dtype(|value| half::bf16::from_f32(value.to_f32().unwrap()));
-                let inputs = inputs
-                    .into_iter()
-                    .map(|(name, values)| {
-                        (
-                            name,
-                            values
-                                .into_iter()
-                                .map(|value| half::bf16::from_f32(value.to_f32().unwrap()))
-                                .collect(),
-                        )
-                    })
-                    .collect();
-                executor
-                    .compile_and_execute(&execute_graph, inputs)?
-                    .into_iter()
-                    .map(|value| {
-                        D::from(value.to_f32()).context("PTX bf16 result conversion failed")
-                    })
-                    .collect()
-            }
+            Runtime::PtxBF16(executor) => execute_native_ptx(executor, graph, inputs),
         }
     }
 
@@ -547,4 +482,28 @@ where
                 .collect(),
         }
     }
+}
+
+/// Native PTX buffers already use the runtime scalar type. Preserve their
+/// ownership and parameter sharing instead of converting the graph on each call.
+#[cfg(feature = "cuda")]
+fn execute_native_ptx<M: crate::ptx::types::CudaDType, D: 'static, G>(
+    executor: &mut PtxExecutor<M>,
+    graph: &TensorGraph<D, G>,
+    inputs: HashMap<String, Vec<D>>,
+) -> Result<Vec<D>> {
+    anyhow::ensure!(
+        std::any::TypeId::of::<D>() == std::any::TypeId::of::<M::HostType>(),
+        "PTX executor storage dtype does not match the runtime dtype"
+    );
+    // SAFETY: TypeId equality proves D and M::HostType are the same type.
+    // G is unchanged; all graph and buffer layouts and ownership are identical.
+    let graph =
+        unsafe { &*(graph as *const TensorGraph<D, G> as *const TensorGraph<M::HostType, G>) };
+    let inputs = unsafe {
+        std::mem::transmute::<HashMap<String, Vec<D>>, HashMap<String, Vec<M::HostType>>>(inputs)
+    };
+    let output = executor.compile_and_execute(graph, inputs)?;
+    // SAFETY: The checked scalar types are identical; transfer the allocation.
+    Ok(unsafe { std::mem::transmute::<Vec<M::HostType>, Vec<D>>(output) })
 }

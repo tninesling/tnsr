@@ -263,14 +263,31 @@ impl<'a> fmt::Display for Function<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Module<'a> {
     pub functions: Vec<Function<'a>>,
+    target: (u32, u32),
+}
+
+impl Default for Module<'_> {
+    fn default() -> Self {
+        Self {
+            functions: Vec::new(),
+            target: (8, 0),
+        }
+    }
 }
 
 impl<'a> Module<'a> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn new_with_target(target: (u32, u32)) -> Self {
+        Self {
+            functions: Vec::new(),
+            target,
+        }
     }
 
     pub fn add_function(&mut self, func: Function<'a>) {
@@ -281,7 +298,7 @@ impl<'a> Module<'a> {
 impl<'a> fmt::Display for Module<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, ".version 8.0")?;
-        writeln!(f, ".target sm_80")?;
+        writeln!(f, ".target sm_{}{}", self.target.0, self.target.1)?;
         writeln!(f, ".address_size 64")?;
         writeln!(f)?;
 
@@ -567,6 +584,7 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::MovU64 { dst, src } => write!(f, "mov.u64 {dst}, {src};"),
             Inst::MovF32 { dst, src } => write!(f, "mov.f32 {dst}, {src};"),
             Inst::MovB32 { dst, src } => write!(f, "mov.b32 {dst}, {src};"),
+            Inst::MovF32B32 { dst, src } => write!(f, "mov.b32 {dst}, {src};"),
             Inst::LdGlobalF32 { dst, addr, vec } => match vec {
                 VecWidth::Scalar => write!(f, "ld.global.f32 {}, [{addr}];", dst[0]),
                 VecWidth::V2 => write!(
@@ -625,6 +643,15 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::SetpF32(inst) => write!(f, "{inst}"),
             Inst::SelpF32(inst) => write!(f, "{inst}"),
             Inst::SelpU64(inst) => write!(f, "{inst}"),
+            Inst::ShflSyncDownB32 {
+                dst,
+                predicate,
+                src,
+                offset,
+            } => write!(
+                f,
+                "shfl.sync.down.b32 {dst}|{predicate}, {src}, {offset}, 0x1f, 0xffffffff;"
+            ),
 
             Inst::Bra { condition, target } => write!(f, "@{condition} bra {target};"),
             Inst::BraUni { target } => write!(f, "bra.uni {target};"),
@@ -667,32 +694,47 @@ impl<'a> fmt::Display for Inst<'a> {
             }
 
             Inst::WmmaLoadA {
+                dtype,
                 frags,
                 addr,
                 stride,
             } => {
                 write!(
                     f,
-                    "wmma.load.a.sync.aligned.m16n16k8.row.shared.tf32 {{{}}}, [{}], {};",
+                    "wmma.load.a.sync.aligned.m16n16k{}.row.shared.{} {{{}}}, [{}], {};",
+                    if *dtype == crate::tile::DType::TF32 {
+                        8
+                    } else {
+                        16
+                    },
+                    wmma_dtype(*dtype),
                     frags.iter().join(", "),
                     addr,
                     stride
                 )
             }
             Inst::WmmaLoadB {
+                dtype,
                 frags,
                 addr,
                 stride,
             } => {
                 write!(
                     f,
-                    "wmma.load.b.sync.aligned.m16n16k8.row.shared.tf32 {{{}}}, [{}], {};",
+                    "wmma.load.b.sync.aligned.m16n16k{}.row.shared.{} {{{}}}, [{}], {};",
+                    if *dtype == crate::tile::DType::TF32 {
+                        8
+                    } else {
+                        16
+                    },
+                    wmma_dtype(*dtype),
                     frags.iter().join(", "),
                     addr,
                     stride
                 )
             }
             Inst::WmmaMma {
+                dtype,
                 d_frags,
                 a_frags,
                 b_frags,
@@ -700,7 +742,17 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.mma.sync.aligned.m16n16k8.row.row.f32.tf32.tf32.f32 {{{}}}, {{{}}}, {{{}}}, {{{}}};",
+                    "wmma.mma.sync.aligned.m16n16k{}.row.row.{} {{{}}}, {{{}}}, {{{}}}, {{{}}};",
+                    if *dtype == crate::tile::DType::TF32 {
+                        8
+                    } else {
+                        16
+                    },
+                    match dtype {
+                        crate::tile::DType::F16 => "f32.f32",
+                        crate::tile::DType::BF16 => "f32.bf16.bf16.f32",
+                        _ => "f32.tf32.tf32.f32",
+                    },
                     d_frags.iter().join(", "),
                     a_frags.iter().join(", "),
                     b_frags.iter().join(", "),
@@ -738,18 +790,32 @@ impl<'a> fmt::Display for Inst<'a> {
                 )
             }
             Inst::WmmaStore {
+                dtype,
                 addr,
                 frags,
                 stride,
             } => {
                 write!(
                     f,
-                    "wmma.store.d.sync.aligned.m16n16k8.row.shared.f32 [{}], {{{}}}, {};",
+                    "wmma.store.d.sync.aligned.m16n16k{}.row.shared.f32 [{}], {{{}}}, {};",
+                    if *dtype == crate::tile::DType::TF32 {
+                        8
+                    } else {
+                        16
+                    },
                     addr,
                     frags.iter().join(", "),
                     stride
                 )
             }
         }
+    }
+}
+
+fn wmma_dtype(dtype: crate::tile::DType) -> &'static str {
+    match dtype {
+        crate::tile::DType::F16 => "f16",
+        crate::tile::DType::BF16 => "bf16",
+        _ => "tf32",
     }
 }

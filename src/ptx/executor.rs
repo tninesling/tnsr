@@ -1,30 +1,67 @@
 use super::graph::PtxGraph;
+use super::plan::{PtxExecutionPlan, PtxPlanAction, PtxReductionMode};
+use super::target::PtxTarget;
 use super::types::{CudaDType, F32};
 use crate::Executor;
 use crate::alloc::{AllocStats, CudaBufferPool};
-use crate::graph::{TensorGraph, TensorGraphNode, WithGrad, liveness};
-use crate::tile::TileGraph;
+use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
+use crate::tile::{IndexMap, TileGraph, VirtualTensor};
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use num_traits::ToPrimitive;
 use petgraph::visit::EdgeRef;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
+
+// This versions the in-memory compilation-key schema, not the crate release.
+// Bump it whenever signature encoding or generated-code-affecting inputs change.
+const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 5;
+
+/// Measurements from the most recent successful PTX compilation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PtxCompileMetrics {
+    pub graph_nodes: usize,
+    pub generated_kernels: usize,
+    pub ptx_source_bytes: usize,
+    pub compile_time: Duration,
+}
+
+/// Measurements from the most recent successful graph execution.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PtxExecutionMetrics {
+    pub kernel_launches: usize,
+    pub materialized_values: usize,
+    pub materialized_bytes: usize,
+    pub intermediate_materialized_bytes: usize,
+    pub device_copies: usize,
+}
 
 /// PTX executor that compiles TensorGraph → TileGraph → PtxGraph → PTX string
 /// and executes kernels via cudarc
 pub struct PtxExecutor<D: CudaDType = F32> {
     device: Arc<CudaContext>,
     module: Option<Arc<CudaModule>>,
-    values: HashMap<petgraph::graph::NodeIndex, CudaSlice<D::HostType>>,
+    values: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
     pool: RefCell<CudaBufferPool<D::HostType>>,
     stats: AllocStats,
     /// Stores the PtxGraph to access kernel names during execution
-    ptx_graph: Option<PtxGraph>,
+    ptx_graph: Option<Box<PtxGraph>>,
+    execution_plan: Option<Box<PtxExecutionPlan>>,
     compilation_signature: Option<Vec<u8>>,
     compilation_count: usize,
+    compile_metrics: PtxCompileMetrics,
+    execution_metrics: PtxExecutionMetrics,
+    kernel_launches: Cell<usize>,
+    reduction_mode: PtxReductionMode,
+    target: PtxTarget,
+    matmul_precision: crate::tile::MatMulPrecision,
 }
 
 impl<D: CudaDType> Default for PtxExecutor<D> {
@@ -41,6 +78,12 @@ impl PtxExecutor<F32> {
         Self::new_for_dtype()
     }
 
+    /// Create a PTX executor with an explicit reduction ordering policy.
+    pub fn new_with_reduction_mode(reduction_mode: PtxReductionMode) -> Self {
+        Self::try_new_with_reduction_mode(reduction_mode)
+            .expect("Failed to initialize PTX executor")
+    }
+
     /// Try to create a new PTX executor, returning an error if initialization fails.
     pub fn try_new() -> Result<Self> {
         Self::try_new_for_dtype()
@@ -55,7 +98,18 @@ impl<D: CudaDType> PtxExecutor<D> {
 
     /// Try to create an executor for a specific storage dtype.
     pub fn try_new_for_dtype() -> Result<Self> {
+        Self::try_new_with_reduction_mode(PtxReductionMode::Strict)
+    }
+
+    /// Initialize this storage dtype with an explicit reduction policy.
+    pub fn try_new_with_reduction_mode(reduction_mode: PtxReductionMode) -> Result<Self> {
         let device = CudaContext::new(0).context("Failed to initialize CUDA device 0")?;
+        let target = PtxTarget::from_context(&device)?;
+        anyhow::ensure!(
+            <D::HostType as crate::tile::TileDType>::TILE_DTYPE != crate::tile::DType::BF16
+                || target.compute_capability.0 >= 8,
+            "Native BF16 PTX storage requires SM80 or newer; use the CUDA backend for f32 boundary conversion on older GPUs"
+        );
         Ok(PtxExecutor {
             device,
             module: None,
@@ -63,9 +117,25 @@ impl<D: CudaDType> PtxExecutor<D> {
             pool: RefCell::new(CudaBufferPool::default()),
             stats: AllocStats::default(),
             ptx_graph: None,
+            execution_plan: None,
             compilation_signature: None,
             compilation_count: 0,
+            compile_metrics: PtxCompileMetrics::default(),
+            execution_metrics: PtxExecutionMetrics::default(),
+            kernel_launches: Cell::new(0),
+            reduction_mode,
+            target,
+            matmul_precision: crate::tile::MatMulPrecision::AllowTf32,
         })
+    }
+
+    /// Select matmul arithmetic for subsequent compilations. Changing the policy
+    /// invalidates the compilation signature so execute recompiles cached graphs.
+    pub fn set_matmul_precision(&mut self, precision: crate::tile::MatMulPrecision) {
+        if self.matmul_precision != precision {
+            self.matmul_precision = precision;
+            self.compilation_signature = None;
+        }
     }
 
     fn take_buffer(&self, len: usize) -> Result<CudaSlice<D::HostType>> {
@@ -126,6 +196,117 @@ impl<D: CudaDType> PtxExecutor<D> {
         self.compilation_count
     }
 
+    pub fn compile_metrics(&self) -> &PtxCompileMetrics {
+        &self.compile_metrics
+    }
+
+    pub fn execution_metrics(&self) -> &PtxExecutionMetrics {
+        &self.execution_metrics
+    }
+
+    pub fn execution_plan(&self) -> Option<&PtxExecutionPlan> {
+        self.execution_plan.as_deref()
+    }
+
+    /// Return the generated PTX module for diagnostics after compilation.
+    pub fn module_source(&self) -> Option<String> {
+        self.ptx_graph.as_ref().map(|graph| graph.module_source())
+    }
+
+    /// Describe the current physical PTX execution plan.
+    pub fn describe_plan<G>(&self, graph: &TensorGraph<D::HostType, G>) -> Result<String> {
+        let supplied_signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+        );
+        let compiled_signature = self
+            .compilation_signature
+            .as_deref()
+            .context("No compiled graph signature available. Call compile_owned() first.")?;
+        anyhow::ensure!(
+            compiled_signature == supplied_signature.as_slice(),
+            "Supplied graph structure does not match the compiled PTX module"
+        );
+        let ptx_graph = self
+            .ptx_graph
+            .as_ref()
+            .context("No PTX graph available. Call compile_owned() first.")?;
+        let mut description = format!(
+            "PTX plan: {} graph nodes, {} physical kernels\n",
+            graph.graph.node_count(),
+            self.compile_metrics.generated_kernels
+        );
+        let plan = self
+            .execution_plan
+            .as_ref()
+            .context("No PTX execution plan available. Call compile_owned() first.")?;
+        for (step, plan_step) in plan.steps().iter().enumerate() {
+            let node_index = plan_step.node;
+            let action = match plan_step.action {
+                PtxPlanAction::Upload => "upload".to_string(),
+                PtxPlanAction::DeviceCopy => "device-copy".to_string(),
+                PtxPlanAction::VirtualView => "virtual-view".to_string(),
+                PtxPlanAction::Kernel => format!(
+                    "kernel {}",
+                    ptx_graph
+                        .kernel_name(node_index)
+                        .context("Missing compiled kernel in unfused plan")?
+                ),
+                PtxPlanAction::PointwiseRegion(region_id) => format!(
+                    "kernel {}",
+                    ptx_graph
+                        .region_kernel_name(region_id)
+                        .context("Missing compiled pointwise region kernel")?
+                ),
+                PtxPlanAction::ReductionRegion(region_id) => {
+                    let schedule = plan
+                        .reduction_regions()
+                        .get(region_id)
+                        .context("Missing reduction region schedule")?
+                        .schedule;
+                    format!(
+                        "kernel {} schedule={schedule:?}",
+                        ptx_graph
+                            .reduction_region_kernel_name(region_id)
+                            .context("Missing compiled reduction region kernel")?
+                    )
+                }
+                PtxPlanAction::MatMulRegion(region_id) => format!(
+                    "kernel {} schedule={:?}",
+                    ptx_graph
+                        .matmul_region_kernel_name(region_id)
+                        .context("Missing compiled matmul region kernel")?,
+                    plan.matmul_regions()[region_id].schedule,
+                ),
+            };
+            writeln!(
+                description,
+                "{step:04}: node {:04} {:<32} shape={:?} outputs={:?} action={action}",
+                node_index.index(),
+                plan_step.operation,
+                plan_step.shape,
+                plan_step.outputs
+            )?;
+        }
+        Ok(description)
+    }
+
+    fn record_kernel_launch(&self) {
+        self.kernel_launches.set(self.kernel_launches.get() + 1);
+    }
+
+    fn recycle_value(&self, value: Arc<CudaSlice<D::HostType>>) -> usize {
+        let bytes = value.len() * std::mem::size_of::<D::HostType>();
+        if let Ok(value) = Arc::try_unwrap(value) {
+            self.pool.borrow_mut().give(value);
+            bytes
+        } else {
+            0
+        }
+    }
+
     /// Reset allocation counters without discarding pooled device buffers.
     pub fn reset_stats(&mut self) {
         self.stats.reset();
@@ -141,62 +322,105 @@ impl<D: CudaDType> PtxExecutor<D> {
     pub fn release_gradients(&mut self, graph: &TensorGraph<D::HostType, WithGrad>) {
         for grad_node in graph.gradient_metadata().param_to_grad.values() {
             if let Some(buf) = self.values.remove(grad_node) {
-                self.pool.get_mut().give(buf);
+                self.recycle_value(buf);
             }
         }
     }
 
-    /// Compile an owned TensorGraph to PTX without cloning during lowering.
-    ///
-    /// Prefer this over compiling from a reference when you have an owned graph.
+    /// Compile an owned TensorGraph to PTX, sharing its tensor buffers during lowering.
     pub fn compile_owned<G>(&mut self, graph: TensorGraph<D::HostType, G>) -> Result<()> {
-        let signature = graph_compilation_signature(&graph);
-        let tile_graph: TileGraph = graph.into();
-        self.compile_tile_graph(signature, tile_graph)
+        self.compile(&graph)
     }
 
-    /// Compile a borrowed tensor graph to PTX.
+    /// Compile a borrowed graph without cloning tensor data.
     pub fn compile<G>(&mut self, graph: &TensorGraph<D::HostType, G>) -> Result<()> {
-        let signature = graph_compilation_signature(graph);
-        let tile_graph = TileGraph::from_graph(graph);
-        self.compile_tile_graph(signature, tile_graph)
-    }
-
-    fn compile_tile_graph(&mut self, signature: Vec<u8>, tile_graph: TileGraph) -> Result<()> {
-        let ptx_graph: PtxGraph = tile_graph.into();
+        let started = Instant::now();
+        let graph_nodes = graph.graph.node_count();
+        let signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+        );
+        let mut execution_plan =
+            PtxExecutionPlan::build_with_reduction_mode(graph, self.reduction_mode)?;
+        execution_plan.schedule_matmuls(self.target.matmul_capabilities(), self.matmul_precision);
+        let mut tile_graph = TileGraph::from_with_matmul_schedules(
+            graph,
+            self.target.supports_tf32()
+                && self.matmul_precision == crate::tile::MatMulPrecision::AllowTf32,
+            execution_plan.matmul_schedules(),
+        );
+        tile_graph.add_fusion_regions(execution_plan.regions())?;
+        tile_graph.add_reduction_regions(execution_plan.reduction_regions())?;
+        tile_graph.add_matmul_regions(execution_plan.matmul_regions())?;
+        tile_graph.set_physical_nodes(
+            execution_plan
+                .steps()
+                .iter()
+                .filter_map(|step| (step.action == PtxPlanAction::Kernel).then_some(step.node))
+                .collect(),
+        );
+        let ptx_graph = PtxGraph::from(tile_graph).with_target(self.target);
         let ptx_src = ptx_graph.module_source();
+        let generated_kernels = execution_plan
+            .steps()
+            .iter()
+            .filter(|step| {
+                matches!(
+                    step.action,
+                    PtxPlanAction::Kernel
+                        | PtxPlanAction::PointwiseRegion(_)
+                        | PtxPlanAction::ReductionRegion(_)
+                        | PtxPlanAction::MatMulRegion(_)
+                )
+            })
+            .count();
+        let ptx_source_bytes = ptx_src.len();
+
         let cuda_module = self
             .device
             .load_module(Ptx::from_src(&ptx_src))
             .context("Failed to load PTX module with cudarc")?;
         self.module = Some(cuda_module);
-        self.ptx_graph = Some(ptx_graph);
+        self.ptx_graph = Some(Box::new(ptx_graph));
+        self.execution_plan = Some(Box::new(execution_plan));
         self.compilation_signature = Some(signature);
         self.compilation_count += 1;
+        self.compile_metrics = PtxCompileMetrics {
+            graph_nodes,
+            generated_kernels,
+            ptx_source_bytes,
+            compile_time: started.elapsed(),
+        };
+
         Ok(())
     }
 
     /// Get the value of a specific node from the executor's cache after execution
     pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<Vec<D::HostType>> {
         self.values.get(&node_idx).and_then(|cuda_slice| {
-            let mut host_vec = vec![D::HostType::default(); cuda_slice.len()];
+            let mut storage = vec![D::HostType::default(); cuda_slice.len()];
             self.device
                 .default_stream()
-                .memcpy_dtoh(cuda_slice, &mut host_vec)
+                .memcpy_dtoh(cuda_slice.as_ref(), &mut storage)
                 .ok()?;
-            Some(host_vec)
+            let plan = self.execution_plan.as_ref()?;
+            let view = plan.virtual_value(node_idx)?;
+            let source_shape = plan.value_shape(view.source)?;
+            materialize_host_view(storage, view, source_shape).ok()
         })
     }
 
     fn execute_matmul(
         &self,
+        node: crate::graph::NodeIndex,
         kernel_name: &str,
         a: &CudaSlice<D::HostType>,
         b: &CudaSlice<D::HostType>,
-        a_shape: &[usize],
-        b_shape: &[usize],
-        output_shape: &[usize],
+        shapes: (&[usize], &[usize], &[usize]),
     ) -> Result<CudaSlice<D::HostType>> {
+        let (a_shape, b_shape, output_shape) = shapes;
         anyhow::ensure!(
             a_shape.len() >= 2 && b_shape.len() >= 2 && output_shape.len() >= 2,
             "MatMul requires rank >= 2, got {a_shape:?} and {b_shape:?}"
@@ -221,7 +445,11 @@ impl<D: CudaDType> PtxExecutor<D> {
             return Ok(output);
         }
 
-        const TILE_SIZE: usize = 16;
+        let schedule = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.matmul_schedules().get(&node))
+            .context("Matmul schedule is unavailable")?;
         let stream = self.device.default_stream();
         if k == 0 {
             stream
@@ -233,11 +461,13 @@ impl<D: CudaDType> PtxExecutor<D> {
         let function = module.load_function(kernel_name)?;
         let config = LaunchConfig {
             grid_dim: (
-                n.div_ceil(TILE_SIZE) as u32,
-                m.div_ceil(TILE_SIZE) as u32,
+                u32::try_from(n.div_ceil(schedule.block_tile.n))
+                    .context("Matmul grid width exceeds u32")?,
+                u32::try_from(m.div_ceil(schedule.block_tile.m))
+                    .context("Matmul grid height exceeds u32")?,
                 1,
             ),
-            block_dim: (TILE_SIZE as u32, TILE_SIZE as u32, 1),
+            block_dim: schedule.block_threads,
             shared_mem_bytes: 0,
         };
 
@@ -254,10 +484,272 @@ impl<D: CudaDType> PtxExecutor<D> {
             launcher.arg(&a_view);
             launcher.arg(&b_view);
             launcher.arg(&mut output_view);
+            self.record_kernel_launch();
             unsafe { launcher.launch(config) }
                 .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
         }
         Ok(output)
+    }
+
+    fn execute_matmul_region(
+        &self,
+        module: &Arc<CudaModule>,
+        ptx_graph: &PtxGraph,
+        region_id: usize,
+        step: &super::plan::PtxPlanStep,
+    ) -> Result<RegionValues<D::HostType>> {
+        let kernel_name = ptx_graph
+            .matmul_region_kernel_name(region_id)
+            .context("Missing compiled matmul region kernel")?;
+        let region = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.matmul_regions().get(region_id))
+            .context("Matmul region metadata is unavailable")?;
+        anyhow::ensure!(
+            step.outputs
+                == region
+                    .outputs
+                    .iter()
+                    .map(|output| output.node)
+                    .collect::<Vec<_>>(),
+            "Matmul region output bindings do not match the execution plan"
+        );
+        let input_values: Vec<_> = step
+            .inputs
+            .iter()
+            .map(|input| {
+                self.values.get(input).cloned().with_context(|| {
+                    format!("Matmul region input node {} is unavailable", input.index())
+                })
+            })
+            .collect::<Result<_>>()?;
+        anyhow::ensure!(
+            input_values.len() == region.inputs.len(),
+            "Matmul region input binding count mismatch"
+        );
+        for (input, descriptor) in input_values.iter().zip(&region.inputs) {
+            let expected =
+                checked_element_count(&descriptor.source_shape, "Matmul region input storage")?;
+            anyhow::ensure!(
+                input.len() == expected,
+                "Matmul region input length {} does not match storage length {expected}",
+                input.len()
+            );
+        }
+        let output_len = checked_element_count(&region.output_shape, "Matmul region output")?;
+        let mut outputs = Vec::with_capacity(step.outputs.len());
+        for _ in &step.outputs {
+            outputs.push(self.take_buffer(output_len)?);
+        }
+
+        let function = module.load_function(kernel_name)?;
+        let stream = self.device.default_stream();
+        let mut launcher = stream.launch_builder(&function);
+        for input in &input_values {
+            launcher.arg(input.as_ref());
+        }
+        for output in &mut outputs {
+            launcher.arg(output);
+        }
+        self.record_kernel_launch();
+        let config = LaunchConfig {
+            grid_dim: (
+                u32::try_from(region.n.div_ceil(region.schedule.block_tile.n))
+                    .context("Matmul region grid width exceeds u32")?,
+                u32::try_from(region.m.div_ceil(region.schedule.block_tile.m))
+                    .context("Matmul region grid height exceeds u32")?,
+                u32::try_from(checked_element_count(
+                    &region.batch_shape,
+                    "Matmul batch count",
+                )?)
+                .context("Matmul batch grid exceeds u32")?,
+            ),
+            block_dim: region.schedule.block_threads,
+            shared_mem_bytes: 0,
+        };
+        unsafe { launcher.launch(config) }
+            .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
+
+        Ok(step
+            .outputs
+            .iter()
+            .copied()
+            .zip(outputs.into_iter().map(Arc::new))
+            .collect())
+    }
+
+    fn execute_pointwise_region(
+        &self,
+        module: &Arc<CudaModule>,
+        ptx_graph: &PtxGraph,
+        region_id: usize,
+        step: &super::plan::PtxPlanStep,
+    ) -> Result<RegionValues<D::HostType>> {
+        let kernel_name = ptx_graph
+            .region_kernel_name(region_id)
+            .context("Missing compiled pointwise region kernel")?;
+        let input_values: Vec<_> = step
+            .inputs
+            .iter()
+            .map(|input| {
+                self.values.get(input).cloned().with_context(|| {
+                    format!(
+                        "Pointwise region input node {} is unavailable",
+                        input.index()
+                    )
+                })
+            })
+            .collect::<Result<_>>()?;
+        let len = checked_element_count(&step.shape, "Pointwise region")?;
+        let region = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.regions().get(region_id))
+            .context("Pointwise region metadata is unavailable")?;
+        anyhow::ensure!(
+            region.inputs.len() == input_values.len(),
+            "Pointwise region input binding count mismatch"
+        );
+        for (input, descriptor) in input_values.iter().zip(&region.inputs) {
+            let expected =
+                checked_element_count(&descriptor.source_shape, "Pointwise region input storage")?;
+            anyhow::ensure!(
+                input.len() == expected,
+                "Pointwise region input length {} does not match storage length {expected}",
+                input.len(),
+            );
+        }
+        let mut outputs = Vec::with_capacity(step.outputs.len());
+        for _ in &step.outputs {
+            outputs.push(self.take_buffer(len)?);
+        }
+        if len != 0 {
+            let launch_len = u32::try_from(len)
+                .context("Pointwise region output is too large for a CUDA launch")?;
+            let function = module.load_function(kernel_name)?;
+            let stream = self.device.default_stream();
+            let mut launcher = stream.launch_builder(&function);
+            for input in &input_values {
+                launcher.arg(input.as_ref());
+            }
+            for output in &mut outputs {
+                launcher.arg(output);
+            }
+            self.record_kernel_launch();
+            unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+                .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
+        }
+        Ok(step
+            .outputs
+            .iter()
+            .copied()
+            .zip(outputs.into_iter().map(Arc::new))
+            .collect())
+    }
+
+    fn execute_reduction_region(
+        &self,
+        module: &Arc<CudaModule>,
+        ptx_graph: &PtxGraph,
+        region_id: usize,
+        step: &super::plan::PtxPlanStep,
+    ) -> Result<RegionValues<D::HostType>> {
+        let kernel_name = ptx_graph
+            .reduction_region_kernel_name(region_id)
+            .context("Missing compiled reduction region kernel")?;
+        let region = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.reduction_regions().get(region_id))
+            .context("Reduction region metadata is unavailable")?;
+        anyhow::ensure!(
+            step.outputs
+                == region
+                    .outputs
+                    .iter()
+                    .map(|output| output.node)
+                    .collect::<Vec<_>>(),
+            "Reduction region output bindings do not match the execution plan"
+        );
+        anyhow::ensure!(
+            step.output_shapes == region.output_shapes,
+            "Reduction region output shapes do not match the execution plan"
+        );
+        anyhow::ensure!(
+            step.shape == region.output_shape,
+            "Reduction region launch shape does not match the execution plan"
+        );
+        let input_values: Vec<_> = step
+            .inputs
+            .iter()
+            .map(|input| {
+                self.values.get(input).cloned().with_context(|| {
+                    format!(
+                        "Reduction region input node {} is unavailable",
+                        input.index()
+                    )
+                })
+            })
+            .collect::<Result<_>>()?;
+        anyhow::ensure!(
+            region.inputs.len() == input_values.len(),
+            "Reduction region input binding count mismatch"
+        );
+        for (input, descriptor) in input_values.iter().zip(&region.inputs) {
+            let expected =
+                checked_element_count(&descriptor.source_shape, "Reduction region input storage")?;
+            anyhow::ensure!(
+                input.len() == expected,
+                "Reduction region input length {} does not match storage length {expected}",
+                input.len(),
+            );
+        }
+        let len = checked_element_count(&step.shape, "Reduction region")?;
+        anyhow::ensure!(
+            step.output_shapes.len() == step.outputs.len(),
+            "Reduction region output shape binding count mismatch"
+        );
+        let mut outputs = Vec::with_capacity(step.outputs.len());
+        for shape in &step.output_shapes {
+            outputs
+                .push(self.take_buffer(checked_element_count(shape, "Reduction region output")?)?);
+        }
+        if len != 0 {
+            let launch_len = u32::try_from(len)
+                .context("Reduction region output is too large for a CUDA launch")?;
+            let function = module.load_function(kernel_name)?;
+            let stream = self.device.default_stream();
+            let mut launcher = stream.launch_builder(&function);
+            for input in &input_values {
+                launcher.arg(input.as_ref());
+            }
+            for output in &mut outputs {
+                launcher.arg(output);
+            }
+            self.record_kernel_launch();
+            let config = match region.schedule {
+                crate::tile::ReductionSchedule::Serial => LaunchConfig::for_num_elems(launch_len),
+                crate::tile::ReductionSchedule::Subgroup { width } => LaunchConfig {
+                    grid_dim: (launch_len, 1, 1),
+                    block_dim: (width, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                crate::tile::ReductionSchedule::Block { threads } => LaunchConfig {
+                    grid_dim: (launch_len, 1, 1),
+                    block_dim: (threads, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+            };
+            unsafe { launcher.launch(config) }
+                .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
+        }
+        Ok(step
+            .outputs
+            .iter()
+            .copied()
+            .zip(outputs.into_iter().map(Arc::new))
+            .collect())
     }
 
     /// Execute a compiled graph with the given inputs
@@ -266,16 +758,14 @@ impl<D: CudaDType> PtxExecutor<D> {
         graph: &TensorGraph<D::HostType, G>,
         inputs: HashMap<String, Vec<D::HostType>>,
     ) -> Result<Vec<D::HostType>> {
-        let supplied_signature = graph_compilation_signature(graph);
-        self.execute_compiled_with_signature(graph, inputs, &supplied_signature)
-    }
-
-    fn execute_compiled_with_signature<G>(
-        &mut self,
-        graph: &TensorGraph<D::HostType, G>,
-        inputs: HashMap<String, Vec<D::HostType>>,
-        supplied_signature: &[u8],
-    ) -> Result<Vec<D::HostType>> {
+        self.execution_metrics = PtxExecutionMetrics::default();
+        self.kernel_launches.set(0);
+        let supplied_signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+        );
         let compiled_signature = self
             .compilation_signature
             .as_deref()
@@ -294,20 +784,109 @@ impl<D: CudaDType> PtxExecutor<D> {
             .as_ref()
             .context("No PTX graph available. Call compile() first.")?;
 
-        let order = graph.toposort();
-        let liveness = liveness::analyze(graph, &order);
-        for (_, value) in self.values.drain() {
-            self.pool.get_mut().give(value);
+        let execution_plan = self
+            .execution_plan
+            .as_ref()
+            .context("No PTX execution plan available. Call compile_owned() first.")?;
+        let plan_steps = execution_plan.steps().to_vec();
+        let graph_output = execution_plan.graph_output().context("Graph is empty")?;
+        let old_values: Vec<_> = self.values.drain().map(|(_, value)| value).collect();
+        for value in old_values {
+            self.recycle_value(value);
         }
         let mut live_bytes = 0usize;
 
-        for (pos, node_idx) in order.iter().enumerate() {
+        for plan_step in &plan_steps {
+            let node_idx = &plan_step.node;
+            let planned_inputs = &plan_step.inputs;
             let node = &graph[*node_idx];
+            if let PtxPlanAction::MatMulRegion(region_id) = plan_step.action {
+                let region_outputs =
+                    self.execute_matmul_region(module, ptx_graph, region_id, plan_step)?;
+                for (output_node, output) in region_outputs {
+                    let bytes = output.len() * std::mem::size_of::<D::HostType>();
+                    self.execution_metrics.materialized_values += 1;
+                    self.execution_metrics.materialized_bytes += bytes;
+                    if output_node != graph_output {
+                        self.execution_metrics.intermediate_materialized_bytes += bytes;
+                    }
+                    self.values.insert(output_node, output);
+                    live_bytes += bytes;
+                }
+                self.stats.record_live(live_bytes);
+                for &dead in &plan_step.release_after {
+                    if let Some(value) = self.values.remove(&dead) {
+                        live_bytes -= self.recycle_value(value);
+                    }
+                }
+                continue;
+            }
+            if let PtxPlanAction::PointwiseRegion(region_id) = plan_step.action {
+                let region_outputs =
+                    self.execute_pointwise_region(module, ptx_graph, region_id, plan_step)?;
+                for (output_node, output) in region_outputs {
+                    let bytes = output.len() * std::mem::size_of::<D::HostType>();
+                    self.execution_metrics.materialized_values += 1;
+                    self.execution_metrics.materialized_bytes += bytes;
+                    if output_node != graph_output {
+                        self.execution_metrics.intermediate_materialized_bytes += bytes;
+                    }
+                    self.values.insert(output_node, output);
+                    live_bytes += bytes;
+                }
+                self.stats.record_live(live_bytes);
+                for &dead in &plan_step.release_after {
+                    if let Some(value) = self.values.remove(&dead) {
+                        live_bytes -= self.recycle_value(value);
+                    }
+                }
+                continue;
+            }
+            if let PtxPlanAction::ReductionRegion(region_id) = plan_step.action {
+                let region_outputs =
+                    self.execute_reduction_region(module, ptx_graph, region_id, plan_step)?;
+                for (output_node, output) in region_outputs {
+                    let bytes = output.len() * std::mem::size_of::<D::HostType>();
+                    self.execution_metrics.materialized_values += 1;
+                    self.execution_metrics.materialized_bytes += bytes;
+                    if output_node != graph_output {
+                        self.execution_metrics.intermediate_materialized_bytes += bytes;
+                    }
+                    self.values.insert(output_node, output);
+                    live_bytes += bytes;
+                }
+                self.stats.record_live(live_bytes);
+                for &dead in &plan_step.release_after {
+                    if let Some(value) = self.values.remove(&dead) {
+                        live_bytes -= self.recycle_value(value);
+                    }
+                }
+                continue;
+            }
+            if plan_step.action == PtxPlanAction::VirtualView {
+                let input = planned_inputs
+                    .first()
+                    .context("virtual view plan step has no input")?;
+                let result = Arc::clone(
+                    self.values
+                        .get(input)
+                        .context("virtual view input value is unavailable")?,
+                );
+                self.values.insert(*node_idx, result);
+                self.stats.record_live(live_bytes);
+                for &dead in &plan_step.release_after {
+                    if let Some(value) = self.values.remove(&dead) {
+                        live_bytes -= self.recycle_value(value);
+                    }
+                }
+                continue;
+            }
             let result = match node {
                 TensorGraphNode::Constant { data, .. } => {
                     let stream = self.device.default_stream();
                     let mut device_data = self.take_buffer(data.len())?;
                     if !data.is_empty() {
+                        self.execution_metrics.device_copies += 1;
                         stream
                             .memcpy_htod(data.as_slice(), &mut device_data)
                             .context("Failed to copy constant to CUDA device")?;
@@ -327,6 +906,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut device_data = self.take_buffer(val.len())?;
                     if !val.is_empty() {
+                        self.execution_metrics.device_copies += 1;
                         stream
                             .memcpy_htod(val.as_slice(), &mut device_data)
                             .context("Failed to copy input to CUDA device")?;
@@ -341,6 +921,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut device_data = self.take_buffer(v.len())?;
                     if !v.is_empty() {
+                        self.execution_metrics.device_copies += 1;
                         stream
                             .memcpy_htod(v.as_slice(), &mut device_data)
                             .context("Failed to copy parameter to CUDA device")?;
@@ -352,7 +933,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .kernel_name(*node_idx)
                         .context("Missing compiled unary kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -365,8 +946,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -380,7 +962,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .kernel_name(*node_idx)
                         .context("Missing compiled fused unary kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -393,8 +975,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -407,7 +990,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .kernel_name(*node_idx)
                         .context("Missing compiled binary kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let lhs = self
                         .values
                         .get(&ins[0])
@@ -425,9 +1008,10 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(lhs);
-                        launcher.arg(rhs);
+                        launcher.arg(lhs.as_ref());
+                        launcher.arg(rhs.as_ref());
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -440,7 +1024,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .kernel_name(*node_idx)
                         .context("Missing compiled Gt kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let lhs = self
                         .values
                         .get(&ins[0])
@@ -458,9 +1042,10 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(lhs);
-                        launcher.arg(rhs);
+                        launcher.arg(lhs.as_ref());
+                        launcher.arg(rhs.as_ref());
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -473,7 +1058,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .kernel_name(*node_idx)
                         .context("Missing compiled Mask kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let values = self
                         .values
                         .get(&ins[0])
@@ -491,9 +1076,10 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(values);
-                        launcher.arg(condition);
+                        launcher.arg(values.as_ref());
+                        launcher.arg(condition.as_ref());
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }
                             .context("CUDA mask kernel launch failed")?;
                     }
@@ -505,7 +1091,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .kernel_name(*node_idx)
                         .context("Missing compiled MatMul kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let a = self
                         .values
                         .get(&ins[0])
@@ -518,19 +1104,18 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let a_shape = graph.graph[ins[0]].shape();
                     let b_shape = graph.graph[ins[1]].shape();
                     self.execute_matmul(
+                        *node_idx,
                         kernel_name,
                         a,
                         b,
-                        a_shape,
-                        b_shape,
-                        graph.graph[*node_idx].shape(),
+                        (a_shape, b_shape, graph.graph[*node_idx].shape()),
                     )?
                 }
                 TensorGraphNode::Embedding { .. } => {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled Embedding kernel")?;
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     anyhow::ensure!(ins.len() == 2, "Embedding requires 2 inputs");
                     let weight = self
                         .values
@@ -564,9 +1149,10 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(weight);
-                        launcher.arg(indices);
+                        launcher.arg(weight.as_ref());
+                        launcher.arg(indices.as_ref());
                         launcher.arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
                             .context("PTX embedding kernel launch failed")?;
                     }
@@ -576,7 +1162,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled EmbeddingBackward kernel")?;
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     anyhow::ensure!(ins.len() == 2, "EmbeddingBackward requires 2 inputs");
                     let indices = self
                         .values
@@ -611,14 +1197,22 @@ impl<D: CudaDType> PtxExecutor<D> {
                             .context("Failed to zero PTX embedding gradient output")?;
                     }
                     if grad_output_len != 0 {
-                        let launch_len = u32::try_from(grad_output_len).context(
+                        let launch_elements = if <D::HostType as crate::tile::TileDType>::TILE_DTYPE
+                            == crate::tile::DType::F32
+                        {
+                            grad_output_len
+                        } else {
+                            output_len
+                        };
+                        let launch_len = u32::try_from(launch_elements).context(
                             "EmbeddingBackward grad_output is too large for a CUDA launch",
                         )?;
                         let function = module.load_function(kernel_name)?;
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(indices);
-                        launcher.arg(grad_output);
+                        launcher.arg(indices.as_ref());
+                        launcher.arg(grad_output.as_ref());
                         launcher.arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
                             .context("PTX embedding_backward kernel launch failed")?;
                     }
@@ -628,7 +1222,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled IndexedCrossEntropy kernel")?;
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     anyhow::ensure!(ins.len() == 2, "IndexedCrossEntropy requires 2 inputs");
                     let logits = self
                         .values
@@ -663,9 +1257,10 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(logits);
-                        launcher.arg(targets);
+                        launcher.arg(logits.as_ref());
+                        launcher.arg(targets.as_ref());
                         launcher.arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
                             .context("PTX indexed_cross_entropy kernel launch failed")?;
                     }
@@ -675,7 +1270,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled IndexedCrossEntropyBackward kernel")?;
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     anyhow::ensure!(
                         ins.len() == 3,
                         "IndexedCrossEntropyBackward requires 3 inputs"
@@ -723,10 +1318,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(logits);
-                        launcher.arg(targets);
-                        launcher.arg(grad_output);
+                        launcher.arg(logits.as_ref());
+                        launcher.arg(targets.as_ref());
+                        launcher.arg(grad_output.as_ref());
                         launcher.arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
                             .context("PTX indexed_cross_entropy_backward kernel launch failed")?;
                     }
@@ -737,7 +1333,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .kernel_name(*node_idx)
                         .context("Missing compiled BroadcastAxis kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -753,8 +1349,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(out_len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -767,7 +1364,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .kernel_name(*node_idx)
                         .context("Missing compiled ReduceAxis kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -783,8 +1380,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(out_len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -797,7 +1395,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .kernel_name(*node_idx)
                         .context("Missing compiled permutation kernel")?;
 
-                    let ins = graph.inputs(*node_idx);
+                    let ins = planned_inputs;
                     let input = self
                         .values
                         .get(&ins[0])
@@ -810,8 +1408,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let f = module.load_function(kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
-                        launcher.arg(input);
+                        launcher.arg(input.as_ref());
                         launcher.arg(&mut out);
+                        self.record_kernel_launch();
                         unsafe { launcher.launch(cfg) }.with_context(|| {
                             format!("CUDA {} kernel launch failed", kernel_name)
                         })?;
@@ -820,7 +1419,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     out
                 }
                 TensorGraphNode::Reshape { .. } | TensorGraphNode::Flatten { .. } => {
-                    let input_index = graph.inputs(*node_idx)[0];
+                    let input_index = planned_inputs[0];
                     let input = self
                         .values
                         .get(&input_index)
@@ -833,9 +1432,10 @@ impl<D: CudaDType> PtxExecutor<D> {
                     );
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
+                        self.execution_metrics.device_copies += 1;
                         self.device
                             .default_stream()
-                            .memcpy_dtod(input, &mut output)
+                            .memcpy_dtod(input.as_ref(), &mut output)
                             .context("Failed to copy contiguous view")?;
                     }
                     output
@@ -844,7 +1444,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled Conv2d kernel")?;
-                    let inputs = graph.inputs(*node_idx);
+                    let inputs = planned_inputs;
                     let input = self
                         .values
                         .get(&inputs[0])
@@ -859,7 +1459,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(input).arg(weight).arg(&mut output);
+                        launcher
+                            .arg(input.as_ref())
+                            .arg(weight.as_ref())
+                            .arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len)
@@ -874,7 +1478,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled ConvTranspose2d kernel")?;
-                    let inputs = graph.inputs(*node_idx);
+                    let inputs = planned_inputs;
                     let grad_output = self
                         .values
                         .get(&inputs[0])
@@ -889,7 +1493,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(grad_output).arg(weight).arg(&mut output);
+                        launcher
+                            .arg(grad_output.as_ref())
+                            .arg(weight.as_ref())
+                            .arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len).context(
@@ -905,7 +1513,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled Conv2dBackwardWeight kernel")?;
-                    let inputs = graph.inputs(*node_idx);
+                    let inputs = planned_inputs;
                     let input = self
                         .values
                         .get(&inputs[0])
@@ -920,7 +1528,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(input).arg(grad_output).arg(&mut output);
+                        launcher
+                            .arg(input.as_ref())
+                            .arg(grad_output.as_ref())
+                            .arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len).context(
@@ -936,7 +1548,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled MaxPool2d kernel")?;
-                    let input_index = graph.inputs(*node_idx)[0];
+                    let input_index = planned_inputs[0];
                     let input = self
                         .values
                         .get(&input_index)
@@ -947,7 +1559,8 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let function = module.load_function(kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(input).arg(&mut output);
+                        launcher.arg(input.as_ref()).arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len)
@@ -962,7 +1575,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
                         .context("Missing compiled MaxPool2dBackward kernel")?;
-                    let inputs = graph.inputs(*node_idx);
+                    let inputs = planned_inputs;
                     let input = self
                         .values
                         .get(&inputs[0])
@@ -982,10 +1595,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher
-                            .arg(input)
-                            .arg(pooled)
-                            .arg(grad_output)
+                            .arg(input.as_ref())
+                            .arg(pooled.as_ref())
+                            .arg(grad_output.as_ref())
                             .arg(&mut output);
+                        self.record_kernel_launch();
                         unsafe {
                             launcher.launch(LaunchConfig::for_num_elems(
                                 u32::try_from(output_len).context(
@@ -998,52 +1612,76 @@ impl<D: CudaDType> PtxExecutor<D> {
                     output
                 }
             };
+            let result = Arc::new(result);
 
             let bytes = result.len() * std::mem::size_of::<D::HostType>();
+            self.execution_metrics.materialized_values += 1;
+            self.execution_metrics.materialized_bytes += bytes;
+            let is_source = matches!(
+                node,
+                TensorGraphNode::Constant { .. }
+                    | TensorGraphNode::Input { .. }
+                    | TensorGraphNode::Parameter { .. }
+            );
+            if !is_source && *node_idx != graph_output {
+                self.execution_metrics.intermediate_materialized_bytes += bytes;
+            }
             self.values.insert(*node_idx, result);
             live_bytes += bytes;
             self.stats.record_live(live_bytes);
 
-            for &dead in liveness.free_after(pos) {
+            for &dead in &plan_step.release_after {
                 if let Some(value) = self.values.remove(&dead) {
-                    live_bytes -= value.len() * std::mem::size_of::<D::HostType>();
-                    self.pool.get_mut().give(value);
+                    live_bytes -= self.recycle_value(value);
                 }
             }
         }
 
         self.stats = self.stats.with_pool_stats(self.pool.get_mut().stats());
+        self.execution_metrics.kernel_launches = self.kernel_launches.get();
 
-        let last_node_idx = order.last().context("Graph is empty")?;
+        let last_node_idx = &graph_output;
         let out_device = self
             .values
             .get(last_node_idx)
             .context("Output value not found after execution")?;
-        let mut out_host = vec![D::HostType::default(); out_device.len()];
-        if !out_host.is_empty() {
+        let mut storage_host = vec![D::HostType::default(); out_device.len()];
+        if !storage_host.is_empty() {
+            self.execution_metrics.device_copies += 1;
             self.device
                 .default_stream()
-                .memcpy_dtoh(out_device, &mut out_host)
+                .memcpy_dtoh(out_device.as_ref(), &mut storage_host)
                 .context("Failed to copy output from CUDA device to host")?;
         }
-        Ok(out_host)
+        let output_view = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.virtual_value(graph_output))
+            .context("Graph output has no virtual value")?;
+        let source_shape = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.value_shape(output_view.source))
+            .context("Virtual output source is absent from the execution plan")?;
+        materialize_host_view(storage_host, output_view, source_shape)
     }
 
-    /// Compile and execute a TensorGraph in one call
+    /// Compile and execute, reusing the module for the same graph structure.
     pub fn compile_and_execute<G>(
         &mut self,
         graph: &TensorGraph<D::HostType, G>,
         inputs: HashMap<String, Vec<D::HostType>>,
     ) -> Result<Vec<D::HostType>> {
-        let signature = graph_compilation_signature(graph);
-        let needs_compilation = self.module.is_none()
-            || self.ptx_graph.is_none()
-            || self.compilation_signature.as_deref() != Some(signature.as_slice());
-        if needs_compilation {
-            let tile_graph = TileGraph::from_graph(graph);
-            self.compile_tile_graph(signature.clone(), tile_graph)?;
+        let signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+        );
+        if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
+            self.compile(graph)?;
         }
-        self.execute_compiled_with_signature(graph, inputs, &signature)
+        self.execute_compiled(graph, inputs)
     }
 }
 
@@ -1062,6 +1700,54 @@ fn validate_batch_broadcast(input_shape: &[usize], output_batch_shape: &[usize])
         );
     }
     Ok(())
+}
+
+fn materialize_host_view<T: Copy>(
+    storage: Vec<T>,
+    view: &VirtualTensor,
+    source_shape: &[usize],
+) -> Result<Vec<T>> {
+    anyhow::ensure!(
+        view.predicate.is_none(),
+        "Predicated virtual outputs are not yet supported at the host boundary"
+    );
+    if view.shape == source_shape && view.access == IndexMap::identity(view.shape.len()) {
+        return Ok(storage);
+    }
+    let output_len = checked_element_count(&view.shape, "Virtual output")?;
+    let mut output = Vec::with_capacity(output_len);
+    for linear_output in 0..output_len {
+        let mut remainder = linear_output;
+        let mut output_index = vec![0; view.shape.len()];
+        for dimension in (0..view.shape.len()).rev() {
+            let extent = view.shape[dimension];
+            anyhow::ensure!(extent > 0, "non-empty virtual output has a zero extent");
+            output_index[dimension] = remainder % extent;
+            remainder /= extent;
+        }
+        let source_index = view.source_index(&output_index)?;
+        anyhow::ensure!(
+            source_index.len() == source_shape.len(),
+            "Virtual output source rank does not match its storage shape"
+        );
+        let mut linear_source = 0usize;
+        for (&coordinate, &extent) in source_index.iter().zip(source_shape) {
+            anyhow::ensure!(
+                coordinate < extent,
+                "Virtual output source coordinate {coordinate} exceeds extent {extent}"
+            );
+            linear_source = linear_source
+                .checked_mul(extent)
+                .and_then(|offset| offset.checked_add(coordinate))
+                .context("Virtual output source index overflowed usize")?;
+        }
+        output.push(
+            *storage
+                .get(linear_source)
+                .context("Virtual output source index exceeds its storage buffer")?,
+        );
+    }
+    Ok(output)
 }
 
 fn checked_element_count(shape: &[usize], description: &str) -> Result<usize> {
@@ -1088,9 +1774,31 @@ fn signature_str(signature: &mut Vec<u8>, value: &str) {
     signature.extend_from_slice(value.as_bytes());
 }
 
-fn graph_compilation_signature<D, G>(graph: &TensorGraph<D, G>) -> Vec<u8> {
+fn graph_compilation_signature<D: crate::tile::TileDType, G>(
+    graph: &TensorGraph<D, G>,
+    reduction_mode: PtxReductionMode,
+    target: PtxTarget,
+    matmul_precision: crate::tile::MatMulPrecision,
+) -> Vec<u8> {
     let mut signature = Vec::new();
-    signature.extend_from_slice(b"tnsr-ptx-graph-v1");
+    signature.extend_from_slice(PTX_GRAPH_SIGNATURE_MAGIC);
+    signature.push(PTX_GRAPH_SIGNATURE_VERSION);
+    signature.push(match D::TILE_DTYPE {
+        crate::tile::DType::F32 => 0,
+        crate::tile::DType::F16 => 1,
+        crate::tile::DType::BF16 => 2,
+        _ => unreachable!("unsupported host storage dtype"),
+    });
+    signature.push(match reduction_mode {
+        PtxReductionMode::Strict => 0,
+        PtxReductionMode::DeterministicTree => 1,
+    });
+    signature.push(match matmul_precision {
+        crate::tile::MatMulPrecision::StrictF32 => 0,
+        crate::tile::MatMulPrecision::AllowTf32 => 1,
+    });
+    signature.extend_from_slice(&target.compute_capability.0.to_le_bytes());
+    signature.extend_from_slice(&target.compute_capability.1.to_le_bytes());
     signature_usize(&mut signature, graph.graph.node_count());
     for node_index in graph.graph.node_indices() {
         let node = &graph.graph[node_index];
@@ -1254,7 +1962,19 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
     where
         TensorGraph<D::HostType, G>: Clone,
     {
-        self.compile_and_execute(graph, inputs)
+        let signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+        );
+        let needs_compilation = self.module.is_none()
+            || self.ptx_graph.is_none()
+            || self.compilation_signature.as_deref() != Some(signature.as_slice());
+        if needs_compilation {
+            self.compile_owned(graph.clone())?;
+        }
+        self.execute_compiled(graph, inputs)
     }
 
     fn get_gradients(

@@ -99,7 +99,7 @@ impl<D: DType> Input<D> {
 }
 
 /// Element-wise unary operations on tensors.
-#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
     /// Negation: `-x`
     Neg,
@@ -112,7 +112,7 @@ pub enum UnaryOp {
 }
 
 /// Element-wise binary operations on tensors.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryOp {
     /// Addition: `a + b`
     Add,
@@ -125,7 +125,7 @@ pub enum BinaryOp {
 }
 
 /// Reduction operations along a tensor axis.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum ReduceOp {
     /// Sum all elements along an axis
     Sum,
@@ -133,6 +133,16 @@ pub enum ReduceOp {
     Max,
     /// Mean (average) of elements along an axis
     Mean,
+}
+
+impl ReduceOp {
+    /// Identity value used to initialize an f32 reduction accumulator.
+    pub const fn identity_f32(self) -> f32 {
+        match self {
+            Self::Sum | Self::Mean => 0.0,
+            Self::Max => f32::NEG_INFINITY,
+        }
+    }
 }
 
 /// A trainable parameter with mutable data updated during optimization.
@@ -1243,7 +1253,7 @@ impl<D: DType> TensorExpr<D> {
                         lower_rec(&b.clone().broadcast(expr.shape().clone()), g, memo)
                     };
                     let node_idx = g.graph.add_node(TensorGraphNode::Binary {
-                        op: op.clone(),
+                        op: *op,
                         shape: expr.shape().clone(),
                     });
                     g.graph.add_edge(a_idx, node_idx, 0);
@@ -1323,7 +1333,7 @@ impl<D: DType> TensorExpr<D> {
                 ExprKind::ReduceAxis { op, x, axis } => {
                     let x_idx = lower_rec(x, g, memo);
                     let node_idx = g.graph.add_node(TensorGraphNode::ReduceAxis {
-                        op: op.clone(),
+                        op: *op,
                         axis: *axis,
                         shape: expr.shape().clone(),
                     });

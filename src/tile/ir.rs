@@ -42,6 +42,17 @@ pub enum Stmt {
     LoadGlobalToSharedPredicated {
         dest: TileVar,
         src_param: String,
+        element_index: Expr,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
+    },
+
+    /// Load one logical matrix element into a scalar register, or zero outside bounds.
+    LoadGlobalPredicated {
+        dest: TileVar,
+        src_param: String,
+        element_index: Expr,
         row: Expr,
         col: Expr,
         layout: MatrixLayout,
@@ -59,6 +70,7 @@ pub enum Stmt {
     StoreGlobalPredicated {
         dest_param: String,
         src: TileVar,
+        element_index: Expr,
         row: Expr,
         col: Expr,
         layout: MatrixLayout,
@@ -82,7 +94,13 @@ pub enum Stmt {
         a: TileVar,
         b: TileVar,
         layout: MatMulLayout, // NN, NT, TN, TT
-        plan: MatMulPlan,
+        schedule: super::MatMulSchedule,
+    },
+
+    /// Expose the calling thread's scalar from a register or fragment tile.
+    LoadTileElement {
+        dest: TileVar,
+        src: TileVar,
     },
 
     /// Gather rows from a contiguous [vocabulary, width] table.
@@ -195,6 +213,10 @@ pub enum Stmt {
         output_shape: Vec<usize>,
     },
 
+    ReductionRegion {
+        region: Box<super::ReductionRegion>,
+    },
+
     /// Greater than comparison
     Gt {
         dest: TileVar,
@@ -271,12 +293,19 @@ pub enum MemorySpace {
 pub enum MatMulPlan {
     ScalarF32,
     TensorCoreTf32,
+    TensorCoreF16,
+    TensorCoreBF16,
 }
 
 impl MatMulPlan {
     pub fn for_shape(m: usize, n: usize, k: usize) -> Self {
+        Self::for_shape_with_tf32(m, n, k, true)
+    }
+
+    pub fn for_shape_with_tf32(m: usize, n: usize, k: usize, supports_tf32: bool) -> Self {
         const MIN_TENSOR_CORE_WORK: usize = 32 * 32 * 32;
-        if m >= 16
+        if supports_tf32
+            && m >= 16
             && n >= 16
             && k >= 8
             && m.saturating_mul(n).saturating_mul(k) >= MIN_TENSOR_CORE_WORK
@@ -288,7 +317,7 @@ impl MatMulPlan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
     F16,
     BF16,
@@ -356,6 +385,17 @@ pub enum Expr {
     ThreadIdx(Dim),
     Mul(Box<Expr>, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr>, Box<Expr>),
+    FloorDiv(Box<Expr>, usize),
+    Mod(Box<Expr>, usize),
+}
+
+impl std::ops::Add for Expr {
+    type Output = Expr;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Expr::Add(Box::new(self), Box::new(rhs))
+    }
 }
 
 impl std::ops::Mul<usize> for Expr {

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use tnsr::graph::TensorGraph;
 use tnsr::nn::{TransformerBlock, layer_norm, softmax};
-use tnsr::ptx::PtxExecutor;
+use tnsr::ptx::{PtxExecutor, PtxReductionMode};
 use tnsr::tensor::{Parameter, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
 
@@ -22,6 +22,116 @@ fn ptx_executor() -> Option<PtxExecutor> {
         }
         Err(error) => panic!("PtxExecutor initialization failed: {error:#}"),
     }
+}
+
+fn cooperative_ptx_executor() -> Option<PtxExecutor> {
+    match PtxExecutor::try_new_with_reduction_mode(PtxReductionMode::DeterministicTree) {
+        Ok(executor) => Some(executor),
+        Err(error)
+            if std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1")
+                && error
+                    .to_string()
+                    .starts_with("Failed to initialize CUDA device 0") =>
+        {
+            eprintln!("skipping CUDA test: {error:#}");
+            None
+        }
+        Err(error) => panic!("PtxExecutor initialization failed: {error:#}"),
+    }
+}
+
+#[test]
+fn ptx_cooperative_block_reduction_matches_cpu() {
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    let values: Vec<_> = (0..2 * 1024)
+        .map(|index| (index as f32 * 0.001).sin())
+        .collect();
+    let input = TensorExpr::constant(values, vec![2, 1024]);
+    let graph: TensorGraph<f32> = input.exp().reduce_sum(1).into();
+    let expected = execute_cpu(&graph);
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert_eq!(
+        ptx.execution_plan().unwrap().reduction_regions()[0].schedule,
+        tnsr::tile::ReductionSchedule::Block { threads: 128 }
+    );
+    let source = ptx.module_source().unwrap();
+    assert!(source.contains("reduction_partials[512]"));
+    assert!(!source.contains("shfl.sync"));
+    assert!(
+        ptx.describe_plan(&graph)
+            .unwrap()
+            .contains("schedule=Block { threads: 128 }")
+    );
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_close(&actual, &expected, 1e-3);
+}
+
+#[test]
+fn ptx_cooperative_reductions_cover_schedule_boundaries_and_middle_axes() {
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    for width in [32, 33, 127, 256] {
+        let values: Vec<_> = (0..2 * width * 3)
+            .map(|index| ((index % 29) as f32 - 14.0) * 0.125)
+            .collect();
+        let input = || TensorExpr::constant(values.clone(), vec![2, width, 3]);
+        let zero = || TensorExpr::constant(vec![0.0; 2 * width * 3], vec![2, width, 3]);
+        let graphs: [TensorGraph<f32>; 3] = [
+            (input() + zero()).reduce_sum(1).into(),
+            (input() + zero()).reduce_mean(1).into(),
+            (input() + zero()).reduce_max(1).into(),
+        ];
+
+        for graph in graphs {
+            let expected = execute_cpu(&graph);
+            ptx.compile_owned(graph.clone()).unwrap();
+            let expected_schedule = if width < 256 {
+                tnsr::tile::ReductionSchedule::Subgroup { width: 32 }
+            } else {
+                tnsr::tile::ReductionSchedule::Block { threads: 128 }
+            };
+            assert_eq!(
+                ptx.execution_plan().unwrap().reduction_regions()[0].schedule,
+                expected_schedule
+            );
+            let source = ptx.module_source().unwrap();
+            assert_eq!(
+                source.matches("shfl.sync.down.b32").count(),
+                if width < 256 { 5 } else { 0 }
+            );
+            let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+            assert_close(&actual, &expected, 1e-5);
+        }
+    }
+}
+
+#[test]
+fn ptx_cooperative_block_fuses_large_softmax_epilogue() {
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    let values: Vec<_> = (0..2 * 1024)
+        .map(|index| ((index % 97) as f32 - 48.0) * 0.03125)
+        .collect();
+    let graph: TensorGraph<f32> = softmax(TensorExpr::constant(values, vec![2, 1024]), 1).into();
+    let expected = execute_cpu(&graph);
+
+    ptx.compile_owned(graph.clone()).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert_eq!(plan.reduction_regions().len(), 1);
+    let region = &plan.reduction_regions()[0];
+    assert_eq!(
+        region.schedule,
+        tnsr::tile::ReductionSchedule::Block { threads: 128 }
+    );
+    assert!(!region.full_epilogue_operations.is_empty());
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    assert_close(&actual, &expected, 2e-5);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 3);
 }
 
 fn execute_cpu(graph: &TensorGraph<f32>) -> Vec<f32> {
@@ -902,6 +1012,51 @@ fn ptx_tf32_matmul_matches_cpu() {
         let expected = execute_cpu(&graph);
         let actual = ptx.execute(&graph, HashMap::new()).unwrap();
         assert_close(&actual, &expected, 2e-3);
+    }
+}
+
+#[test]
+fn ptx_fuses_rank_two_matmul_epilogues_for_scalar_and_tf32_plans() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    for (m, k, n, tolerance, expect_tf32) in [(15, 17, 16, 2e-4, false), (32, 32, 32, 2e-3, true)] {
+        let left = TensorExpr::constant(
+            (0..m * k)
+                .map(|index| (index % 29) as f32 / 29.0 - 0.5)
+                .collect(),
+            vec![m, k],
+        );
+        let right = TensorExpr::constant(
+            (0..k * n)
+                .map(|index| (index % 31) as f32 / 31.0 - 0.5)
+                .collect(),
+            vec![k, n],
+        );
+        let bias = TensorExpr::constant(
+            (0..n)
+                .map(|index| (index % 7) as f32 * 0.01 - 0.02)
+                .collect(),
+            vec![n],
+        );
+        let graph: TensorGraph<f32> = (left.matmul(right) + bias).relu().into();
+        let expected = execute_cpu(&graph);
+
+        ptx.compile_owned(graph.clone()).unwrap();
+        let plan = ptx.execution_plan().unwrap();
+        assert_eq!(plan.matmul_regions().len(), 1);
+        assert_eq!(plan.matmul_regions()[0].epilogue_operations.len(), 2);
+        assert_eq!(ptx.compile_metrics().generated_kernels, 1);
+        assert_eq!(
+            ptx.module_source().unwrap().contains("wmma.mma.sync"),
+            expect_tf32
+        );
+
+        let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+        assert_close(&actual, &expected, tolerance);
+        assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+        assert_eq!(ptx.execution_metrics().materialized_values, 4);
+        assert_eq!(ptx.execution_metrics().intermediate_materialized_bytes, 0);
     }
 }
 

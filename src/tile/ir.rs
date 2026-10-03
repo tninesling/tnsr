@@ -47,6 +47,16 @@ pub enum Stmt {
         layout: MatrixLayout,
     },
 
+    /// Load one logical matrix element into a scalar register, or zero outside bounds.
+    LoadGlobalPredicated {
+        dest: TileVar,
+        src_param: String,
+        element_index: Expr,
+        row: Expr,
+        col: Expr,
+        layout: MatrixLayout,
+    },
+
     /// Store from register/shared to global
     Store {
         dest_param: String, // Parameter name
@@ -83,6 +93,12 @@ pub enum Stmt {
         b: TileVar,
         layout: MatMulLayout, // NN, NT, TN, TT
         plan: MatMulPlan,
+    },
+
+    /// Expose the calling thread's scalar from a register or fragment tile.
+    LoadTileElement {
+        dest: TileVar,
+        src: TileVar,
     },
 
     /// Gather rows from a contiguous [vocabulary, width] table.
@@ -279,8 +295,13 @@ pub enum MatMulPlan {
 
 impl MatMulPlan {
     pub fn for_shape(m: usize, n: usize, k: usize) -> Self {
+        Self::for_shape_with_tf32(m, n, k, true)
+    }
+
+    pub fn for_shape_with_tf32(m: usize, n: usize, k: usize, supports_tf32: bool) -> Self {
         const MIN_TENSOR_CORE_WORK: usize = 32 * 32 * 32;
-        if m >= 16
+        if supports_tf32
+            && m >= 16
             && n >= 16
             && k >= 8
             && m.saturating_mul(n).saturating_mul(k) >= MIN_TENSOR_CORE_WORK

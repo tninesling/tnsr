@@ -4,7 +4,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
 use tnsr::nn::{layer_norm, softmax};
-use tnsr::ptx::PtxExecutor;
+use tnsr::ptx::{PtxExecutor, PtxReductionMode};
 use tnsr::tensor::{Parameter, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
 
@@ -21,6 +21,25 @@ fn reduction_chain() -> TensorGraph<f32> {
         .exp()
         .reduce_sum(1)
         .log()
+        .into()
+}
+
+fn subgroup_reduction_chain() -> TensorGraph<f32> {
+    let input = Parameter::new(vec![0.25; 2048 * 128], vec![2048, 128]);
+    TensorExpr::from(input)
+        .relu()
+        .exp()
+        .reduce_sum(1)
+        .log()
+        .into()
+}
+
+fn matmul_epilogue() -> TensorGraph<f32> {
+    let input = Parameter::new(vec![0.25; 128 * 128], vec![128, 128]);
+    let weight = Parameter::new(vec![0.5; 128 * 128], vec![128, 128]);
+    let bias = Parameter::new(vec![0.1; 128], vec![128]);
+    (TensorExpr::from(input).matmul(TensorExpr::from(weight)) + TensorExpr::from(bias))
+        .relu()
         .into()
 }
 
@@ -58,6 +77,8 @@ fn fusion_benchmarks(c: &mut Criterion) {
     for (name, graph) in [
         ("pointwise_diamond", pointwise_diamond()),
         ("reduction_chain", reduction_chain()),
+        ("subgroup_reduction_chain", subgroup_reduction_chain()),
+        ("matmul_epilogue", matmul_epilogue()),
         ("bias_broadcast_region", bias_broadcast_region()),
         ("permutation_region", permutation_region()),
         ("softmax_reduction_region", softmax_reduction_region()),
@@ -78,6 +99,28 @@ fn fusion_benchmarks(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("tile_ptx", name), |benchmark| {
             benchmark.iter(|| ptx.execute_compiled(&graph, HashMap::new()).unwrap())
         });
+
+        if matches!(
+            name,
+            "reduction_chain"
+                | "subgroup_reduction_chain"
+                | "softmax_reduction_region"
+                | "layer_norm_reduction_region"
+        ) {
+            let mut cooperative =
+                PtxExecutor::new_with_reduction_mode(PtxReductionMode::DeterministicTree);
+            cooperative.compile_owned(graph.clone()).unwrap();
+            group.bench_function(
+                BenchmarkId::new("tile_ptx_cooperative", name),
+                |benchmark| {
+                    benchmark.iter(|| {
+                        cooperative
+                            .execute_compiled(&graph, HashMap::new())
+                            .unwrap()
+                    })
+                },
+            );
+        }
     }
     group.finish();
 }

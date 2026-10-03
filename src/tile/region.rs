@@ -265,7 +265,11 @@ impl FusionRegion {
     }
 }
 
-fn input_element_index(input: &RegionInput, output_shape: &[usize], linear: &Expr) -> Result<Expr> {
+pub(crate) fn input_element_index(
+    input: &RegionInput,
+    output_shape: &[usize],
+    linear: &Expr,
+) -> Result<Expr> {
     anyhow::ensure!(
         input.tensor.predicate.is_none(),
         "predicated region inputs are not yet supported"

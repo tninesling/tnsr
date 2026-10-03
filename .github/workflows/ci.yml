@@ -20,8 +20,12 @@ jobs:
         include:
           - arch: x86_64
             os: ubuntu-latest
+            rustflags: -C target-cpu=x86-64-v2
           - arch: aarch64
             os: macos-latest
+            rustflags: ""
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +49,8 @@ jobs:
   lint:
     name: Lint and Format
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C target-cpu=x86-64-v2
     steps:
       - uses: actions/checkout@v4
 

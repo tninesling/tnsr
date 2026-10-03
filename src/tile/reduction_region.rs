@@ -16,6 +16,17 @@ pub enum ReductionInputDomain {
     Reduced,
 }
 
+/// Physical execution strategy for a fused reduction region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReductionSchedule {
+    /// One backend thread visits the reduction axis in index order.
+    Serial,
+    /// One hardware subgroup cooperatively reduces each output fiber.
+    Subgroup { width: u32 },
+    /// One thread block cooperatively reduces each output fiber.
+    Block { threads: u32 },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReductionInput {
     pub node: NodeIndex,
@@ -42,6 +53,7 @@ pub struct ReductionRegion {
     pub output_shape: Shape,
     pub axis: usize,
     pub op: ReduceOp,
+    pub schedule: ReductionSchedule,
 }
 
 impl ReductionRegion {
@@ -267,6 +279,7 @@ impl ReductionRegion {
             output_shape,
             axis,
             op,
+            schedule: ReductionSchedule::Serial,
         })
     }
 
@@ -288,12 +301,23 @@ impl ReductionRegion {
         for index in 0..self.outputs.len() {
             builder.add_param(&format!("output_{index}"), DType::F32, false);
         }
-        builder.bounds_check(extent);
+        if self.schedule == ReductionSchedule::Serial {
+            builder.bounds_check(extent);
+        }
         builder.reduction_region(self.clone());
         Ok(builder.finish())
     }
 
     fn validate_lowering_inputs(&self) -> Result<()> {
+        if let ReductionSchedule::Subgroup { width } = self.schedule {
+            anyhow::ensure!(width > 0, "reduction subgroup width must be non-zero");
+        }
+        if let ReductionSchedule::Block { threads } = self.schedule {
+            anyhow::ensure!(
+                threads.is_power_of_two() && threads <= 1024,
+                "reduction block size must be a non-zero power of two at most 1024"
+            );
+        }
         anyhow::ensure!(
             self.outputs.len() == self.output_shapes.len(),
             "reduction output metadata length mismatch"

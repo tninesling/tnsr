@@ -471,6 +471,10 @@ pub enum Inst<'a> {
         dst: Operand<'a, B32>,
         src: Operand<'a, F32>,
     },
+    MovF32B32 {
+        dst: Operand<'a, F32>,
+        src: Operand<'a, B32>,
+    },
     LdGlobalF32 {
         dst: Vec<Operand<'a, F32>>,
         addr: Operand<'a, U64>,
@@ -513,6 +517,12 @@ pub enum Inst<'a> {
     SetpF32(SetpInst<'a, F32>),
     SelpF32(SelpInst<'a, F32>),
     SelpU64(SelpInst<'a, U64>),
+    ShflSyncDownB32 {
+        dst: Operand<'a, B32>,
+        predicate: Operand<'a, Pred>,
+        src: Operand<'a, B32>,
+        offset: u32,
+    },
 
     Bra {
         condition: Operand<'a, Pred>,
@@ -626,6 +636,10 @@ impl<'a> Inst<'a> {
 
     pub fn mov_b32(dst: Operand<'a, B32>, src: Operand<'a, F32>) -> Self {
         Inst::MovB32 { dst, src }
+    }
+
+    pub fn mov_f32_b32(dst: Operand<'a, F32>, src: Operand<'a, B32>) -> Self {
+        Inst::MovF32B32 { dst, src }
     }
 
     pub fn load_global_scalar_f32(dst: Operand<'a, F32>, addr: Operand<'a, U64>) -> Self {
@@ -788,6 +802,20 @@ impl<'a> Inst<'a> {
         pred: Operand<'a, Pred>,
     ) -> Self {
         Inst::SelpF32(SelpInst::new(dst, a, b, pred))
+    }
+
+    pub fn shfl_sync_down_b32(
+        dst: Operand<'a, B32>,
+        predicate: Operand<'a, Pred>,
+        src: Operand<'a, B32>,
+        offset: u32,
+    ) -> Self {
+        Inst::ShflSyncDownB32 {
+            dst,
+            predicate,
+            src,
+            offset,
+        }
     }
 
     pub fn selp_u64(

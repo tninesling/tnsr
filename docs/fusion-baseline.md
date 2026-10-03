@@ -148,3 +148,134 @@ The same run measured warm Tile PTX transformer forward at 379.59-383.06 us
 measured 2.2368-2.3078 ms, 2.6260-2.6708 ms, and 3.2633-3.3733 ms respectively.
 These are improvements over the pre-fusion warm baselines recorded in issue
 #36 and keep compilation within the previously observed range.
+
+## Stage 5c Cooperative Warp Reductions
+
+Stage 5c adds an opt-in `DeterministicTree` reduction policy while retaining
+strict serial accumulation as the default. Eligible axes of at least 32
+elements use one warp per output fiber. Every lane accumulates a strided subset,
+the 32 lane-local partials are combined through shared memory, and lane zero
+evaluates and stores the reduced epilogue. The schedule supports sum, mean, max,
+partial warps, and arbitrary reduction axes. Regions with fused full-shape
+epilogues currently remain serial.
+
+The execution policy and selected schedule are part of compilation identity,
+and schedule-specific launch geometry keeps all cooperative lanes active. The
+PTX model also includes predicate-aware warp shuffle instructions for a later
+tree-reduction refinement; the initial production path deliberately uses the
+shared-memory partial fold validated here.
+
+Measured on 2026-10-01 with the same RTX 4080. These are end-to-end Criterion
+95% confidence intervals:
+
+| Graph | Strict Tile PTX | Cooperative Tile PTX | Midpoint improvement |
+| --- | ---: | ---: | ---: |
+| Reduction chain | 248.23-249.12 us | 159.93-160.84 us | 35.6% |
+| Softmax, `[256, 1024]` | 791.33-802.47 us | 442.21-448.96 us | 43.9% |
+| LayerNorm, `[256, 1024]` | 833.30-837.48 us | 460.19-474.07 us | 43.8% |
+
+Cooperative softmax and LayerNorm now outperform the Stage 5b static-CUDA
+ranges. The next reduction work is to replace the lane-zero partial fold with a
+validated shuffle tree, support cooperative full-shape epilogues, and add a
+multi-warp block schedule for wider or lower-fiber-count reductions.
+
+## Stage 5d Block Reductions and Cooperative Full Epilogues
+
+Stage 5d adds a 128-thread block schedule for axes of at least 256 elements and
+for profitable broadcast-back epilogues. Threads accumulate strided local
+partials, then combine them through a deterministic power-of-two shared-memory
+tree. The final reduced value is broadcast through shared memory so the entire
+block can evaluate a full-shape epilogue in parallel.
+
+The planner fuses cooperative full epilogues containing at most two pointwise
+operations. More complex epilogues remain separate pointwise regions: this
+guard preserves LayerNorm parallelism while still fusing the simple final
+division in softmax. Schedule metadata uses backend-neutral subgroup widths;
+the PTX planner supplies CUDA's 32-lane subgroup and 128-thread block sizes.
+
+Measured on 2026-10-02 with the same RTX 4080:
+
+| Graph | Stage 5c cooperative | Stage 5d cooperative | Change |
+| --- | ---: | ---: | ---: |
+| Reduction chain | 159.93-160.84 us | 152.81-153.33 us | 5.0% faster |
+| Softmax, `[256, 1024]` | 442.21-448.96 us | 418.07-422.22 us | 5.1% faster |
+| LayerNorm, `[256, 1024]` | 460.19-474.07 us | 449.18-452.09 us | 4.0% faster at interval midpoints |
+
+The remaining reduction work is a validated warp-shuffle finalization path and
+target-aware tuning beyond the initial CUDA thresholds.
+
+## Stage 5e Warp-Shuffle Finalization
+
+Stage 5e replaces the subgroup schedule's lane-zero shared-memory fold with a
+five-stage CUDA warp shuffle tree. Predicate-aware shuffle results select the
+reduction identity for lanes beyond each stage's valid source range, preserving
+correct sum, mean, and max behavior for non-power-of-two extents. Shared memory
+is reduced from 32 partial values to one value used only to broadcast the final
+result before epilogue evaluation. The block schedule continues to use its
+128-thread shared-memory tree.
+
+The generated PTX is checked for the five offsets 1, 2, 4, 8, and 16, while
+CUDA correctness coverage exercises widths 32, 33, and 127 on a middle axis.
+The benchmark uses shape `[2048, 128]`, preserving the 262,144-element workload
+of the existing `[256, 1024]` reduction benchmark while selecting the subgroup
+schedule.
+
+Measured on 2026-10-02 with the same RTX 4080:
+
+| Path, `[2048, 128]` | Time |
+| --- | ---: |
+| Static CUDA | 213.98-214.36 us |
+| Strict Tile PTX | 200.27-200.81 us |
+| Cooperative Tile PTX | 156.96-157.64 us |
+
+The shuffle schedule is 21.6% faster than strict Tile PTX at interval
+midpoints and 26.6% faster than static CUDA. Remaining work is target-aware
+schedule tuning and broader reduction strategy selection rather than another
+missing CUDA reduction primitive.
+
+## Stage 6a Matmul Epilogue Fusion
+
+Stage 6a introduces a dedicated matmul anchor region for rank-2, nonzero-inner-
+dimension matrix multiplications. Same-shape pointwise descendants are evaluated
+inside the existing 16x16 scalar or TF32 matmul kernel, so the raw matmul result
+does not need a global intermediate or a separate pointwise launch. External
+epilogue inputs retain composed virtual indexing; the common vector-bias pattern
+therefore remains a virtual broadcast and is loaded directly by the matmul
+epilogue.
+
+The first slice deliberately excludes batched matmul, zero-K matmul, and
+pointwise producers on either matrix operand. Those cases keep their existing
+execution paths until batch pointer binding and predicated tiled producer
+evaluation are represented explicitly. Both scalar and tensor-core plans are
+covered, including partial 16x16 edge tiles.
+
+Measured on 2026-10-02 with the same RTX 4080. The graph is a `[128, 128]`
+matmul followed by a `[128]` vector bias and ReLU:
+
+| Backend | Time |
+| --- | ---: |
+| CPU | 503.92-577.63 us |
+| Static CUDA | 93.753-95.091 us |
+| Tile PTX, fused | 39.726-40.162 us |
+
+The fused Tile PTX path uses one physical kernel, materializes no raw matmul
+intermediate, and is 57.6% faster than static CUDA at interval midpoints. The
+next anchor work is batched epilogue binding, tiled operand-producer fusion, and
+the equivalent convolution epilogue model; target-aware matmul schedule metadata
+is the next tile-selection prerequisite.
+
+## Stage 6b Target-Aware TF32 Gating
+
+Stage 6b queries the CUDA compute capability once when the PTX executor is
+created and carries it through compilation. Tensor-core TF32 matmul is selected
+only for SM80-or-newer targets; older targets retain the scalar FP32 plan. The
+generated module header now names the actual target instead of always declaring
+SM80, and compute capability is part of the compilation signature so cached code
+cannot be reused across incompatible targets.
+
+Synthetic SM75 and SM80 codegen tests verify both the PTX header and the absence
+or presence of TF32 conversion and WMMA instructions. On the RTX 4080, the
+`[128, 128]` fused matmul epilogue remeasured at 40.270-40.624 us. Criterion
+classified the 1.6% midpoint movement from Stage 6a as within its noise
+threshold. This establishes safe target plumbing; multiple tile shapes and
+resource-aware schedule selection remain follow-on work.

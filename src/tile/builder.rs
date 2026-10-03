@@ -1,5 +1,6 @@
+use super::MatMulSchedule;
 use super::ir::{
-    Block, DType, Expr, KernelParam, MatMulLayout, MatrixLayout, MemorySpace, ReduceOp, Stmt,
+    Block, DType, Dim, Expr, KernelParam, MatMulLayout, MatrixLayout, MemorySpace, ReduceOp, Stmt,
     TileIR, TileLayout, TileVar,
 };
 
@@ -75,7 +76,7 @@ impl TileIRBuilder {
         dtype: DType,
         rows: usize,
         cols: usize,
-        schedule: super::MatMulSchedule,
+        schedule: MatMulSchedule,
     ) -> TileVar {
         let var = TileVar(self.next_var);
         self.next_var += 1;
@@ -102,7 +103,7 @@ impl TileIRBuilder {
         a: TileVar,
         b: TileVar,
         layout: MatMulLayout,
-        schedule: super::MatMulSchedule,
+        schedule: MatMulSchedule,
     ) {
         self.stmts.push(Stmt::MatMul {
             dest,
@@ -225,8 +226,8 @@ impl TileIRBuilder {
             element_index: row.clone() * layout.row_stride + col.clone(),
             row,
             col,
-            tile_row: Expr::ThreadIdx(super::Dim::Y),
-            tile_col: Expr::ThreadIdx(super::Dim::X),
+            tile_row: Expr::ThreadIdx(Dim::Y),
+            tile_col: Expr::ThreadIdx(Dim::X),
             layout,
         });
     }

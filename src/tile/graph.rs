@@ -1,16 +1,26 @@
+use anyhow::Result;
+#[cfg(feature = "cuda")]
+use anyhow::anyhow;
+
 use super::builder::TileIRBuilder;
 use super::ir::{
     Conv2dGeometry, DType, Dim, Expr, MatMulLayout, MatMulPlan, MatrixLayout, MaxPool2dGeometry,
     ReduceOp, TileDType, TileIR,
 };
+use super::matmul_schedule::{MatMulCapabilities, MatMulPrecision, MatMulSchedule};
 #[cfg(feature = "cuda")]
-use super::{FusionRegion, MatMulRegion, ReductionRegion};
+use super::region::input_coordinate_index;
+use super::region::input_element_index;
+#[cfg(feature = "cuda")]
+use super::{FusionRegion, ReductionRegion, RegionInput};
+use super::{MatMulRegion, RegionOpKind};
 use crate::graph::{TensorGraph, TensorGraphNode};
 use crate::tensor;
 use petgraph::{Graph, graph::NodeIndex};
 use std::collections::HashMap;
 #[cfg(feature = "cuda")]
 use std::collections::HashSet;
+use std::mem::swap;
 
 #[allow(dead_code)]
 pub struct TileGraph {
@@ -84,7 +94,7 @@ impl<D: TileDType, G> From<TensorGraph<D, G>> for TileGraph {
 
 impl TileGraph {
     /// Validate layouts and optimize indices in physical and diagnostic tile kernels.
-    pub fn optimize_indices(&mut self) -> anyhow::Result<()> {
+    pub fn optimize_indices(&mut self) -> Result<()> {
         for ir in self.graph.node_weights_mut() {
             ir.validate_layouts()?;
             ir.optimize_indices()?;
@@ -117,7 +127,7 @@ impl TileGraph {
     pub(crate) fn from_with_matmul_schedules<D: TileDType, G>(
         tensor_graph: &TensorGraph<D, G>,
         supports_tf32: bool,
-        schedules: &HashMap<NodeIndex, super::MatMulSchedule>,
+        schedules: &HashMap<NodeIndex, MatMulSchedule>,
     ) -> Self {
         // Pre-compute input shapes for MatMul, BroadcastAxis, ReduceAxis, and Transpose nodes
         let mut op_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
@@ -180,7 +190,7 @@ impl TileGraph {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn add_fusion_regions(&mut self, regions: &[FusionRegion]) -> anyhow::Result<()> {
+    pub(crate) fn add_fusion_regions(&mut self, regions: &[FusionRegion]) -> Result<()> {
         self.region_kernels = regions
             .iter()
             .enumerate()
@@ -190,15 +200,12 @@ impl TileGraph {
                     ir: region.lower_to_tile_ir(region_id)?,
                 })
             })
-            .collect::<anyhow::Result<_>>()?;
+            .collect::<Result<_>>()?;
         Ok(())
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn add_reduction_regions(
-        &mut self,
-        regions: &[ReductionRegion],
-    ) -> anyhow::Result<()> {
+    pub(crate) fn add_reduction_regions(&mut self, regions: &[ReductionRegion]) -> Result<()> {
         self.reduction_region_kernels = regions
             .iter()
             .enumerate()
@@ -208,12 +215,12 @@ impl TileGraph {
                     ir: region.lower_to_tile_ir(region_id)?,
                 })
             })
-            .collect::<anyhow::Result<_>>()?;
+            .collect::<Result<_>>()?;
         Ok(())
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn add_matmul_regions(&mut self, regions: &[MatMulRegion]) -> anyhow::Result<()> {
+    pub(crate) fn add_matmul_regions(&mut self, regions: &[MatMulRegion]) -> Result<()> {
         self.matmul_region_kernels = regions
             .iter()
             .enumerate()
@@ -223,7 +230,7 @@ impl TileGraph {
                     ir: Self::lower_matmul_region(region, region_id)?,
                 })
             })
-            .collect::<anyhow::Result<_>>()?;
+            .collect::<Result<_>>()?;
         Ok(())
     }
 
@@ -239,7 +246,7 @@ impl TileGraph {
         shape: &[usize],
         input_shapes: &[&[usize]],
         supports_tf32: bool,
-        schedule: Option<super::MatMulSchedule>,
+        schedule: Option<MatMulSchedule>,
     ) -> TileIR {
         match node {
             TensorGraphNode::Constant { data, .. } => Self::lower_constant(dtype, data, shape),
@@ -264,17 +271,17 @@ impl TileGraph {
                     n,
                     k,
                     schedule.unwrap_or_else(|| {
-                        super::MatMulSchedule::select_for_dtype(
+                        MatMulSchedule::select_for_dtype(
                             m,
                             n,
                             k,
                             dtype,
-                            super::MatMulCapabilities {
+                            MatMulCapabilities {
                                 tf32: supports_tf32,
                                 f16: supports_tf32,
                                 bf16: supports_tf32,
                             },
-                            super::MatMulPrecision::AllowTf32,
+                            MatMulPrecision::AllowTf32,
                         )
                     }),
                     None,
@@ -544,16 +551,13 @@ impl TileGraph {
 
     #[allow(dead_code)]
     #[cfg(feature = "cuda")]
-    fn lower_matmul_region(
-        region: &super::MatMulRegion,
-        region_id: usize,
-    ) -> anyhow::Result<TileIR> {
+    fn lower_matmul_region(region: &MatMulRegion, region_id: usize) -> Result<TileIR> {
         let operand = |value| {
             region
                 .inputs
                 .iter()
                 .find(|input| input.value == value)
-                .ok_or_else(|| anyhow::anyhow!("matmul operand binding is unavailable"))
+                .ok_or_else(|| anyhow!("matmul operand binding is unavailable"))
         };
         let staging = (
             stage_rows_contiguously(operand(region.lhs_value)?)?
@@ -567,7 +571,7 @@ impl TileGraph {
                 .inputs
                 .iter()
                 .find(|input| input.value == value)
-                .ok_or_else(|| anyhow::anyhow!("matmul operand binding is unavailable"))?;
+                .ok_or_else(|| anyhow!("matmul operand binding is unavailable"))?;
             let batch = &shape[..shape.len() - 2];
             let mut stride = 1;
             let mut coordinates = Vec::new();
@@ -585,7 +589,7 @@ impl TileGraph {
             }
             coordinates.reverse();
             coordinates.extend([row, col]);
-            super::region::input_coordinate_index(input, &coordinates)
+            input_coordinate_index(input, &coordinates)
         };
         let indices = (
             address(region.lhs_value, &region.lhs_shape, a_row, a_col)?,
@@ -606,8 +610,8 @@ impl TileGraph {
         m: usize,
         n: usize,
         k: usize,
-        schedule: super::MatMulSchedule,
-        region: Option<(&super::MatMulRegion, usize)>,
+        schedule: MatMulSchedule,
+        region: Option<(&MatMulRegion, usize)>,
         operand_indices: Option<(Expr, Expr)>,
         staging: (bool, bool),
     ) -> TileIR {
@@ -765,8 +769,6 @@ impl TileGraph {
             row_stride: n,
         };
         if let Some((region, _)) = region {
-            use super::RegionOpKind;
-
             let mut registers = HashMap::new();
             registers.insert(region.matmul_value, matmul_element);
             let linear_element = output_batch.clone()
@@ -792,12 +794,9 @@ impl TileGraph {
                     })
             }) {
                 let value = builder.alloc_register(DType::F32, 1, 1);
-                let element_index = super::region::input_element_index(
-                    input,
-                    &region.output_shape,
-                    &linear_element,
-                )
-                .expect("matmul epilogue input access is invalid");
+                let element_index =
+                    input_element_index(input, &region.output_shape, &linear_element)
+                        .expect("matmul epilogue input access is invalid");
                 builder.load_global_predicated(
                     value,
                     &format!("input_{index}"),
@@ -1189,23 +1188,23 @@ impl TileGraph {
 }
 
 fn staging_coordinates(transposed: bool) -> (Expr, Expr) {
+    let mut coordinates = (Expr::ThreadIdx(Dim::Y), Expr::ThreadIdx(Dim::X));
     if transposed {
-        (Expr::ThreadIdx(Dim::X), Expr::ThreadIdx(Dim::Y))
-    } else {
-        (Expr::ThreadIdx(Dim::Y), Expr::ThreadIdx(Dim::X))
+        swap(&mut coordinates.0, &mut coordinates.1);
     }
+    coordinates
 }
 
 // Choose which matrix coordinate varies across adjacent staging threads. This
 // changes only the traversal of a square tile, not its contents or MMA layout.
 // Unit steps also handle a transpose composed with reshape/permutation maps.
 #[cfg(feature = "cuda")]
-fn stage_rows_contiguously(input: &super::RegionInput) -> anyhow::Result<bool> {
+fn stage_rows_contiguously(input: &RegionInput) -> Result<bool> {
     let rank = input.tensor.shape.len();
     if rank < 2 || input.tensor.shape[rank - 2] < 2 || input.tensor.shape[rank - 1] < 2 {
         return Ok(false);
     }
-    let offset = |iteration: &[usize]| -> anyhow::Result<usize> {
+    let offset = |iteration: &[usize]| -> Result<usize> {
         input
             .tensor
             .source_index(iteration)?
@@ -1215,7 +1214,7 @@ fn stage_rows_contiguously(input: &super::RegionInput) -> anyhow::Result<bool> {
                 offset
                     .checked_mul(extent)
                     .and_then(|offset| offset.checked_add(coordinate))
-                    .ok_or_else(|| anyhow::anyhow!("operand storage offset overflows usize"))
+                    .ok_or_else(|| anyhow!("operand storage offset overflows usize"))
             })
     };
     let mut coordinate = vec![0; rank];
@@ -1229,7 +1228,7 @@ fn stage_rows_contiguously(input: &super::RegionInput) -> anyhow::Result<bool> {
 }
 
 fn matmul_operand_coordinates(
-    schedule: super::MatMulSchedule,
+    schedule: MatMulSchedule,
     staging: (bool, bool),
 ) -> ((Expr, Expr), (Expr, Expr)) {
     let (a_local_row, a_local_col) = staging_coordinates(staging.0);

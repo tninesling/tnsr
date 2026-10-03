@@ -4,7 +4,7 @@ use super::instructions::{Inst, Operand};
 use super::target::PtxTarget;
 use super::types::{B32, F32, I32, U64};
 use super::{Function, Module};
-use crate::tile::{Expr, TileGraph, TileIR, TileVar};
+use crate::tile::{Dim, Expr, MemorySpace, Stmt, TileGraph, TileIR, TileLayout, TileVar};
 use petgraph::{Graph, graph::NodeIndex};
 
 pub struct PtxGraph {
@@ -227,7 +227,7 @@ struct LoweringContext<'a> {
     /// Maps TileVar to its dimensions (rows, cols)
     tile_dims: HashMap<TileVar, (usize, usize)>,
     tile_dtypes: HashMap<TileVar, crate::tile::DType>,
-    tile_layouts: HashMap<TileVar, crate::tile::TileLayout>,
+    tile_layouts: HashMap<TileVar, TileLayout>,
     fragment_regs: HashMap<TileVar, Vec<Operand<'a, F32>>>,
     /// Maps register tile vars to their shared memory source (for LoadSharedToReg)
     reg_to_shared: HashMap<TileVar, TileVar>,
@@ -399,13 +399,7 @@ fn lower_block<'a>(
     ctx.index_vars = outer_bindings;
 }
 
-fn lower_stmt<'a>(
-    func: &mut Function<'a>,
-    ctx: &mut LoweringContext<'a>,
-    stmt: &crate::tile::Stmt,
-) {
-    use crate::tile::Stmt;
-
+fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: &Stmt) {
     match stmt {
         Stmt::LetIndex { name, value } => {
             let value = lower_expr(func, ctx, value);
@@ -437,7 +431,6 @@ fn lower_stmt<'a>(
             ctx.tile_dims.insert(*var, (*rows, *cols));
             ctx.tile_dtypes.insert(*var, *dtype);
 
-            use crate::tile::MemorySpace;
             match space {
                 MemorySpace::Register => {
                     // Allocate register for this tile variable
@@ -1004,7 +997,6 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::Label(loop_end));
         }
         Stmt::ConvertLayout { dest, src } => {
-            use crate::tile::TileLayout;
             match (ctx.tile_layouts[src], ctx.tile_layouts[dest]) {
                 (
                     TileLayout::WarpAccumulator {
@@ -3324,7 +3316,7 @@ fn lower_tensor_core_matmul<'a>(
 
 fn shared_row_stride(ctx: &LoweringContext<'_>, tile: TileVar) -> usize {
     match ctx.tile_layouts[&tile] {
-        crate::tile::TileLayout::SharedRowMajor { row_stride } => row_stride,
+        TileLayout::SharedRowMajor { row_stride } => row_stride,
         _ => unreachable!("expected validated shared-memory tile layout"),
     }
 }
@@ -3396,8 +3388,8 @@ fn shared_thread_address<'a>(
         func,
         ctx,
         tile,
-        &crate::tile::Expr::ThreadIdx(crate::tile::Dim::Y),
-        &crate::tile::Expr::ThreadIdx(crate::tile::Dim::X),
+        &Expr::ThreadIdx(Dim::Y),
+        &Expr::ThreadIdx(Dim::X),
     )
 }
 
@@ -3405,8 +3397,8 @@ fn shared_coordinate_address<'a>(
     func: &mut Function<'a>,
     ctx: &LoweringContext<'a>,
     tile: TileVar,
-    row: &crate::tile::Expr,
-    column: &crate::tile::Expr,
+    row: &Expr,
+    column: &Expr,
 ) -> Operand<'a, U64> {
     let row = lower_expr(func, ctx, row);
     let column = lower_expr(func, ctx, column);
@@ -3682,7 +3674,6 @@ fn lower_expr<'a>(
             }
         }
         Expr::BlockIdx(dim) => {
-            use crate::tile::Dim;
             let block_idx = match dim {
                 Dim::X => super::instructions::BLOCK_ID.x.clone(),
                 Dim::Y => super::instructions::BLOCK_ID.y.clone(),
@@ -3694,7 +3685,6 @@ fn lower_expr<'a>(
             result
         }
         Expr::ThreadIdx(dim) => {
-            use crate::tile::Dim;
             let thread_idx = match dim {
                 Dim::X => super::instructions::THREAD_ID.x.clone(),
                 Dim::Y => super::instructions::THREAD_ID.y.clone(),
@@ -3706,7 +3696,6 @@ fn lower_expr<'a>(
             result
         }
         Expr::BlockDim(dim) => {
-            use crate::tile::Dim;
             let block_dim = match dim {
                 Dim::X => super::instructions::BLOCK_DIM.x.clone(),
                 Dim::Y => super::instructions::BLOCK_DIM.y.clone(),
@@ -4053,7 +4042,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4061,7 +4050,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4069,7 +4058,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4109,7 +4098,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4117,7 +4106,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4125,7 +4114,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4133,7 +4122,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(3),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4141,7 +4130,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(4),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4149,7 +4138,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(5),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4157,7 +4146,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(6),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4216,7 +4205,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4224,7 +4213,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4255,7 +4244,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4263,7 +4252,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4271,7 +4260,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4308,7 +4297,7 @@ mod tests {
                 stmts: vec![Stmt::AllocTile {
                     var: TileVar(0),
                     space: MemorySpace::Shared,
-                    layout: crate::tile::TileLayout::SharedRowMajor { row_stride: 16 },
+                    layout: TileLayout::SharedRowMajor { row_stride: 16 },
                     dtype: DType::F32,
                     rows: 16,
                     cols: 16,
@@ -4358,7 +4347,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4366,7 +4355,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4374,7 +4363,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4423,7 +4412,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4484,7 +4473,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0), // x_val
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4492,7 +4481,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1), // a_val
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4500,7 +4489,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2), // b_val
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4508,7 +4497,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(3), // temp = a * x
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4516,7 +4505,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(4), // temp2 = temp + b
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4524,7 +4513,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(5), // result = relu(temp2)
                         space: MemorySpace::Register,
-                        layout: crate::tile::TileLayout::ThreadScalar,
+                        layout: TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,

@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::{BinaryOp, Shape, UnaryOp};
 
+use super::index_egraph::normalize_map_in_domain;
 use super::{DType, Dim, Expr, IndexExpr, IndexMap, TileIR, TileIRBuilder, TileVar, VirtualTensor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -332,10 +333,7 @@ pub(crate) fn input_coordinate_index(input: &RegionInput, iterations: &[Expr]) -
         .iter()
         .zip(source_strides)
         .try_fold(Expr::Const(0), |offset, (coordinate, stride)| {
-            let coordinate = super::index_egraph::normalize_map_in_domain(
-                coordinate.clone(),
-                &input.tensor.shape,
-            )?;
+            let coordinate = normalize_map_in_domain(coordinate.clone(), &input.tensor.shape)?;
             Ok(Expr::Add(
                 Box::new(offset),
                 Box::new(Expr::Mul(

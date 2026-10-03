@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 
-use super::{Block, DType, MatMulPlan, MemorySpace, Stmt, TileIR, TileLayout, TileVar};
+use super::{
+    Block, DType, MatMulLayout, MatMulPlan, MemorySpace, Stmt, TileIR, TileLayout, TileVar,
+};
 
 #[derive(Clone, Copy)]
 struct Tile {
@@ -89,7 +91,7 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                 schedule,
             } => {
                 anyhow::ensure!(
-                    matches!(layout, super::MatMulLayout::NN),
+                    matches!(layout, MatMulLayout::NN),
                     "matmul transposes must be expressed by logical access maps"
                 );
                 for (var, rows, cols) in [

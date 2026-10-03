@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use num_traits::{NumCast, ToPrimitive};
 use tnsr::graph::TensorGraph;
-use tnsr::ptx::{PtxExecutor, types::CudaDType};
+use tnsr::ptx::{
+    PtxExecutor,
+    types::{BF16, CudaDType, F16, F32},
+};
 use tnsr::tensor::TensorExpr;
 use tnsr::tile::MatMulPrecision;
 use tnsr::{Executor, SimpleExecutor};
@@ -95,15 +98,15 @@ fn check_views<D: CudaDType>(epsilon: f32) {
 
 #[test]
 fn f32_matmul_layout_views() {
-    check_views::<tnsr::ptx::types::F32>(1e-6);
+    check_views::<F32>(1e-6);
 }
 
 #[test]
 fn f16_matmul_layout_views() {
-    check_views::<tnsr::ptx::types::F16>(0.001);
+    check_views::<F16>(0.001);
 }
 
 #[test]
 fn bf16_matmul_layout_views() {
-    check_views::<tnsr::ptx::types::BF16>(0.008);
+    check_views::<BF16>(0.008);
 }

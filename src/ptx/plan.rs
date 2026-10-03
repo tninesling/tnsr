@@ -962,11 +962,7 @@ fn virtual_view_paths<D: crate::tile::TileDType, G>(
                         .get(&consumer)
                         .is_some_and(|&region_id| {
                             let region = &matmul_regions[region_id];
-                            region.inputs.iter().any(|input| {
-                                input.node == node_index
-                                    && input.value != region.lhs_value
-                                    && input.value != region.rhs_value
-                            })
+                            region.inputs.iter().any(|input| input.node == node_index)
                         })
                     || trailing.get(&consumer) == Some(&true)
             });

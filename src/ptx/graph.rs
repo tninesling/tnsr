@@ -227,6 +227,7 @@ struct LoweringContext<'a> {
     /// Maps TileVar to its dimensions (rows, cols)
     tile_dims: HashMap<TileVar, (usize, usize)>,
     tile_dtypes: HashMap<TileVar, crate::tile::DType>,
+    tile_layouts: HashMap<TileVar, crate::tile::TileLayout>,
     fragment_regs: HashMap<TileVar, Vec<Operand<'a, F32>>>,
     /// Maps register tile vars to their shared memory source (for LoadSharedToReg)
     reg_to_shared: HashMap<TileVar, TileVar>,
@@ -249,6 +250,7 @@ impl<'a> LoweringContext<'a> {
             index_vars: HashMap::new(),
             shared_mem_offset: 0,
             tile_dims: HashMap::new(),
+            tile_layouts: HashMap::new(),
             fragment_regs: HashMap::new(),
             reg_to_shared: HashMap::new(),
             label_counter: 0,
@@ -425,10 +427,12 @@ fn lower_stmt<'a>(
         Stmt::AllocTile {
             var,
             space,
+            layout,
             dtype,
             rows,
             cols,
         } => {
+            ctx.tile_layouts.insert(*var, *layout);
             // Track tile dimensions
             ctx.tile_dims.insert(*var, (*rows, *cols));
             ctx.tile_dtypes.insert(*var, *dtype);
@@ -581,6 +585,8 @@ fn lower_stmt<'a>(
             element_index,
             row,
             col,
+            tile_row,
+            tile_col,
             layout,
         } => {
             let row = lower_expr(func, ctx, row);
@@ -622,7 +628,7 @@ fn lower_stmt<'a>(
             load_global_as_f32(func, ctx.param_dtypes[src_param], value.clone(), address);
             func.add_inst(Inst::Label(skip_load));
 
-            let shared_address = shared_thread_address(func, ctx, *dest);
+            let shared_address = shared_coordinate_address(func, ctx, *dest, tile_row, tile_col);
             if ctx.tile_dtypes.get(dest) == Some(&crate::tile::DType::TF32) {
                 let tf32 = func.add_b32_register();
                 func.add_inst(Inst::convert_tf32_f32(tf32.clone(), value));
@@ -780,18 +786,7 @@ fn lower_stmt<'a>(
                 element_offset,
                 ctx.param_dtypes[dest_param],
             );
-            let value = if ctx.fragment_regs.contains_key(src) {
-                let shared = ctx
-                    .reg_to_shared
-                    .get(src)
-                    .expect("WMMA accumulator has no shared-memory backing");
-                let address = shared_thread_address(func, ctx, *shared);
-                let value = func.add_f32_register();
-                func.add_inst(Inst::load_shared_scalar_f32(value.clone(), address));
-                value
-            } else {
-                ctx.get_or_alloc_reg(func, *src)
-            };
+            let value = ctx.get_or_alloc_reg(func, *src);
             store_global_from_f32(func, ctx.param_dtypes[dest_param], address, value);
             func.add_inst(Inst::Label(skip_store));
         }
@@ -800,6 +795,7 @@ fn lower_stmt<'a>(
             // We don't need to emit any PTX here - MatMul will access shared memory directly
             ctx.reg_to_shared.insert(*dest, *src);
 
+            ctx.tile_layouts.insert(*dest, ctx.tile_layouts[src]);
             // Also copy the tile dimensions
             if let Some(&dims) = ctx.tile_dims.get(src) {
                 ctx.tile_dims.insert(*dest, dims);
@@ -853,7 +849,7 @@ fn lower_stmt<'a>(
                 .tile_dims
                 .get(&a_smem)
                 .expect("Tile dimensions not found for A");
-            let (_b_rows, b_cols) = ctx
+            let (_b_rows, _b_cols) = ctx
                 .tile_dims
                 .get(&b_smem)
                 .expect("Tile dimensions not found for B");
@@ -891,7 +887,7 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::mul_u64(
                 a_row_base.clone(),
                 tid_y_u64.clone(),
-                Operand::imm_u64(*a_cols as u64),
+                Operand::imm_u64(shared_row_stride(ctx, a_smem) as u64),
             ));
             func.add_inst(Inst::mul_u64(
                 a_row_base.clone(),
@@ -976,7 +972,7 @@ fn lower_stmt<'a>(
             func.add_inst(Inst::mul_u64(
                 k_offset_b.clone(),
                 k_u64.clone(),
-                Operand::imm_u64(*b_cols as u64),
+                Operand::imm_u64(shared_row_stride(ctx, b_smem) as u64),
             ));
             func.add_inst(Inst::mul_u64(
                 k_offset_b.clone(),
@@ -1007,21 +1003,41 @@ fn lower_stmt<'a>(
             // Loop end label
             func.add_inst(Inst::Label(loop_end));
         }
-        Stmt::LoadTileElement { dest, src } => {
-            let value = if ctx.fragment_regs.contains_key(src) {
-                let shared = ctx
-                    .reg_to_shared
-                    .get(src)
-                    .expect("WMMA accumulator has no shared-memory backing");
-                let address = shared_thread_address(func, ctx, *shared);
-                let value = func.add_f32_register();
-                func.add_inst(Inst::load_shared_scalar_f32(value.clone(), address));
-                value
-            } else {
-                ctx.get_or_alloc_reg(func, *src)
-            };
-            let output = ctx.get_or_alloc_reg(func, *dest);
-            func.add_inst(Inst::mov_f32(output, value));
+        Stmt::ConvertLayout { dest, src } => {
+            use crate::tile::TileLayout;
+            match (ctx.tile_layouts[src], ctx.tile_layouts[dest]) {
+                (
+                    TileLayout::WarpAccumulator {
+                        operand_dtype,
+                        block_width,
+                    },
+                    TileLayout::SharedRowMajor { row_stride },
+                ) => {
+                    let done =
+                        bumpalo::format!(in ctx.arena, "fragment_store_done_{}", ctx.label_counter)
+                            .into_bump_str();
+                    ctx.label_counter += 1;
+                    skip_noncomputing_warps(func, block_width, done);
+                    func.add_inst(Inst::WmmaStore {
+                        dtype: operand_dtype,
+                        addr: ctx.shared_mem_ptrs[dest].clone(),
+                        frags: ctx.fragment_regs[src].clone(),
+                        stride: Operand::imm_i32(row_stride as i32),
+                    });
+                    func.add_inst(Inst::Label(done));
+                }
+                (TileLayout::SharedRowMajor { .. }, TileLayout::ThreadScalar) => {
+                    let address = shared_thread_address(func, ctx, *src);
+                    let output = ctx.get_or_alloc_reg(func, *dest);
+                    load_shared_as_f32(func, ctx.tile_dtypes[src], output, address);
+                }
+                (TileLayout::ThreadScalar, TileLayout::ThreadScalar) => {
+                    let value = ctx.get_or_alloc_reg(func, *src);
+                    let output = ctx.get_or_alloc_reg(func, *dest);
+                    func.add_inst(Inst::mov_f32(output, value));
+                }
+                _ => unreachable!("tile layout conversion must be validated before lowering"),
+            }
         }
         Stmt::Embedding {
             vocabulary: _,
@@ -3246,36 +3262,12 @@ fn lower_tensor_core_matmul<'a>(
         .get(&b_shared)
         .expect("TF32 MatMul operand B is not in shared memory")
         .clone();
-    let c_shared = ctx
-        .reg_to_shared
-        .get(&dest)
-        .expect("TF32 MatMul destination has no shared-memory backing");
-    let c_ptr = ctx
-        .shared_mem_ptrs
-        .get(c_shared)
-        .expect("TF32 MatMul output is not in shared memory")
-        .clone();
-
     // The 16x16 staging block contains eight warps. Warp zero owns the complete
     // output fragment while every thread still participates in staging/barriers.
-    let thread_y = func.add_u64_register();
-    func.add_inst(Inst::convert_u64_u32(
-        thread_y.clone(),
-        super::instructions::THREAD_ID.y.clone(),
-    ));
-    let inactive = func.add_predicate_register();
-    func.add_inst(Inst::setp_ge_u64(
-        inactive.clone(),
-        thread_y,
-        Operand::imm_u64(32 / u64::from(schedule.block_threads.0)),
-    ));
     let done =
         bumpalo::format!(in ctx.arena, "tf32_matmul_done_{}", ctx.label_counter).into_bump_str();
     ctx.label_counter += 1;
-    func.add_inst(Inst::Bra {
-        condition: inactive,
-        target: done,
-    });
+    skip_noncomputing_warps(func, schedule.block_threads.0, done);
 
     for k_offset in (0..schedule.block_tile.k).step_by(schedule.instruction_tile.k) {
         let k_offset = k_offset as u64;
@@ -3287,7 +3279,9 @@ fn lower_tensor_core_matmul<'a>(
         let b_address = shared_address_with_byte_offset(
             func,
             b_ptr.clone(),
-            k_offset * schedule.block_tile.n as u64 * schedule.operand_dtype.size_bytes() as u64,
+            k_offset
+                * shared_row_stride(ctx, b_shared) as u64
+                * schedule.operand_dtype.size_bytes() as u64,
         );
         let a_fragments: Vec<Operand<'a, B32>> =
             (0..if schedule.operand_dtype == crate::tile::DType::F16 {
@@ -3309,13 +3303,13 @@ fn lower_tensor_core_matmul<'a>(
             dtype: schedule.operand_dtype,
             frags: a_fragments.clone(),
             addr: a_address,
-            stride: Operand::imm_i32(schedule.block_tile.k as i32),
+            stride: Operand::imm_i32(shared_row_stride(ctx, a_shared) as i32),
         });
         func.add_inst(Inst::WmmaLoadB {
             dtype: schedule.operand_dtype,
             frags: b_fragments.clone(),
             addr: b_address,
-            stride: Operand::imm_i32(schedule.block_tile.n as i32),
+            stride: Operand::imm_i32(shared_row_stride(ctx, b_shared) as i32),
         });
         func.add_inst(Inst::WmmaMma {
             dtype: schedule.operand_dtype,
@@ -3325,13 +3319,32 @@ fn lower_tensor_core_matmul<'a>(
             c_frags: accumulators.clone(),
         });
     }
-    func.add_inst(Inst::WmmaStore {
-        dtype: schedule.operand_dtype,
-        addr: c_ptr,
-        frags: accumulators,
-        stride: Operand::imm_i32(schedule.block_tile.n as i32),
-    });
     func.add_inst(Inst::Label(done));
+}
+
+fn shared_row_stride(ctx: &LoweringContext<'_>, tile: TileVar) -> usize {
+    match ctx.tile_layouts[&tile] {
+        crate::tile::TileLayout::SharedRowMajor { row_stride } => row_stride,
+        _ => unreachable!("expected validated shared-memory tile layout"),
+    }
+}
+
+fn skip_noncomputing_warps<'a>(func: &mut Function<'a>, block_width: u32, done: &'a str) {
+    let thread_y = func.add_u64_register();
+    func.add_inst(Inst::convert_u64_u32(
+        thread_y.clone(),
+        super::instructions::THREAD_ID.y.clone(),
+    ));
+    let inactive = func.add_predicate_register();
+    func.add_inst(Inst::setp_ge_u64(
+        inactive.clone(),
+        thread_y,
+        Operand::imm_u64(32 / u64::from(block_width)),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: inactive,
+        target: done,
+    });
 }
 
 fn shared_address_with_byte_offset<'a>(
@@ -3379,30 +3392,35 @@ fn shared_thread_address<'a>(
     ctx: &LoweringContext<'a>,
     tile: TileVar,
 ) -> Operand<'a, U64> {
-    let row = func.add_u64_register();
-    let column = func.add_u64_register();
-    func.add_inst(Inst::convert_u64_u32(
-        row.clone(),
-        super::instructions::THREAD_ID.y.clone(),
-    ));
-    func.add_inst(Inst::convert_u64_u32(
-        column.clone(),
-        super::instructions::THREAD_ID.x.clone(),
-    ));
+    shared_coordinate_address(
+        func,
+        ctx,
+        tile,
+        &crate::tile::Expr::ThreadIdx(crate::tile::Dim::Y),
+        &crate::tile::Expr::ThreadIdx(crate::tile::Dim::X),
+    )
+}
+
+fn shared_coordinate_address<'a>(
+    func: &mut Function<'a>,
+    ctx: &LoweringContext<'a>,
+    tile: TileVar,
+    row: &crate::tile::Expr,
+    column: &crate::tile::Expr,
+) -> Operand<'a, U64> {
+    let row = lower_expr(func, ctx, row);
+    let column = lower_expr(func, ctx, column);
     let shared = ctx
         .shared_mem_ptrs
         .get(&tile)
         .expect("Shared tile pointer not found")
         .clone();
-    let (_, columns) = ctx
-        .tile_dims
-        .get(&tile)
-        .expect("Shared tile dimensions not found");
+    let columns = shared_row_stride(ctx, tile);
     let row_offset = func.add_u64_register();
     func.add_inst(Inst::mul_u64(
         row_offset.clone(),
         row,
-        Operand::imm_u64(*columns as u64),
+        Operand::imm_u64(columns as u64),
     ));
     let element_offset = func.add_u64_register();
     func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, column));
@@ -4035,6 +4053,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4042,6 +4061,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4049,6 +4069,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4088,6 +4109,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4095,6 +4117,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4102,6 +4125,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4109,6 +4133,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(3),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4116,6 +4141,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(4),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4123,6 +4149,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(5),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4130,6 +4157,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(6),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4188,6 +4216,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4195,6 +4224,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4225,6 +4255,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4232,6 +4263,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4239,6 +4271,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4275,6 +4308,7 @@ mod tests {
                 stmts: vec![Stmt::AllocTile {
                     var: TileVar(0),
                     space: MemorySpace::Shared,
+                    layout: crate::tile::TileLayout::SharedRowMajor { row_stride: 16 },
                     dtype: DType::F32,
                     rows: 16,
                     cols: 16,
@@ -4324,6 +4358,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4331,6 +4366,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4338,6 +4374,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4386,6 +4423,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0),
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4446,6 +4484,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(0), // x_val
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4453,6 +4492,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(1), // a_val
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4460,6 +4500,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(2), // b_val
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4467,6 +4508,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(3), // temp = a * x
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4474,6 +4516,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(4), // temp2 = temp + b
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,
@@ -4481,6 +4524,7 @@ mod tests {
                     Stmt::AllocTile {
                         var: TileVar(5), // result = relu(temp2)
                         space: MemorySpace::Register,
+                        layout: crate::tile::TileLayout::ThreadScalar,
                         dtype: DType::F32,
                         rows: 1,
                         cols: 1,

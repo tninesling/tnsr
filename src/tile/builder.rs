@@ -1,6 +1,6 @@
 use super::ir::{
     Block, DType, Expr, KernelParam, MatMulLayout, MatrixLayout, MemorySpace, ReduceOp, Stmt,
-    TileIR, TileVar,
+    TileIR, TileLayout, TileVar,
 };
 
 #[allow(dead_code)]
@@ -41,6 +41,7 @@ impl TileIRBuilder {
         self.stmts.push(Stmt::AllocTile {
             var,
             space: MemorySpace::Shared,
+            layout: TileLayout::SharedRowMajor { row_stride: cols },
             dtype,
             rows,
             cols,
@@ -60,6 +61,7 @@ impl TileIRBuilder {
         self.stmts.push(Stmt::AllocTile {
             var,
             space: MemorySpace::Register,
+            layout: TileLayout::ThreadScalar,
             dtype,
             rows,
             cols,
@@ -68,12 +70,19 @@ impl TileIRBuilder {
         var
     }
 
-    pub fn alloc_fragment(&mut self, dtype: DType, rows: usize, cols: usize) -> TileVar {
+    pub fn alloc_fragment(
+        &mut self,
+        dtype: DType,
+        rows: usize,
+        cols: usize,
+        schedule: super::MatMulSchedule,
+    ) -> TileVar {
         let var = TileVar(self.next_var);
         self.next_var += 1;
         self.stmts.push(Stmt::AllocTile {
             var,
             space: MemorySpace::Fragment,
+            layout: schedule.accumulator_tile_layout(),
             dtype,
             rows,
             cols,
@@ -104,8 +113,8 @@ impl TileIRBuilder {
         });
     }
 
-    pub fn load_tile_element(&mut self, dest: TileVar, src: TileVar) {
-        self.stmts.push(Stmt::LoadTileElement { dest, src });
+    pub fn convert_layout(&mut self, dest: TileVar, src: TileVar) {
+        self.stmts.push(Stmt::ConvertLayout { dest, src });
     }
 
     pub fn load_global_predicated(
@@ -216,6 +225,8 @@ impl TileIRBuilder {
             element_index: row.clone() * layout.row_stride + col.clone(),
             row,
             col,
+            tile_row: Expr::ThreadIdx(super::Dim::Y),
+            tile_col: Expr::ThreadIdx(super::Dim::X),
             layout,
         });
     }
@@ -226,6 +237,7 @@ impl TileIRBuilder {
         src_param: &str,
         element_index: Expr,
         bounds: (Expr, Expr),
+        tile_coordinates: (Expr, Expr),
         layout: MatrixLayout,
     ) {
         self.stmts.push(Stmt::LoadGlobalToSharedPredicated {
@@ -234,6 +246,8 @@ impl TileIRBuilder {
             element_index,
             row: bounds.0,
             col: bounds.1,
+            tile_row: tile_coordinates.0,
+            tile_col: tile_coordinates.1,
             layout,
         });
     }

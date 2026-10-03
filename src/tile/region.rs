@@ -306,6 +306,24 @@ pub(crate) fn input_element_index(
             )
         })
         .collect();
+    input_coordinate_index(input, &iterations)
+}
+
+/// Compose logical coordinates with the source map without flattening and decoding
+/// them again. Matmul already has row, column, and broadcast batch coordinates.
+pub(crate) fn input_coordinate_index(input: &RegionInput, iterations: &[Expr]) -> Result<Expr> {
+    anyhow::ensure!(
+        input.tensor.predicate.is_none(),
+        "predicated region inputs are not yet supported"
+    );
+    anyhow::ensure!(
+        iterations.len() == input.tensor.shape.len(),
+        "logical input coordinate rank mismatch"
+    );
+    anyhow::ensure!(
+        input.tensor.access.results.len() == input.source_shape.len(),
+        "logical input map rank mismatch"
+    );
     let source_strides = row_major_strides(&input.source_shape)?;
     input
         .tensor
@@ -314,10 +332,14 @@ pub(crate) fn input_element_index(
         .iter()
         .zip(source_strides)
         .try_fold(Expr::Const(0), |offset, (coordinate, stride)| {
+            let coordinate = super::index_egraph::normalize_map_in_domain(
+                coordinate.clone(),
+                &input.tensor.shape,
+            )?;
             Ok(Expr::Add(
                 Box::new(offset),
                 Box::new(Expr::Mul(
-                    Box::new(lower_index_expr(coordinate, &iterations)?),
+                    Box::new(lower_index_expr(&coordinate, iterations)?),
                     Box::new(Expr::Const(
                         i64::try_from(stride)
                             .context("virtual region input stride does not fit in i64")?,

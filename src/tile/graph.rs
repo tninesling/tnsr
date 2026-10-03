@@ -83,9 +83,10 @@ impl<D: TileDType, G> From<TensorGraph<D, G>> for TileGraph {
 }
 
 impl TileGraph {
-    /// Optimize index expressions in all physical and diagnostic tile kernels.
+    /// Validate layouts and optimize indices in physical and diagnostic tile kernels.
     pub fn optimize_indices(&mut self) -> anyhow::Result<()> {
         for ir in self.graph.node_weights_mut() {
+            ir.validate_layouts()?;
             ir.optimize_indices()?;
         }
         #[cfg(feature = "cuda")]
@@ -95,6 +96,7 @@ impl TileGraph {
             .chain(&mut self.reduction_region_kernels)
             .chain(&mut self.matmul_region_kernels)
         {
+            kernel.ir.validate_layouts()?;
             kernel.ir.optimize_indices()?;
         }
         Ok(())
@@ -215,11 +217,13 @@ impl TileGraph {
         self.matmul_region_kernels = regions
             .iter()
             .enumerate()
-            .map(|(region_id, region)| TileRegionKernel {
-                region_id,
-                ir: Self::lower_matmul_region(region, region_id),
+            .map(|(region_id, region)| {
+                Ok(TileRegionKernel {
+                    region_id,
+                    ir: Self::lower_matmul_region(region, region_id)?,
+                })
             })
-            .collect();
+            .collect::<anyhow::Result<_>>()?;
         Ok(())
     }
 
@@ -259,8 +263,6 @@ impl TileGraph {
                     m,
                     n,
                     k,
-                    false,
-                    false,
                     schedule.unwrap_or_else(|| {
                         super::MatMulSchedule::select_for_dtype(
                             m,
@@ -276,6 +278,8 @@ impl TileGraph {
                         )
                     }),
                     None,
+                    None,
+                    (false, false),
                 )
             }
             TensorGraphNode::Embedding { .. } => {
@@ -540,26 +544,72 @@ impl TileGraph {
 
     #[allow(dead_code)]
     #[cfg(feature = "cuda")]
-    fn lower_matmul_region(region: &super::MatMulRegion, region_id: usize) -> TileIR {
-        Self::lower_matmul_impl(
+    fn lower_matmul_region(
+        region: &super::MatMulRegion,
+        region_id: usize,
+    ) -> anyhow::Result<TileIR> {
+        let operand = |value| {
+            region
+                .inputs
+                .iter()
+                .find(|input| input.value == value)
+                .ok_or_else(|| anyhow::anyhow!("matmul operand binding is unavailable"))
+        };
+        let staging = (
+            stage_rows_contiguously(operand(region.lhs_value)?)?
+                && region.schedule.block_tile.m == region.schedule.block_tile.k,
+            stage_rows_contiguously(operand(region.rhs_value)?)?
+                && region.schedule.block_tile.k == region.schedule.block_tile.n,
+        );
+        let ((a_row, a_col), (b_row, b_col)) = matmul_operand_coordinates(region.schedule, staging);
+        let address = |value, shape: &[usize], row: Expr, col: Expr| {
+            let input = region
+                .inputs
+                .iter()
+                .find(|input| input.value == value)
+                .ok_or_else(|| anyhow::anyhow!("matmul operand binding is unavailable"))?;
+            let batch = &shape[..shape.len() - 2];
+            let mut stride = 1;
+            let mut coordinates = Vec::new();
+            for (&extent, &output_extent) in batch.iter().rev().zip(region.batch_shape.iter().rev())
+            {
+                coordinates.push(if extent == 1 {
+                    Expr::Const(0)
+                } else {
+                    Expr::Mod(
+                        Box::new(Expr::FloorDiv(Box::new(Expr::BlockIdx(Dim::Z)), stride)),
+                        extent,
+                    )
+                });
+                stride *= output_extent;
+            }
+            coordinates.reverse();
+            coordinates.extend([row, col]);
+            super::region::input_coordinate_index(input, &coordinates)
+        };
+        let indices = (
+            address(region.lhs_value, &region.lhs_shape, a_row, a_col)?,
+            address(region.rhs_value, &region.rhs_shape, b_row, b_col)?,
+        );
+        Ok(Self::lower_matmul_impl(
             region.m,
             region.n,
             region.k,
-            false,
-            false,
             region.schedule,
             Some((region, region_id)),
-        )
+            Some(indices),
+            staging,
+        ))
     }
 
     fn lower_matmul_impl(
         m: usize,
         n: usize,
         k: usize,
-        transpose_a: bool,
-        transpose_b: bool,
         schedule: super::MatMulSchedule,
         region: Option<(&super::MatMulRegion, usize)>,
+        operand_indices: Option<(Expr, Expr)>,
+        staging: (bool, bool),
     ) -> TileIR {
         let dtype = schedule.storage_dtype;
         let mut builder = TileIRBuilder::new();
@@ -628,17 +678,12 @@ impl TileGraph {
         };
 
         // Allocate register tiles for computation
-        let a_reg = builder.alloc_register(DType::F32, tile_m, tile_k);
-        let b_reg = builder.alloc_register(DType::F32, tile_k, tile_n);
         let c_reg = match plan {
             MatMulPlan::ScalarF32 => builder.alloc_register(DType::F32, tile_m, tile_n),
             MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreF16 | MatMulPlan::TensorCoreBF16 => {
-                builder.alloc_fragment(DType::F32, tile_m, tile_n)
+                builder.alloc_fragment(DType::F32, tile_m, tile_n, schedule)
             }
         };
-        if let Some(c_smem) = c_smem {
-            builder.load_shared_to_register(c_reg, c_smem);
-        }
 
         // Initialize accumulator
         builder.zero(c_reg);
@@ -647,20 +692,17 @@ impl TileGraph {
         let k_tiles = k.div_ceil(tile_k);
 
         // Main tiling loop over K dimension
-        builder.for_loop("k_tile", 0, k_tiles as i64, |builder, k_var| {
-            let a_row = Expr::Add(
-                Box::new(Expr::BlockIdx(Dim::Y) * tile_m),
-                Box::new(Expr::ThreadIdx(Dim::Y)),
-            );
-            let a_col = Expr::Add(
-                Box::new(Expr::Var(k_var.clone()) * tile_k),
-                Box::new(Expr::ThreadIdx(Dim::X)),
-            );
+        builder.for_loop("k_tile", 0, k_tiles as i64, |builder, _| {
+            let ((a_row, a_col), (b_row, b_col)) = matmul_operand_coordinates(schedule, staging);
             builder.load_global_to_shared_indexed(
                 a_smem,
                 &a_param,
-                a_batch.clone() + a_row.clone() * k + a_col.clone(),
+                operand_indices
+                    .as_ref()
+                    .map(|indices| indices.0.clone())
+                    .unwrap_or_else(|| a_batch.clone() + a_row.clone() * k + a_col.clone()),
                 (a_row, a_col),
+                staging_coordinates(staging.0),
                 MatrixLayout {
                     rows: m,
                     cols: k,
@@ -668,19 +710,15 @@ impl TileGraph {
                 },
             );
 
-            let b_row = Expr::Add(
-                Box::new(Expr::Var(k_var) * tile_k),
-                Box::new(Expr::ThreadIdx(Dim::Y)),
-            );
-            let b_col = Expr::Add(
-                Box::new(Expr::BlockIdx(Dim::X) * tile_n),
-                Box::new(Expr::ThreadIdx(Dim::X)),
-            );
             builder.load_global_to_shared_indexed(
                 b_smem,
                 &b_param,
-                b_batch.clone() + b_row.clone() * n + b_col.clone(),
+                operand_indices
+                    .as_ref()
+                    .map(|indices| indices.1.clone())
+                    .unwrap_or_else(|| b_batch.clone() + b_row.clone() * n + b_col.clone()),
                 (b_row, b_col),
+                staging_coordinates(staging.1),
                 MatrixLayout {
                     rows: k,
                     cols: n,
@@ -690,22 +728,23 @@ impl TileGraph {
 
             builder.barrier();
 
-            // Load from shared memory to registers
-            builder.load_shared_to_register(a_reg, a_smem);
-            builder.load_shared_to_register(b_reg, b_smem);
-
             // Compute: C_reg += A_reg @ B_reg
-            let layout = match (transpose_a, transpose_b) {
-                (false, false) => MatMulLayout::NN,
-                (false, true) => MatMulLayout::NT,
-                (true, false) => MatMulLayout::TN,
-                (true, true) => MatMulLayout::TT,
-            };
-
-            builder.matmul(c_reg, a_reg, b_reg, layout, schedule);
+            builder.matmul(c_reg, a_smem, b_smem, MatMulLayout::NN, schedule);
 
             builder.barrier();
         });
+
+        // Pointwise consumers require one scalar per thread. Scalar accumulators
+        // already match; fragment accumulators need an explicit shared exchange.
+        let matmul_element = if let Some(c_smem) = c_smem {
+            builder.convert_layout(c_smem, c_reg);
+            builder.barrier();
+            let scalar = builder.alloc_register(DType::F32, 1, 1);
+            builder.convert_layout(scalar, c_smem);
+            scalar
+        } else {
+            c_reg
+        };
 
         // Store result to global memory
         // Each thread stores one element of the output tile
@@ -728,8 +767,6 @@ impl TileGraph {
         if let Some((region, _)) = region {
             use super::RegionOpKind;
 
-            let matmul_element = builder.alloc_register(DType::F32, 1, 1);
-            builder.load_tile_element(matmul_element, c_reg);
             let mut registers = HashMap::new();
             registers.insert(region.matmul_value, matmul_element);
             let linear_element = output_batch.clone()
@@ -810,7 +847,13 @@ impl TileGraph {
                 );
             }
         } else {
-            builder.store_global_predicated("C", c_reg, global_row, global_col, output_layout);
+            builder.store_global_predicated(
+                "C",
+                matmul_element,
+                global_row,
+                global_col,
+                output_layout,
+            );
         }
 
         builder.finish()
@@ -1143,6 +1186,59 @@ impl TileGraph {
             Box::new(Expr::ThreadIdx(Dim::X)),
         )
     }
+}
+
+fn staging_coordinates(transposed: bool) -> (Expr, Expr) {
+    if transposed {
+        (Expr::ThreadIdx(Dim::X), Expr::ThreadIdx(Dim::Y))
+    } else {
+        (Expr::ThreadIdx(Dim::Y), Expr::ThreadIdx(Dim::X))
+    }
+}
+
+// Choose which matrix coordinate varies across adjacent staging threads. This
+// changes only the traversal of a square tile, not its contents or MMA layout.
+// Unit steps also handle a transpose composed with reshape/permutation maps.
+#[cfg(feature = "cuda")]
+fn stage_rows_contiguously(input: &super::RegionInput) -> anyhow::Result<bool> {
+    let rank = input.tensor.shape.len();
+    if rank < 2 || input.tensor.shape[rank - 2] < 2 || input.tensor.shape[rank - 1] < 2 {
+        return Ok(false);
+    }
+    let offset = |iteration: &[usize]| -> anyhow::Result<usize> {
+        input
+            .tensor
+            .source_index(iteration)?
+            .iter()
+            .zip(&input.source_shape)
+            .try_fold(0usize, |offset, (&coordinate, &extent)| {
+                offset
+                    .checked_mul(extent)
+                    .and_then(|offset| offset.checked_add(coordinate))
+                    .ok_or_else(|| anyhow::anyhow!("operand storage offset overflows usize"))
+            })
+    };
+    let mut coordinate = vec![0; rank];
+    let base = offset(&coordinate)?;
+    coordinate[rank - 2] = 1;
+    let row = offset(&coordinate)?.checked_sub(base);
+    coordinate[rank - 2] = 0;
+    coordinate[rank - 1] = 1;
+    let col = offset(&coordinate)?.checked_sub(base);
+    Ok(row == Some(1) && col.is_some_and(|stride| stride > 1))
+}
+
+fn matmul_operand_coordinates(
+    schedule: super::MatMulSchedule,
+    staging: (bool, bool),
+) -> ((Expr, Expr), (Expr, Expr)) {
+    let (a_local_row, a_local_col) = staging_coordinates(staging.0);
+    let (b_local_row, b_local_col) = staging_coordinates(staging.1);
+    let a_row = Expr::BlockIdx(Dim::Y) * schedule.block_tile.m + a_local_row;
+    let a_col = Expr::Var("k_tile".into()) * schedule.block_tile.k + a_local_col;
+    let b_row = Expr::Var("k_tile".into()) * schedule.block_tile.k + b_local_row;
+    let b_col = Expr::BlockIdx(Dim::X) * schedule.block_tile.n + b_local_col;
+    ((a_row, a_col), (b_row, b_col))
 }
 
 /// Decode the output batch coordinate and drop broadcast dimensions before

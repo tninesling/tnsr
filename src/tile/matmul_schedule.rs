@@ -57,6 +57,17 @@ pub struct MatMulSchedule {
 }
 
 impl MatMulSchedule {
+    /// Representation supplied to epilogue layout propagation.
+    pub fn accumulator_tile_layout(&self) -> super::TileLayout {
+        match self.accumulator_layout {
+            MatMulAccumulatorLayout::ThreadScalar => super::TileLayout::ThreadScalar,
+            MatMulAccumulatorLayout::WarpFragment => super::TileLayout::WarpAccumulator {
+                operand_dtype: self.operand_dtype,
+                block_width: self.block_threads.0,
+            },
+        }
+    }
+
     pub fn select(
         m: usize,
         n: usize,

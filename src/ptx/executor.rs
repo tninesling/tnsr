@@ -22,7 +22,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 6;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 7;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -27,9 +27,11 @@ fn roots(stmt: &mut Stmt) -> Vec<&mut Expr> {
             element_index,
             row,
             col,
+            tile_row,
+            tile_col,
             ..
-        }
-        | Stmt::LoadGlobalPredicated {
+        } => vec![element_index, row, col, tile_row, tile_col],
+        Stmt::LoadGlobalPredicated {
             element_index,
             row,
             col,
@@ -220,7 +222,17 @@ impl TileIR {
         let mut bindings = BTreeMap::new();
         let mut serial = 0;
         for (expr, usage) in usage {
-            if matches!(expr, Expr::Const(_) | Expr::Var(_)) {
+            // Primitive index reads are cheap and may be rematerialized by the
+            // backend. Binding them can extend register lifetimes without sharing
+            // any arithmetic; share composite expressions instead.
+            if matches!(
+                expr,
+                Expr::Const(_)
+                    | Expr::Var(_)
+                    | Expr::BlockIdx(_)
+                    | Expr::ThreadIdx(_)
+                    | Expr::BlockDim(_)
+            ) {
                 continue;
             }
             let Some(scope) = dependency_scope(&expr, &variables) else {

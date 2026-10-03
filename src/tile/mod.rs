@@ -4,6 +4,7 @@ pub mod graph;
 mod index_egraph;
 mod index_optimization;
 pub mod ir;
+mod layout;
 pub mod matmul_region;
 pub mod matmul_schedule;
 pub mod reduction_region;
@@ -20,7 +21,7 @@ pub use graph::TileGraph;
 #[allow(unused_imports)]
 pub use ir::{
     Block, Conv2dGeometry, DType, Dim, Expr, KernelParam, MatMulLayout, MatMulPlan,
-    MaxPool2dGeometry, MemorySpace, ReduceOp, Stmt, TileDType, TileIR, TileVar,
+    MaxPool2dGeometry, MemorySpace, ReduceOp, Stmt, TileDType, TileIR, TileLayout, TileVar,
 };
 pub use matmul_region::MatMulRegion;
 pub use matmul_schedule::*;

@@ -425,11 +425,3 @@ compiled PTX, or `TNSR_PROFILE_OVERRIDE_PTX` to load a counterfactual module for
 resident timing. Each process should run alone on the GPU. Use separate build
 directories for baseline and current code to prevent Cargo artifact reuse
 across snapshots.
-
-## Scheduled Index E-Graph Optimization
-
-Issue #61 shares integer normalization between virtual maps and scheduled tile
-addresses and places invariant bindings before the K loop. GPT projection at
-B/M/K/N = 2/128/256/768 improves from 66.272 to 22.877 us resident GPU time,
-with one launch and unchanged numerical error. The [paired benchmark report](benchmarks/index-issue61/README.md)
-records the full sweep, compile overhead, and increased register usage.

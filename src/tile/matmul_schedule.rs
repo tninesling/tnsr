@@ -1,4 +1,4 @@
-use super::{DType, MatMulPlan};
+use super::{DType, MatMulPlan, TileLayout};
 
 /// Arithmetic policy, independent of the target's available instructions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -57,6 +57,17 @@ pub struct MatMulSchedule {
 }
 
 impl MatMulSchedule {
+    /// Representation supplied to epilogue layout propagation.
+    pub fn accumulator_tile_layout(&self) -> TileLayout {
+        match self.accumulator_layout {
+            MatMulAccumulatorLayout::ThreadScalar => TileLayout::ThreadScalar,
+            MatMulAccumulatorLayout::WarpFragment => TileLayout::WarpAccumulator {
+                operand_dtype: self.operand_dtype,
+                block_width: self.block_threads.0,
+            },
+        }
+    }
+
     pub fn select(
         m: usize,
         n: usize,

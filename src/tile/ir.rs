@@ -31,6 +31,7 @@ pub enum Stmt {
     AllocTile {
         var: TileVar,
         space: MemorySpace,
+        layout: TileLayout,
         dtype: DType,
         rows: usize,
         cols: usize,
@@ -51,6 +52,9 @@ pub enum Stmt {
         element_index: Expr,
         row: Expr,
         col: Expr,
+        /// Local logical coordinates in the destination shared tile.
+        tile_row: Expr,
+        tile_col: Expr,
         layout: MatrixLayout,
     },
 
@@ -103,8 +107,9 @@ pub enum Stmt {
         schedule: super::MatMulSchedule,
     },
 
-    /// Expose the calling thread's scalar from a register or fragment tile.
-    LoadTileElement {
+    /// Convert between accumulator fragments, shared tiles, and thread scalars.
+    /// Synchronization is represented by separate barriers in the surrounding block.
+    ConvertLayout {
         dest: TileVar,
         src: TileVar,
     },
@@ -252,6 +257,19 @@ pub enum Stmt {
 /// Tile variable reference (like SSA values)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TileVar(pub usize);
+
+/// Physical tile representation, independent of the logical tensor's index map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileLayout {
+    ThreadScalar,
+    SharedRowMajor {
+        row_stride: usize,
+    },
+    WarpAccumulator {
+        operand_dtype: DType,
+        block_width: u32,
+    },
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct MatrixLayout {

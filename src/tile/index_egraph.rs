@@ -70,6 +70,7 @@ struct Facts {
 
 struct IntegerAnalysis {
     semantics: Semantics,
+    leaf_bounds: HashMap<Symbol, (i128, i128)>,
 }
 impl Analysis<Integer> for IntegerAnalysis {
     type Data = Facts;
@@ -87,7 +88,12 @@ impl Analysis<Integer> for IntegerAnalysis {
         if let Integer::Leaf(symbol) = node {
             return Facts {
                 constant: None,
-                bounds: limits,
+                bounds: graph
+                    .analysis
+                    .leaf_bounds
+                    .get(symbol)
+                    .copied()
+                    .unwrap_or(limits),
                 total: true,
                 dependencies: BTreeSet::from([*symbol]),
             };
@@ -275,7 +281,11 @@ impl CostFunction<Integer> for AddressCost {
     }
 }
 
-fn extract(input: RecExpr<Integer>, semantics: Semantics) -> RecExpr<Integer> {
+fn extract(
+    input: RecExpr<Integer>,
+    semantics: Semantics,
+    leaf_bounds: HashMap<Symbol, (i128, i128)>,
+) -> RecExpr<Integer> {
     let mut rules = Vec::new();
     if semantics == Semantics::Wrapping {
         rules.push(rewrite!("integer-add-commute"; "(+ ?a ?b)" => "(+ ?b ?a)"));
@@ -283,17 +293,26 @@ fn extract(input: RecExpr<Integer>, semantics: Semantics) -> RecExpr<Integer> {
         rules
             .push(rewrite!("integer-quotient-remainder"; "(+ (* (/ ?x ?d) ?d) (% ?x ?d))" => "?x"));
     }
-    let runner = Runner::<Integer, IntegerAnalysis, ()>::new(IntegerAnalysis { semantics })
-        .with_iter_limit(4)
-        .with_node_limit(2048)
-        .with_expr(&input)
-        .run(&rules);
+    let runner = Runner::<Integer, IntegerAnalysis, ()>::new(IntegerAnalysis {
+        semantics,
+        leaf_bounds,
+    })
+    .with_iter_limit(4)
+    .with_node_limit(2048)
+    .with_expr(&input)
+    .run(&rules);
     Extractor::new(&runner.egraph, AddressCost)
         .find_best(runner.roots[0])
         .1
 }
 
 pub(super) fn normalize_map(expression: IndexExpr) -> Result<IndexExpr> {
+    normalize_map_in_domain(expression, &[])
+}
+
+/// Valid only within the supplied logical domain. This removes reshape wrapping
+/// before substituting scheduled coordinates, whose edge loads are predicated.
+pub(super) fn normalize_map_in_domain(expression: IndexExpr, shape: &[usize]) -> Result<IndexExpr> {
     fn encode(expr: &IndexExpr, out: &mut RecExpr<Integer>) -> Result<Id> {
         let node = match expr {
             IndexExpr::Const(v) => Integer::Num(i128::from(*v)),
@@ -360,7 +379,18 @@ pub(super) fn normalize_map(expression: IndexExpr) -> Result<IndexExpr> {
     }
     let mut input = RecExpr::default();
     encode(&expression, &mut input)?;
-    let result = extract(input, Semantics::Checked);
+    let mut bounds = HashMap::new();
+    for (dimension, &extent) in shape.iter().enumerate() {
+        if extent > 0 {
+            let upper =
+                i64::try_from(extent - 1).context("logical domain exceeds signed index range")?;
+            bounds.insert(
+                Symbol::from(format!("dim_{dimension}")),
+                (0, i128::from(upper)),
+            );
+        }
+    }
+    let result = extract(input, Semantics::Checked, bounds);
     decode(&result, Id::from(result.as_ref().len() - 1))
 }
 
@@ -463,7 +493,7 @@ pub(super) fn normalize_address(expression: &Expr) -> Result<Expr> {
     let mut input = RecExpr::default();
     let mut leaves = HashMap::new();
     encode(expression, &mut input, &mut leaves)?;
-    let result = extract(input, Semantics::Wrapping);
+    let result = extract(input, Semantics::Wrapping, HashMap::new());
     decode(&result, Id::from(result.as_ref().len() - 1), &leaves)
 }
 
@@ -572,6 +602,37 @@ mod tests {
             Expr::FloorDiv(Box::new(x), 15)
         );
     }
+    #[test]
+    fn logical_domain_bounds_remove_reshape_wraps_without_changing_unbounded_maps() {
+        let quotient = IndexExpr::FloorDiv(
+            Box::new(IndexExpr::Add(
+                Box::new(IndexExpr::Mul(
+                    Box::new(IndexExpr::IterDim(0)),
+                    Box::new(IndexExpr::Const(5)),
+                )),
+                Box::new(IndexExpr::IterDim(1)),
+            )),
+            5,
+        );
+        let original = IndexExpr::Mod(Box::new(quotient.clone()), 3);
+        let bounded = normalize_map_in_domain(original.clone(), &[3, 5]).unwrap();
+        assert_eq!(bounded, quotient);
+        for row in 0..3 {
+            for col in 0..5 {
+                assert_eq!(
+                    original.evaluate(&[row, col], &[]).unwrap(),
+                    bounded.evaluate(&[row, col], &[]).unwrap()
+                );
+            }
+        }
+        // Bounds are local to this use; general map normalization stays signed.
+        let unbounded = normalize_map(original.clone()).unwrap();
+        assert_eq!(
+            unbounded.evaluate(&[-1, 0], &[]).unwrap(),
+            original.evaluate(&[-1, 0], &[]).unwrap()
+        );
+    }
+
     #[test]
     fn invalid_divisors_are_rejected_before_dead_expression_folding() {
         let invalid = Expr::Mul(

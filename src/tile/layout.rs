@@ -51,10 +51,14 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                         TileLayout::WarpAccumulator {
                             operand_dtype,
                             block_width,
+                            warp_topology,
                         },
                     ) => {
-                        *rows == 16
-                            && *cols == 16
+                        matches!(warp_topology.0, 1 | 2 | 4 | 8)
+                            && matches!(warp_topology.1, 1 | 2 | 4 | 8)
+                            && warp_topology.0 * warp_topology.1 <= 8
+                            && *rows == 16 * warp_topology.0
+                            && *cols == 16 * warp_topology.1
                             && *dtype == DType::F32
                             && matches!(operand_dtype, DType::TF32 | DType::F16 | DType::BF16)
                             && *block_width > 0
@@ -128,16 +132,25 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                     "matmul accumulator layout does not match its schedule"
                 );
             }
-            Stmt::ConvertLayout { dest, src } => {
+            Stmt::ConvertLayout {
+                dest,
+                src,
+                coordinates,
+            } => {
                 let (dest, src) = (get(tiles, dest)?, get(tiles, src)?);
                 let valid = match (src.layout, dest.layout) {
                     (TileLayout::WarpAccumulator { .. }, TileLayout::SharedRowMajor { .. }) => {
-                        src.rows == dest.rows && src.cols == dest.cols && dest.dtype == DType::F32
+                        coordinates.is_none()
+                            && src.rows == dest.rows
+                            && src.cols == dest.cols
+                            && dest.dtype == DType::F32
                     }
                     (TileLayout::SharedRowMajor { .. }, TileLayout::ThreadScalar) => {
                         dest.rows == 1 && dest.cols == 1 && dest.dtype == DType::F32
                     }
-                    (TileLayout::ThreadScalar, TileLayout::ThreadScalar) => src.dtype == dest.dtype,
+                    (TileLayout::ThreadScalar, TileLayout::ThreadScalar) => {
+                        coordinates.is_none() && src.dtype == dest.dtype
+                    }
                     _ => false,
                 };
                 anyhow::ensure!(valid, "unsupported tile layout conversion");
@@ -285,7 +298,7 @@ mod tests {
             .iter_mut()
             .find(|stmt| matches!(stmt, Stmt::ConvertLayout { .. }))
             .unwrap();
-        if let Stmt::ConvertLayout { dest, src } = conversion {
+        if let Stmt::ConvertLayout { dest, src, .. } = conversion {
             *src = *dest;
         }
         assert!(

@@ -112,6 +112,8 @@ pub enum Stmt {
     ConvertLayout {
         dest: TileVar,
         src: TileVar,
+        /// Shared coordinates when extracting a thread scalar.
+        coordinates: Option<(Expr, Expr)>,
     },
 
     /// Gather rows from a contiguous [vocabulary, width] table.
@@ -268,6 +270,7 @@ pub enum TileLayout {
     WarpAccumulator {
         operand_dtype: DType,
         block_width: u32,
+        warp_topology: (usize, usize),
     },
 }
 

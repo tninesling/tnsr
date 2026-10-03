@@ -1,5 +1,5 @@
 //! Focused matmul ablations. Run with CUDA enabled; all timings are microseconds.
-//! Arguments: [batch|flat] [epilogue stage 0..3] [B] [M] [K] [N] [measure|trace].
+//! Arguments: [batch|flat] [epilogue stage 0..3] [B] [M] [K] [N] [measure|trace] [f32|f16|bf16].
 //! Stages: matmul, +bias, +ReLU, +residual. Flat merges B and M for shared weights.
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,8 +10,12 @@ use cudarc::driver::{
     CudaContext, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchConfig, PushKernelArg, sys,
 };
 use cudarc::nvrtc::Ptx;
+use num_traits::{Float, ToPrimitive, cast};
 use tnsr::graph::{NodeIndex, TensorGraph, TensorGraphNode};
-use tnsr::ptx::{PtxExecutor, PtxPlanAction};
+use tnsr::ptx::{
+    PtxExecutor, PtxPlanAction,
+    types::{BF16, CudaDType, F16, F32},
+};
 use tnsr::tensor::{Parameter, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
 
@@ -41,6 +45,19 @@ fn percentile(values: &mut [f64], fraction: usize) -> f64 {
 }
 
 fn main() -> Result<()> {
+    match std::env::args().nth(8).as_deref().unwrap_or("f32") {
+        "f32" => profile::<F32>(),
+        "f16" => profile::<F16>(),
+        "bf16" => profile::<BF16>(),
+        dtype => anyhow::bail!("unsupported profiling dtype {dtype}"),
+    }
+}
+
+fn profile<D: CudaDType>() -> Result<()> {
+    let scalar = |value: f32| -> Result<D::HostType> {
+        cast(value).context("profiling value is not representable")
+    };
+    let element_bytes = std::mem::size_of::<D::HostType>();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flat = args.first().is_some_and(|argument| argument == "flat");
     let number = |position: usize, default: usize| -> Result<usize> {
@@ -72,29 +89,32 @@ fn main() -> Result<()> {
     };
     let input = Parameter::new(
         (0..batches * m * k)
-            .map(|index| (index % 29) as f32 / 29.0 - 0.5)
-            .collect(),
+            .map(|index| scalar((index % 29) as f32 / 29.0 - 0.5))
+            .collect::<Result<Vec<_>>>()?,
         input_shape,
     );
     let weight = Parameter::new(
         (0..k * n)
-            .map(|index| (index % 31) as f32 / 31.0 - 0.5)
-            .collect(),
+            .map(|index| scalar((index % 31) as f32 / 31.0 - 0.5))
+            .collect::<Result<Vec<_>>>()?,
         vec![k, n],
     );
     let mut expression = TensorExpr::from(input).matmul(TensorExpr::from(weight));
     if stage >= 1 {
-        expression = expression + TensorExpr::from(Parameter::new(vec![0.1; n], vec![n]));
+        expression = expression + TensorExpr::from(Parameter::new(vec![scalar(0.1)?; n], vec![n]));
     }
     if stage >= 2 {
         expression = expression.relu();
     }
     if stage >= 3 {
         expression = expression
-            + TensorExpr::from(Parameter::new(vec![0.05; batches * m * n], output_shape));
+            + TensorExpr::from(Parameter::new(
+                vec![scalar(0.05)?; batches * m * n],
+                output_shape,
+            ));
     }
-    let graph: TensorGraph<f32> = expression.into();
-    let mut executor = PtxExecutor::try_new()?;
+    let graph: TensorGraph<D::HostType> = expression.into();
+    let mut executor = PtxExecutor::<D>::try_new_for_dtype()?;
     executor.compile_owned(graph.clone())?;
     let description = executor.describe_plan(&graph)?;
     let source = executor.module_source().context("missing PTX")?;
@@ -114,7 +134,7 @@ fn main() -> Result<()> {
         Err(_) => source,
     };
     let module = device.load_module(Ptx::from_src(resident_source))?;
-    let mut storage: HashMap<NodeIndex, CudaSlice<f32>> = HashMap::new();
+    let mut storage: HashMap<NodeIndex, CudaSlice<D::HostType>> = HashMap::new();
     let mut aliases = HashMap::new();
     let names: Vec<Option<&str>> = description
         .lines()
@@ -151,7 +171,10 @@ fn main() -> Result<()> {
         }
         let name = name.context("unsupported physical action in profiling graph")?;
         for (&output, shape) in step.outputs.iter().zip(&step.output_shapes) {
-            storage.insert(output, stream.alloc_zeros::<f32>(shape.iter().product())?);
+            storage.insert(
+                output,
+                stream.alloc_zeros::<D::HostType>(shape.iter().product())?,
+            );
         }
         let pointer = |node: &NodeIndex| -> Result<u64> {
             let node = aliases.get(node).unwrap_or(node);
@@ -176,36 +199,41 @@ fn main() -> Result<()> {
             let rows = shape[shape.len() - 2];
             let cols = shape[shape.len() - 1];
             let count: usize = shape[..shape.len() - 2].iter().product();
+            let schedule = plan
+                .matmul_schedules()
+                .get(&step.node)
+                .context("missing schedule")?;
             // This harness intentionally uses rank-two shared B for every case.
             for batch in 0..count {
                 launches.push(Launch {
                     function: function.clone(),
                     config: LaunchConfig {
                         grid_dim: (
-                            u32::try_from(cols.div_ceil(16))?,
-                            u32::try_from(rows.div_ceil(16))?,
+                            u32::try_from(cols.div_ceil(schedule.block_tile.n))?,
+                            u32::try_from(rows.div_ceil(schedule.block_tile.m))?,
                             1,
                         ),
-                        block_dim: (16, 16, 1),
+                        block_dim: schedule.block_threads,
                         shared_mem_bytes: 0,
                     },
                     pointers: vec![
-                        inputs[0] + u64::try_from(batch * rows * k * 4)?,
+                        inputs[0] + u64::try_from(batch * rows * k * element_bytes)?,
                         inputs[1],
-                        outputs[0] + u64::try_from(batch * rows * cols * 4)?,
+                        outputs[0] + u64::try_from(batch * rows * cols * element_bytes)?,
                     ],
                 });
             }
         } else {
-            let config = if matches!(step.action, PtxPlanAction::MatMulRegion(_)) {
+            let config = if let PtxPlanAction::MatMulRegion(region_id) = step.action {
+                let schedule = plan.matmul_regions()[region_id].schedule;
                 let shape = &step.shape;
                 LaunchConfig {
                     grid_dim: (
-                        u32::try_from(shape[shape.len() - 1].div_ceil(16))?,
-                        u32::try_from(shape[shape.len() - 2].div_ceil(16))?,
+                        u32::try_from(shape[shape.len() - 1].div_ceil(schedule.block_tile.n))?,
+                        u32::try_from(shape[shape.len() - 2].div_ceil(schedule.block_tile.m))?,
                         u32::try_from(shape[..shape.len() - 2].iter().product::<usize>())?,
                     ),
-                    block_dim: (16, 16, 1),
+                    block_dim: schedule.block_threads,
                     shared_mem_bytes: 0,
                 }
             } else {
@@ -239,15 +267,30 @@ fn main() -> Result<()> {
     let reference = if trace {
         actual.clone()
     } else {
-        SimpleExecutor::new().execute(&graph, HashMap::new())?
+        SimpleExecutor::<D::HostType>::new().execute(&graph, HashMap::new())?
     };
-    let error = resident_actual
+    let error = resident_actual.iter().zip(&reference).try_fold(
+        0.0f32,
+        |maximum, (&a, &b)| -> Result<f32> {
+            Ok(maximum.max(
+                (a.to_f32().context("invalid output")?
+                    - b.to_f32().context("invalid reference")?)
+                .abs(),
+            ))
+        },
+    )?;
+    let reference_scale = reference
         .iter()
-        .zip(&reference)
-        .map(|(&a, &b)| (a - b).abs())
-        .fold(0.0f32, f32::max);
+        .try_fold(1.0f32, |maximum, value| -> Result<f32> {
+            Ok(maximum.max(value.to_f32().context("invalid reference")?.abs()))
+        })?;
+    let tolerance = 1e-2
+        + D::HostType::epsilon()
+            .to_f32()
+            .context("invalid dtype epsilon")?
+            * reference_scale;
     anyhow::ensure!(
-        error < 1e-2 && resident_actual.len() == reference.len(),
+        error <= tolerance && resident_actual.len() == reference.len(),
         "resident numerical mismatch {error}"
     );
     let mut end_to_end = Vec::new();

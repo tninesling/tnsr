@@ -22,7 +22,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 7;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 8;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -345,7 +345,11 @@ impl<D: CudaDType> PtxExecutor<D> {
         );
         let mut execution_plan =
             PtxExecutionPlan::build_with_reduction_mode(graph, self.reduction_mode)?;
-        execution_plan.schedule_matmuls(self.target.matmul_capabilities(), self.matmul_precision);
+        execution_plan.schedule_matmuls(
+            self.target.matmul_capabilities(),
+            self.matmul_precision,
+            self.target.matmul_resources,
+        );
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,
             self.target.supports_tf32()
@@ -1804,6 +1808,14 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     });
     signature.extend_from_slice(&target.compute_capability.0.to_le_bytes());
     signature.extend_from_slice(&target.compute_capability.1.to_le_bytes());
+    for budget in [
+        target.matmul_resources.shared_bytes_per_block,
+        target.matmul_resources.shared_bytes_per_sm,
+        target.matmul_resources.registers_per_sm,
+        target.matmul_resources.threads_per_sm,
+    ] {
+        signature_usize(&mut signature, budget);
+    }
     signature_usize(&mut signature, graph.graph.node_count());
     for node_index in graph.graph.node_indices() {
         let node = &graph.graph[node_index];

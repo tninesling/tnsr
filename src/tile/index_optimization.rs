@@ -43,6 +43,10 @@ fn roots(stmt: &mut Stmt) -> Vec<&mut Expr> {
             col,
             ..
         } => vec![element_index, row, col],
+        Stmt::ConvertLayout {
+            coordinates: Some((row, col)),
+            ..
+        } => vec![row, col],
         Stmt::ForLoop { start, end, .. } => vec![start, end],
         _ => Vec::new(),
     }

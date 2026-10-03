@@ -559,12 +559,9 @@ impl TileGraph {
                 .ok_or_else(|| anyhow!("matmul operand binding is unavailable"))
         };
         let staging = (
-            stage_rows_contiguously(operand(region.lhs_value)?)?
-                && region.schedule.block_tile.m == region.schedule.block_tile.k,
-            stage_rows_contiguously(operand(region.rhs_value)?)?
-                && region.schedule.block_tile.k == region.schedule.block_tile.n,
+            stage_rows_contiguously(operand(region.lhs_value)?)?,
+            stage_rows_contiguously(operand(region.rhs_value)?)?,
         );
-        let ((a_row, a_col), (b_row, b_col)) = matmul_operand_coordinates(region.schedule, staging);
         let address = |value, shape: &[usize], row: Expr, col: Expr| {
             let input = region
                 .inputs
@@ -590,10 +587,18 @@ impl TileGraph {
             coordinates.extend([row, col]);
             input_coordinate_index(input, &coordinates)
         };
-        let indices = (
-            address(region.lhs_value, &region.lhs_shape, a_row, a_col)?,
-            address(region.rhs_value, &region.rhs_shape, b_row, b_col)?,
-        );
+        let tile = region.schedule.block_tile;
+        let staging_rounds = tile.k * tile.m.max(tile.n) / region.schedule.thread_count();
+        let indices = (0..staging_rounds)
+            .map(|round| {
+                let ((a_row, a_col), (b_row, b_col)) =
+                    matmul_operand_coordinates(region.schedule, staging, round);
+                Ok((
+                    address(region.lhs_value, &region.lhs_shape, a_row, a_col)?,
+                    address(region.rhs_value, &region.rhs_shape, b_row, b_col)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self::lower_matmul_impl(
             region.m,
             region.n,
@@ -611,7 +616,7 @@ impl TileGraph {
         k: usize,
         schedule: MatMulSchedule,
         region: Option<(&MatMulRegion, usize)>,
-        operand_indices: Option<(Expr, Expr)>,
+        operand_indices: Option<Vec<(Expr, Expr)>>,
         staging: (bool, bool),
     ) -> TileIR {
         let dtype = schedule.storage_dtype;
@@ -653,6 +658,7 @@ impl TileGraph {
             schedule.block_tile.n,
             schedule.block_tile.k,
         );
+        let threads = schedule.thread_count();
         let plan = schedule.plan;
         let operand_dtype = if schedule.plan == MatMulPlan::ScalarF32 {
             dtype
@@ -696,38 +702,42 @@ impl TileGraph {
 
         // Main tiling loop over K dimension
         builder.for_loop("k_tile", 0, k_tiles as i64, |builder, _| {
-            let ((a_row, a_col), (b_row, b_col)) = matmul_operand_coordinates(schedule, staging);
-            builder.load_global_to_shared_indexed(
-                a_smem,
-                &a_param,
-                operand_indices
-                    .as_ref()
-                    .map(|indices| indices.0.clone())
-                    .unwrap_or_else(|| a_batch.clone() + a_row.clone() * k + a_col.clone()),
-                (a_row, a_col),
-                staging_coordinates(staging.0),
-                MatrixLayout {
-                    rows: m,
-                    cols: k,
-                    row_stride: k,
-                },
-            );
-
-            builder.load_global_to_shared_indexed(
-                b_smem,
-                &b_param,
-                operand_indices
-                    .as_ref()
-                    .map(|indices| indices.1.clone())
-                    .unwrap_or_else(|| b_batch.clone() + b_row.clone() * n + b_col.clone()),
-                (b_row, b_col),
-                staging_coordinates(staging.1),
-                MatrixLayout {
-                    rows: k,
-                    cols: n,
-                    row_stride: n,
-                },
-            );
+            for round in 0..tile_m * tile_k / threads {
+                let ((a_row, a_col), _) = matmul_operand_coordinates(schedule, staging, round);
+                builder.load_global_to_shared_indexed(
+                    a_smem,
+                    &a_param,
+                    operand_indices
+                        .as_ref()
+                        .map(|indices| indices[round].0.clone())
+                        .unwrap_or_else(|| a_batch.clone() + a_row.clone() * k + a_col.clone()),
+                    (a_row, a_col),
+                    operand_staging_coordinates(schedule, true, staging.0, round),
+                    MatrixLayout {
+                        rows: m,
+                        cols: k,
+                        row_stride: k,
+                    },
+                );
+            }
+            for round in 0..tile_k * tile_n / threads {
+                let (_, (b_row, b_col)) = matmul_operand_coordinates(schedule, staging, round);
+                builder.load_global_to_shared_indexed(
+                    b_smem,
+                    &b_param,
+                    operand_indices
+                        .as_ref()
+                        .map(|indices| indices[round].1.clone())
+                        .unwrap_or_else(|| b_batch.clone() + b_row.clone() * n + b_col.clone()),
+                    (b_row, b_col),
+                    operand_staging_coordinates(schedule, false, staging.1, round),
+                    MatrixLayout {
+                        rows: k,
+                        cols: n,
+                        row_stride: n,
+                    },
+                );
+            }
 
             builder.barrier();
 
@@ -737,121 +747,144 @@ impl TileGraph {
             builder.barrier();
         });
 
-        // Pointwise consumers require one scalar per thread. Scalar accumulators
-        // already match; fragment accumulators need an explicit shared exchange.
-        let matmul_element = if let Some(c_smem) = c_smem {
+        if let Some(c_smem) = c_smem {
             builder.convert_layout(c_smem, c_reg);
             builder.barrier();
-            let scalar = builder.alloc_register(DType::F32, 1, 1);
-            builder.convert_layout(scalar, c_smem);
-            scalar
-        } else {
-            c_reg
-        };
+        }
+        let output = |builder: &mut TileIRBuilder, round: usize| {
+            let (local_row, local_col) = if schedule.block_threads == (16, 16, 1) {
+                staging_coordinates(false)
+            } else {
+                let index = Expr::Const((round * schedule.thread_count()) as i64)
+                    + Expr::ThreadIdx(Dim::Y) * schedule.block_threads.0 as usize
+                    + Expr::ThreadIdx(Dim::X);
+                (
+                    Expr::FloorDiv(Box::new(index.clone()), tile_n),
+                    Expr::Mod(Box::new(index), tile_n),
+                )
+            };
+            // Pointwise consumers require one scalar per thread. Scalar accumulators
+            // already match; fragment accumulators need an explicit shared exchange.
+            let matmul_element = if let Some(c_smem) = c_smem {
+                let scalar = builder.alloc_register(DType::F32, 1, 1);
+                builder.extract_scalar(scalar, c_smem, (local_row.clone(), local_col.clone()));
+                scalar
+            } else {
+                c_reg
+            };
 
-        // Store result to global memory
-        // Each thread stores one element of the output tile
-        // Global row = blockIdx.y * tile_m + threadIdx.y
-        // Global col = blockIdx.x * tile_n + threadIdx.x
-        // Linear offset = (global_row) * N + (global_col)
-        let global_row = Expr::Add(
-            Box::new(Expr::BlockIdx(Dim::Y) * tile_m),
-            Box::new(Expr::ThreadIdx(Dim::Y)),
-        );
-        let global_col = Expr::Add(
-            Box::new(Expr::BlockIdx(Dim::X) * tile_n),
-            Box::new(Expr::ThreadIdx(Dim::X)),
-        );
-        let output_layout = MatrixLayout {
-            rows: m,
-            cols: n,
-            row_stride: n,
-        };
-        if let Some((region, _)) = region {
-            let mut registers = HashMap::new();
-            registers.insert(region.matmul_value, matmul_element);
-            let linear_element = output_batch.clone()
-                + Expr::Add(
-                    Box::new(Expr::Mul(
-                        Box::new(global_row.clone()),
-                        Box::new(Expr::Const(n as i64)),
-                    )),
-                    Box::new(global_col.clone()),
-                );
-            for (index, input) in region.inputs.iter().enumerate().filter(|(_, input)| {
-                region
-                    .epilogue_operations
-                    .iter()
-                    .any(|operation| match operation.kind {
-                        RegionOpKind::Unary { input: value, .. } => value == input.value,
-                        RegionOpKind::Binary { lhs, rhs, .. } | RegionOpKind::Gt { lhs, rhs } => {
-                            lhs == input.value || rhs == input.value
+            // Each round extracts and stores one output per thread.
+            let global_row = Expr::Add(
+                Box::new(Expr::BlockIdx(Dim::Y) * tile_m),
+                Box::new(local_row),
+            );
+            let global_col = Expr::Add(
+                Box::new(Expr::BlockIdx(Dim::X) * tile_n),
+                Box::new(local_col),
+            );
+            let output_layout = MatrixLayout {
+                rows: m,
+                cols: n,
+                row_stride: n,
+            };
+            if let Some((region, _)) = region {
+                let mut registers = HashMap::new();
+                registers.insert(region.matmul_value, matmul_element);
+                let linear_element = output_batch.clone()
+                    + Expr::Add(
+                        Box::new(Expr::Mul(
+                            Box::new(global_row.clone()),
+                            Box::new(Expr::Const(n as i64)),
+                        )),
+                        Box::new(global_col.clone()),
+                    );
+                for (index, input) in region.inputs.iter().enumerate().filter(|(_, input)| {
+                    region
+                        .epilogue_operations
+                        .iter()
+                        .any(|operation| match operation.kind {
+                            RegionOpKind::Unary { input: value, .. } => value == input.value,
+                            RegionOpKind::Binary { lhs, rhs, .. }
+                            | RegionOpKind::Gt { lhs, rhs } => {
+                                lhs == input.value || rhs == input.value
+                            }
+                            RegionOpKind::Mask { values, condition } => {
+                                values == input.value || condition == input.value
+                            }
+                        })
+                }) {
+                    let value = builder.alloc_register(DType::F32, 1, 1);
+                    let element_index =
+                        input_element_index(input, &region.output_shape, &linear_element)
+                            .expect("matmul epilogue input access is invalid");
+                    builder.load_global_predicated(
+                        value,
+                        &format!("input_{index}"),
+                        element_index,
+                        global_row.clone(),
+                        global_col.clone(),
+                        output_layout,
+                    );
+                    registers.insert(input.value, value);
+                }
+                for operation in &region.epilogue_operations {
+                    let output = builder.alloc_register(DType::F32, 1, 1);
+                    let register = |value| {
+                        *registers
+                            .get(&value)
+                            .expect("matmul epilogue SSA value is unavailable")
+                    };
+                    match operation.kind {
+                        RegionOpKind::Unary { op, input } => match op {
+                            tensor::UnaryOp::Neg => builder.neg(output, register(input)),
+                            tensor::UnaryOp::Exp => builder.exp(output, register(input)),
+                            tensor::UnaryOp::Log => builder.log(output, register(input)),
+                            tensor::UnaryOp::Relu => builder.relu(output, register(input)),
+                        },
+                        RegionOpKind::Binary { op, lhs, rhs } => match op {
+                            tensor::BinaryOp::Add => {
+                                builder.add(output, register(lhs), register(rhs))
+                            }
+                            tensor::BinaryOp::Sub => {
+                                builder.sub(output, register(lhs), register(rhs))
+                            }
+                            tensor::BinaryOp::Mul => {
+                                builder.mul(output, register(lhs), register(rhs))
+                            }
+                            tensor::BinaryOp::Div => {
+                                builder.div(output, register(lhs), register(rhs))
+                            }
+                        },
+                        RegionOpKind::Gt { lhs, rhs } => {
+                            builder.gt(output, register(lhs), register(rhs))
                         }
                         RegionOpKind::Mask { values, condition } => {
-                            values == input.value || condition == input.value
+                            builder.mask(output, register(values), register(condition))
                         }
-                    })
-            }) {
-                let value = builder.alloc_register(DType::F32, 1, 1);
-                let element_index =
-                    input_element_index(input, &region.output_shape, &linear_element)
-                        .expect("matmul epilogue input access is invalid");
-                builder.load_global_predicated(
-                    value,
-                    &format!("input_{index}"),
-                    element_index,
-                    global_row.clone(),
-                    global_col.clone(),
-                    output_layout,
-                );
-                registers.insert(input.value, value);
-            }
-            for operation in &region.epilogue_operations {
-                let output = builder.alloc_register(DType::F32, 1, 1);
-                let register = |value| {
-                    *registers
-                        .get(&value)
-                        .expect("matmul epilogue SSA value is unavailable")
-                };
-                match operation.kind {
-                    RegionOpKind::Unary { op, input } => match op {
-                        tensor::UnaryOp::Neg => builder.neg(output, register(input)),
-                        tensor::UnaryOp::Exp => builder.exp(output, register(input)),
-                        tensor::UnaryOp::Log => builder.log(output, register(input)),
-                        tensor::UnaryOp::Relu => builder.relu(output, register(input)),
-                    },
-                    RegionOpKind::Binary { op, lhs, rhs } => match op {
-                        tensor::BinaryOp::Add => builder.add(output, register(lhs), register(rhs)),
-                        tensor::BinaryOp::Sub => builder.sub(output, register(lhs), register(rhs)),
-                        tensor::BinaryOp::Mul => builder.mul(output, register(lhs), register(rhs)),
-                        tensor::BinaryOp::Div => builder.div(output, register(lhs), register(rhs)),
-                    },
-                    RegionOpKind::Gt { lhs, rhs } => {
-                        builder.gt(output, register(lhs), register(rhs))
                     }
-                    RegionOpKind::Mask { values, condition } => {
-                        builder.mask(output, register(values), register(condition))
-                    }
+                    registers.insert(operation.output, output);
                 }
-                registers.insert(operation.output, output);
-            }
-            for (index, output) in region.outputs.iter().enumerate() {
-                builder.store_global_indexed(
-                    &format!("output_{index}"),
-                    registers[&output.value],
-                    linear_element.clone(),
-                    (global_row.clone(), global_col.clone()),
+                for (index, output) in region.outputs.iter().enumerate() {
+                    builder.store_global_indexed(
+                        &format!("output_{index}"),
+                        registers[&output.value],
+                        linear_element.clone(),
+                        (global_row.clone(), global_col.clone()),
+                        output_layout,
+                    );
+                }
+            } else {
+                builder.store_global_predicated(
+                    "C",
+                    matmul_element,
+                    global_row,
+                    global_col,
                     output_layout,
                 );
             }
-        } else {
-            builder.store_global_predicated(
-                "C",
-                matmul_element,
-                global_row,
-                global_col,
-                output_layout,
-            );
+        };
+        for round in 0..tile_m * tile_n / threads {
+            output(&mut builder, round);
         }
 
         builder.finish()
@@ -1194,8 +1227,40 @@ fn staging_coordinates(transposed: bool) -> (Expr, Expr) {
     }
 }
 
+// Expanded schedules traverse each shared tile in complete, disjoint rounds.
+// Swapping the decoding order keeps logical transposes coalesced even for rectangular tiles.
+fn operand_staging_coordinates(
+    schedule: MatMulSchedule,
+    lhs: bool,
+    transposed: bool,
+    round: usize,
+) -> (Expr, Expr) {
+    if schedule.block_threads == (16, 16, 1) {
+        return staging_coordinates(transposed);
+    }
+    let (rows, cols) = if lhs {
+        (schedule.block_tile.m, schedule.block_tile.k)
+    } else {
+        (schedule.block_tile.k, schedule.block_tile.n)
+    };
+    let index = Expr::Const((round * schedule.thread_count()) as i64)
+        + Expr::ThreadIdx(Dim::Y) * schedule.block_threads.0 as usize
+        + Expr::ThreadIdx(Dim::X);
+    if transposed {
+        (
+            Expr::Mod(Box::new(index.clone()), rows),
+            Expr::FloorDiv(Box::new(index), rows),
+        )
+    } else {
+        (
+            Expr::FloorDiv(Box::new(index.clone()), cols),
+            Expr::Mod(Box::new(index), cols),
+        )
+    }
+}
+
 // Choose which matrix coordinate varies across adjacent staging threads. This
-// changes only the traversal of a square tile, not its contents or MMA layout.
+// changes only the tile traversal, not its contents or MMA layout.
 // Unit steps also handle a transpose composed with reshape/permutation maps.
 #[cfg(feature = "cuda")]
 fn stage_rows_contiguously(input: &RegionInput) -> Result<bool> {
@@ -1229,9 +1294,10 @@ fn stage_rows_contiguously(input: &RegionInput) -> Result<bool> {
 fn matmul_operand_coordinates(
     schedule: MatMulSchedule,
     staging: (bool, bool),
+    round: usize,
 ) -> ((Expr, Expr), (Expr, Expr)) {
-    let (a_local_row, a_local_col) = staging_coordinates(staging.0);
-    let (b_local_row, b_local_col) = staging_coordinates(staging.1);
+    let (a_local_row, a_local_col) = operand_staging_coordinates(schedule, true, staging.0, round);
+    let (b_local_row, b_local_col) = operand_staging_coordinates(schedule, false, staging.1, round);
     let a_row = Expr::BlockIdx(Dim::Y) * schedule.block_tile.m + a_local_row;
     let a_col = Expr::Var("k_tile".into()) * schedule.block_tile.k + a_local_col;
     let b_row = Expr::Var("k_tile".into()) * schedule.block_tile.k + b_local_row;

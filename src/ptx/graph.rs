@@ -996,41 +996,54 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             // Loop end label
             func.add_inst(Inst::Label(loop_end));
         }
-        Stmt::ConvertLayout { dest, src } => {
-            match (ctx.tile_layouts[src], ctx.tile_layouts[dest]) {
-                (
-                    TileLayout::WarpAccumulator {
-                        operand_dtype,
-                        block_width,
-                    },
-                    TileLayout::SharedRowMajor { row_stride },
-                ) => {
-                    let done =
-                        bumpalo::format!(in ctx.arena, "fragment_store_done_{}", ctx.label_counter)
-                            .into_bump_str();
-                    ctx.label_counter += 1;
-                    skip_noncomputing_warps(func, block_width, done);
-                    func.add_inst(Inst::WmmaStore {
-                        dtype: operand_dtype,
-                        addr: ctx.shared_mem_ptrs[dest].clone(),
-                        frags: ctx.fragment_regs[src].clone(),
-                        stride: Operand::imm_i32(row_stride as i32),
-                    });
-                    func.add_inst(Inst::Label(done));
-                }
-                (TileLayout::SharedRowMajor { .. }, TileLayout::ThreadScalar) => {
-                    let address = shared_thread_address(func, ctx, *src);
-                    let output = ctx.get_or_alloc_reg(func, *dest);
-                    load_shared_as_f32(func, ctx.tile_dtypes[src], output, address);
-                }
-                (TileLayout::ThreadScalar, TileLayout::ThreadScalar) => {
-                    let value = ctx.get_or_alloc_reg(func, *src);
-                    let output = ctx.get_or_alloc_reg(func, *dest);
-                    func.add_inst(Inst::mov_f32(output, value));
-                }
-                _ => unreachable!("tile layout conversion must be validated before lowering"),
+        Stmt::ConvertLayout {
+            dest,
+            src,
+            coordinates,
+        } => match (ctx.tile_layouts[src], ctx.tile_layouts[dest]) {
+            (
+                TileLayout::WarpAccumulator {
+                    operand_dtype,
+                    block_width,
+                    warp_topology,
+                },
+                TileLayout::SharedRowMajor { row_stride },
+            ) => {
+                let done =
+                    bumpalo::format!(in ctx.arena, "fragment_store_done_{}", ctx.label_counter)
+                        .into_bump_str();
+                ctx.label_counter += 1;
+                skip_noncomputing_warps(func, block_width, warp_topology.0 * warp_topology.1, done);
+                let (row, col) = warp_coordinates(block_width, warp_topology);
+                let address = if warp_topology == (1, 1) {
+                    ctx.shared_mem_ptrs[dest].clone()
+                } else {
+                    shared_coordinate_address(func, ctx, *dest, &row, &col)
+                };
+                func.add_inst(Inst::WmmaStore {
+                    dtype: operand_dtype,
+                    addr: address,
+                    frags: ctx.fragment_regs[src].clone(),
+                    stride: Operand::imm_i32(row_stride as i32),
+                });
+                func.add_inst(Inst::Label(done));
             }
-        }
+            (TileLayout::SharedRowMajor { .. }, TileLayout::ThreadScalar) => {
+                let address = if let Some((row, col)) = coordinates {
+                    shared_coordinate_address(func, ctx, *src, row, col)
+                } else {
+                    shared_thread_address(func, ctx, *src)
+                };
+                let output = ctx.get_or_alloc_reg(func, *dest);
+                load_shared_as_f32(func, ctx.tile_dtypes[src], output, address);
+            }
+            (TileLayout::ThreadScalar, TileLayout::ThreadScalar) => {
+                let value = ctx.get_or_alloc_reg(func, *src);
+                let output = ctx.get_or_alloc_reg(func, *dest);
+                func.add_inst(Inst::mov_f32(output, value));
+            }
+            _ => unreachable!("tile layout conversion must be validated before lowering"),
+        },
         Stmt::Embedding {
             vocabulary: _,
             width,
@@ -3244,37 +3257,53 @@ fn lower_tensor_core_matmul<'a>(
         .clone();
     let a_shared = ctx.reg_to_shared.get(&a).copied().unwrap_or(a);
     let b_shared = ctx.reg_to_shared.get(&b).copied().unwrap_or(b);
-    let a_ptr = ctx
-        .shared_mem_ptrs
-        .get(&a_shared)
-        .expect("TF32 MatMul operand A is not in shared memory")
-        .clone();
-    let b_ptr = ctx
-        .shared_mem_ptrs
-        .get(&b_shared)
-        .expect("TF32 MatMul operand B is not in shared memory")
-        .clone();
-    // The 16x16 staging block contains eight warps. Warp zero owns the complete
-    // output fragment while every thread still participates in staging/barriers.
+    // Each computing warp owns one 16x16 fragment. All block threads stage
+    // operands and participate in the surrounding barriers.
     let done =
         bumpalo::format!(in ctx.arena, "tf32_matmul_done_{}", ctx.label_counter).into_bump_str();
     ctx.label_counter += 1;
-    skip_noncomputing_warps(func, schedule.block_threads.0, done);
+    skip_noncomputing_warps(
+        func,
+        schedule.block_threads.0,
+        schedule.warp_topology.0 * schedule.warp_topology.1,
+        done,
+    );
+    let (warp_row, warp_col) = warp_coordinates(schedule.block_threads.0, schedule.warp_topology);
 
     for k_offset in (0..schedule.block_tile.k).step_by(schedule.instruction_tile.k) {
-        let k_offset = k_offset as u64;
-        let a_address = shared_address_with_byte_offset(
-            func,
-            a_ptr.clone(),
-            k_offset * schedule.operand_dtype.size_bytes() as u64,
-        );
-        let b_address = shared_address_with_byte_offset(
-            func,
-            b_ptr.clone(),
-            k_offset
-                * shared_row_stride(ctx, b_shared) as u64
-                * schedule.operand_dtype.size_bytes() as u64,
-        );
+        let (a_address, b_address) = if schedule.warp_topology == (1, 1) {
+            (
+                shared_address_with_byte_offset(
+                    func,
+                    ctx.shared_mem_ptrs[&a_shared].clone(),
+                    (k_offset * schedule.operand_dtype.size_bytes()) as u64,
+                ),
+                shared_address_with_byte_offset(
+                    func,
+                    ctx.shared_mem_ptrs[&b_shared].clone(),
+                    (k_offset
+                        * shared_row_stride(ctx, b_shared)
+                        * schedule.operand_dtype.size_bytes()) as u64,
+                ),
+            )
+        } else {
+            (
+                shared_coordinate_address(
+                    func,
+                    ctx,
+                    a_shared,
+                    &warp_row,
+                    &Expr::Const(k_offset as i64),
+                ),
+                shared_coordinate_address(
+                    func,
+                    ctx,
+                    b_shared,
+                    &Expr::Const(k_offset as i64),
+                    &warp_col,
+                ),
+            )
+        };
         let a_fragments: Vec<Operand<'a, B32>> =
             (0..if schedule.operand_dtype == crate::tile::DType::F16 {
                 8
@@ -3321,7 +3350,12 @@ fn shared_row_stride(ctx: &LoweringContext<'_>, tile: TileVar) -> usize {
     }
 }
 
-fn skip_noncomputing_warps<'a>(func: &mut Function<'a>, block_width: u32, done: &'a str) {
+fn skip_noncomputing_warps<'a>(
+    func: &mut Function<'a>,
+    block_width: u32,
+    warps: usize,
+    done: &'a str,
+) {
     let thread_y = func.add_u64_register();
     func.add_inst(Inst::convert_u64_u32(
         thread_y.clone(),
@@ -3331,7 +3365,7 @@ fn skip_noncomputing_warps<'a>(func: &mut Function<'a>, block_width: u32, done: 
     func.add_inst(Inst::setp_ge_u64(
         inactive.clone(),
         thread_y,
-        Operand::imm_u64(32 / u64::from(block_width)),
+        Operand::imm_u64(warps as u64 * 32 / u64::from(block_width)),
     ));
     func.add_inst(Inst::Bra {
         condition: inactive,
@@ -3354,6 +3388,28 @@ fn shared_address_with_byte_offset<'a>(
         Operand::imm_u64(byte_offset),
     ));
     address
+}
+
+fn warp_coordinates(block_width: u32, topology: (usize, usize)) -> (Expr, Expr) {
+    let warp = if block_width == 32 {
+        Expr::ThreadIdx(Dim::Y)
+    } else {
+        Expr::FloorDiv(Box::new(Expr::ThreadIdx(Dim::Y)), 32 / block_width as usize)
+    };
+    let row = if topology.0 == 1 {
+        Expr::Const(0)
+    } else {
+        Expr::ShiftRight(
+            Box::new(warp.clone()),
+            u64::from(topology.1.trailing_zeros()),
+        ) * 16usize
+    };
+    let col = if topology.1 == 1 {
+        Expr::Const(0)
+    } else {
+        Expr::BitAnd(Box::new(warp), (topology.1 - 1) as u64) * 16usize
+    };
+    (row, col)
 }
 
 fn global_linear_tid<'a>(func: &mut Function<'a>) -> Operand<'a, U64> {
@@ -3872,12 +3928,14 @@ mod tests {
         for (target, expect_tf32) in [
             (
                 PtxTarget {
+                    matmul_resources: Default::default(),
                     compute_capability: (7, 5),
                 },
                 false,
             ),
             (
                 PtxTarget {
+                    matmul_resources: Default::default(),
                     compute_capability: (8, 0),
                 },
                 true,
@@ -3916,7 +3974,10 @@ mod tests {
         use crate::tile::{MatMulPlan, MatMulPrecision};
         for compute_capability in [(6, 1), (7, 5), (8, 0), (8, 9)] {
             for precision in [MatMulPrecision::AllowTf32, MatMulPrecision::StrictF32] {
-                let target = super::super::target::PtxTarget { compute_capability };
+                let target = super::super::target::PtxTarget {
+                    compute_capability,
+                    matmul_resources: Default::default(),
+                };
                 let lhs = TensorExpr::constant(vec![0.25; 2 * 32 * 32], vec![2, 32, 32]);
                 let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
                 let bias = TensorExpr::constant(vec![0.1; 32], vec![32]);
@@ -3924,7 +3985,11 @@ mod tests {
                 let mut plan =
                     PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict)
                         .unwrap();
-                plan.schedule_matmuls(target.matmul_capabilities(), precision);
+                plan.schedule_matmuls(
+                    target.matmul_capabilities(),
+                    precision,
+                    target.matmul_resources,
+                );
                 assert_eq!(plan.matmul_regions().len(), 1);
                 let schedule = plan.matmul_regions()[0].schedule;
                 let expect_tf32 = target.supports_tf32() && precision == MatMulPrecision::AllowTf32;

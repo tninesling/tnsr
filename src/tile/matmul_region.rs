@@ -10,7 +10,7 @@ use super::{
     VirtualTensor,
 };
 
-/// One rank-2 matrix multiplication followed by same-shape pointwise operations.
+/// One broadcast-aware batched matrix multiplication followed by same-shape pointwise operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatMulRegion {
     pub members: Vec<NodeIndex>,
@@ -23,6 +23,8 @@ pub struct MatMulRegion {
     pub lhs_shape: Shape,
     pub rhs_shape: Shape,
     pub output_shape: Shape,
+    pub batch_shape: Shape,
+    pub schedule: super::MatMulSchedule,
     pub m: usize,
     pub n: usize,
     pub k: usize,
@@ -72,19 +74,43 @@ impl MatMulRegion {
         let lhs_shape = graph[lhs_node].shape().clone();
         let rhs_shape = graph[rhs_node].shape().clone();
         anyhow::ensure!(
-            lhs_shape.len() == 2 && rhs_shape.len() == 2 && output_shape.len() == 2,
-            "matmul region supports only rank-2 matrices"
+            lhs_shape.len() >= 2 && rhs_shape.len() >= 2 && output_shape.len() >= 2,
+            "matmul region requires rank >= 2"
         );
-        let (m, k) = (lhs_shape[0], lhs_shape[1]);
-        let n = rhs_shape[1];
+        let (m, k) = (
+            lhs_shape[lhs_shape.len() - 2],
+            lhs_shape[lhs_shape.len() - 1],
+        );
+        let n = rhs_shape[rhs_shape.len() - 1];
         anyhow::ensure!(k > 0, "matmul region requires a non-zero inner dimension");
         anyhow::ensure!(
-            rhs_shape[0] == k,
+            rhs_shape[rhs_shape.len() - 2] == k,
             "matmul region inner dimensions do not match"
         );
         anyhow::ensure!(
-            output_shape == [m, n],
+            output_shape[output_shape.len() - 2..] == [m, n],
             "matmul output shape is incompatible with its inputs"
+        );
+        let batch_shape = output_shape[..output_shape.len() - 2].to_vec();
+        for shape in [&lhs_shape, &rhs_shape] {
+            let batch = &shape[..shape.len() - 2];
+            anyhow::ensure!(
+                batch.len() <= batch_shape.len(),
+                "matmul input batch rank exceeds output rank"
+            );
+            for (&input, &output) in batch.iter().rev().zip(batch_shape.iter().rev()) {
+                anyhow::ensure!(
+                    input == 1 || input == output,
+                    "matmul batch dimension cannot broadcast"
+                );
+            }
+        }
+        let schedule = super::MatMulSchedule::select(
+            m,
+            n,
+            k,
+            super::MatMulCapabilities { tf32: true },
+            super::MatMulPrecision::AllowTf32,
         );
 
         let mut values = HashMap::new();
@@ -153,6 +179,8 @@ impl MatMulRegion {
             lhs_shape,
             rhs_shape,
             output_shape,
+            batch_shape,
+            schedule,
             m,
             n,
             k,
@@ -343,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_batched_matmul() {
+    fn builds_batched_matmul() {
         let mut graph = TensorGraph::new();
         let lhs = graph.graph.add_node(TensorGraphNode::Input {
             name: "lhs",
@@ -361,10 +389,8 @@ mod tests {
             &[lhs, rhs],
         );
 
-        let error = MatMulRegion::from_graph(&graph, matmul, vec![], vec![matmul])
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("rank-2"));
+        let region = MatMulRegion::from_graph(&graph, matmul, vec![], vec![matmul]).unwrap();
+        assert_eq!(region.batch_shape, vec![2]);
+        assert_eq!((region.m, region.n, region.k), (3, 5, 4));
     }
 }

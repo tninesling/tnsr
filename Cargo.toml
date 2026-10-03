@@ -62,3 +62,7 @@ reqwest = { version = "0.12.24", default-features = false, features = ["blocking
 rstest = "0.26.1"
 stats_alloc = "0.1.10"
 test-log = "0.2.18"
+
+[[example]]
+name = "matmul_profile"
+required-features = ["cuda"]

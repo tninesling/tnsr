@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 3;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 4;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -57,6 +57,7 @@ pub struct PtxExecutor {
     kernel_launches: Cell<usize>,
     reduction_mode: PtxReductionMode,
     target: PtxTarget,
+    matmul_precision: crate::tile::MatMulPrecision,
 }
 
 impl Default for PtxExecutor {
@@ -103,7 +104,17 @@ impl PtxExecutor {
             kernel_launches: Cell::new(0),
             reduction_mode,
             target,
+            matmul_precision: crate::tile::MatMulPrecision::AllowTf32,
         })
+    }
+
+    /// Select matmul arithmetic for subsequent compilations. Changing the policy
+    /// invalidates the compilation signature so execute recompiles cached graphs.
+    pub fn set_matmul_precision(&mut self, precision: crate::tile::MatMulPrecision) {
+        if self.matmul_precision != precision {
+            self.matmul_precision = precision;
+            self.compilation_signature = None;
+        }
     }
 
     fn take_buffer(&self, len: usize) -> Result<CudaSlice<f32>> {
@@ -180,8 +191,12 @@ impl PtxExecutor {
 
     /// Describe the current physical PTX execution plan.
     pub fn describe_plan<G>(&self, graph: &TensorGraph<f32, G>) -> Result<String> {
-        let supplied_signature =
-            graph_compilation_signature(graph, self.reduction_mode, self.target);
+        let supplied_signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+        );
         let compiled_signature = self
             .compilation_signature
             .as_deref()
@@ -235,10 +250,11 @@ impl PtxExecutor {
                     )
                 }
                 PtxPlanAction::MatMulRegion(region_id) => format!(
-                    "kernel {}",
+                    "kernel {} schedule={:?}",
                     ptx_graph
                         .matmul_region_kernel_name(region_id)
-                        .context("Missing compiled matmul region kernel")?
+                        .context("Missing compiled matmul region kernel")?,
+                    plan.matmul_regions()[region_id].schedule,
                 ),
             };
             writeln!(
@@ -293,14 +309,24 @@ impl PtxExecutor {
     pub fn compile_owned<G>(&mut self, graph: TensorGraph<f32, G>) -> Result<()> {
         let started = Instant::now();
         let graph_nodes = graph.graph.node_count();
-        let signature = graph_compilation_signature(&graph, self.reduction_mode, self.target);
-        let execution_plan =
+        let signature = graph_compilation_signature(
+            &graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+        );
+        let mut execution_plan =
             PtxExecutionPlan::build_with_reduction_mode(&graph, self.reduction_mode)?;
-        let mut tile_graph = TileGraph::from_with_tf32_support(graph, self.target.supports_tf32());
+        execution_plan.schedule_matmuls(self.target.matmul_capabilities(), self.matmul_precision);
+        let mut tile_graph = TileGraph::from_with_matmul_schedules(
+            graph,
+            self.target.supports_tf32()
+                && self.matmul_precision == crate::tile::MatMulPrecision::AllowTf32,
+            execution_plan.matmul_schedules(),
+        );
         tile_graph.add_fusion_regions(execution_plan.regions())?;
         tile_graph.add_reduction_regions(execution_plan.reduction_regions())?;
-        tile_graph
-            .add_matmul_regions(execution_plan.matmul_regions(), self.target.supports_tf32())?;
+        tile_graph.add_matmul_regions(execution_plan.matmul_regions())?;
         tile_graph.set_physical_nodes(
             execution_plan
                 .steps()
@@ -369,13 +395,13 @@ impl PtxExecutor {
 
     fn execute_matmul(
         &self,
+        node: crate::graph::NodeIndex,
         kernel_name: &str,
         a: &CudaSlice<f32>,
         b: &CudaSlice<f32>,
-        a_shape: &[usize],
-        b_shape: &[usize],
-        output_shape: &[usize],
+        shapes: (&[usize], &[usize], &[usize]),
     ) -> Result<CudaSlice<f32>> {
+        let (a_shape, b_shape, output_shape) = shapes;
         anyhow::ensure!(
             a_shape.len() >= 2 && b_shape.len() >= 2 && output_shape.len() >= 2,
             "MatMul requires rank >= 2, got {a_shape:?} and {b_shape:?}"
@@ -400,7 +426,11 @@ impl PtxExecutor {
             return Ok(output);
         }
 
-        const TILE_SIZE: usize = 16;
+        let schedule = self
+            .execution_plan
+            .as_ref()
+            .and_then(|plan| plan.matmul_schedules().get(&node))
+            .context("Matmul schedule is unavailable")?;
         let stream = self.device.default_stream();
         if k == 0 {
             stream
@@ -412,11 +442,13 @@ impl PtxExecutor {
         let function = module.load_function(kernel_name)?;
         let config = LaunchConfig {
             grid_dim: (
-                n.div_ceil(TILE_SIZE) as u32,
-                m.div_ceil(TILE_SIZE) as u32,
+                u32::try_from(n.div_ceil(schedule.block_tile.n))
+                    .context("Matmul grid width exceeds u32")?,
+                u32::try_from(m.div_ceil(schedule.block_tile.m))
+                    .context("Matmul grid height exceeds u32")?,
                 1,
             ),
-            block_dim: (TILE_SIZE as u32, TILE_SIZE as u32, 1),
+            block_dim: schedule.block_threads,
             shared_mem_bytes: 0,
         };
 
@@ -486,10 +518,7 @@ impl PtxExecutor {
                 input.len()
             );
         }
-        let output_len = region
-            .m
-            .checked_mul(region.n)
-            .context("Matmul region output size overflowed usize")?;
+        let output_len = checked_element_count(&region.output_shape, "Matmul region output")?;
         let mut outputs = Vec::with_capacity(step.outputs.len());
         for _ in &step.outputs {
             outputs.push(self.take_buffer(output_len)?);
@@ -507,13 +536,17 @@ impl PtxExecutor {
         self.record_kernel_launch();
         let config = LaunchConfig {
             grid_dim: (
-                u32::try_from(region.n.div_ceil(16))
+                u32::try_from(region.n.div_ceil(region.schedule.block_tile.n))
                     .context("Matmul region grid width exceeds u32")?,
-                u32::try_from(region.m.div_ceil(16))
+                u32::try_from(region.m.div_ceil(region.schedule.block_tile.m))
                     .context("Matmul region grid height exceeds u32")?,
-                1,
+                u32::try_from(checked_element_count(
+                    &region.batch_shape,
+                    "Matmul batch count",
+                )?)
+                .context("Matmul batch grid exceeds u32")?,
             ),
-            block_dim: (16, 16, 1),
+            block_dim: region.schedule.block_threads,
             shared_mem_bytes: 0,
         };
         unsafe { launcher.launch(config) }
@@ -708,8 +741,12 @@ impl PtxExecutor {
     ) -> Result<Vec<f32>> {
         self.execution_metrics = PtxExecutionMetrics::default();
         self.kernel_launches.set(0);
-        let supplied_signature =
-            graph_compilation_signature(graph, self.reduction_mode, self.target);
+        let supplied_signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+        );
         let compiled_signature = self
             .compilation_signature
             .as_deref()
@@ -1048,12 +1085,11 @@ impl PtxExecutor {
                     let a_shape = graph.graph[ins[0]].shape();
                     let b_shape = graph.graph[ins[1]].shape();
                     self.execute_matmul(
+                        *node_idx,
                         kernel_name,
                         a,
                         b,
-                        a_shape,
-                        b_shape,
-                        graph.graph[*node_idx].shape(),
+                        (a_shape, b_shape, graph.graph[*node_idx].shape()),
                     )?
                 }
                 TensorGraphNode::Embedding { .. } => {
@@ -1711,6 +1747,7 @@ fn graph_compilation_signature<G>(
     graph: &TensorGraph<f32, G>,
     reduction_mode: PtxReductionMode,
     target: PtxTarget,
+    matmul_precision: crate::tile::MatMulPrecision,
 ) -> Vec<u8> {
     let mut signature = Vec::new();
     signature.extend_from_slice(PTX_GRAPH_SIGNATURE_MAGIC);
@@ -1718,6 +1755,10 @@ fn graph_compilation_signature<G>(
     signature.push(match reduction_mode {
         PtxReductionMode::Strict => 0,
         PtxReductionMode::DeterministicTree => 1,
+    });
+    signature.push(match matmul_precision {
+        crate::tile::MatMulPrecision::StrictF32 => 0,
+        crate::tile::MatMulPrecision::AllowTf32 => 1,
     });
     signature.extend_from_slice(&target.compute_capability.0.to_le_bytes());
     signature.extend_from_slice(&target.compute_capability.1.to_le_bytes());
@@ -1884,7 +1925,12 @@ impl Executor<f32> for PtxExecutor {
     where
         TensorGraph<f32, G>: Clone,
     {
-        let signature = graph_compilation_signature(graph, self.reduction_mode, self.target);
+        let signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+        );
         let needs_compilation = self.module.is_none()
             || self.ptx_graph.is_none()
             || self.compilation_signature.as_deref() != Some(signature.as_slice());

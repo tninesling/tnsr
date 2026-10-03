@@ -42,6 +42,7 @@ pub enum Stmt {
     LoadGlobalToSharedPredicated {
         dest: TileVar,
         src_param: String,
+        element_index: Expr,
         row: Expr,
         col: Expr,
         layout: MatrixLayout,
@@ -69,6 +70,7 @@ pub enum Stmt {
     StoreGlobalPredicated {
         dest_param: String,
         src: TileVar,
+        element_index: Expr,
         row: Expr,
         col: Expr,
         layout: MatrixLayout,
@@ -92,7 +94,7 @@ pub enum Stmt {
         a: TileVar,
         b: TileVar,
         layout: MatMulLayout, // NN, NT, TN, TT
-        plan: MatMulPlan,
+        schedule: super::MatMulSchedule,
     },
 
     /// Expose the calling thread's scalar from a register or fragment tile.
@@ -367,6 +369,14 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     FloorDiv(Box<Expr>, usize),
     Mod(Box<Expr>, usize),
+}
+
+impl std::ops::Add for Expr {
+    type Output = Expr;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Expr::Add(Box::new(self), Box::new(rhs))
+    }
 }
 
 impl std::ops::Mul<usize> for Expr {

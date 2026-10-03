@@ -449,6 +449,7 @@ fn lower_stmt<'a>(
         Stmt::LoadGlobalToSharedPredicated {
             dest,
             src_param,
+            element_index,
             row,
             col,
             layout,
@@ -481,14 +482,7 @@ fn lower_stmt<'a>(
                 condition: col_outside,
                 target: skip_load,
             });
-            let row_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                row_offset.clone(),
-                row,
-                Operand::imm_u64(layout.row_stride as u64),
-            ));
-            let element_offset = func.add_u64_register();
-            func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, col));
+            let element_offset = lower_expr(func, ctx, element_index);
             let source = ctx
                 .param_ptrs
                 .get(src_param)
@@ -612,6 +606,7 @@ fn lower_stmt<'a>(
         Stmt::StoreGlobalPredicated {
             dest_param,
             src,
+            element_index,
             row,
             col,
             layout,
@@ -642,14 +637,7 @@ fn lower_stmt<'a>(
                 condition: col_outside,
                 target: skip_store,
             });
-            let row_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                row_offset.clone(),
-                row,
-                Operand::imm_u64(layout.row_stride as u64),
-            ));
-            let element_offset = func.add_u64_register();
-            func.add_inst(Inst::add_u64(element_offset.clone(), row_offset, col));
+            let element_offset = lower_expr(func, ctx, element_index);
             let destination = ctx
                 .param_ptrs
                 .get(dest_param)
@@ -697,10 +685,10 @@ fn lower_stmt<'a>(
             a,
             b,
             layout: _,
-            plan,
+            schedule,
         } => {
-            if *plan == crate::tile::MatMulPlan::TensorCoreTf32 {
-                lower_tf32_matmul(func, ctx, *dest, *a, *b);
+            if schedule.plan == crate::tile::MatMulPlan::TensorCoreTf32 {
+                lower_tf32_matmul(func, ctx, *dest, *a, *b, schedule);
                 return;
             }
             // Matrix multiply: each thread computes one output element
@@ -3037,6 +3025,7 @@ fn lower_tf32_matmul<'a>(
     dest: TileVar,
     a: TileVar,
     b: TileVar,
+    schedule: &crate::tile::MatMulSchedule,
 ) {
     let accumulators = ctx
         .fragment_regs
@@ -3076,7 +3065,7 @@ fn lower_tf32_matmul<'a>(
     func.add_inst(Inst::setp_ge_u64(
         inactive.clone(),
         thread_y,
-        Operand::imm_u64(2),
+        Operand::imm_u64(32 / u64::from(schedule.block_threads.0)),
     ));
     let done =
         bumpalo::format!(in ctx.arena, "tf32_matmul_done_{}", ctx.label_counter).into_bump_str();
@@ -3086,20 +3075,25 @@ fn lower_tf32_matmul<'a>(
         target: done,
     });
 
-    for k_offset in [0_u64, 8] {
+    for k_offset in (0..schedule.block_tile.k).step_by(schedule.instruction_tile.k) {
+        let k_offset = k_offset as u64;
         let a_address = shared_address_with_byte_offset(func, a_ptr.clone(), k_offset * 4);
-        let b_address = shared_address_with_byte_offset(func, b_ptr.clone(), k_offset * 16 * 4);
+        let b_address = shared_address_with_byte_offset(
+            func,
+            b_ptr.clone(),
+            k_offset * schedule.block_tile.n as u64 * 4,
+        );
         let a_fragments: Vec<Operand<'a, B32>> = (0..4).map(|_| func.add_b32_register()).collect();
         let b_fragments: Vec<Operand<'a, B32>> = (0..4).map(|_| func.add_b32_register()).collect();
         func.add_inst(Inst::wmma_load_a(
             a_fragments.clone(),
             a_address,
-            Operand::imm_i32(16),
+            Operand::imm_i32(schedule.block_tile.k as i32),
         ));
         func.add_inst(Inst::wmma_load_b(
             b_fragments.clone(),
             b_address,
-            Operand::imm_i32(16),
+            Operand::imm_i32(schedule.block_tile.n as i32),
         ));
         func.add_inst(Inst::wmma_mma(
             accumulators.clone(),
@@ -3108,7 +3102,11 @@ fn lower_tf32_matmul<'a>(
             accumulators.clone(),
         ));
     }
-    func.add_inst(Inst::wmma_store(c_ptr, accumulators, Operand::imm_i32(16)));
+    func.add_inst(Inst::wmma_store(
+        c_ptr,
+        accumulators,
+        Operand::imm_i32(schedule.block_tile.n as i32),
+    ));
     func.add_inst(Inst::Label(done));
 }
 
@@ -3494,6 +3492,9 @@ fn lower_expr<'a>(
             result
         }
         Expr::FloorDiv(value, divisor) => {
+            // TODO(#61): Consume simplified/index-egraph expressions so identity
+            // and power-of-two divisions avoid general division calls. Keep
+            // instruction emission here; optimize and place expressions upstream.
             let value = lower_expr(func, ctx, value);
             let result = func.add_u64_register();
             func.add_inst(Inst::div_u64(
@@ -3629,33 +3630,53 @@ mod tests {
     }
 
     #[test]
-    fn fused_matmul_epilogue_keeps_tf32_and_one_entry() {
-        let lhs = TensorExpr::constant(vec![0.25; 32 * 32], vec![32, 32]);
-        let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
-        let bias = TensorExpr::constant(vec![0.1; 32 * 32], vec![32, 32]);
-        let graph: TensorGraph<f32> = (lhs.matmul(rhs) + bias).relu().into();
-        let plan =
-            PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict).unwrap();
-        assert_eq!(plan.matmul_regions().len(), 1);
-
-        let mut tile_graph = TileGraph::from(graph);
-        tile_graph
-            .add_matmul_regions(plan.matmul_regions(), true)
-            .unwrap();
-        tile_graph.set_physical_nodes(
-            plan.steps()
-                .iter()
-                .filter_map(|step| {
-                    (step.action == crate::ptx::PtxPlanAction::Kernel).then_some(step.node)
-                })
-                .collect(),
-        );
-        let source = PtxGraph::from(tile_graph).module_source();
-
-        assert_eq!(source.matches(".visible .entry").count(), 1);
-        assert!(source.contains("wmma.mma.sync.aligned.m16n16k8"));
-        assert!(source.contains("add.f32"));
-        assert!(source.contains("max.f32"));
+    fn fused_batched_matmul_codegen_uses_target_schedule_and_one_entry() {
+        use crate::tile::{MatMulPlan, MatMulPrecision};
+        for compute_capability in [(6, 1), (7, 5), (8, 0), (8, 9)] {
+            for precision in [MatMulPrecision::AllowTf32, MatMulPrecision::StrictF32] {
+                let target = super::super::target::PtxTarget { compute_capability };
+                let lhs = TensorExpr::constant(vec![0.25; 2 * 32 * 32], vec![2, 32, 32]);
+                let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
+                let bias = TensorExpr::constant(vec![0.1; 32], vec![32]);
+                let graph: TensorGraph<f32> = (lhs.matmul(rhs) + bias).relu().into();
+                let mut plan =
+                    PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict)
+                        .unwrap();
+                plan.schedule_matmuls(target.matmul_capabilities(), precision);
+                assert_eq!(plan.matmul_regions().len(), 1);
+                let schedule = plan.matmul_regions()[0].schedule;
+                let expect_tf32 = target.supports_tf32() && precision == MatMulPrecision::AllowTf32;
+                assert_eq!(schedule.plan == MatMulPlan::TensorCoreTf32, expect_tf32);
+                let mut tile_graph = TileGraph::from_with_matmul_schedules(
+                    graph,
+                    expect_tf32,
+                    plan.matmul_schedules(),
+                );
+                tile_graph
+                    .add_matmul_regions(plan.matmul_regions())
+                    .unwrap();
+                tile_graph.set_physical_nodes(
+                    plan.steps()
+                        .iter()
+                        .filter_map(|step| {
+                            (step.action == crate::ptx::PtxPlanAction::Kernel).then_some(step.node)
+                        })
+                        .collect(),
+                );
+                let source = PtxGraph::from(tile_graph)
+                    .with_target(target)
+                    .module_source();
+                assert_eq!(source.matches(".visible .entry").count(), 1);
+                assert_eq!(
+                    source.contains("wmma.mma.sync.aligned.m16n16k8"),
+                    expect_tf32
+                );
+                assert_eq!(source.contains("cvt.rna.tf32.f32"), expect_tf32);
+                assert!(source.contains("%ctaid.z"));
+                assert!(source.contains("add.f32"));
+                assert!(source.contains("max.f32"));
+            }
+        }
     }
 
     #[test]

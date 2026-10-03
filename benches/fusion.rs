@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
 use tnsr::nn::{layer_norm, softmax};
@@ -125,5 +125,87 @@ fn fusion_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, fusion_benchmarks);
+fn batched_matmul_benchmarks(c: &mut Criterion) {
+    use tnsr::tile::MatMulPrecision;
+    let mut group = c.benchmark_group("batched_matmul_epilogue");
+    group.sample_size(10);
+    eprintln!(
+        "shape,precision,compile_us,launches,materialized_bytes,intermediate_bytes,estimated_global_bytes,max_absolute_error"
+    );
+    for (name, batches, m, k, n) in [
+        ("transformer_projection", 2, 64, 128, 384),
+        ("attention_scores", 8, 64, 32, 64),
+        ("gpt_projection", 2, 128, 256, 768),
+    ] {
+        let input = Parameter::new(
+            (0..batches * m * k)
+                .map(|index| (index % 29) as f32 / 29.0 - 0.5)
+                .collect(),
+            vec![batches, m, k],
+        );
+        let weight = Parameter::new(
+            (0..k * n)
+                .map(|index| (index % 31) as f32 / 31.0 - 0.5)
+                .collect(),
+            vec![k, n],
+        );
+        let bias = Parameter::new(vec![0.1; n], vec![n]);
+        let residual = Parameter::new(vec![0.05; batches * m * n], vec![batches, m, n]);
+        let graph: TensorGraph<f32> = ((TensorExpr::from(input).matmul(TensorExpr::from(weight))
+            + TensorExpr::from(bias))
+        .relu()
+            + TensorExpr::from(residual))
+        .into();
+        let expected = SimpleExecutor::new()
+            .execute(&graph, HashMap::new())
+            .unwrap();
+        // Criterion reports elements/s here; one element represents one FLOP.
+        group.throughput(Throughput::Elements((2 * batches * m * n * k) as u64));
+        for (policy, precision) in [
+            ("tf32", MatMulPrecision::AllowTf32),
+            ("strict_f32", MatMulPrecision::StrictF32),
+        ] {
+            let mut executor = PtxExecutor::new();
+            executor.set_matmul_precision(precision);
+            executor.compile_owned(graph.clone()).unwrap();
+            let actual = executor.execute_compiled(&graph, HashMap::new()).unwrap();
+            let error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(&actual, &expected)| (actual - expected).abs())
+                .fold(0.0f32, f32::max);
+            let tolerance = if precision == MatMulPrecision::StrictF32 {
+                1e-4
+            } else {
+                1e-2
+            };
+            assert!(error <= tolerance, "{name}/{policy}: maximum error {error}");
+            let schedule = executor.execution_plan().unwrap().matmul_regions()[0].schedule;
+            // Count valid operand loads repeated per output block, bias/residual
+            // reads, and output stores. This is a source-level traffic estimate,
+            // not a measurement of DRAM transactions or cache behavior.
+            let traffic = 4
+                * batches
+                * (m * k * n.div_ceil(schedule.block_tile.n)
+                    + k * n * m.div_ceil(schedule.block_tile.m)
+                    + 3 * m * n);
+            let metrics = executor.execution_metrics();
+            assert_eq!(metrics.kernel_launches, 1);
+            assert_eq!(metrics.intermediate_materialized_bytes, 0);
+            eprintln!(
+                "{name},{policy},{},{},{},{},{traffic},{error}",
+                executor.compile_metrics().compile_time.as_micros(),
+                metrics.kernel_launches,
+                metrics.materialized_bytes,
+                metrics.intermediate_materialized_bytes
+            );
+            group.bench_function(BenchmarkId::new(policy, name), |benchmark| {
+                benchmark.iter(|| executor.execute_compiled(&graph, HashMap::new()).unwrap())
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, fusion_benchmarks, batched_matmul_benchmarks);
 criterion_main!(benches);

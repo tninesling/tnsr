@@ -73,6 +73,7 @@ pub struct PtxExecutionPlan {
     regions: Vec<FusionRegion>,
     reduction_regions: Vec<ReductionRegion>,
     matmul_regions: Vec<MatMulRegion>,
+    matmul_schedules: HashMap<NodeIndex, crate::tile::MatMulSchedule>,
     graph_output: Option<NodeIndex>,
 }
 
@@ -470,11 +471,32 @@ impl PtxExecutionPlan {
             }
         }
         assign_plan_liveness(graph, &mut steps);
+        let mut matmul_schedules = HashMap::new();
+        for step in &steps {
+            if step.action == PtxPlanAction::Kernel
+                && matches!(graph[step.node], TensorGraphNode::MatMul { .. })
+            {
+                let inputs = graph.inputs(step.node);
+                let shape = graph[step.node].shape();
+                let lhs = graph[inputs[0]].shape();
+                matmul_schedules.insert(
+                    step.node,
+                    crate::tile::MatMulSchedule::select(
+                        shape[shape.len() - 2],
+                        shape[shape.len() - 1],
+                        lhs[lhs.len() - 1],
+                        crate::tile::MatMulCapabilities { tf32: true },
+                        crate::tile::MatMulPrecision::AllowTf32,
+                    ),
+                );
+            }
+        }
         Ok(Self {
             steps,
             regions,
             reduction_regions,
             matmul_regions,
+            matmul_schedules,
             graph_output,
         })
     }
@@ -489,6 +511,36 @@ impl PtxExecutionPlan {
 
     pub fn reduction_regions(&self) -> &[ReductionRegion] {
         &self.reduction_regions
+    }
+
+    pub(crate) fn schedule_matmuls(
+        &mut self,
+        capabilities: crate::tile::MatMulCapabilities,
+        precision: crate::tile::MatMulPrecision,
+    ) {
+        for schedule in self.matmul_schedules.values_mut() {
+            let shape = schedule.logical_shape;
+            *schedule = crate::tile::MatMulSchedule::select(
+                shape.m,
+                shape.n,
+                shape.k,
+                capabilities,
+                precision,
+            );
+        }
+        for region in &mut self.matmul_regions {
+            region.schedule = crate::tile::MatMulSchedule::select(
+                region.m,
+                region.n,
+                region.k,
+                capabilities,
+                precision,
+            );
+        }
+    }
+
+    pub fn matmul_schedules(&self) -> &HashMap<NodeIndex, crate::tile::MatMulSchedule> {
+        &self.matmul_schedules
     }
 
     pub fn matmul_regions(&self) -> &[MatMulRegion] {
@@ -723,18 +775,26 @@ fn form_matmul_regions<G>(
         let output_shape = match &graph[anchor] {
             TensorGraphNode::MatMul { shape }
                 if !claimed.contains(&anchor)
-                    && shape.len() == 2
+                    && shape.len() >= 2
                     && shape.iter().all(|&x| x > 0) =>
             {
                 shape
             }
             _ => continue,
         };
+        // CUDA grid.z is limited to 65535. Larger batches retain the existing
+        // per-matrix path instead of constructing an unlaunchable fused kernel.
+        let batch_count = output_shape[..output_shape.len() - 2]
+            .iter()
+            .try_fold(1usize, |count, &extent| count.checked_mul(extent));
+        if batch_count.is_none_or(|count| count > 65535) {
+            continue;
+        }
         let anchor_inputs = graph.inputs(anchor);
         if anchor_inputs.len() != 2
-            || graph[anchor_inputs[0]].shape().len() != 2
-            || graph[anchor_inputs[1]].shape().len() != 2
-            || graph[anchor_inputs[0]].shape()[1] == 0
+            || graph[anchor_inputs[0]].shape().len() < 2
+            || graph[anchor_inputs[1]].shape().len() < 2
+            || graph[anchor_inputs[0]].shape().last() == Some(&0)
         {
             continue;
         }
@@ -1002,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn standalone_batched_and_zero_k_matmuls_remain_unfused() {
+    fn standalone_and_zero_k_remain_unfused_batched_epilogue_fuses() {
         let standalone: TensorGraph<f32> = TensorExpr::constant(vec![0.25; 2 * 3], vec![2, 3])
             .matmul(TensorExpr::constant(vec![0.5; 3 * 4], vec![3, 4]))
             .into();
@@ -1017,11 +1077,12 @@ mod tests {
             .matmul(TensorExpr::constant(vec![0.5; 2 * 3 * 4], vec![2, 3, 4]))
             .relu()
             .into();
-        assert!(
+        assert_eq!(
             PtxExecutionPlan::build(&batched)
                 .unwrap()
                 .matmul_regions
-                .is_empty()
+                .len(),
+            1
         );
 
         let zero_k: TensorGraph<f32> = TensorExpr::constant(Vec::new(), vec![2, 0])
@@ -1034,6 +1095,16 @@ mod tests {
                 .matmul_regions
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn batched_matmul_grid_limit_keeps_per_matrix_fallback() {
+        let lhs = TensorExpr::constant(vec![0.25; 65536], vec![65536, 1, 1]);
+        let rhs = TensorExpr::constant(vec![0.5], vec![1, 1]);
+        let graph: TensorGraph<f32> = lhs.matmul(rhs).relu().into();
+        let plan = PtxExecutionPlan::build(&graph).unwrap();
+        assert!(plan.matmul_regions().is_empty());
+        assert_eq!(plan.matmul_schedules().len(), 1);
     }
 
     #[test]

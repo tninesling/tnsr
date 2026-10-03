@@ -279,3 +279,149 @@ or presence of TF32 conversion and WMMA instructions. On the RTX 4080, the
 classified the 1.6% midpoint movement from Stage 6a as within its noise
 threshold. This establishes safe target plumbing; multiple tile shapes and
 resource-aware schedule selection remain follow-on work.
+
+## Stage 6c Target-Aware Schedules and Batched Epilogues
+
+`MatMulSchedule` now separates the logical matrix shape, block tile, instruction
+shape, compute-warp topology, operand and accumulator layouts, operand dtype,
+and pipeline depth. The execution plan selects one schedule for each standalone
+matmul and each fused region; tile lowering, WMMA instruction staging, and launch
+geometry consume that same descriptor. The initial schedules retain synchronous
+16x16x16 staging with one pipeline stage. TF32 uses 16x16x8 instructions and one
+compute warp, while all eight block warps participate in staging. Scalar F32
+assigns one output element to each thread.
+
+Capability profiles before SM80, including SM75, use scalar F32 for these F32
+operands. SM80+ may select TF32 at the existing shape/work threshold. An explicit
+`MatMulPrecision::StrictF32` policy disables TF32 operand rounding on every
+target; `AllowTf32` remains the default. Changing precision invalidates the
+executor's compilation signature. Call `execute` to recompile automatically,
+or call `compile_owned` before the next `execute_compiled`.
+
+Nonzero-K batched matmuls with pointwise epilogues now use one launch, with
+`grid.z` selecting a flattened output batch. Input addressing decodes that
+batch coordinate and drops broadcast dimensions independently for each matrix.
+Bias and residual inputs retain composed virtual indexing across the entire
+output shape. This supports two-sided batch broadcasts, rank-two operands,
+partial tile dimensions, and aliased matrix/epilogue operands. Zero-K and empty
+outputs retain their existing correctness paths; batches above CUDA's 65,535
+`grid.z` limit retain the per-matrix fallback. Operand producers still
+materialize before matmul. Shared-memory swizzling, asynchronous copies,
+multiple pipeline stages, and warpgroup execution remain future schedules.
+
+Run the representative shape benchmark with:
+
+```sh
+cargo bench --bench fusion --features cuda -- batched_matmul_epilogue \
+  --warm-up-time 0.5 --measurement-time 1 --sample-size 10
+```
+
+Measured on 2026-10-03 with the RTX 4080 (SM89), driver 580.178.04, without
+concurrent GPU tests. Each workload evaluates `relu(A @ B + bias) + residual`;
+B is shared across batches. Times include input uploads and output download.
+Criterion's elements/s is configured as FLOPs/s using `2 * batch * M * N * K`.
+Compile times below are individual calls with the CUDA driver JIT cache warm;
+they are not cold compilation estimates.
+
+| Workload, batch/M/K/N | Policy | End-to-end time (95% CI) | Throughput (GFLOP/s, estimate) | Compile (us) | Max absolute error vs CPU |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Transformer projection, 2/64/128/384 | TF32 | 119.36–120.39 us | 105.05 | 364 | 5.07e-4 |
+| Transformer projection, 2/64/128/384 | Strict F32 | 120.29–121.47 us | 104.02 | 338 | 3.58e-7 |
+| Attention scores, 8/64/32/64 | TF32 | 70.813–71.936 us | 29.424 | 353 | 2.72e-4 |
+| Attention scores, 8/64/32/64 | Strict F32 | 72.152–72.622 us | 29.001 | 336 | 2.38e-7 |
+| GPT projection, 2/128/256/768 | TF32 | 385.28–388.69 us | 259.81 | 391 | 4.88e-4 |
+| GPT projection, 2/128/256/768 | Strict F32 | 390.60–392.26 us | 257.08 | 345 | 5.96e-7 |
+
+Every case records **one launch and zero intermediate materialized bytes**.
+For either precision, the transformer, attention, and GPT cases respectively
+materialize 656,896, 336,128, and 2,624,512 bytes including inputs and outputs.
+Their estimated global kernel traffic is 3,735,552, 917,504, and 27,525,120 bytes.
+The traffic estimate counts valid operand loads repeated per output block,
+per-element bias/residual reads, and output stores; it excludes host transfers
+and does not measure cache behavior or physical DRAM transactions.
+
+These initial TF32 and scalar schedules have similar end-to-end throughput;
+the interface and removal of batched intermediates establish a foundation for
+later tile and pipeline tuning, rather than a claim of peak tensor-core speed.
+Synthetic SM61/SM75/SM80/SM89 codegen coverage checks precision gating and one
+kernel entry. GPU tests cover edge dimensions, both batch broadcast directions,
+strict-policy recompilation, shared operands, zero-K, and empty batches.
+
+## Stage 6c GPT Projection Profiling
+
+A direct comparison with previous commit `d4bb9b5` found a roughly 10% end-to-end
+regression for `relu(A @ B + bias) + residual` at B/M/K/N = 2/128/256/768.
+The dedicated `matmul_profile` example uploads and allocates resident buffers
+once, launches the compiled plan using its physical bindings, checks numerical
+parity, and measures repeated GPU work with CUDA events. Its normal executor
+measurement continues to include transfers and buffer management. Run it with:
+
+```sh
+cargo run --release --features cuda --example matmul_profile -- \
+  batch 3 2 128 256 768
+cargo run --release --features cuda --example matmul_profile -- \
+  flat 3 2 128 256 768
+```
+
+Arguments are layout, epilogue stage, B, M, K, N, and optional `trace` mode.
+Stages 0 through 3 evaluate matmul, bias, ReLU, and residual incrementally.
+`flat` merges batch and rows into a rank-two matrix and is equivalent because
+these workloads share B across batches. Resident timings use 20 samples of 32
+repetitions; executor timings use 20 samples of 5 repetitions. Reported spreads
+are sample p10/p90, rather than confidence intervals. The harness uses the
+initial 16x16 launch geometry and supports these shared-weight forward graphs;
+it is not a general execution backend.
+
+Measured on the RTX 4080 on 2026-10-03, using both revisions and identical data:
+
+| Variant | Previous resident GPU time (us) | Current resident GPU time (us) |
+| --- | ---: | ---: |
+| Batched matmul alone | 22.432 | 23.201 |
+| Batched matmul + bias | 36.096 | 66.016 |
+| Batched matmul + bias + ReLU | 29.440 | 66.144 |
+| Batched matmul + bias + ReLU + residual | 29.728 | 66.268 |
+| Flattened matmul alone | 19.264 | 19.680 |
+| Flattened full epilogue | 23.328 | 23.680 |
+
+Full-epilogue executor medians were 357.924 us before and 394.761 us after.
+An Nsight Systems trace independently measured the previous two matmuls at
+10.80 us each and its pointwise region at 7.07 us, versus 65.89 us for the new
+fused batched kernel. Transfer durations were essentially unchanged.
+
+The slowdown comes from batch index division in the K loop. Static `ptxas`
+and `nvdisasm` inspection shows two general `__cuda_sm20_div_u64` calls per K
+iteration in the fused batched kernel: one for division by 1, and one for
+quotient extraction for modulo 2. The flattened kernel has neither call in
+its K loop. Both fused kernels use 40 registers, 3,072 bytes of shared memory,
+and zero spill loads/stores with the local CUDA 12.9 assembler. These static
+counts are evidence against a spill explanation; they are not dynamic
+occupancy measurements. Nsight Compute hardware counters could not be
+collected because this account lacks NVIDIA performance-counter access.
+
+A PTX-only experiment replaced division by 1 with a move and power-of-two
+division with a right shift. Without changing arithmetic or buffers, resident
+GPU time fell from 66.268 to 25.632 us (61.3% lower), with identical maximum
+absolute error versus CPU (4.88e-4). The prototype's executor measurement still
+uses the original generated module, so only its resident result evaluates the
+edited PTX. The production lowering still needs the corresponding correction.
+[Issue #61](https://github.com/tninesling/tnsr/issues/61) tracks a shared `egg`
+index-optimization mechanism, expression extraction, and loop-invariant
+placement to replace local simplifications and the PTX-only workaround.
+Removing these divisions and hoisting invariant batch offsets are the next
+implementation changes; a shape-based fusion fallback would conceal this
+lowering inefficiency.
+
+The 27-shape sweep covers B = 1/2/8, K = 128/256/512, N = 384/768/1536 at M=128.
+Current fused batched resident execution regressed at every B=2 and B=8 shape;
+B=1 improved. The flattened control was faster than the previous batched plan
+at every shape. At B=2 and N=768, current batched GPU time grew from 36.128 us
+at K=128 to 66.272 us at K=256 and 126.398 us at K=512, consistent with division
+cost repeated in the K loop. Numerical parity was checked throughout.
+
+Raw measurements are retained in
+[ablations.csv](benchmarks/matmul-issue60/ablations.csv) and
+[sweep.csv](benchmarks/matmul-issue60/sweep.csv). Set `TNSR_PROFILE_PTX` to save
+compiled PTX, or `TNSR_PROFILE_OVERRIDE_PTX` to load a counterfactual module for
+resident timing. Each process should run alone on the GPU. Use separate build
+directories for baseline and current code to prevent Cargo artifact reuse
+across snapshots.

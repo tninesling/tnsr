@@ -20,6 +20,12 @@ impl PtxTarget {
         })
     }
 
+    pub const fn matmul_capabilities(self) -> crate::tile::MatMulCapabilities {
+        crate::tile::MatMulCapabilities {
+            tf32: self.supports_tf32(),
+        }
+    }
+
     pub const fn supports_tf32(self) -> bool {
         self.compute_capability.0 >= 8
     }
@@ -27,6 +33,46 @@ impl PtxTarget {
     pub(crate) const fn sm80() -> Self {
         Self {
             compute_capability: (8, 0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tile::{MatMulPlan, MatMulPrecision, MatMulSchedule};
+
+    #[test]
+    fn synthetic_target_profiles_select_supported_f32_instructions() {
+        for (compute_capability, expected) in [
+            ((6, 1), MatMulPlan::ScalarF32),
+            ((7, 5), MatMulPlan::ScalarF32),
+            ((8, 0), MatMulPlan::TensorCoreTf32),
+            ((8, 9), MatMulPlan::TensorCoreTf32),
+        ] {
+            let target = PtxTarget { compute_capability };
+            assert_eq!(
+                MatMulSchedule::select(
+                    128,
+                    128,
+                    128,
+                    target.matmul_capabilities(),
+                    MatMulPrecision::AllowTf32
+                )
+                .plan,
+                expected
+            );
+            assert_eq!(
+                MatMulSchedule::select(
+                    128,
+                    128,
+                    128,
+                    target.matmul_capabilities(),
+                    MatMulPrecision::StrictF32
+                )
+                .plan,
+                MatMulPlan::ScalarF32
+            );
         }
     }
 }

@@ -87,6 +87,14 @@ impl TileGraph {
         tensor_graph: TensorGraph<f32, G>,
         supports_tf32: bool,
     ) -> Self {
+        Self::from_with_matmul_schedules(tensor_graph, supports_tf32, &HashMap::new())
+    }
+
+    pub(crate) fn from_with_matmul_schedules<G>(
+        tensor_graph: TensorGraph<f32, G>,
+        supports_tf32: bool,
+        schedules: &HashMap<NodeIndex, super::MatMulSchedule>,
+    ) -> Self {
         // Pre-compute input shapes for MatMul, BroadcastAxis, ReduceAxis, and Transpose nodes
         let mut op_input_shapes: HashMap<NodeIndex, Vec<Vec<usize>>> = HashMap::new();
         for idx in tensor_graph.graph.node_indices() {
@@ -125,7 +133,13 @@ impl TileGraph {
                         .get(&idx)
                         .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
                         .unwrap_or_default();
-                    Self::lower_node(node, &shape, &input_shapes, supports_tf32)
+                    Self::lower_node(
+                        node,
+                        &shape,
+                        &input_shapes,
+                        supports_tf32,
+                        schedules.get(&idx).copied(),
+                    )
                 },
                 |_, e| e,
             ),
@@ -174,17 +188,13 @@ impl TileGraph {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn add_matmul_regions(
-        &mut self,
-        regions: &[MatMulRegion],
-        supports_tf32: bool,
-    ) -> anyhow::Result<()> {
+    pub(crate) fn add_matmul_regions(&mut self, regions: &[MatMulRegion]) -> anyhow::Result<()> {
         self.matmul_region_kernels = regions
             .iter()
             .enumerate()
             .map(|(region_id, region)| TileRegionKernel {
                 region_id,
-                ir: Self::lower_matmul_region(region, region_id, supports_tf32),
+                ir: Self::lower_matmul_region(region, region_id),
             })
             .collect();
         Ok(())
@@ -201,6 +211,7 @@ impl TileGraph {
         shape: &[usize],
         input_shapes: &[&[usize]],
         supports_tf32: bool,
+        schedule: Option<super::MatMulSchedule>,
     ) -> TileIR {
         match node {
             TensorGraphNode::Constant { data, .. } => Self::lower_constant(data, shape),
@@ -218,7 +229,25 @@ impl TileGraph {
                 let m = shape[shape.len() - 2];
                 let n = shape[shape.len() - 1];
                 let k = input_shapes[0][input_shapes[0].len() - 1];
-                Self::lower_matmul(m, n, k, false, false, supports_tf32)
+                Self::lower_matmul_impl(
+                    m,
+                    n,
+                    k,
+                    false,
+                    false,
+                    schedule.unwrap_or_else(|| {
+                        super::MatMulSchedule::select(
+                            m,
+                            n,
+                            k,
+                            super::MatMulCapabilities {
+                                tf32: supports_tf32,
+                            },
+                            super::MatMulPrecision::AllowTf32,
+                        )
+                    }),
+                    None,
+                )
             }
             TensorGraphNode::Embedding { .. } => {
                 let weight_shape = input_shapes[0];
@@ -447,30 +476,15 @@ impl TileGraph {
     }
 
     #[allow(dead_code)]
-    fn lower_matmul(
-        m: usize,
-        n: usize,
-        k: usize,
-        transpose_a: bool,
-        transpose_b: bool,
-        supports_tf32: bool,
-    ) -> TileIR {
-        Self::lower_matmul_impl(m, n, k, transpose_a, transpose_b, supports_tf32, None)
-    }
-
     #[cfg(feature = "cuda")]
-    fn lower_matmul_region(
-        region: &super::MatMulRegion,
-        region_id: usize,
-        supports_tf32: bool,
-    ) -> TileIR {
+    fn lower_matmul_region(region: &super::MatMulRegion, region_id: usize) -> TileIR {
         Self::lower_matmul_impl(
             region.m,
             region.n,
             region.k,
             false,
             false,
-            supports_tf32,
+            region.schedule,
             Some((region, region_id)),
         )
     }
@@ -481,7 +495,7 @@ impl TileGraph {
         k: usize,
         transpose_a: bool,
         transpose_b: bool,
-        supports_tf32: bool,
+        schedule: super::MatMulSchedule,
         region: Option<(&super::MatMulRegion, usize)>,
     ) -> TileIR {
         let mut builder = TileIRBuilder::new();
@@ -498,25 +512,44 @@ impl TileGraph {
             for index in 0..region.outputs.len() {
                 builder.add_param(&format!("output_{index}"), DType::F32, false);
             }
-            ("input_0", "input_1")
+            // Region construction guarantees that both operand SSA values are
+            // represented in the input table, including when they alias.
+            let names: HashMap<_, _> = region
+                .inputs
+                .iter()
+                .enumerate()
+                .map(|(index, input)| (input.value, format!("input_{index}")))
+                .collect();
+            (
+                names[&region.lhs_value].clone(),
+                names[&region.rhs_value].clone(),
+            )
         } else {
             builder.add_param("A", DType::F32, true);
             builder.add_param("B", DType::F32, true);
             builder.add_param("C", DType::F32, false);
-            ("A", "B")
+            ("A".to_string(), "B".to_string())
         };
 
-        // Tile sizes for shared memory
-        let tile_m = 16;
-        let tile_n = 16;
-        let tile_k = 16;
-        let plan = MatMulPlan::for_shape_with_tf32(m, n, k, supports_tf32);
-
-        // Allocate shared memory for input tiles
-        let operand_dtype = match plan {
-            MatMulPlan::ScalarF32 => DType::F32,
-            MatMulPlan::TensorCoreTf32 => DType::TF32,
+        let (tile_m, tile_n, tile_k) = (
+            schedule.block_tile.m,
+            schedule.block_tile.n,
+            schedule.block_tile.k,
+        );
+        let plan = schedule.plan;
+        let operand_dtype = schedule.operand_dtype;
+        let a_batch = region
+            .map(|(region, _)| batch_element_offset(&region.batch_shape, &region.lhs_shape))
+            .unwrap_or(Expr::Const(0));
+        let b_batch = region
+            .map(|(region, _)| batch_element_offset(&region.batch_shape, &region.rhs_shape))
+            .unwrap_or(Expr::Const(0));
+        let output_batch = if region.is_some() {
+            Expr::BlockIdx(Dim::Z) * (m * n)
+        } else {
+            Expr::Const(0)
         };
+
         let a_smem = builder.alloc_shared(operand_dtype, tile_m, tile_k);
         let b_smem = builder.alloc_shared(operand_dtype, tile_k, tile_n);
         let c_smem = match plan {
@@ -551,11 +584,11 @@ impl TileGraph {
                 Box::new(Expr::Var(k_var.clone()) * tile_k),
                 Box::new(Expr::ThreadIdx(Dim::X)),
             );
-            builder.load_global_to_shared_predicated(
+            builder.load_global_to_shared_indexed(
                 a_smem,
-                a_param,
-                a_row,
-                a_col,
+                &a_param,
+                a_batch.clone() + a_row.clone() * k + a_col.clone(),
+                (a_row, a_col),
                 MatrixLayout {
                     rows: m,
                     cols: k,
@@ -571,11 +604,11 @@ impl TileGraph {
                 Box::new(Expr::BlockIdx(Dim::X) * tile_n),
                 Box::new(Expr::ThreadIdx(Dim::X)),
             );
-            builder.load_global_to_shared_predicated(
+            builder.load_global_to_shared_indexed(
                 b_smem,
-                b_param,
-                b_row,
-                b_col,
+                &b_param,
+                b_batch.clone() + b_row.clone() * n + b_col.clone(),
+                (b_row, b_col),
                 MatrixLayout {
                     rows: k,
                     cols: n,
@@ -597,7 +630,7 @@ impl TileGraph {
                 (true, true) => MatMulLayout::TT,
             };
 
-            builder.matmul(c_reg, a_reg, b_reg, layout, plan);
+            builder.matmul(c_reg, a_reg, b_reg, layout, schedule);
 
             builder.barrier();
         });
@@ -627,14 +660,28 @@ impl TileGraph {
             builder.load_tile_element(matmul_element, c_reg);
             let mut registers = HashMap::new();
             registers.insert(region.matmul_value, matmul_element);
-            let linear_element = Expr::Add(
-                Box::new(Expr::Mul(
-                    Box::new(global_row.clone()),
-                    Box::new(Expr::Const(n as i64)),
-                )),
-                Box::new(global_col.clone()),
-            );
-            for (index, input) in region.inputs.iter().enumerate().skip(2) {
+            let linear_element = output_batch.clone()
+                + Expr::Add(
+                    Box::new(Expr::Mul(
+                        Box::new(global_row.clone()),
+                        Box::new(Expr::Const(n as i64)),
+                    )),
+                    Box::new(global_col.clone()),
+                );
+            for (index, input) in region.inputs.iter().enumerate().filter(|(_, input)| {
+                region
+                    .epilogue_operations
+                    .iter()
+                    .any(|operation| match operation.kind {
+                        RegionOpKind::Unary { input: value, .. } => value == input.value,
+                        RegionOpKind::Binary { lhs, rhs, .. } | RegionOpKind::Gt { lhs, rhs } => {
+                            lhs == input.value || rhs == input.value
+                        }
+                        RegionOpKind::Mask { values, condition } => {
+                            values == input.value || condition == input.value
+                        }
+                    })
+            }) {
                 let value = builder.alloc_register(DType::F32, 1, 1);
                 let element_index = super::region::input_element_index(
                     input,
@@ -682,11 +729,11 @@ impl TileGraph {
                 registers.insert(operation.output, output);
             }
             for (index, output) in region.outputs.iter().enumerate() {
-                builder.store_global_predicated(
+                builder.store_global_indexed(
                     &format!("output_{index}"),
                     registers[&output.value],
-                    global_row.clone(),
-                    global_col.clone(),
+                    linear_element.clone(),
+                    (global_row.clone(), global_col.clone()),
                     output_layout,
                 );
             }
@@ -1032,4 +1079,34 @@ impl TileGraph {
             Box::new(Expr::ThreadIdx(Dim::X)),
         )
     }
+}
+
+/// Decode the output batch coordinate and drop broadcast dimensions before
+/// computing an operand's contiguous matrix offset.
+fn batch_element_offset(output_batch: &[usize], input_shape: &[usize]) -> Expr {
+    // TODO(#61): Replace local address simplifications with shared egg index
+    // optimization, then extract batch-invariant bindings outside the K loop.
+    let input_batch = &input_shape[..input_shape.len() - 2];
+    let padding = output_batch.len() - input_batch.len();
+    let mut offset = Expr::Const(0);
+    let mut output_stride = 1;
+    let mut input_stride = input_shape[input_shape.len() - 2] * input_shape[input_shape.len() - 1];
+    for dimension in (0..output_batch.len()).rev() {
+        if dimension >= padding {
+            let extent = input_batch[dimension - padding];
+            if extent != 1 {
+                let coordinate = Expr::Mod(
+                    Box::new(Expr::FloorDiv(
+                        Box::new(Expr::BlockIdx(Dim::Z)),
+                        output_stride,
+                    )),
+                    output_batch[dimension],
+                );
+                offset = offset + coordinate * input_stride;
+            }
+            input_stride *= extent;
+        }
+        output_stride *= output_batch[dimension];
+    }
+    offset
 }

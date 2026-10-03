@@ -3,6 +3,7 @@ pub mod builder;
 pub mod graph;
 pub mod ir;
 pub mod matmul_region;
+pub mod matmul_schedule;
 pub mod reduction_region;
 pub mod region;
 
@@ -20,6 +21,7 @@ pub use ir::{
     MaxPool2dGeometry, MemorySpace, ReduceOp, Stmt, TileIR, TileVar,
 };
 pub use matmul_region::MatMulRegion;
+pub use matmul_schedule::*;
 pub use reduction_region::{
     ReductionInput, ReductionInputDomain, ReductionRegion, ReductionSchedule,
 };

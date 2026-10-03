@@ -20,7 +20,6 @@ use petgraph::{Graph, graph::NodeIndex};
 use std::collections::HashMap;
 #[cfg(feature = "cuda")]
 use std::collections::HashSet;
-use std::mem::swap;
 
 #[allow(dead_code)]
 pub struct TileGraph {
@@ -1188,11 +1187,11 @@ impl TileGraph {
 }
 
 fn staging_coordinates(transposed: bool) -> (Expr, Expr) {
-    let mut coordinates = (Expr::ThreadIdx(Dim::Y), Expr::ThreadIdx(Dim::X));
     if transposed {
-        swap(&mut coordinates.0, &mut coordinates.1);
+        (Expr::ThreadIdx(Dim::X), Expr::ThreadIdx(Dim::Y))
+    } else {
+        (Expr::ThreadIdx(Dim::Y), Expr::ThreadIdx(Dim::X))
     }
-    coordinates
 }
 
 // Choose which matrix coordinate varies across adjacent staging threads. This

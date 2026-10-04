@@ -74,7 +74,7 @@ pub(super) fn lower_scalar_stmt<'a>(
             lower_block(func, ctx, body);
             func.add_inst(Inst::Label(end));
         }
-        Stmt::ScalarLoop {
+        Stmt::ForLoop {
             loop_var,
             start,
             end,
@@ -88,18 +88,22 @@ pub(super) fn lower_scalar_stmt<'a>(
             }
             let counter = func.add_u64_register();
             let initial = lower_expr(func, ctx, start);
+            // Bounds belong to the surrounding scope, even when a nested loop
+            // shadows its parent's counter name.
+            let limit = lower_expr(func, ctx, end);
             func.add_inst(Inst::mov_u64(counter.clone(), initial));
             let outer = ctx.index_vars.insert(loop_var.clone(), counter.clone());
-            let begin = next_label(ctx, &format!("{loop_var}_loop"));
-            let done = next_label(ctx, &format!("{loop_var}_end"));
+            let begin = next_label(ctx, &format!("loop_start_{loop_var}"));
+            let body_label = next_label(ctx, &format!("loop_body_{loop_var}"));
+            let done = next_label(ctx, &format!("loop_end_{loop_var}"));
             func.add_inst(Inst::Label(begin));
-            let limit = lower_expr(func, ctx, end);
             let finished = func.add_predicate_register();
             func.add_inst(Inst::setp_ge_u64(finished.clone(), counter.clone(), limit));
             func.add_inst(Inst::Bra {
                 condition: finished,
                 target: done,
             });
+            func.add_inst(Inst::Label(body_label));
             lower_block(func, ctx, body);
             func.add_inst(Inst::add_u64(counter.clone(), counter, Operand::imm_u64(1)));
             func.add_inst(Inst::BraUni { target: begin });

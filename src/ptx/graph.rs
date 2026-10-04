@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::instructions::{AndInst, Inst, Operand};
 use super::target::PtxTarget;
-use super::types::{B32, F32, I32, U64};
+use super::types::{B32, F32, U64};
 use super::{Function, Module};
 use crate::tile::{
     DType, Dim, Expr, MemorySpace, RegionOpKind, SharedLayout, Stmt, TileGraph, TileIR, TileLayout,
@@ -224,7 +224,6 @@ struct LoweringContext<'a> {
     /// Storage dtype for global-memory parameters.
     param_dtypes: HashMap<String, crate::tile::DType>,
     /// Maps loop variable names to their i32 register operands
-    loop_vars: HashMap<String, Operand<'a, I32>>,
     index_vars: HashMap<String, Operand<'a, U64>>,
     /// Current offset into shared memory for allocation
     shared_mem_offset: usize,
@@ -250,7 +249,6 @@ impl<'a> LoweringContext<'a> {
             shared_mem_ptrs: HashMap::new(),
             param_ptrs: HashMap::new(),
             param_dtypes: HashMap::new(),
-            loop_vars: HashMap::new(),
             index_vars: HashMap::new(),
             shared_mem_offset: 0,
             tile_dims: HashMap::new(),
@@ -1566,7 +1564,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
         | Stmt::StoreScalar { .. }
         | Stmt::WarpReduce { .. }
         | Stmt::If { .. }
-        | Stmt::ScalarLoop { .. } => scalar::lower_scalar_stmt(func, ctx, stmt),
+        | Stmt::ForLoop { .. } => scalar::lower_scalar_stmt(func, ctx, stmt),
         Stmt::ReductionRegion { region } => {
             lower_reduction_region(func, ctx, region);
         }
@@ -1604,95 +1602,6 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
         }
         Stmt::Barrier => {
             func.add_inst(Inst::BarSync { barrier_id: 0 });
-        }
-        Stmt::ForLoop {
-            loop_var,
-            start,
-            end,
-            body,
-        } => {
-            // Implement for loop with labels and branches
-            let loop_counter = func.add_i32_register();
-
-            // Initialize loop counter
-            let start_val = lower_expr_i32(func, ctx, start);
-            // Using add with 0 as a workaround for mov
-            let temp = func.add_i32_register();
-            func.add_inst(Inst::add_i32(temp.clone(), start_val, Operand::imm_i32(0)));
-            func.add_inst(Inst::add_i32(
-                loop_counter.clone(),
-                temp,
-                Operand::imm_i32(0),
-            ));
-
-            // Track the loop variable in context
-            let outer_loop_var = ctx.loop_vars.insert(loop_var.clone(), loop_counter.clone());
-
-            // Create labels
-            let loop_start_label =
-                bumpalo::format!(in ctx.arena, "loop_start_{}", loop_var).into_bump_str();
-            let loop_body_label =
-                bumpalo::format!(in ctx.arena, "loop_body_{}", loop_var).into_bump_str();
-            let loop_end_label =
-                bumpalo::format!(in ctx.arena, "loop_end_{}", loop_var).into_bump_str();
-
-            // Loop start label
-            func.add_inst(Inst::Label(loop_start_label));
-
-            // Check loop condition: if counter < end, continue to body
-            let end_val = lower_expr_i32(func, ctx, end);
-            let pred = func.add_predicate_register();
-            func.add_inst(Inst::setp_lt_i32(
-                pred.clone(),
-                loop_counter.clone(),
-                end_val,
-            ));
-
-            // Branch to body if counter < end
-            func.add_inst(Inst::Bra {
-                condition: pred,
-                target: loop_body_label,
-            });
-
-            // Otherwise fall through to end
-            func.add_inst(Inst::BraUni {
-                target: loop_end_label,
-            });
-
-            // Loop body label
-            func.add_inst(Inst::Label(loop_body_label));
-
-            // Loop body
-            lower_block(func, ctx, body);
-
-            // Increment loop counter
-            let one = Operand::imm_i32(1);
-            let incremented = func.add_i32_register();
-            func.add_inst(Inst::add_i32(
-                incremented.clone(),
-                loop_counter.clone(),
-                one,
-            ));
-            func.add_inst(Inst::add_i32(
-                loop_counter.clone(),
-                incremented,
-                Operand::imm_i32(0),
-            ));
-
-            // Branch back to loop start
-            func.add_inst(Inst::BraUni {
-                target: loop_start_label,
-            });
-
-            // Loop end label
-            func.add_inst(Inst::Label(loop_end_label));
-
-            // Remove loop variable from context
-            if let Some(outer) = outer_loop_var {
-                ctx.loop_vars.insert(loop_var.clone(), outer);
-            } else {
-                ctx.loop_vars.remove(loop_var);
-            }
         }
     }
 }
@@ -3735,21 +3644,11 @@ fn lower_expr<'a>(
             if let Some(value) = ctx.index_vars.get(name) {
                 return value.clone();
             }
-            // Check if it's a loop variable
-            if let Some(loop_var_i32) = ctx.loop_vars.get(name) {
-                // Convert from i32 to u64
-                let result = func.add_u64_register();
-                func.add_inst(Inst::ConvertU64I32(super::instructions::ConvertInst::new(
-                    result.clone(),
-                    loop_var_i32.clone(),
-                )));
-                result
-            } else {
-                // Variable reference - would need to be tracked in context
-                let reg_name = bumpalo::format!(in ctx.arena, "%{}", name).into_bump_str();
-                Operand::reg(reg_name)
-            }
+            // Unbound external symbols retain the existing raw-register behavior.
+            let reg_name = bumpalo::format!(in ctx.arena, "%{}", name).into_bump_str();
+            Operand::reg(reg_name)
         }
+
         Expr::BlockIdx(dim) => {
             let block_idx = match dim {
                 Dim::X => super::instructions::BLOCK_ID.x.clone(),
@@ -3853,38 +3752,6 @@ fn lower_expr<'a>(
             ));
             let result = func.add_u64_register();
             func.add_inst(Inst::sub_u64(result.clone(), value, consumed));
-            result
-        }
-    }
-}
-
-/// Lower an expression to an I32 operand (for loop counters)
-fn lower_expr_i32<'a>(
-    func: &mut Function<'a>,
-    ctx: &LoweringContext<'a>,
-    expr: &Expr,
-) -> Operand<'a, I32> {
-    match expr {
-        Expr::Const(val) => Operand::imm_i32(*val as i32),
-        Expr::Var(name) => {
-            if let Some(value) = ctx.index_vars.get(name) {
-                let result = func.add_i32_register();
-                func.add_inst(Inst::convert_i32_u64(result.clone(), value.clone()));
-                return result;
-            }
-            // Check if it's a loop variable
-            if let Some(loop_var) = ctx.loop_vars.get(name) {
-                loop_var.clone()
-            } else {
-                let reg_name = bumpalo::format!(in ctx.arena, "%{}", name).into_bump_str();
-                Operand::reg(reg_name)
-            }
-        }
-        _ => {
-            // For complex expressions, compute as u64 then convert
-            let u64_val = lower_expr(func, ctx, expr);
-            let result = func.add_i32_register();
-            func.add_inst(Inst::convert_i32_u64(result.clone(), u64_val));
             result
         }
     }
@@ -4065,8 +3932,8 @@ mod tests {
                 if !pipelined {
                     continue;
                 }
-                let start = source.find("loop_body_k_tile:").unwrap();
-                let end = source[start..].find("loop_end_k_tile:").unwrap() + start;
+                let start = source.find("loop_body_k_tile_").unwrap();
+                let end = source[start..].find("loop_end_k_tile_").unwrap() + start;
                 let body = &source[start..end];
                 let wait = body.find("cp.async.wait_group 0;").unwrap();
                 let publish = body[wait..].find("bar.sync 0;").unwrap() + wait;

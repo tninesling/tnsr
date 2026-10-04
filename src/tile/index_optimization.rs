@@ -55,8 +55,7 @@ fn roots(stmt: &mut Stmt) -> Vec<&mut Expr> {
             coordinates: Some((row, col)),
             ..
         } => vec![row, col],
-        Stmt::ForLoop { start, end, .. } => vec![start, end],
-        Stmt::ScalarLoop {
+        Stmt::ForLoop {
             start,
             end,
             carries,
@@ -98,9 +97,7 @@ fn normalize(block: &mut Block, cache: &mut HashMap<Expr, Expr>) -> Result<()> {
             };
             *root = value;
         }
-        if let Stmt::ForLoop { body, .. } | Stmt::ScalarLoop { body, .. } | Stmt::If { body, .. } =
-            stmt
-        {
+        if let Stmt::ForLoop { body, .. } | Stmt::If { body, .. } = stmt {
             normalize(body, cache)?;
         }
     }
@@ -145,8 +142,7 @@ fn collect(
         if let Stmt::LetIndex { name, .. } = stmt {
             names.insert(name.clone());
         }
-        if let Stmt::ForLoop { loop_var, body, .. } | Stmt::ScalarLoop { loop_var, body, .. } = stmt
-        {
+        if let Stmt::ForLoop { loop_var, body, .. } = stmt {
             names.insert(loop_var.clone());
             let mut inner = scope.clone();
             inner.push(index);
@@ -230,9 +226,7 @@ fn place(block: &mut Block, scope: &Scope, bindings: &BTreeMap<Expr, Binding>) {
         for root in roots(&mut stmt) {
             substitute(root, bindings);
         }
-        if let Stmt::ForLoop { body, .. } | Stmt::ScalarLoop { body, .. } | Stmt::If { body, .. } =
-            &mut stmt
-        {
+        if let Stmt::ForLoop { body, .. } | Stmt::If { body, .. } = &mut stmt {
             let mut inner = scope.clone();
             inner.push(index);
             place(body, &inner, bindings);
@@ -353,6 +347,7 @@ mod tests {
                     start,
                     end,
                     body,
+                    ..
                 } => {
                     for i in evaluate(start, env)..evaluate(end, env) {
                         env.insert(loop_var.clone(), i);
@@ -373,11 +368,13 @@ mod tests {
             loop_var: "outer".into(),
             start: Expr::Const(0),
             end: Expr::Const(7),
+            carries: Vec::new(),
             body: Block {
                 stmts: vec![Stmt::ForLoop {
                     loop_var: "inner".into(),
                     start: Expr::Const(0),
                     end: Expr::Const(3),
+                    carries: Vec::new(),
                     body: Block {
                         stmts: vec![load(address)],
                     },

@@ -282,7 +282,6 @@ fn validate(
                     "global store requires an explicit conversion to thread scalars"
                 );
             }
-            Stmt::ForLoop { body, .. } => validate(body, &mut tiles.clone(), params)?,
             Stmt::SetScalar { dest, value } => {
                 validate_scalar(value, tiles)?;
                 define_scalar(*dest, tiles)?;
@@ -303,7 +302,7 @@ fn validate(
                 validate_predicate(condition, tiles)?;
                 validate(body, &mut tiles.clone(), params)?;
             }
-            Stmt::ScalarLoop { carries, body, .. } => {
+            Stmt::ForLoop { carries, body, .. } => {
                 let mut carries_seen = std::collections::HashSet::new();
                 for carry in carries {
                     anyhow::ensure!(

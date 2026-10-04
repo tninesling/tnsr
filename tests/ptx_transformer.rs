@@ -1261,10 +1261,10 @@ fn ptx_index_optimization_hoists_irregular_batch_decoding_and_preserves_precisio
             assert_eq!(ptx.execution_metrics().kernel_launches, 1);
             let source = ptx.module_source().unwrap();
             let body = source
-                .split("loop_body_k_tile:")
+                .split("loop_body_k_tile_")
                 .nth(1)
                 .unwrap()
-                .split("bra.uni loop_start_k_tile;")
+                .split("bra.uni loop_start_k_tile_")
                 .next()
                 .unwrap();
             assert!(
@@ -1279,7 +1279,7 @@ fn ptx_index_optimization_hoists_irregular_batch_decoding_and_preserves_precisio
             if batch == 3 {
                 assert!(
                     source
-                        .split("loop_start_k_tile:")
+                        .split("loop_start_k_tile_")
                         .next()
                         .unwrap()
                         .contains("div.u64")

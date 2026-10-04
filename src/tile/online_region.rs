@@ -1,6 +1,6 @@
 //! Coupled online normalization and weighted contraction, represented only in the
 //! scheduling IR. The tensor graph continues to use ordinary arithmetic/reductions.
-use super::{DType, KernelParam, RegionInput, TileIR};
+use super::{DType, IndexedSum, KernelParam, RegionInput, TileIR};
 use crate::graph::NodeIndex;
 use crate::tensor::{BinaryOp, Shape, UnaryOp};
 use anyhow::{Context, Result};
@@ -10,12 +10,7 @@ pub enum OnlineExpr {
     Input(usize),
     Unary(UnaryOp, Box<Self>),
     Binary(BinaryOp, Box<Self>, Box<Self>),
-    /// Scalar dot-product producer. Operands retain their virtual access maps.
-    Dot {
-        lhs: usize,
-        rhs: usize,
-        width: usize,
-    },
+    Sum(Box<IndexedSum>),
 }
 
 /// Supported consumers of the running normalizer state.
@@ -24,7 +19,7 @@ pub enum OnlineConsumer {
     /// Sum of stable exponentials, without any downstream normalization.
     Normalizer,
     /// A homogeneous sum can carry a numerator under the normalizer's rescaling.
-    WeightedSum { weights: usize, elementwise: bool },
+    Sum(IndexedSum),
 }
 
 /// Compiler analysis metadata, eliminated into ordinary scalar scheduling IR.

@@ -48,6 +48,22 @@ second broadcast belongs to the consumer rule: it proves that the denominator
 is invariant along the sum, rather than being necessary to discover normalization.
 Whole attention is never a tensor-IR pattern or operation.
 
+Matmul and explicit multiply/reduce expressions are first canonicalized into a
+shared `IndexedSum`: a reduction extent and two operands with logical access
+maps over output coordinates plus the reduction coordinate. This representation
+is used on both sides of normalization. `OnlineExpr::Dot` and the matrix versus
+elementwise weighted-output flag are removed. The contraction lowering emits
+ordinary loads, multiplication, addition, and `ForLoop`; it contains no score
+or weight matrix address formulas.
+
+The consumer rule binds the unnormalized exponential as an inlined scalar
+argument and applies the normalizer's scale to an ordinary `SumAccumulator`.
+Its access-map check proves that the denominator belongs to the output row and
+is invariant along the contraction. For example, transposing row-normalized
+probabilities before contraction fails that check and retains the reference
+plan. Singleton-axis reshapes preserve coordinates directly, so equivalent
+broadcast/multiply/reduce forms need no special attention syntax.
+
 `S` can be an input or a bounded arithmetic expression containing a matrix
 product. This applies to hand-written primitive expressions as well as
 `nn::scaled_dot_product_attention` and attention inside `TransformerBlock`.
@@ -72,7 +88,7 @@ repeat score production and is not performance-tuned.
 
 `OnlineRegion` remains transient compiler analysis metadata. It is eliminated
 before backend lowering; the old `Stmt::OnlineRegion` and dedicated PTX emitter
-are removed. `ScalarLoop` initializes carried scalars before the loop, including
+are removed. `ForLoop` initializes carried scalars before the loop, including
 empty loops, and its ordinary assignments update the state. Body-local values
 cannot escape their scope. Loads, floating-point operations, and barriers are
 never moved by index optimization.
@@ -89,6 +105,8 @@ or tensor cores.
 This is closer to composing normalization and fusion rules, but it still chooses
 a fixed 32-score schedule and directly recognizes compatible sum consumers.
 The compiler does not yet search equivalent scalar loops, tilings, or schedules.
+Consumer matching currently accepts indexed multiply/sum contractions; it does
+not prove arbitrary nonlinear consumers compatible with online rescaling.
 
 ## Attention-only measurements
 
@@ -168,3 +186,23 @@ intermediate bytes. These six cases show 1.17–1.33x faster resident execution
 with generic lowering; this is not a claim about arbitrary attention shapes.
 Raw runs, timing spreads, end-to-end timings, and compilation/index-optimization
 metrics are in [checkpoint-comparison.csv](../benchmarks/attention-online/checkpoint-comparison.csv).
+
+
+The scheduling IR now has a single counted-loop node, `ForLoop`, with optional
+carried scalar state. Matmul tile loops and online normalization use the same
+backend handler and u64 index bindings. Unique labels and lexical bindings
+support nesting and repeated loop-variable names without register narrowing.
+
+
+The indexed-contraction refactor is compared directly against saved commit
+`0662732` in [indexed-sum-comparison.csv](../benchmarks/attention-online/indexed-sum-comparison.csv).
+Runs alternate implementations, using three process runs per implementation
+and the same six attention cases. Equivalence tests exercise all four
+matmul/explicit-sum combinations for score and output contractions, compare
+physical storage maps, check batched explicit contractions, and reject a
+contraction with a varying normalizer.
+
+The measured resident medians remain within about 3.2% of the checkpoint in
+these six cases (five are lower, one is 0.3% higher). This refactor preserves
+performance rather than demonstrating a material speedup. Every indexed case
+still uses one kernel and zero intermediate materialized bytes.

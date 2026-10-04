@@ -1,5 +1,6 @@
 //! Build normalized reductions from explicit scalar arithmetic and loop state.
-use super::region::{input_coordinate_index, input_element_index};
+use super::indexed_sum::SumAccumulator;
+use super::region::input_element_index;
 use super::*;
 use crate::tensor::{BinaryOp, ReduceOp, UnaryOp};
 use anyhow::{Context, Result};
@@ -57,8 +58,7 @@ fn score(
             let b = score(builder, region, b, offset)?;
             builder.value(arithmetic(*op, a, b))
         }
-        OnlineExpr::Dot { lhs, rhs, width } => {
-            let rank = region.score_shape.len();
+        OnlineExpr::Sum(sum) => {
             let mut coordinates = Vec::new();
             let mut stride = 1;
             for &dim in region.score_shape.iter().rev() {
@@ -69,32 +69,7 @@ fn score(
                 stride *= dim;
             }
             coordinates.reverse();
-            let result = builder.var();
-            let name = builder.loop_name("dot");
-            builder.fold(
-                name,
-                constant(*width)?,
-                vec![LoopCarry {
-                    var: result,
-                    initial: ScalarExpr::Constant(0.0),
-                }],
-                |builder, feature| {
-                    let mut a = coordinates.clone();
-                    a[rank - 1] = feature.clone();
-                    let mut b = coordinates.clone();
-                    b[rank - 2] = feature;
-                    let a_index = input_coordinate_index(&region.inputs[*lhs], &a)?;
-                    let b_index = input_coordinate_index(&region.inputs[*rhs], &b)?;
-                    let a = builder.load(ScalarMemory::Global(format!("input_{lhs}")), a_index);
-                    let b = builder.load(ScalarMemory::Global(format!("input_{rhs}")), b_index);
-                    builder.set(
-                        result,
-                        arithmetic(BinaryOp::Add, result, arithmetic(BinaryOp::Mul, a, b)),
-                    );
-                    Ok(())
-                },
-            )?;
-            result
+            sum.lower(builder, &region.inputs, &coordinates)?
         }
     })
 }
@@ -121,11 +96,6 @@ fn merge(
 pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usize)> {
     let rank = region.score_shape.len();
     let keys = region.score_shape[rank - 1];
-    let rows = if rank > 1 {
-        region.score_shape[rank - 2]
-    } else {
-        1
-    };
     let columns = region.output_shape[rank - 1];
     let cooperative = region.block_threads().is_some();
     let lane = Expr::ThreadIdx(Dim::X);
@@ -147,7 +117,6 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
         )
     };
     let score_base = fiber.clone() * keys;
-    let weight_base = Expr::FloorDiv(Box::new(fiber), rows) * (keys * columns);
     let mut builder = ScalarBuilder::default();
     if !cooperative {
         builder.stmts.push(Stmt::BoundsCheck { extent });
@@ -168,7 +137,7 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
     };
     let maximum = builder.var();
     let denominator = builder.var();
-    let numerator = builder.var();
+    let numerator = SumAccumulator::new(&mut builder);
     let tile_size = if cooperative { 32 } else { 1 };
     let name = builder.loop_name("scan");
     builder.fold(
@@ -183,10 +152,7 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
                 var: denominator,
                 initial: ScalarExpr::Constant(0.0),
             },
-            LoopCarry {
-                var: numerator,
-                initial: ScalarExpr::Constant(0.0),
-            },
+            numerator.carry(),
         ],
         |builder, tile| {
             let base = tile * tile_size;
@@ -211,7 +177,7 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
                 builder.barrier();
                 let reference = builder.load(ScalarMemory::Shared(shared), Expr::Const(32));
                 let alpha = merge(builder, maximum, denominator, reference);
-                builder.set(numerator, arithmetic(BinaryOp::Mul, numerator, alpha));
+                numerator.rescale(builder, alpha);
             }
             let name = builder.loop_name("consume");
             builder.fold(name, constant(tile_size)?, Vec::new(), |builder, local| {
@@ -229,7 +195,7 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
                     };
                     if !cooperative {
                         let alpha = merge(builder, maximum, denominator, value);
-                        builder.set(numerator, arithmetic(BinaryOp::Mul, numerator, alpha));
+                        numerator.rescale(builder, alpha);
                     }
                     let probability = builder.value(ScalarExpr::select(
                         equal(value, f32::NEG_INFINITY),
@@ -240,27 +206,26 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
                         denominator,
                         arithmetic(BinaryOp::Add, denominator, probability),
                     );
-                    if let OnlineConsumer::WeightedSum {
-                        weights,
-                        elementwise,
-                    } = region.consumer
-                    {
+                    if let OnlineConsumer::Sum(sum) = &region.consumer {
                         builder.when(less(column.clone(), columns)?, |builder| {
-                            let offset = if elementwise {
-                                score_base.clone() + key
-                            } else {
-                                weight_base.clone() + key * columns + column.clone()
-                            };
-                            let weight = load(builder, region, weights, offset)?;
-                            builder.set(
-                                numerator,
-                                arithmetic(
-                                    BinaryOp::Add,
-                                    numerator,
-                                    arithmetic(BinaryOp::Mul, probability, weight),
-                                ),
-                            );
-                            Ok(())
+                            let mut point = Vec::new();
+                            let mut stride = 1;
+                            for &dim in region.output_shape.iter().rev() {
+                                point.push(Expr::Mod(
+                                    Box::new(Expr::FloorDiv(Box::new(output.clone()), stride)),
+                                    dim,
+                                ));
+                                stride *= dim;
+                            }
+                            point.reverse();
+                            point.push(key);
+                            sum.accumulate(
+                                builder,
+                                &region.inputs,
+                                &numerator,
+                                &point,
+                                Some(probability),
+                            )
                         })?;
                     }
                     Ok(())
@@ -280,7 +245,7 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
                 ScalarExpr::Constant(f32::NAN),
                 denominator,
             ),
-            OnlineConsumer::WeightedSum { .. } => arithmetic(BinaryOp::Div, numerator, denominator),
+            OnlineConsumer::Sum(_) => arithmetic(BinaryOp::Div, numerator.0, denominator),
         });
         builder.store(ScalarMemory::Global("output_0".into()), output, result);
         Ok(())

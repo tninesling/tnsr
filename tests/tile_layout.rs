@@ -79,7 +79,7 @@ fn check_views<D: CudaDType>(epsilon: f32) {
             let source = executor.module_source().unwrap();
             if precision == MatMulPrecision::AllowTf32 {
                 assert_eq!(source.matches("wmma.store.d").count(), 1);
-                let end = source.find("loop_end_k_tile:").unwrap();
+                let end = source.find("loop_end_k_tile_").unwrap();
                 assert!(source.find("wmma.store.d").unwrap() > end);
             }
         }

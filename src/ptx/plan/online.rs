@@ -1,9 +1,12 @@
 //! Recognize normalization algebra, then inline legal score producers. This pass
 //! never adds an attention operation or changes the user's differentiation graph.
 use super::*;
+mod contraction;
 mod normalization;
 use crate::tensor::{BinaryOp, ReduceOp, UnaryOp};
+use crate::tile::{IndexExpr, IndexMap, IndexedSource};
 use crate::tile::{OnlineConsumer, OnlineExpr, OnlineRegion, RegionInput, RegionValue, TileDType};
+use contraction::{contraction, view_root};
 use normalization::{Normalization, match_normalization};
 
 impl PtxExecutionPlan {
@@ -76,7 +79,7 @@ impl PtxExecutionPlan {
                 output_shapes: vec![region.output_shape.clone()],
                 operation: match region.consumer {
                     OnlineConsumer::Normalizer => "OnlineNormalizer",
-                    OnlineConsumer::WeightedSum { .. } => "OnlineNormalizedContraction",
+                    OnlineConsumer::Sum(_) => "OnlineNormalizedContraction",
                 },
                 shape: region.output_shape.clone(),
                 action: PtxPlanAction::OnlineRegion(id),
@@ -137,55 +140,57 @@ fn recognize<D: TileDType, G>(
     boundaries: &HashSet<NodeIndex>,
     normalizer_only: bool,
 ) -> Option<OnlineRegion> {
-    let (mut normalization, weights, elementwise) = if normalizer_only {
-        (match_normalization(graph, output)?, None, false)
+    let (mut normalization, matched) = if normalizer_only {
+        (match_normalization(graph, output)?, None)
     } else {
-        match graph[output] {
-            TensorGraphNode::MatMul { .. } => {
-                let [normalized, weights]: [NodeIndex; 2] = graph.inputs(output).try_into().ok()?;
-                (normalized_input(graph, normalized)?, Some(weights), false)
+        let mut sum = contraction(graph, output)?;
+        let mut matched = None;
+        for argument in 0..2 {
+            let (view, views) = view_root(graph, sum.operands[argument])?;
+            let Some(n) = normalized_input(graph, view.source) else {
+                continue;
+            };
+            let shape = graph[n.score].shape();
+            let output_shape = graph[output].shape();
+            // The existing schedule handles one normalized row per output row.
+            if output_shape.len() != shape.len()
+                || output_shape[..shape.len() - 1] != shape[..shape.len() - 1]
+                || sum.extent != shape[shape.len() - 1]
+            {
+                continue;
             }
-            TensorGraphNode::ReduceAxis {
-                op: ReduceOp::Sum,
-                axis,
-                ..
-            } => {
-                let [product]: [NodeIndex; 1] = graph.inputs(output).try_into().ok()?;
-                let operands = binary(graph, product, BinaryOp::Mul)?;
-                let (mut normalization, weights) =
-                    if let Some(n) = normalized_input(graph, operands[0]) {
-                        (n, operands[1])
-                    } else {
-                        (normalized_input(graph, operands[1])?, operands[0])
-                    };
-                if axis + 1 != graph[normalization.score].shape().len() {
-                    return None;
-                }
-                normalization.members.push(product);
-                (normalization, Some(weights), true)
+            let mut domain = output_shape.clone();
+            domain.push(sum.extent);
+            let mapped = view
+                .access
+                .compose(&sum.accesses[argument])
+                .ok()?
+                .normalize_in_domain(&domain)
+                .ok()?;
+            let mut expected = IndexMap::identity(shape.len());
+            expected.results[shape.len() - 1] = IndexExpr::IterDim(shape.len());
+            if mapped != expected.normalize_in_domain(&domain).ok()? {
+                continue;
             }
-            _ => return None,
+            sum.accesses[argument] = mapped;
+            let mut n = n;
+            n.members.extend(views);
+            if argument == 1 {
+                sum.operands.swap(0, 1);
+                sum.accesses.swap(0, 1);
+            }
+            matched = Some((n, sum));
+            break;
         }
+        let (n, sum) = matched?;
+        (n, Some(sum))
     };
     normalization.members.push(output);
     let shape = graph[normalization.score].shape().clone();
-    let rank = shape.len();
-    if let Some(weights) = weights {
-        let weight_shape = graph[weights].shape();
-        if elementwise {
-            if weight_shape != &shape {
-                return None;
-            }
-        } else if rank < 2
-            || weight_shape.len() != rank
-            || weight_shape[..rank - 2] != shape[..rank - 2]
-            || weight_shape[rank - 2] != shape[rank - 1]
-            || weight_shape[rank - 1] == 0
-        {
-            return None;
-        }
-    }
     let mut members = normalization.members;
+    if let Some(sum) = &matched {
+        members.extend(&sum.members);
+    }
     let mut inputs = Vec::new();
     let score_expr = producer(
         graph,
@@ -196,11 +201,9 @@ fn recognize<D: TileDType, G>(
         boundaries,
         0,
     )?;
-    let consumer = if let Some(weights) = weights {
-        OnlineConsumer::WeightedSum {
-            weights: add_input(graph, weights, &mut inputs),
-            elementwise,
-        }
+    let consumer = if let Some(sum) = matched {
+        let weight = add_input(graph, sum.operands[1], &mut inputs);
+        OnlineConsumer::Sum(sum.bind(IndexedSource::Argument, IndexedSource::Input(weight)))
     } else {
         OnlineConsumer::Normalizer
     };
@@ -300,6 +303,7 @@ fn producer<D: TileDType, G>(
         return Some(OnlineExpr::Input(add_input(graph, node, inputs)));
     }
     let operands = graph.inputs(node);
+    let indexed = contraction(graph, node);
     let expression = match graph[node] {
         TensorGraphNode::Unary { op, .. } => OnlineExpr::Unary(
             op,
@@ -334,22 +338,14 @@ fn producer<D: TileDType, G>(
                 depth + 1,
             )?),
         ),
-        TensorGraphNode::MatMul { .. } => {
-            let lhs = graph[operands[0]].shape();
-            let rhs = graph[operands[1]].shape();
-            let rank = shape.len();
-            if lhs.len() != rank
-                || rhs.len() != rank
-                || lhs[..rank - 2] != shape[..rank - 2]
-                || rhs[..rank - 2] != shape[..rank - 2]
-            {
-                return None;
-            }
-            OnlineExpr::Dot {
-                lhs: add_input(graph, operands[0], inputs),
-                rhs: add_input(graph, operands[1], inputs),
-                width: lhs[rank - 1],
-            }
+        _ if indexed.is_some() => {
+            let sum = indexed?;
+            let lhs = add_input(graph, sum.operands[0], inputs);
+            let rhs = add_input(graph, sum.operands[1], inputs);
+            members.extend(&sum.members);
+            OnlineExpr::Sum(Box::new(
+                sum.bind(IndexedSource::Input(lhs), IndexedSource::Input(rhs)),
+            ))
         }
         _ => return Some(OnlineExpr::Input(add_input(graph, node, inputs))),
     };

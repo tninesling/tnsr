@@ -41,3 +41,6 @@ pub use reduction_region::{
 pub use region::{FusionRegion, RegionInput, RegionOp, RegionOpKind, RegionOutput, RegionValue};
 
 mod normalized_schedule;
+
+pub mod indexed_sum;
+pub use indexed_sum::{IndexedOperand, IndexedSource, IndexedSum};

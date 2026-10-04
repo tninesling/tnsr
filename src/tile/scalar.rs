@@ -188,7 +188,7 @@ impl ScalarBuilder {
         build: impl FnOnce(&mut Self, Expr) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         let body = self.block(|builder| build(builder, Expr::Var(loop_var.clone())))?;
-        self.stmts.push(super::Stmt::ScalarLoop {
+        self.stmts.push(super::Stmt::ForLoop {
             loop_var,
             start: Expr::Const(0),
             end: extent,

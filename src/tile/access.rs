@@ -170,6 +170,18 @@ impl IndexMap {
         })
     }
 
+    /// Canonicalize accesses under the static bounds of their iteration domain.
+    pub fn normalize_in_domain(&self, shape: &[usize]) -> Result<Self> {
+        Ok(Self {
+            results: self
+                .results
+                .iter()
+                .cloned()
+                .map(|e| super::index_egraph::normalize_map_in_domain(e, shape))
+                .collect::<Result<_>>()?,
+        })
+    }
+
     pub fn evaluate(&self, iteration: &[i64], symbols: &[i64]) -> Result<Vec<i64>> {
         self.results
             .iter()
@@ -182,6 +194,34 @@ impl IndexMap {
             element_count(input_shape)? == element_count(output_shape)?,
             "reshape access map must preserve element count"
         );
+        // Adding/removing singleton axes preserves every nontrivial coordinate.
+        // Keep these maps explicit instead of flattening and decoding them again.
+        let input_axes: Vec<_> = input_shape.iter().copied().filter(|&d| d != 1).collect();
+        let output_axes: Vec<_> = output_shape
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d != 1)
+            .collect();
+        if input_axes
+            .iter()
+            .copied()
+            .eq(output_axes.iter().map(|(_, d)| **d))
+        {
+            let mut axes = output_axes.iter();
+            let results = input_shape
+                .iter()
+                .map(|&extent| {
+                    if extent == 1 {
+                        Ok(IndexExpr::Const(0))
+                    } else {
+                        let (dimension, _) =
+                            axes.next().context("reshape coordinate is missing")?;
+                        Ok(IndexExpr::IterDim(*dimension))
+                    }
+                })
+                .collect::<Result<_>>()?;
+            return Ok(Self { results });
+        }
         let output_strides = row_major_strides(output_shape)?;
         let input_strides = row_major_strides(input_shape)?;
         let linear = output_strides.iter().enumerate().fold(
@@ -487,6 +527,10 @@ mod tests {
             (vec![2, 3, 4], vec![6, 4]),
             (vec![2, 3, 4], vec![4, 3, 2]),
             (vec![24], vec![2, 2, 2, 3]),
+            (vec![1, 2, 1, 3, 1], vec![2, 3]),
+            (vec![2, 3], vec![1, 2, 1, 3, 1]),
+            (vec![1, 1], vec![1, 1, 1]),
+            (vec![2, 1, 3], vec![1, 2, 3, 1]),
         ] {
             let map = IndexMap::reshape(&input_shape, &output_shape).unwrap();
             for output_index in coordinates(&output_shape) {

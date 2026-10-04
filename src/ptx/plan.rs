@@ -1,4 +1,10 @@
+mod fusion;
+mod fusion_features;
+pub use fusion::{FusionAlternative, FusionAlternativeKind, FusionDecision, PtxFusionPolicy};
+
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt::{self, Display};
 
 use anyhow::{Context, Result};
 use petgraph::Direction;
@@ -14,6 +20,23 @@ use crate::tile::{
     MatMulResources, MatMulSchedule, MatMulSharedLayout, ReductionRegion, ReductionSchedule,
     VirtualTensor,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FusionPlanError {
+    ContractionCycle,
+}
+
+impl Display for FusionPlanError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ContractionCycle => {
+                formatter.write_str("fusion plan contraction contains a cycle")
+            }
+        }
+    }
+}
+
+impl Error for FusionPlanError {}
 
 const MAX_POINTWISE_REGION_OPS: usize = 64;
 const MAX_VIRTUAL_INDEX_OPS: usize = 64;
@@ -77,6 +100,7 @@ pub struct PtxExecutionPlan {
     matmul_regions: Vec<MatMulRegion>,
     matmul_schedules: HashMap<NodeIndex, MatMulSchedule>,
     graph_output: Option<NodeIndex>,
+    fusion_decisions: Vec<FusionDecision>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -114,9 +138,8 @@ impl PtxExecutionPlan {
         ) {
             Ok(plan) => Ok(plan),
             Err(error)
-                if error
-                    .to_string()
-                    .contains("fusion plan contraction contains a cycle") =>
+                if error.downcast_ref::<FusionPlanError>()
+                    == Some(&FusionPlanError::ContractionCycle) =>
             {
                 Self::build_with_regions(
                     graph,
@@ -235,8 +258,8 @@ impl PtxExecutionPlan {
                 quotient.add_edge(quotient_nodes[source], quotient_nodes[target], ());
             }
         }
-        let physical_order = toposort(&quotient, None)
-            .map_err(|_| anyhow::anyhow!("fusion plan contraction contains a cycle"))?;
+        let physical_order =
+            toposort(&quotient, None).map_err(|_| FusionPlanError::ContractionCycle)?;
 
         let virtual_view_path = virtual_view_paths(
             graph,
@@ -511,6 +534,7 @@ impl PtxExecutionPlan {
             matmul_regions,
             matmul_schedules,
             graph_output,
+            fusion_decisions: Vec::new(),
         })
     }
 
@@ -726,6 +750,11 @@ fn form_reduction_regions<D: crate::tile::TileDType, G>(
         {
             broadcast_members.clear();
             full_epilogue_members.clear();
+        }
+        // Broadcast bridges are written only by the full-domain epilogue.
+        // Without one, export the reduced value and leave the bridge virtual.
+        if full_epilogue_members.is_empty() {
+            broadcast_members.clear();
         }
         if producer_members.is_empty()
             && epilogue_members.is_empty()
@@ -1055,6 +1084,30 @@ fn assign_plan_liveness<D: crate::tile::TileDType, G>(
 mod tests {
     use super::*;
     use crate::tensor::TensorExpr;
+
+    #[test]
+    fn contraction_cycle_is_a_typed_error_even_with_context() {
+        let graph: TensorGraph<f32> = TensorExpr::input("x", vec![4]).relu().exp().log().into();
+        let order = graph.toposort();
+        // Combining nonadjacent operations would put the intervening Exp both
+        // before and after the region in the contracted graph.
+        let region =
+            FusionRegion::from_graph(&graph, vec![order[1], order[3]], vec![order[3]]).unwrap();
+        let error = PtxExecutionPlan::build_with_regions(
+            &graph,
+            &order,
+            vec![region],
+            Vec::new(),
+            Vec::new(),
+            order.last().copied(),
+        )
+        .unwrap_err()
+        .context("while evaluating a fusion candidate");
+        assert_eq!(
+            error.downcast_ref::<FusionPlanError>(),
+            Some(&FusionPlanError::ContractionCycle)
+        );
+    }
 
     #[test]
     fn pointwise_diamond_forms_one_closed_region_without_graph_mutation() {

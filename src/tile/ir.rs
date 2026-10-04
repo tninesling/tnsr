@@ -390,6 +390,11 @@ impl DType {
 }
 
 /// Host scalar types that can be represented by the tile IR.
+///
+/// `tensor::DType` is a blanket `Clone` marker; this lowering capability adds
+/// an explicit IR-format mapping. Host graph types such as `f64` can satisfy
+/// the marker without being supported by tile lowering. TF32 is an IR compute
+/// representation, not a separate Rust host scalar type.
 pub trait TileDType: crate::tensor::DType + 'static {
     const TILE_DTYPE: DType;
 }

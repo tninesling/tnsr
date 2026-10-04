@@ -275,6 +275,50 @@ impl TileIRBuilder {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_global_to_shared_indexed(
+        &mut self,
+        dest: TileVar,
+        src_param: &str,
+        element_index: Expr,
+        bounds: (Expr, Expr),
+        tile_coordinates: (Expr, Expr),
+        layout: MatrixLayout,
+        copy_bytes: usize,
+    ) {
+        self.stmts.push(Stmt::AsyncCopy {
+            dest,
+            src_param: src_param.to_string(),
+            element_index,
+            row: bounds.0,
+            col: bounds.1,
+            tile_row: tile_coordinates.0,
+            tile_col: tile_coordinates.1,
+            layout,
+            copy_bytes,
+        });
+    }
+
+    pub fn select_shared_stage(&mut self, first: TileVar, second: TileVar, stage: Expr) -> TileVar {
+        let dest = TileVar(self.next_var);
+        self.next_var += 1;
+        self.stmts.push(Stmt::SelectSharedStage {
+            dest,
+            first,
+            second,
+            stage,
+        });
+        dest
+    }
+
+    pub fn async_commit(&mut self) {
+        self.stmts.push(Stmt::AsyncCommit);
+    }
+
+    pub fn async_wait(&mut self) {
+        self.stmts.push(Stmt::AsyncWait);
+    }
+
     pub fn store_global_indexed(
         &mut self,
         dest_param: &str,

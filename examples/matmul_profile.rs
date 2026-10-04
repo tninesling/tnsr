@@ -17,7 +17,7 @@ use tnsr::ptx::{
     types::{BF16, CudaDType, F16, F32},
 };
 use tnsr::tensor::{Parameter, TensorExpr};
-use tnsr::tile::{MatMulPrecision, MatMulSharedLayout};
+use tnsr::tile::{MatMulPipeline, MatMulPrecision, MatMulSharedLayout};
 use tnsr::{Executor, SimpleExecutor};
 
 struct Launch {
@@ -130,6 +130,17 @@ fn profile<D: CudaDType>() -> Result<()> {
         other => anyhow::bail!("unsupported shared layout {other}"),
     };
     executor.set_matmul_shared_layout(layout);
+    executor.set_matmul_pipeline(
+        match std::env::var("TNSR_PROFILE_PIPELINE")
+            .as_deref()
+            .unwrap_or("auto")
+        {
+            "auto" => MatMulPipeline::Auto,
+            "sync" => MatMulPipeline::Synchronous,
+            "double" => MatMulPipeline::DoubleBuffered,
+            other => anyhow::bail!("unsupported matmul pipeline {other}"),
+        },
+    );
     executor.compile_owned(graph.clone())?;
     let description = executor.describe_plan(&graph)?;
     let source = executor.module_source().context("missing PTX")?;

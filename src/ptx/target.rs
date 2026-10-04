@@ -49,6 +49,10 @@ impl PtxTarget {
         }
     }
 
+    pub const fn supports_async_copy(self) -> bool {
+        self.compute_capability.0 >= 8
+    }
+
     pub const fn supports_tf32(self) -> bool {
         self.compute_capability.0 >= 8
     }

@@ -30,6 +30,14 @@ fn roots(stmt: &mut Stmt) -> Vec<&mut Expr> {
             tile_row,
             tile_col,
             ..
+        }
+        | Stmt::AsyncCopy {
+            element_index,
+            row,
+            col,
+            tile_row,
+            tile_col,
+            ..
         } => vec![element_index, row, col, tile_row, tile_col],
         Stmt::LoadGlobalPredicated {
             element_index,
@@ -48,6 +56,7 @@ fn roots(stmt: &mut Stmt) -> Vec<&mut Expr> {
             ..
         } => vec![row, col],
         Stmt::ForLoop { start, end, .. } => vec![start, end],
+        Stmt::SelectSharedStage { stage, .. } => vec![stage],
         _ => Vec::new(),
     }
 }

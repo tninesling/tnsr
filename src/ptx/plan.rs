@@ -10,8 +10,9 @@ use petgraph::visit::EdgeRef;
 use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::Shape;
 use crate::tile::{
-    FusionRegion, MatMulCapabilities, MatMulPrecision, MatMulRegion, MatMulResources,
-    MatMulSchedule, MatMulSharedLayout, ReductionRegion, ReductionSchedule, VirtualTensor,
+    FusionRegion, MatMulCapabilities, MatMulPipeline, MatMulPrecision, MatMulRegion,
+    MatMulResources, MatMulSchedule, MatMulSharedLayout, ReductionRegion, ReductionSchedule,
+    VirtualTensor,
 };
 
 const MAX_POINTWISE_REGION_OPS: usize = 64;
@@ -531,6 +532,8 @@ impl PtxExecutionPlan {
         precision: MatMulPrecision,
         resources: MatMulResources,
         shared_layout: MatMulSharedLayout,
+        pipeline: MatMulPipeline,
+        supports_async: bool,
     ) -> Result<()> {
         for schedule in self.matmul_schedules.values_mut() {
             let shape = schedule.logical_shape;
@@ -543,9 +546,18 @@ impl PtxExecutionPlan {
                 precision,
                 resources,
             )
-            .with_shared_layout(shared_layout, resources)?;
+            .with_shared_layout(shared_layout, resources)?
+            .with_pipeline(pipeline, supports_async, true, resources);
         }
         for region in &mut self.matmul_regions {
+            // Half copies require adjacent, aligned pairs. Identity access maps
+            // prove this for contiguous matrices, including implicit batch broadcasts.
+            let contiguous = [region.lhs_value, region.rhs_value].iter().all(|value| {
+                region
+                    .inputs
+                    .iter()
+                    .any(|input| input.value == *value && input.tensor.access.is_identity())
+            });
             region.schedule = MatMulSchedule::select_with_resources(
                 region.m,
                 region.n,
@@ -555,7 +567,8 @@ impl PtxExecutionPlan {
                 precision,
                 resources,
             )
-            .with_shared_layout(shared_layout, resources)?;
+            .with_shared_layout(shared_layout, resources)?
+            .with_pipeline(pipeline, supports_async, contiguous, resources);
         }
         Ok(())
     }

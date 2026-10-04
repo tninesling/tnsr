@@ -79,6 +79,23 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                     },
                 );
             }
+            Stmt::SelectSharedStage {
+                dest,
+                first,
+                second,
+                ..
+            } => {
+                let (first, second) = (get(tiles, first)?, get(tiles, second)?);
+                anyhow::ensure!(
+                    matches!(first.layout, TileLayout::Shared(_))
+                        && first.layout == second.layout
+                        && first.dtype == second.dtype
+                        && first.rows == second.rows
+                        && first.cols == second.cols,
+                    "pipeline stages must have identical shared layouts"
+                );
+                tiles.insert(*dest, first);
+            }
             Stmt::LoadSharedToReg { dest, src } => {
                 let source = get(tiles, src)?;
                 anyhow::ensure!(
@@ -95,6 +112,10 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                 layout,
                 schedule,
             } => {
+                anyhow::ensure!(
+                    matches!(schedule.pipeline_stages, 1 | 2),
+                    "matmul pipeline must have one or two stages"
+                );
                 anyhow::ensure!(
                     matches!(layout, MatMulLayout::NN),
                     "matmul transposes must be expressed by logical access maps"
@@ -114,7 +135,9 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                     ),
                 ] {
                     let tile = get(tiles, var)?;
-                    let dtype = if schedule.plan == MatMulPlan::ScalarF32 {
+                    let dtype = if schedule.plan == MatMulPlan::ScalarF32
+                        || schedule.pipeline_stages == 2
+                    {
                         schedule.storage_dtype
                     } else {
                         schedule.operand_dtype
@@ -214,6 +237,28 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                         "pointwise operation requires thread scalars"
                     );
                 }
+            }
+            Stmt::AsyncCopy {
+                dest,
+                layout,
+                copy_bytes,
+                ..
+            } => {
+                let tile = get(tiles, dest)?;
+                anyhow::ensure!(
+                    matches!(copy_bytes, 4 | 16),
+                    "unsupported asynchronous copy width"
+                );
+                let group = copy_bytes / tile.dtype.size_bytes();
+                let TileLayout::Shared(physical) = tile.layout else {
+                    anyhow::bail!("asynchronous copy requires shared memory");
+                };
+                anyhow::ensure!(
+                    physical.row_stride.is_multiple_of(group)
+                        && physical.xor_mask & (group - 1) == 0
+                        && layout.cols.is_multiple_of(group),
+                    "asynchronous copies require aligned contiguous groups"
+                );
             }
             Stmt::LoadGlobalToSharedPredicated { dest, .. } => {
                 anyhow::ensure!(

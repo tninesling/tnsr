@@ -708,6 +708,18 @@ impl<'a> fmt::Display for Inst<'a> {
                 )
             }
 
+            Inst::ConvertTf32Bits { dst, src } => write!(f, "cvt.rna.tf32.f32 {dst}, {src};"),
+            Inst::AsyncCopy {
+                dst,
+                src,
+                source_bytes,
+                copy_bytes,
+            } => write!(
+                f,
+                "cp.async.ca.shared.global [{dst}], [{src}], {copy_bytes}, {source_bytes};"
+            ),
+            Inst::AsyncCommit => write!(f, "cp.async.commit_group;"),
+            Inst::AsyncWait => write!(f, "cp.async.wait_group 0;"),
             Inst::WmmaLoadA {
                 dtype,
                 frags,

@@ -1,3 +1,4 @@
+mod online;
 use std::collections::{HashMap, HashSet};
 
 use super::instructions::{AndInst, Inst, Operand};
@@ -5,7 +6,8 @@ use super::target::PtxTarget;
 use super::types::{B32, F32, I32, U64};
 use super::{Function, Module};
 use crate::tile::{
-    DType, Dim, Expr, MemorySpace, SharedLayout, Stmt, TileGraph, TileIR, TileLayout, TileVar,
+    DType, Dim, Expr, MemorySpace, RegionOpKind, SharedLayout, Stmt, TileGraph, TileIR, TileLayout,
+    TileVar,
 };
 use petgraph::{Graph, graph::NodeIndex};
 
@@ -1559,6 +1561,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 func.add_inst(Inst::mov_f32(dest_reg, accumulator));
             }
         }
+        Stmt::OnlineRegion { region } => online::lower_online_region(func, ctx, region),
         Stmt::ReductionRegion { region } => {
             lower_reduction_region(func, ctx, region);
         }
@@ -2147,7 +2150,7 @@ fn lower_serial_reduction_region<'a>(
     ctx: &mut LoweringContext<'a>,
     region: &crate::tile::ReductionRegion,
 ) {
-    use crate::tile::{ReductionInputDomain, RegionOpKind};
+    use crate::tile::ReductionInputDomain;
 
     let tid = global_linear_tid(func);
     let input_strides = contiguous_strides(&region.input_shape);
@@ -2222,7 +2225,7 @@ fn lower_serial_reduction_region<'a>(
         }
     }
     for operation in &region.producer_operations {
-        emit_reduction_region_op(func, operation, &mut values);
+        emit_region_op(func, operation, &mut values);
     }
     for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
         if shape == &region.input_shape && values.contains_key(&output.value) {
@@ -2283,7 +2286,7 @@ fn lower_serial_reduction_region<'a>(
         }
     }
     for operation in &region.epilogue_operations {
-        emit_reduction_region_op(func, operation, &mut values);
+        emit_region_op(func, operation, &mut values);
     }
     let reduced_values = values.clone();
     for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
@@ -2331,10 +2334,10 @@ fn lower_serial_reduction_region<'a>(
             }
         }
         for operation in &region.producer_operations {
-            emit_reduction_region_op(func, operation, &mut values);
+            emit_region_op(func, operation, &mut values);
         }
         for operation in &region.full_epilogue_operations {
-            emit_reduction_region_op(func, operation, &mut values);
+            emit_region_op(func, operation, &mut values);
         }
         for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate()
         {
@@ -2354,92 +2357,6 @@ fn lower_serial_reduction_region<'a>(
         }
         end_counted_loop(func, full);
     }
-
-    fn emit_reduction_region_op<'a>(
-        func: &mut Function<'a>,
-        operation: &crate::tile::RegionOp,
-        values: &mut HashMap<crate::tile::RegionValue, Operand<'a, F32>>,
-    ) {
-        let get = |value: crate::tile::RegionValue| {
-            values
-                .get(&value)
-                .expect("reduction region operand SSA value is unavailable")
-                .clone()
-        };
-        let output = func.add_f32_register();
-        match operation.kind {
-            RegionOpKind::Unary { op, input } => match op {
-                crate::tensor::UnaryOp::Neg => {
-                    func.add_inst(Inst::neg_f32(output.clone(), get(input)))
-                }
-                crate::tensor::UnaryOp::Exp => {
-                    let scaled = func.add_f32_register();
-                    func.add_inst(Inst::mul_f32(
-                        scaled.clone(),
-                        get(input),
-                        Operand::imm_f32(std::f32::consts::LOG2_E),
-                    ));
-                    func.add_inst(Inst::ex2_f32(output.clone(), scaled));
-                }
-                crate::tensor::UnaryOp::Log => {
-                    let logarithm = func.add_f32_register();
-                    func.add_inst(Inst::lg2_f32(logarithm.clone(), get(input)));
-                    func.add_inst(Inst::mul_f32(
-                        output.clone(),
-                        logarithm,
-                        Operand::imm_f32(std::f32::consts::LN_2),
-                    ));
-                }
-                crate::tensor::UnaryOp::Relu => func.add_inst(Inst::max_f32(
-                    output.clone(),
-                    get(input),
-                    Operand::imm_f32(0.0),
-                )),
-            },
-            RegionOpKind::Binary { op, lhs, rhs } => match op {
-                crate::tensor::BinaryOp::Add => {
-                    func.add_inst(Inst::add_f32(output.clone(), get(lhs), get(rhs)))
-                }
-                crate::tensor::BinaryOp::Sub => {
-                    func.add_inst(Inst::sub_f32(output.clone(), get(lhs), get(rhs)))
-                }
-                crate::tensor::BinaryOp::Mul => {
-                    func.add_inst(Inst::mul_f32(output.clone(), get(lhs), get(rhs)))
-                }
-                crate::tensor::BinaryOp::Div => {
-                    func.add_inst(Inst::div_f32(output.clone(), get(lhs), get(rhs)))
-                }
-            },
-            RegionOpKind::Gt { lhs, rhs } => {
-                let predicate = func.add_predicate_register();
-                func.add_inst(Inst::setp_gt_f32(predicate.clone(), get(lhs), get(rhs)));
-                func.add_inst(Inst::selp_f32(
-                    output.clone(),
-                    Operand::imm_f32(1.0),
-                    Operand::imm_f32(0.0),
-                    predicate,
-                ));
-            }
-            RegionOpKind::Mask {
-                values: input,
-                condition,
-            } => {
-                let predicate = func.add_predicate_register();
-                func.add_inst(Inst::setp_ne_f32(
-                    predicate.clone(),
-                    get(condition),
-                    Operand::imm_f32(0.0),
-                ));
-                func.add_inst(Inst::selp_f32(
-                    output.clone(),
-                    get(input),
-                    Operand::imm_f32(0.0),
-                    predicate,
-                ));
-            }
-        }
-        values.insert(operation.output, output);
-    }
 }
 
 fn lower_cooperative_reduction_region<'a>(
@@ -2449,7 +2366,7 @@ fn lower_cooperative_reduction_region<'a>(
     thread_count: u32,
     tree_reduce: bool,
 ) {
-    use crate::tile::{ReductionInputDomain, RegionOpKind};
+    use crate::tile::ReductionInputDomain;
 
     let thread_count = u64::from(thread_count);
 
@@ -3966,6 +3883,91 @@ fn lower_expr_i32<'a>(
             result
         }
     }
+}
+
+fn emit_region_op<'a>(
+    func: &mut Function<'a>,
+    operation: &crate::tile::RegionOp,
+    values: &mut HashMap<crate::tile::RegionValue, Operand<'a, F32>>,
+) {
+    use crate::tile::RegionOpKind;
+    let get = |value: crate::tile::RegionValue| {
+        values
+            .get(&value)
+            .expect("reduction region operand SSA value is unavailable")
+            .clone()
+    };
+    let output = func.add_f32_register();
+    match operation.kind {
+        RegionOpKind::Unary { op, input } => match op {
+            crate::tensor::UnaryOp::Neg => func.add_inst(Inst::neg_f32(output.clone(), get(input))),
+            crate::tensor::UnaryOp::Exp => {
+                let scaled = func.add_f32_register();
+                func.add_inst(Inst::mul_f32(
+                    scaled.clone(),
+                    get(input),
+                    Operand::imm_f32(std::f32::consts::LOG2_E),
+                ));
+                func.add_inst(Inst::ex2_f32(output.clone(), scaled));
+            }
+            crate::tensor::UnaryOp::Log => {
+                let logarithm = func.add_f32_register();
+                func.add_inst(Inst::lg2_f32(logarithm.clone(), get(input)));
+                func.add_inst(Inst::mul_f32(
+                    output.clone(),
+                    logarithm,
+                    Operand::imm_f32(std::f32::consts::LN_2),
+                ));
+            }
+            crate::tensor::UnaryOp::Relu => func.add_inst(Inst::max_f32(
+                output.clone(),
+                get(input),
+                Operand::imm_f32(0.0),
+            )),
+        },
+        RegionOpKind::Binary { op, lhs, rhs } => match op {
+            crate::tensor::BinaryOp::Add => {
+                func.add_inst(Inst::add_f32(output.clone(), get(lhs), get(rhs)))
+            }
+            crate::tensor::BinaryOp::Sub => {
+                func.add_inst(Inst::sub_f32(output.clone(), get(lhs), get(rhs)))
+            }
+            crate::tensor::BinaryOp::Mul => {
+                func.add_inst(Inst::mul_f32(output.clone(), get(lhs), get(rhs)))
+            }
+            crate::tensor::BinaryOp::Div => {
+                func.add_inst(Inst::div_f32(output.clone(), get(lhs), get(rhs)))
+            }
+        },
+        RegionOpKind::Gt { lhs, rhs } => {
+            let predicate = func.add_predicate_register();
+            func.add_inst(Inst::setp_gt_f32(predicate.clone(), get(lhs), get(rhs)));
+            func.add_inst(Inst::selp_f32(
+                output.clone(),
+                Operand::imm_f32(1.0),
+                Operand::imm_f32(0.0),
+                predicate,
+            ));
+        }
+        RegionOpKind::Mask {
+            values: input,
+            condition,
+        } => {
+            let predicate = func.add_predicate_register();
+            func.add_inst(Inst::setp_ne_f32(
+                predicate.clone(),
+                get(condition),
+                Operand::imm_f32(0.0),
+            ));
+            func.add_inst(Inst::selp_f32(
+                output.clone(),
+                get(input),
+                Operand::imm_f32(0.0),
+                predicate,
+            ));
+        }
+    }
+    values.insert(operation.output, output);
 }
 
 #[cfg(test)]

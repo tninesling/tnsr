@@ -11,7 +11,9 @@ pub mod shared_layout;
 pub use shared_layout::SharedLayout;
 pub mod matmul_region;
 pub mod matmul_schedule;
+pub mod online_region;
 pub mod reduction_region;
+pub use online_region::{OnlineExpr, OnlineRegion};
 pub mod region;
 
 pub use access::{

@@ -310,6 +310,12 @@ impl<D: CudaDType> PtxExecutor<D> {
                             .context("Missing compiled reduction region kernel")?
                     )
                 }
+                PtxPlanAction::OnlineRegion(id) => format!(
+                    "kernel {} schedule=Online",
+                    ptx_graph
+                        .region_kernel_name(plan.regions().len() + id)
+                        .context("Missing online region kernel")?
+                ),
                 PtxPlanAction::MatMulRegion(region_id) => format!(
                     "kernel {} schedule={:?}",
                     ptx_graph
@@ -405,6 +411,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                 },
             )?;
         }
+        if self.reduction_mode == PtxReductionMode::Online {
+            execution_plan.fuse_online(graph)?;
+        }
         let fusion_selection_time = fusion_started.elapsed();
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,
@@ -415,6 +424,34 @@ impl<D: CudaDType> PtxExecutor<D> {
         tile_graph.add_fusion_regions(execution_plan.regions())?;
         tile_graph.add_reduction_regions(execution_plan.reduction_regions())?;
         tile_graph.add_matmul_regions(execution_plan.matmul_regions())?;
+        // Only emit kernels selected by the final plan; fused-away regions retain
+        // diagnostic metadata but must not bloat the loaded module.
+        tile_graph.region_kernels.retain(|k| {
+            execution_plan
+                .steps()
+                .iter()
+                .any(|s| s.action == PtxPlanAction::PointwiseRegion(k.region_id))
+        });
+        tile_graph.reduction_region_kernels.retain(|k| {
+            execution_plan
+                .steps()
+                .iter()
+                .any(|s| s.action == PtxPlanAction::ReductionRegion(k.region_id))
+        });
+        tile_graph.matmul_region_kernels.retain(|k| {
+            execution_plan
+                .steps()
+                .iter()
+                .any(|s| s.action == PtxPlanAction::MatMulRegion(k.region_id))
+        });
+        for (id, region) in execution_plan.online_regions().iter().enumerate() {
+            tile_graph
+                .region_kernels
+                .push(crate::tile::graph::TileRegionKernel {
+                    region_id: execution_plan.regions().len() + id,
+                    ir: region.lower_to_tile_ir(id)?,
+                });
+        }
         tile_graph.set_physical_nodes(
             execution_plan
                 .steps()
@@ -437,6 +474,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         | PtxPlanAction::PointwiseRegion(_)
                         | PtxPlanAction::ReductionRegion(_)
                         | PtxPlanAction::MatMulRegion(_)
+                        | PtxPlanAction::OnlineRegion(_)
                 )
             })
             .count();
@@ -714,6 +752,77 @@ impl<D: CudaDType> PtxExecutor<D> {
             .collect())
     }
 
+    fn execute_online_region(
+        &self,
+        module: &Arc<CudaModule>,
+        ptx_graph: &PtxGraph,
+        id: usize,
+        step: &super::plan::PtxPlanStep,
+    ) -> Result<RegionValues<D::HostType>> {
+        let plan = self
+            .execution_plan
+            .as_ref()
+            .context("Online plan unavailable")?;
+        let region = &plan.online_regions()[id];
+        let kernel_name = ptx_graph
+            .region_kernel_name(plan.regions().len() + id)
+            .context("Online kernel unavailable")?;
+        let inputs: Vec<_> = step
+            .inputs
+            .iter()
+            .map(|n| {
+                self.values
+                    .get(n)
+                    .cloned()
+                    .context("Online input unavailable")
+            })
+            .collect::<Result<_>>()?;
+        anyhow::ensure!(
+            inputs.len() == region.inputs.len(),
+            "Online input binding mismatch"
+        );
+        for (value, input) in inputs.iter().zip(&region.inputs) {
+            anyhow::ensure!(
+                value.len() == checked_element_count(&input.source_shape, "Online input")?,
+                "Online input storage mismatch"
+            );
+        }
+        let len = checked_element_count(&step.shape, "Online output")?;
+        let mut output = self.take_buffer(len)?;
+        if len != 0 {
+            let function = module.load_function(kernel_name)?;
+            let stream = self.device.default_stream();
+            let mut launcher = stream.launch_builder(&function);
+            for value in &inputs {
+                launcher.arg(value.as_ref());
+            }
+            launcher.arg(&mut output);
+            self.record_kernel_launch();
+            // SAFETY: input storage lengths and output extent were checked above;
+            // generated code bounds-checks threads and only traverses valid axes.
+            unsafe {
+                launcher.launch(if let Some(threads) = region.block_threads() {
+                    LaunchConfig {
+                        grid_dim: (
+                            u32::try_from(len / region.output_shape[region.output_shape.len() - 1])
+                                .context("Online grid too large")?,
+                            1,
+                            1,
+                        ),
+                        block_dim: (threads, 1, 1),
+                        shared_mem_bytes: 0,
+                    }
+                } else {
+                    LaunchConfig::for_num_elems(
+                        u32::try_from(len).context("Online launch too large")?,
+                    )
+                })
+            }
+            .context("Online kernel launch failed")?;
+        }
+        Ok(vec![(region.output, Arc::new(output))])
+    }
+
     fn execute_reduction_region(
         &self,
         module: &Arc<CudaModule>,
@@ -869,6 +978,27 @@ impl<D: CudaDType> PtxExecutor<D> {
             let node_idx = &plan_step.node;
             let planned_inputs = &plan_step.inputs;
             let node = &graph[*node_idx];
+            if let PtxPlanAction::OnlineRegion(region_id) = plan_step.action {
+                let region_outputs =
+                    self.execute_online_region(module, ptx_graph, region_id, plan_step)?;
+                for (output_node, output) in region_outputs {
+                    let bytes = output.len() * std::mem::size_of::<D::HostType>();
+                    self.execution_metrics.materialized_values += 1;
+                    self.execution_metrics.materialized_bytes += bytes;
+                    if output_node != graph_output {
+                        self.execution_metrics.intermediate_materialized_bytes += bytes;
+                    }
+                    self.values.insert(output_node, output);
+                    live_bytes += bytes;
+                }
+                self.stats.record_live(live_bytes);
+                for &dead in &plan_step.release_after {
+                    if let Some(value) = self.values.remove(&dead) {
+                        live_bytes -= self.recycle_value(value);
+                    }
+                }
+                continue;
+            }
             if let PtxPlanAction::MatMulRegion(region_id) = plan_step.action {
                 let region_outputs =
                     self.execute_matmul_region(module, ptx_graph, region_id, plan_step)?;
@@ -1867,6 +1997,7 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     signature.push(match reduction_mode {
         PtxReductionMode::Strict => 0,
         PtxReductionMode::DeterministicTree => 1,
+        PtxReductionMode::Online => 2,
     });
     signature.push(match matmul_precision {
         crate::tile::MatMulPrecision::StrictF32 => 0,

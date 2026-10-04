@@ -252,6 +252,10 @@ pub enum Stmt {
         output_shape: Vec<usize>,
     },
 
+    OnlineRegion {
+        region: Box<super::OnlineRegion>,
+    },
+
     ReductionRegion {
         region: Box<super::ReductionRegion>,
     },

@@ -66,3 +66,7 @@ test-log = "0.2.18"
 [[example]]
 name = "matmul_profile"
 required-features = ["cuda"]
+
+[[example]]
+name = "attention_profile"
+required-features = ["cuda"]

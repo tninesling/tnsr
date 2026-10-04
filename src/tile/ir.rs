@@ -252,8 +252,39 @@ pub enum Stmt {
         output_shape: Vec<usize>,
     },
 
-    OnlineRegion {
-        region: Box<super::OnlineRegion>,
+    /// Assign an f32 scalar expression, including loop-state updates.
+    SetScalar {
+        dest: TileVar,
+        value: super::ScalarExpr,
+    },
+    LoadScalar {
+        dest: TileVar,
+        source: super::ScalarMemory,
+        index: Expr,
+    },
+    StoreScalar {
+        target: super::ScalarMemory,
+        index: Expr,
+        value: TileVar,
+    },
+    /// The reduction result is complete in lane zero of each full active warp.
+    WarpReduce {
+        dest: TileVar,
+        src: TileVar,
+        op: crate::tensor::ReduceOp,
+    },
+    If {
+        condition: super::ScalarPredicate,
+        body: Block,
+    },
+    /// Carries are initialized before the loop, then updated by body assignments.
+    /// They remain available after the loop, including when it has zero iterations.
+    ScalarLoop {
+        loop_var: String,
+        start: Expr,
+        end: Expr,
+        carries: Vec<super::LoopCarry>,
+        body: Block,
     },
 
     ReductionRegion {

@@ -56,6 +56,21 @@ fn roots(stmt: &mut Stmt) -> Vec<&mut Expr> {
             ..
         } => vec![row, col],
         Stmt::ForLoop { start, end, .. } => vec![start, end],
+        Stmt::ScalarLoop {
+            start,
+            end,
+            carries,
+            ..
+        } => {
+            let mut roots = vec![start, end];
+            for carry in carries {
+                roots.extend(carry.initial.index_roots());
+            }
+            roots
+        }
+        Stmt::LoadScalar { index, .. } | Stmt::StoreScalar { index, .. } => vec![index],
+        Stmt::SetScalar { value, .. } => value.index_roots(),
+        Stmt::If { condition, .. } => condition.index_roots(),
         Stmt::SelectSharedStage { stage, .. } => vec![stage],
         _ => Vec::new(),
     }
@@ -83,7 +98,9 @@ fn normalize(block: &mut Block, cache: &mut HashMap<Expr, Expr>) -> Result<()> {
             };
             *root = value;
         }
-        if let Stmt::ForLoop { body, .. } = stmt {
+        if let Stmt::ForLoop { body, .. } | Stmt::ScalarLoop { body, .. } | Stmt::If { body, .. } =
+            stmt
+        {
             normalize(body, cache)?;
         }
     }
@@ -128,7 +145,8 @@ fn collect(
         if let Stmt::LetIndex { name, .. } = stmt {
             names.insert(name.clone());
         }
-        if let Stmt::ForLoop { loop_var, body, .. } = stmt {
+        if let Stmt::ForLoop { loop_var, body, .. } | Stmt::ScalarLoop { loop_var, body, .. } = stmt
+        {
             names.insert(loop_var.clone());
             let mut inner = scope.clone();
             inner.push(index);
@@ -137,6 +155,10 @@ fn collect(
                 .entry(loop_var.clone())
                 .and_modify(|value| *value = None)
                 .or_insert(Some(inner.clone()));
+            collect(body, &inner, usage, variables, names);
+        } else if let Stmt::If { body, .. } = stmt {
+            let mut inner = scope.clone();
+            inner.push(index);
             collect(body, &inner, usage, variables, names);
         }
     }
@@ -208,7 +230,9 @@ fn place(block: &mut Block, scope: &Scope, bindings: &BTreeMap<Expr, Binding>) {
         for root in roots(&mut stmt) {
             substitute(root, bindings);
         }
-        if let Stmt::ForLoop { body, .. } = &mut stmt {
+        if let Stmt::ForLoop { body, .. } | Stmt::ScalarLoop { body, .. } | Stmt::If { body, .. } =
+            &mut stmt
+        {
             let mut inner = scope.clone();
             inner.push(index);
             place(body, &inner, bindings);

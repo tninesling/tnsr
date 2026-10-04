@@ -19,12 +19,16 @@ struct Tile {
 impl TileIR {
     /// Reject incompatible physical layouts instead of inferring conversions in PTX.
     pub fn validate_layouts(&self) -> Result<()> {
-        validate(&self.body, &mut HashMap::new())
+        validate(&self.body, &mut HashMap::new(), &self.params)
             .with_context(|| format!("invalid layouts in {}", self.kernel_name))
     }
 }
 
-fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
+fn validate(
+    block: &Block,
+    tiles: &mut HashMap<TileVar, Tile>,
+    params: &[super::KernelParam],
+) -> Result<()> {
     let get = |tiles: &HashMap<TileVar, Tile>, var: &TileVar| {
         tiles
             .get(var)
@@ -278,8 +282,134 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                     "global store requires an explicit conversion to thread scalars"
                 );
             }
-            Stmt::ForLoop { body, .. } => validate(body, &mut tiles.clone())?,
+            Stmt::ForLoop { body, .. } => validate(body, &mut tiles.clone(), params)?,
+            Stmt::SetScalar { dest, value } => {
+                validate_scalar(value, tiles)?;
+                define_scalar(*dest, tiles)?;
+            }
+            Stmt::LoadScalar { dest, source, .. } => {
+                validate_memory(source, tiles, params, false)?;
+                define_scalar(*dest, tiles)?;
+            }
+            Stmt::StoreScalar { target, value, .. } => {
+                validate_scalar(&super::ScalarExpr::Var(*value), tiles)?;
+                validate_memory(target, tiles, params, true)?;
+            }
+            Stmt::WarpReduce { dest, src, .. } => {
+                validate_scalar(&super::ScalarExpr::Var(*src), tiles)?;
+                define_scalar(*dest, tiles)?;
+            }
+            Stmt::If { condition, body } => {
+                validate_predicate(condition, tiles)?;
+                validate(body, &mut tiles.clone(), params)?;
+            }
+            Stmt::ScalarLoop { carries, body, .. } => {
+                let mut carries_seen = std::collections::HashSet::new();
+                for carry in carries {
+                    anyhow::ensure!(
+                        carries_seen.insert(carry.var),
+                        "loop carry {} appears twice",
+                        carry.var.0
+                    );
+                    validate_scalar(&carry.initial, tiles)?;
+                    define_scalar(carry.var, tiles)?;
+                }
+                validate(body, &mut tiles.clone(), params)?;
+            }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn define_scalar(var: TileVar, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
+    if tiles.contains_key(&var) {
+        validate_scalar(&super::ScalarExpr::Var(var), tiles)?;
+    }
+    tiles.insert(var, scalar_tile());
+    Ok(())
+}
+
+fn scalar_tile() -> Tile {
+    Tile {
+        layout: TileLayout::ThreadScalar,
+        dtype: DType::F32,
+        rows: 1,
+        cols: 1,
+    }
+}
+fn validate_scalar(value: &super::ScalarExpr, tiles: &HashMap<TileVar, Tile>) -> Result<()> {
+    use super::ScalarExpr;
+    match value {
+        ScalarExpr::Constant(_) => Ok(()),
+        ScalarExpr::Var(var) => {
+            let tile = tiles
+                .get(var)
+                .with_context(|| format!("scalar {} is not defined", var.0))?;
+            anyhow::ensure!(
+                tile.layout == TileLayout::ThreadScalar && tile.dtype == DType::F32,
+                "scalar {} has incompatible layout",
+                var.0
+            );
+            Ok(())
+        }
+        ScalarExpr::Unary { value, .. } => validate_scalar(value, tiles),
+        ScalarExpr::Binary { lhs, rhs, .. } => {
+            validate_scalar(lhs, tiles)?;
+            validate_scalar(rhs, tiles)
+        }
+        ScalarExpr::Select {
+            condition,
+            then_value,
+            else_value,
+        } => {
+            validate_predicate(condition, tiles)?;
+            validate_scalar(then_value, tiles)?;
+            validate_scalar(else_value, tiles)
+        }
+    }
+}
+fn validate_predicate(
+    condition: &super::ScalarPredicate,
+    tiles: &HashMap<TileVar, Tile>,
+) -> Result<()> {
+    match condition {
+        super::ScalarPredicate::IndexLt { .. } => Ok(()),
+        super::ScalarPredicate::Equal { lhs, rhs } => {
+            validate_scalar(lhs, tiles)?;
+            validate_scalar(rhs, tiles)
+        }
+    }
+}
+fn validate_memory(
+    memory: &super::ScalarMemory,
+    tiles: &HashMap<TileVar, Tile>,
+    params: &[super::KernelParam],
+    store: bool,
+) -> Result<()> {
+    match memory {
+        super::ScalarMemory::Global(name) => {
+            let param = params
+                .iter()
+                .find(|p| p.name == *name)
+                .with_context(|| format!("scalar memory parameter {name} is missing"))?;
+            anyhow::ensure!(
+                matches!(param.dtype, DType::F32 | DType::F16 | DType::BF16),
+                "scalar memory parameter {name} has unsupported dtype"
+            );
+            anyhow::ensure!(
+                !store || !param.is_input,
+                "scalar store targets input parameter {name}"
+            );
+        }
+        super::ScalarMemory::Shared(var) => {
+            let tile = tiles
+                .get(var)
+                .context("scalar shared allocation is missing")?;
+            anyhow::ensure!(
+                matches!(tile.layout, TileLayout::Shared(_)) && tile.dtype == DType::F32,
+                "scalar shared memory must have f32 storage"
+            );
         }
     }
     Ok(())

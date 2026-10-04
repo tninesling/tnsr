@@ -1,8 +1,10 @@
 //! Recognize normalization algebra, then inline legal score producers. This pass
 //! never adds an attention operation or changes the user's differentiation graph.
 use super::*;
+mod normalization;
 use crate::tensor::{BinaryOp, ReduceOp, UnaryOp};
-use crate::tile::{OnlineExpr, OnlineRegion, RegionInput, RegionValue, TileDType};
+use crate::tile::{OnlineConsumer, OnlineExpr, OnlineRegion, RegionInput, RegionValue, TileDType};
+use normalization::{Normalization, match_normalization};
 
 impl PtxExecutionPlan {
     pub fn online_regions(&self) -> &[OnlineRegion] {
@@ -13,9 +15,15 @@ impl PtxExecutionPlan {
         if D::TILE_DTYPE != crate::tile::DType::F32 {
             return Ok(());
         }
-        for output in graph.toposort() {
+        // Prefer consumers first; only then try the normalization region alone.
+        let order = graph.toposort();
+        for (output, normalizer_only) in order
+            .iter()
+            .map(|&n| (n, false))
+            .chain(order.iter().map(|&n| (n, true)))
+        {
             let boundaries = self.online_regions.iter().map(|r| r.output).collect();
-            let Some(mut region) = recognize(graph, output, &boundaries) else {
+            let Some(mut region) = recognize(graph, output, &boundaries, normalizer_only) else {
                 continue;
             };
             let members: HashSet<_> = region.members.iter().copied().collect();
@@ -66,7 +74,10 @@ impl PtxExecutionPlan {
                 inputs: region.inputs.iter().map(|i| i.tensor.source).collect(),
                 outputs: vec![output],
                 output_shapes: vec![region.output_shape.clone()],
-                operation: "OnlineNormalizedContraction",
+                operation: match region.consumer {
+                    OnlineConsumer::Normalizer => "OnlineNormalizer",
+                    OnlineConsumer::WeightedSum { .. } => "OnlineNormalizedContraction",
+                },
                 shape: region.output_shape.clone(),
                 action: PtxPlanAction::OnlineRegion(id),
                 materialize: true,
@@ -100,77 +111,106 @@ impl PtxExecutionPlan {
     }
 }
 
+/// Move division by the row-invariant normalizer outside a homogeneous sum.
+/// This consumer rule is independent of score producers and normalization matching.
+fn normalized_input<D: TileDType, G>(
+    graph: &TensorGraph<D, G>,
+    node: NodeIndex,
+) -> Option<Normalization> {
+    let [exponential, broadcast] = binary(graph, node, BinaryOp::Div)?;
+    let axis = graph[exponential].shape().len().checked_sub(1)?;
+    if !matches!(graph[broadcast], TensorGraphNode::BroadcastAxis { axis: a, .. } if a == axis) {
+        return None;
+    }
+    let [sum]: [NodeIndex; 1] = graph.inputs(broadcast).try_into().ok()?;
+    let mut normalization = match_normalization(graph, sum)?;
+    if normalization.exponential != exponential {
+        return None;
+    }
+    normalization.members.extend([broadcast, node]);
+    Some(normalization)
+}
+
 fn recognize<D: TileDType, G>(
     graph: &TensorGraph<D, G>,
     output: NodeIndex,
     boundaries: &HashSet<NodeIndex>,
+    normalizer_only: bool,
 ) -> Option<OnlineRegion> {
-    if !matches!(graph[output], TensorGraphNode::MatMul { .. }) {
-        return None;
-    }
-    let operands = graph.inputs(output);
-    let [normalized, weights] = operands.as_slice() else {
-        return None;
+    let (mut normalization, weights, elementwise) = if normalizer_only {
+        (match_normalization(graph, output)?, None, false)
+    } else {
+        match graph[output] {
+            TensorGraphNode::MatMul { .. } => {
+                let [normalized, weights]: [NodeIndex; 2] = graph.inputs(output).try_into().ok()?;
+                (normalized_input(graph, normalized)?, Some(weights), false)
+            }
+            TensorGraphNode::ReduceAxis {
+                op: ReduceOp::Sum,
+                axis,
+                ..
+            } => {
+                let [product]: [NodeIndex; 1] = graph.inputs(output).try_into().ok()?;
+                let operands = binary(graph, product, BinaryOp::Mul)?;
+                let (mut normalization, weights) =
+                    if let Some(n) = normalized_input(graph, operands[0]) {
+                        (n, operands[1])
+                    } else {
+                        (normalized_input(graph, operands[1])?, operands[0])
+                    };
+                if axis + 1 != graph[normalization.score].shape().len() {
+                    return None;
+                }
+                normalization.members.push(product);
+                (normalization, Some(weights), true)
+            }
+            _ => return None,
+        }
     };
-    let rank = graph[*normalized].shape().len();
-    if rank < 2 {
-        return None;
+    normalization.members.push(output);
+    let shape = graph[normalization.score].shape().clone();
+    let rank = shape.len();
+    if let Some(weights) = weights {
+        let weight_shape = graph[weights].shape();
+        if elementwise {
+            if weight_shape != &shape {
+                return None;
+            }
+        } else if rank < 2
+            || weight_shape.len() != rank
+            || weight_shape[..rank - 2] != shape[..rank - 2]
+            || weight_shape[rank - 2] != shape[rank - 1]
+            || weight_shape[rank - 1] == 0
+        {
+            return None;
+        }
     }
-    let axis = rank - 1;
-    let mut members = vec![output];
-    let [exponential, sum_broadcast] = binary(graph, *normalized, BinaryOp::Div)?;
-    members.push(*normalized);
-    let sum = broadcast_reduction(
-        graph,
-        sum_broadcast,
-        ReduceOp::Sum,
-        axis,
-        exponential,
-        &mut members,
-    )?;
-    let [shift] = unary(graph, exponential, UnaryOp::Exp)?;
-    let [score, max_broadcast] = binary(graph, shift, BinaryOp::Sub)?;
-    broadcast_reduction(
-        graph,
-        max_broadcast,
-        ReduceOp::Max,
-        axis,
-        score,
-        &mut members,
-    )?;
-    members.extend([exponential, shift]);
-    let shape = graph[score].shape().clone();
-    let weight_shape = graph[*weights].shape();
-    if shape.len() != rank
-        || shape.contains(&0)
-        || weight_shape.len() != rank
-        || weight_shape[..rank - 2] != shape[..rank - 2]
-        || weight_shape[rank - 2] != shape[axis]
-        || weight_shape[axis] == 0
-    {
-        return None;
-    }
-    if graph[sum].shape()[axis] != 1 {
-        return None;
-    }
+    let mut members = normalization.members;
     let mut inputs = Vec::new();
     let score_expr = producer(
         graph,
-        score,
+        normalization.score,
         &shape,
         &mut members,
         &mut inputs,
         boundaries,
         0,
     )?;
-    let weight_input = add_input(graph, *weights, &mut inputs);
+    let consumer = if let Some(weights) = weights {
+        OnlineConsumer::WeightedSum {
+            weights: add_input(graph, weights, &mut inputs),
+            elementwise,
+        }
+    } else {
+        OnlineConsumer::Normalizer
+    };
     let member_set: HashSet<_> = members.iter().copied().collect();
     if members.iter().any(|&n| {
         n != output
             && graph
                 .graph
                 .neighbors_directed(n, Direction::Outgoing)
-                .any(|consumer| !member_set.contains(&consumer))
+                .any(|c| !member_set.contains(&c))
     }) {
         return None;
     }
@@ -180,14 +220,14 @@ fn recognize<D: TileDType, G>(
         members,
         inputs,
         score: score_expr,
-        weights: weight_input,
+        consumer,
         output,
         score_shape: shape,
         output_shape: graph[output].shape().clone(),
     })
 }
 
-fn binary<D: TileDType, G>(
+pub(super) fn binary<D: TileDType, G>(
     graph: &TensorGraph<D, G>,
     node: NodeIndex,
     op: BinaryOp,
@@ -197,7 +237,7 @@ fn binary<D: TileDType, G>(
     }
     graph.inputs(node).try_into().ok()
 }
-fn unary<D: TileDType, G>(
+pub(super) fn unary<D: TileDType, G>(
     graph: &TensorGraph<D, G>,
     node: NodeIndex,
     op: UnaryOp,
@@ -207,7 +247,7 @@ fn unary<D: TileDType, G>(
     }
     graph.inputs(node).try_into().ok()
 }
-fn broadcast_reduction<D: TileDType, G>(
+pub(super) fn broadcast_reduction<D: TileDType, G>(
     graph: &TensorGraph<D, G>,
     node: NodeIndex,
     op: ReduceOp,

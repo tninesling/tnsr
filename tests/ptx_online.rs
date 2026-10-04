@@ -69,7 +69,7 @@ fn online_attention_matches_primitive_reference_without_score_buffers() {
             let result = online.execute_compiled(&graph, HashMap::new()).unwrap();
             close(&result, &expected);
             assert_eq!(online.execution_metrics().kernel_launches, 1);
-            assert!(online.module_source().unwrap().contains("online_scan_loop"));
+            assert!(online.module_source().unwrap().contains("scan_0_loop"));
         }
     }
 }
@@ -235,4 +235,82 @@ fn online_policy_fuses_attention_inside_transformer_blocks() {
         &online.execute_compiled(&graph, HashMap::new()).unwrap(),
         &expected,
     );
+}
+
+#[test]
+fn online_normalizer_rewrite_works_without_normalized_or_weighted_consumers() {
+    use tnsr::tile::OnlineConsumer;
+    let Some(mut online) = executor(PtxReductionMode::Online) else {
+        return;
+    };
+    for shape in [vec![7], vec![3, 37], vec![2, 3, 65]] {
+        let axis = shape.len() - 1;
+        let scores = values(shape.clone(), 4);
+        let shifted = scores.clone() - scores.reduce_max(axis).broadcast_axis(axis, shape[axis]);
+        let graph: TensorGraph<f32> = shifted.exp().reduce_sum(axis).into();
+        let expected = SimpleExecutor::new()
+            .execute(&graph, HashMap::new())
+            .unwrap();
+        let actual = online.execute(&graph, HashMap::new()).unwrap();
+        close(&actual, &expected);
+        let regions = online.execution_plan().unwrap().online_regions();
+        assert_eq!(
+            regions.len(),
+            1,
+            "{}",
+            online.describe_plan(&graph).unwrap()
+        );
+        assert!(matches!(regions[0].consumer, OnlineConsumer::Normalizer));
+        assert_eq!(online.execution_metrics().kernel_launches, 1);
+        assert_eq!(
+            online.execution_metrics().intermediate_materialized_bytes,
+            0
+        );
+    }
+    let scores = TensorExpr::constant(vec![f32::NEG_INFINITY; 35], vec![1, 35]);
+    let graph: TensorGraph<f32> = (scores.clone() - scores.reduce_max(1).broadcast_axis(1, 35))
+        .exp()
+        .reduce_sum(1)
+        .into();
+    assert!(online.execute(&graph, HashMap::new()).unwrap()[0].is_nan());
+}
+
+#[test]
+fn online_consumer_fuses_elementwise_weighted_sum_without_matmuls() {
+    use tnsr::tile::OnlineConsumer;
+    let Some(mut online) = executor(PtxReductionMode::Online) else {
+        return;
+    };
+    for shape in [vec![35], vec![3, 37], vec![2, 3, 65]] {
+        let axis = shape.len() - 1;
+        for reversed in [false, true] {
+            let probability = softmax(values(shape.clone(), 0), axis);
+            let weights = values(shape.clone(), 7);
+            let product = if reversed {
+                weights * probability
+            } else {
+                probability * weights
+            };
+            let graph: TensorGraph<f32> = product.reduce_sum(axis).into();
+            let expected = SimpleExecutor::new()
+                .execute(&graph, HashMap::new())
+                .unwrap();
+            close(&online.execute(&graph, HashMap::new()).unwrap(), &expected);
+            let regions = online.execution_plan().unwrap().online_regions();
+            assert_eq!(
+                regions.len(),
+                1,
+                "{}",
+                online.describe_plan(&graph).unwrap()
+            );
+            assert!(matches!(
+                regions[0].consumer,
+                OnlineConsumer::WeightedSum {
+                    elementwise: true,
+                    ..
+                }
+            ));
+            assert_eq!(online.execution_metrics().kernel_launches, 1);
+        }
+    }
 }

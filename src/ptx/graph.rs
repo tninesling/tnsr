@@ -1,4 +1,4 @@
-mod online;
+mod scalar;
 use std::collections::{HashMap, HashSet};
 
 use super::instructions::{AndInst, Inst, Operand};
@@ -1561,7 +1561,12 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 func.add_inst(Inst::mov_f32(dest_reg, accumulator));
             }
         }
-        Stmt::OnlineRegion { region } => online::lower_online_region(func, ctx, region),
+        Stmt::SetScalar { .. }
+        | Stmt::LoadScalar { .. }
+        | Stmt::StoreScalar { .. }
+        | Stmt::WarpReduce { .. }
+        | Stmt::If { .. }
+        | Stmt::ScalarLoop { .. } => scalar::lower_scalar_stmt(func, ctx, stmt),
         Stmt::ReductionRegion { region } => {
             lower_reduction_region(func, ctx, region);
         }

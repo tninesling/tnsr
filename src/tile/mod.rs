@@ -13,8 +13,12 @@ pub mod matmul_region;
 pub mod matmul_schedule;
 pub mod online_region;
 pub mod reduction_region;
-pub use online_region::{OnlineExpr, OnlineRegion};
+pub use online_region::{OnlineConsumer, OnlineExpr, OnlineRegion};
 pub mod region;
+pub mod scalar;
+pub use scalar::{
+    LoopCarry, ScalarBinaryOp, ScalarBuilder, ScalarExpr, ScalarMemory, ScalarPredicate,
+};
 
 pub use access::{
     CompareOp, Extent, IndexExpr, IndexMap, IndexPredicate, IterDim, IterDomain, IterKind,
@@ -35,3 +39,5 @@ pub use reduction_region::{
     ReductionInput, ReductionInputDomain, ReductionRegion, ReductionSchedule,
 };
 pub use region::{FusionRegion, RegionInput, RegionOp, RegionOpKind, RegionOutput, RegionValue};
+
+mod normalized_schedule;

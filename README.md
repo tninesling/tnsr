@@ -143,8 +143,9 @@ on half buffers; this correctness fallback can be slower for large vocabularies.
 ### Automatically fused online attention
 
 The PTX compiler has an experimental `PtxReductionMode::Online` policy that
-recognizes primitive softmax/weighted-matmul graphs and generates a streaming
-normalized contraction. Eligible f32 inference avoids materializing score and
+composes an exponential-normalizer rewrite with compatible weighted-sum
+consumers, then generates ordinary scalar loops with carried state. Eligible f32 inference avoids materializing score and
 probability matrices, including attention inside the existing transformer API.
+The same normalization rule also works without attention or matmuls.
 See [online attention](docs/online-attention.md) for activation, legality checks,
 resident benchmarks, and current schedule limits.

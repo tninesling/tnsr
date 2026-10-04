@@ -1,6 +1,6 @@
 //! Coupled online normalization and weighted contraction, represented only in the
 //! scheduling IR. The tensor graph continues to use ordinary arithmetic/reductions.
-use super::{Block, DType, KernelParam, RegionInput, Stmt, TileIR};
+use super::{DType, KernelParam, RegionInput, TileIR};
 use crate::graph::NodeIndex;
 use crate::tensor::{BinaryOp, Shape, UnaryOp};
 use anyhow::{Context, Result};
@@ -18,14 +18,22 @@ pub enum OnlineExpr {
     },
 }
 
-/// A normalized weighted sum over the last score axis. The running maximum,
-/// normalizer, and weighted accumulator share one increasing-index traversal.
+/// Supported consumers of the running normalizer state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnlineConsumer {
+    /// Sum of stable exponentials, without any downstream normalization.
+    Normalizer,
+    /// A homogeneous sum can carry a numerator under the normalizer's rescaling.
+    WeightedSum { weights: usize, elementwise: bool },
+}
+
+/// Compiler analysis metadata, eliminated into ordinary scalar scheduling IR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnlineRegion {
     pub members: Vec<NodeIndex>,
     pub inputs: Vec<RegionInput>,
     pub score: OnlineExpr,
-    pub weights: usize,
+    pub consumer: OnlineConsumer,
     pub output: NodeIndex,
     pub score_shape: Shape,
     pub output_shape: Shape,
@@ -43,13 +51,22 @@ impl OnlineRegion {
 
     pub fn lower_to_tile_ir(&self, region_id: usize) -> Result<TileIR> {
         anyhow::ensure!(
-            self.score_shape.len() >= 2,
-            "online scores require rank >= 2"
+            !self.score_shape.is_empty(),
+            "online scores require a reduction axis"
         );
         anyhow::ensure!(
             self.inputs.iter().all(|i| i.tensor.dtype == DType::F32),
             "online reduction requires f32 storage"
         );
+        anyhow::ensure!(
+            self.output_shape.len() == self.score_shape.len()
+                && !self.score_shape.contains(&0)
+                && !self.output_shape.contains(&0),
+            "online reduction requires nonempty, equal-rank shapes"
+        );
+        self.score_shape.iter().try_fold(1usize, |n, &d| {
+            n.checked_mul(d).context("online score size overflow")
+        })?;
         let extent = self.output_shape.iter().try_fold(1usize, |n, &d| {
             n.checked_mul(d).context("online output size overflow")
         })?;
@@ -68,22 +85,12 @@ impl OnlineRegion {
             dtype: DType::F32,
             is_input: false,
         });
+        let (body, shared_mem_bytes) = super::normalized_schedule::lower(self, extent)?;
         Ok(TileIR {
             kernel_name: format!("online_region_{region_id}"),
             params,
-            body: Block {
-                stmts: {
-                    let mut stmts = Vec::new();
-                    if self.block_threads().is_none() {
-                        stmts.push(Stmt::BoundsCheck { extent });
-                    }
-                    stmts.push(Stmt::OnlineRegion {
-                        region: Box::new(self.clone()),
-                    });
-                    stmts
-                },
-            },
-            shared_mem_bytes: 0,
+            body,
+            shared_mem_bytes,
         })
     }
 }

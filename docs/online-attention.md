@@ -3,9 +3,12 @@
 The PTX compiler can rewrite the primitive stable-softmax/weighted-matmul
 computation into an online normalized contraction. There is no new attention
 operation in `TensorExpr` or `TensorGraphNode`, and the `nn` API is unchanged.
-The compiler recognizes the algebra, inlines eligible scalar/dot-product score
-producers, and generates PTX for the resulting scheduling region. This is an
-initial algebraic rewrite, not unrestricted equality-saturation discovery.
+The compiler matches an exponential normalizer, independently matches compatible
+consumers, and inlines eligible scalar/dot-product producers. It emits ordinary
+scalar expressions, memory accesses, guards, collectives, and loops with explicit
+carried state. The PTX backend has no attention or online-normalization instruction.
+These are bounded algebraic rules with a selected schedule; unrestricted
+algebraic and loop search remains future work.
 
 Enable it explicitly for f32 inference:
 
@@ -23,13 +26,27 @@ are checked against the primitive reference with tolerances.
 
 ## Recognition and scheduling
 
-The recognized computation is:
+The small normalization rule matches:
 
 ```text
 E = exp(S - broadcast(reduce_max(S, last_axis)))
-P = E / broadcast(reduce_sum(E, last_axis))
-O = P @ V
+L = reduce_sum(E, last_axis)
 ```
+
+It captures one broadcast, and can lower `L` alone. A separate consumer rule
+recognizes division by the invariant `L` and moves it outside a homogeneous sum:
+
+```text
+P = E / broadcast(L)
+O = P @ V                         # matrix contraction
+O = reduce_sum(P * W, last_axis)   # elementwise weighted sum
+```
+
+Both consumer forms use the same normalizer rule. The second works without any
+matmul, and the first does not require a matmul score producer. Matching the
+second broadcast belongs to the consumer rule: it proves that the denominator
+is invariant along the sum, rather than being necessary to discover normalization.
+Whole attention is never a tensor-IR pattern or operation.
 
 `S` can be an input or a bounded arithmetic expression containing a matrix
 product. This applies to hand-written primitive expressions as well as
@@ -47,16 +64,36 @@ first warp produces 32 scores, sharing the tile across weighted-output lanes.
 The running maximum, normalization sum, and weighted accumulator are rescaled
 once per tile. Each score tile is consumed before the shared storage is reused;
 the complete score/probability matrices are never written to global memory.
-Affine dot-product access maps are evaluated outside the contraction loop.
+Scalar memory indices enter the existing index optimizer, which simplifies them
+and hoists expressions to the scope containing their dependencies. This replaces
+the previous backend's bespoke affine dot-product address hoisting.
 Wider outputs currently use a serial schedule per output element, which can
 repeat score production and is not performance-tuned.
 
-The scheduling region and score-expression representation live in the compiler
-IR; they do not extend the mathematical tensor operation set. The initial GPU
-schedule uses scalar f32 arithmetic, not tensor cores. Shared-memory scoring and
-normalization are expressed by generated PTX, without a custom kernel library.
+`OnlineRegion` remains transient compiler analysis metadata. It is eliminated
+before backend lowering; the old `Stmt::OnlineRegion` and dedicated PTX emitter
+are removed. `ScalarLoop` initializes carried scalars before the loop, including
+empty loops, and its ordinary assignments update the state. Body-local values
+cannot escape their scope. Loads, floating-point operations, and barriers are
+never moved by index optimization.
+
+The normalization merge computes `m_new = max(m, tile_max)` and
+`a = exp(m - m_new)`, then rescales the carried denominator by `a`.
+Each compatible weighted-sum consumer rescales its numerator by the same `a`.
+Tile contributions are accumulated relative to `m_new`; final division occurs
+after traversal. Leading negative-infinity scores preserve the identity, while
+all-masked outputs and nonfinite weights retain the reference's NaN behavior.
+The current schedule uses scalar f32 arithmetic, without a custom kernel library
+or tensor cores.
+
+This is closer to composing normalization and fusion rules, but it still chooses
+a fixed 32-score schedule and directly recognizes compatible sum consumers.
+The compiler does not yet search equivalent scalar loops, tilings, or schedules.
 
 ## Attention-only measurements
+
+The original implementation is preserved at commit `17d7438`. The table below
+records that checkpoint; current generic-lowering measurements are linked below.
 
 Run the same primitive expression through three reduction policies:
 
@@ -90,12 +127,12 @@ Measured sequentially on an RTX 4080, driver 580.178.04, on 2026-10-04:
 The reference plans launch 13 kernels for full attention and 14 for causal
 attention. All six online cases launch one kernel and report zero intermediate
 materialized bytes. The largest measured absolute error versus CPU is 2.31e-7.
-Raw strict, cooperative, and online results, including timing spreads and
+Checkpoint strict, cooperative, and online results, including timing spreads and
 compilation metrics, are in
 [results.csv](../benchmarks/attention-online/results.csv).
 
 These are comparisons against the existing strict-f32 implementation, not
-against cuBLAS, handwritten FlashAttention, or default TF32 schedules. The
+against cuBLAS, handwritten FlashAttention, or default TF32 schedules. At the checkpoint, the
 256-token causal case is slower in resident execution, and end-to-end medians
 are effectively unchanged. The online policy is experimental and does not yet
 cost-select between online and reference schedules.
@@ -105,3 +142,29 @@ are still quadratic. Zero intermediate materialization does not imply zero
 input memory or transfer cost. Procedural mask lowering, tensor-core score/value
 tiles, native half storage, and general loop/reduction rewrite search remain
 follow-up compiler work.
+
+
+The refactored compiler is profiled with the same six cases in
+[generic-results.csv](../benchmarks/attention-online/generic-results.csv).
+Both weighted output forms and standalone normalizers have CUDA correctness
+coverage; a separate generic recurrence test exercises nested updates and
+zero-trip identities without normalization.
+
+A direct comparison rebuilt checkpoint `17d7438` in an isolated directory and
+alternated checkpoint/refactored online runs on the same RTX 4080. Each cell is
+the median of three process runs, each using the sampling procedure above:
+
+| Sequence / width / mask | Checkpoint resident (us) | Generic resident (us) | Speedup |
+| --- | ---: | ---: | ---: |
+| 64 / 32 / full | 16.792 | 12.634 | 1.33x |
+| 128 / 64 / full | 37.948 | 29.984 | 1.27x |
+| 256 / 64 / full | 86.176 | 69.856 | 1.23x |
+| 512 / 64 / full | 184.352 | 158.016 | 1.17x |
+| 128 / 64 / causal | 34.650 | 26.976 | 1.28x |
+| 256 / 64 / causal | 86.591 | 69.912 | 1.24x |
+
+All compared online plans still launch one kernel and materialize zero
+intermediate bytes. These six cases show 1.17–1.33x faster resident execution
+with generic lowering; this is not a claim about arbitrary attention shapes.
+Raw runs, timing spreads, end-to-end timings, and compilation/index-optimization
+metrics are in [checkpoint-comparison.csv](../benchmarks/attention-online/checkpoint-comparison.csv).

@@ -172,24 +172,8 @@ fn expression<'a>(
                 UnaryOp::Relu => {
                     func.add_inst(Inst::max_f32(dest.clone(), value, Operand::imm_f32(0.0)))
                 }
-                UnaryOp::Exp => {
-                    let scaled = func.add_f32_register();
-                    func.add_inst(Inst::mul_f32(
-                        scaled.clone(),
-                        value,
-                        Operand::imm_f32(std::f32::consts::LOG2_E),
-                    ));
-                    func.add_inst(Inst::ex2_f32(dest.clone(), scaled));
-                }
-                UnaryOp::Log => {
-                    let logarithm = func.add_f32_register();
-                    func.add_inst(Inst::lg2_f32(logarithm.clone(), value));
-                    func.add_inst(Inst::mul_f32(
-                        dest.clone(),
-                        logarithm,
-                        Operand::imm_f32(std::f32::consts::LN_2),
-                    ));
-                }
+                UnaryOp::Exp => return emit_exp(func, value),
+                UnaryOp::Log => return emit_log(func, value),
             }
             dest
         }

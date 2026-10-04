@@ -41,6 +41,19 @@ fn load(
     )?;
     Ok(builder.load(ScalarMemory::Global(format!("input_{input}")), index))
 }
+fn coordinates(shape: &[usize], offset: &Expr) -> Vec<Expr> {
+    let mut point = Vec::new();
+    let mut stride = 1;
+    for &dim in shape.iter().rev() {
+        point.push(Expr::Mod(
+            Box::new(Expr::FloorDiv(Box::new(offset.clone()), stride)),
+            dim,
+        ));
+        stride *= dim;
+    }
+    point.reverse();
+    point
+}
 fn score(
     builder: &mut ScalarBuilder,
     region: &OnlineRegion,
@@ -59,16 +72,7 @@ fn score(
             builder.value(arithmetic(*op, a, b))
         }
         OnlineExpr::Sum(sum) => {
-            let mut coordinates = Vec::new();
-            let mut stride = 1;
-            for &dim in region.score_shape.iter().rev() {
-                coordinates.push(Expr::Mod(
-                    Box::new(Expr::FloorDiv(Box::new(offset.clone()), stride)),
-                    dim,
-                ));
-                stride *= dim;
-            }
-            coordinates.reverse();
+            let coordinates = coordinates(&region.score_shape, &offset);
             sum.lower(builder, &region.inputs, &coordinates)?
         }
     })
@@ -208,16 +212,7 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
                     );
                     if let OnlineConsumer::Sum(sum) = &region.consumer {
                         builder.when(less(column.clone(), columns)?, |builder| {
-                            let mut point = Vec::new();
-                            let mut stride = 1;
-                            for &dim in region.output_shape.iter().rev() {
-                                point.push(Expr::Mod(
-                                    Box::new(Expr::FloorDiv(Box::new(output.clone()), stride)),
-                                    dim,
-                                ));
-                                stride *= dim;
-                            }
-                            point.reverse();
+                            let mut point = coordinates(&region.output_shape, &output);
                             point.push(key);
                             sum.accumulate(
                                 builder,

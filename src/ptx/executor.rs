@@ -683,44 +683,51 @@ impl<D: CudaDType> PtxExecutor<D> {
             .collect())
     }
 
-    fn execute_pointwise_region(
+    fn execute_scalar_region(
         &self,
         module: &Arc<CudaModule>,
         ptx_graph: &PtxGraph,
-        region_id: usize,
         step: &super::plan::PtxPlanStep,
     ) -> Result<RegionValues<D::HostType>> {
+        let plan = self
+            .execution_plan
+            .as_ref()
+            .context("Scalar region plan unavailable")?;
+        let (kernel_id, inputs, threads) = match step.action {
+            PtxPlanAction::PointwiseRegion(id) => (id, &plan.regions()[id].inputs, None),
+            PtxPlanAction::OnlineRegion(id) => {
+                let region = &plan.online_regions()[id];
+                (
+                    plan.regions().len() + id,
+                    &region.inputs,
+                    region.block_threads(),
+                )
+            }
+            _ => anyhow::bail!("Expected a scalar region step"),
+        };
         let kernel_name = ptx_graph
-            .region_kernel_name(region_id)
-            .context("Missing compiled pointwise region kernel")?;
+            .region_kernel_name(kernel_id)
+            .context("Scalar region kernel unavailable")?;
         let input_values: Vec<_> = step
             .inputs
             .iter()
             .map(|input| {
                 self.values.get(input).cloned().with_context(|| {
-                    format!(
-                        "Pointwise region input node {} is unavailable",
-                        input.index()
-                    )
+                    format!("Scalar region input node {} is unavailable", input.index())
                 })
             })
             .collect::<Result<_>>()?;
-        let len = checked_element_count(&step.shape, "Pointwise region")?;
-        let region = self
-            .execution_plan
-            .as_ref()
-            .and_then(|plan| plan.regions().get(region_id))
-            .context("Pointwise region metadata is unavailable")?;
+        let len = checked_element_count(&step.shape, "Scalar region")?;
         anyhow::ensure!(
-            region.inputs.len() == input_values.len(),
-            "Pointwise region input binding count mismatch"
+            inputs.len() == input_values.len(),
+            "Scalar region input binding count mismatch"
         );
-        for (input, descriptor) in input_values.iter().zip(&region.inputs) {
+        for (input, descriptor) in input_values.iter().zip(inputs) {
             let expected =
-                checked_element_count(&descriptor.source_shape, "Pointwise region input storage")?;
+                checked_element_count(&descriptor.source_shape, "Scalar region input storage")?;
             anyhow::ensure!(
                 input.len() == expected,
-                "Pointwise region input length {} does not match storage length {expected}",
+                "Scalar region input length {} does not match storage length {expected}",
                 input.len(),
             );
         }
@@ -729,8 +736,20 @@ impl<D: CudaDType> PtxExecutor<D> {
             outputs.push(self.take_buffer(len)?);
         }
         if len != 0 {
-            let launch_len = u32::try_from(len)
-                .context("Pointwise region output is too large for a CUDA launch")?;
+            let config = if let Some(threads) = threads {
+                LaunchConfig {
+                    grid_dim: (
+                        u32::try_from(len / step.shape[step.shape.len() - 1])
+                            .context("Scalar grid too large")?,
+                        1,
+                        1,
+                    ),
+                    block_dim: (threads, 1, 1),
+                    shared_mem_bytes: 0,
+                }
+            } else {
+                LaunchConfig::for_num_elems(u32::try_from(len).context("Scalar output too large")?)
+            };
             let function = module.load_function(kernel_name)?;
             let stream = self.device.default_stream();
             let mut launcher = stream.launch_builder(&function);
@@ -741,7 +760,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                 launcher.arg(output);
             }
             self.record_kernel_launch();
-            unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+            // SAFETY: Storage lengths and output extent are checked; generated
+            // kernels guard output lanes and traverse valid input coordinates.
+            unsafe { launcher.launch(config) }
                 .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
         }
         Ok(step
@@ -750,77 +771,6 @@ impl<D: CudaDType> PtxExecutor<D> {
             .copied()
             .zip(outputs.into_iter().map(Arc::new))
             .collect())
-    }
-
-    fn execute_online_region(
-        &self,
-        module: &Arc<CudaModule>,
-        ptx_graph: &PtxGraph,
-        id: usize,
-        step: &super::plan::PtxPlanStep,
-    ) -> Result<RegionValues<D::HostType>> {
-        let plan = self
-            .execution_plan
-            .as_ref()
-            .context("Online plan unavailable")?;
-        let region = &plan.online_regions()[id];
-        let kernel_name = ptx_graph
-            .region_kernel_name(plan.regions().len() + id)
-            .context("Online kernel unavailable")?;
-        let inputs: Vec<_> = step
-            .inputs
-            .iter()
-            .map(|n| {
-                self.values
-                    .get(n)
-                    .cloned()
-                    .context("Online input unavailable")
-            })
-            .collect::<Result<_>>()?;
-        anyhow::ensure!(
-            inputs.len() == region.inputs.len(),
-            "Online input binding mismatch"
-        );
-        for (value, input) in inputs.iter().zip(&region.inputs) {
-            anyhow::ensure!(
-                value.len() == checked_element_count(&input.source_shape, "Online input")?,
-                "Online input storage mismatch"
-            );
-        }
-        let len = checked_element_count(&step.shape, "Online output")?;
-        let mut output = self.take_buffer(len)?;
-        if len != 0 {
-            let function = module.load_function(kernel_name)?;
-            let stream = self.device.default_stream();
-            let mut launcher = stream.launch_builder(&function);
-            for value in &inputs {
-                launcher.arg(value.as_ref());
-            }
-            launcher.arg(&mut output);
-            self.record_kernel_launch();
-            // SAFETY: input storage lengths and output extent were checked above;
-            // generated code bounds-checks threads and only traverses valid axes.
-            unsafe {
-                launcher.launch(if let Some(threads) = region.block_threads() {
-                    LaunchConfig {
-                        grid_dim: (
-                            u32::try_from(len / region.output_shape[region.output_shape.len() - 1])
-                                .context("Online grid too large")?,
-                            1,
-                            1,
-                        ),
-                        block_dim: (threads, 1, 1),
-                        shared_mem_bytes: 0,
-                    }
-                } else {
-                    LaunchConfig::for_num_elems(
-                        u32::try_from(len).context("Online launch too large")?,
-                    )
-                })
-            }
-            .context("Online kernel launch failed")?;
-        }
-        Ok(vec![(region.output, Arc::new(output))])
     }
 
     fn execute_reduction_region(
@@ -978,27 +928,6 @@ impl<D: CudaDType> PtxExecutor<D> {
             let node_idx = &plan_step.node;
             let planned_inputs = &plan_step.inputs;
             let node = &graph[*node_idx];
-            if let PtxPlanAction::OnlineRegion(region_id) = plan_step.action {
-                let region_outputs =
-                    self.execute_online_region(module, ptx_graph, region_id, plan_step)?;
-                for (output_node, output) in region_outputs {
-                    let bytes = output.len() * std::mem::size_of::<D::HostType>();
-                    self.execution_metrics.materialized_values += 1;
-                    self.execution_metrics.materialized_bytes += bytes;
-                    if output_node != graph_output {
-                        self.execution_metrics.intermediate_materialized_bytes += bytes;
-                    }
-                    self.values.insert(output_node, output);
-                    live_bytes += bytes;
-                }
-                self.stats.record_live(live_bytes);
-                for &dead in &plan_step.release_after {
-                    if let Some(value) = self.values.remove(&dead) {
-                        live_bytes -= self.recycle_value(value);
-                    }
-                }
-                continue;
-            }
             if let PtxPlanAction::MatMulRegion(region_id) = plan_step.action {
                 let region_outputs =
                     self.execute_matmul_region(module, ptx_graph, region_id, plan_step)?;
@@ -1020,9 +949,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                 }
                 continue;
             }
-            if let PtxPlanAction::PointwiseRegion(region_id) = plan_step.action {
-                let region_outputs =
-                    self.execute_pointwise_region(module, ptx_graph, region_id, plan_step)?;
+            if matches!(
+                plan_step.action,
+                PtxPlanAction::PointwiseRegion(_) | PtxPlanAction::OnlineRegion(_)
+            ) {
+                let region_outputs = self.execute_scalar_region(module, ptx_graph, plan_step)?;
                 for (output_node, output) in region_outputs {
                     let bytes = output.len() * std::mem::size_of::<D::HostType>();
                     self.execution_metrics.materialized_values += 1;

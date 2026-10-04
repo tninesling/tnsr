@@ -1,25 +1,82 @@
 #![cfg(feature = "cuda")]
 use cudarc::driver::{CudaContext, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
+use std::sync::Arc;
 use tnsr::graph::TensorGraph;
 use tnsr::ptx::PtxGraph;
 use tnsr::tensor::{BinaryOp, TensorExpr};
 use tnsr::tile::*;
 
-#[test]
-fn generic_scalar_folds_preserve_nested_updates_and_empty_identities() {
-    let device = match CudaContext::new(0) {
-        Ok(device) => device,
+fn device() -> Option<Arc<CudaContext>> {
+    match CudaContext::new(0) {
+        Ok(device) => Some(device),
         Err(error) if std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1") => {
             eprintln!("skipping CUDA: {error:#}");
-            return;
+            None
         }
         Err(error) => panic!("{error:#}"),
+    }
+}
+fn arithmetic(op: BinaryOp, a: TileVar, b: TileVar) -> ScalarExpr {
+    ScalarExpr::binary(ScalarBinaryOp::Arithmetic(op), a, b)
+}
+fn run(device: &Arc<CudaContext>, builder: ScalarBuilder, outputs: usize) -> Vec<f32> {
+    let mut ir = TileIR {
+        kernel_name: "scalar".into(),
+        params: vec![
+            KernelParam {
+                name: "input".into(),
+                dtype: DType::F32,
+                is_input: true,
+            },
+            KernelParam {
+                name: "output".into(),
+                dtype: DType::F32,
+                is_input: false,
+            },
+        ],
+        body: Block {
+            stmts: builder.stmts,
+        },
+        shared_mem_bytes: 0,
     };
+    ir.validate_layouts().unwrap();
+    ir.optimize_indices().unwrap();
+    ir.validate_layouts().unwrap();
+    let graph: TensorGraph<f32> = TensorExpr::constant(vec![0.0], vec![1]).into();
+    let mut tiles = TileGraph::from(graph);
+    tiles.graph.clear();
+    tiles.graph.add_node(ir);
+    let module = device
+        .load_module(Ptx::from_src(PtxGraph::from(tiles).to_ptx()))
+        .unwrap();
+    let function = module.load_function("scalar_0").unwrap();
     let stream = device.default_stream();
     let input = stream
         .memcpy_stod(&[1.0f32, 2., 3., 4., 5., 2., 3., 4., 5., 6.])
         .unwrap();
+    let mut output = stream.alloc_zeros::<f32>(outputs * 2).unwrap();
+    // SAFETY: Each of two single-thread blocks reads its five-element row and
+    // writes its disjoint outputs. Buffers stay live through synchronized readback.
+    unsafe {
+        stream
+            .launch_builder(&function)
+            .arg(&input)
+            .arg(&mut output)
+            .launch(LaunchConfig {
+                grid_dim: (2, 1, 1),
+                block_dim: (1, 1, 1),
+                shared_mem_bytes: 0,
+            })
+    }
+    .unwrap();
+    stream.memcpy_dtov(&output).unwrap()
+}
+#[test]
+fn generic_scalar_folds_preserve_nested_updates_and_empty_identities() {
+    let Some(device) = device() else {
+        return;
+    };
     for count in [0, 3, 5] {
         let mut builder = ScalarBuilder::default();
         let sum = builder.var();
@@ -43,14 +100,7 @@ fn generic_scalar_folds_preserve_nested_updates_and_empty_identities() {
                         ScalarMemory::Global("input".into()),
                         Expr::BlockIdx(Dim::X) * 5usize + column.clone(),
                     );
-                    builder.set(
-                        product,
-                        ScalarExpr::binary(
-                            ScalarBinaryOp::Arithmetic(BinaryOp::Mul),
-                            product,
-                            value,
-                        ),
-                    );
+                    builder.set(product, arithmetic(BinaryOp::Mul, product, value));
                     builder.when(
                         ScalarPredicate::IndexLt {
                             lhs: column,
@@ -62,14 +112,7 @@ fn generic_scalar_folds_preserve_nested_updates_and_empty_identities() {
                                 Expr::Const(2),
                                 Vec::new(),
                                 |builder, _| {
-                                    builder.set(
-                                        sum,
-                                        ScalarExpr::binary(
-                                            ScalarBinaryOp::Arithmetic(BinaryOp::Add),
-                                            sum,
-                                            value,
-                                        ),
-                                    );
+                                    builder.set(sum, arithmetic(BinaryOp::Add, sum, value));
                                     Ok(())
                                 },
                             )
@@ -88,51 +131,7 @@ fn generic_scalar_folds_preserve_nested_updates_and_empty_identities() {
             Expr::BlockIdx(Dim::X) * 2usize + Expr::Const(1),
             product,
         );
-        let mut ir = TileIR {
-            kernel_name: "recurrence".into(),
-            params: vec![
-                KernelParam {
-                    name: "input".into(),
-                    dtype: DType::F32,
-                    is_input: true,
-                },
-                KernelParam {
-                    name: "output".into(),
-                    dtype: DType::F32,
-                    is_input: false,
-                },
-            ],
-            body: Block {
-                stmts: builder.stmts,
-            },
-            shared_mem_bytes: 0,
-        };
-        ir.validate_layouts().unwrap();
-        ir.optimize_indices().unwrap();
-        ir.validate_layouts().unwrap();
-        let graph: TensorGraph<f32> = TensorExpr::constant(vec![0.0], vec![1]).into();
-        let mut tile_graph = TileGraph::from(graph);
-        tile_graph.graph.clear();
-        tile_graph.graph.add_node(ir);
-        let source = PtxGraph::from(tile_graph).to_ptx();
-        let module = device.load_module(Ptx::from_src(source)).unwrap();
-        let function = module.load_function("recurrence_0").unwrap();
-        let mut output = stream.alloc_zeros::<f32>(4).unwrap();
-        // SAFETY: Two blocks each read their five-element row and write two
-        // outputs; buffers remain live on the same stream through readback.
-        unsafe {
-            stream
-                .launch_builder(&function)
-                .arg(&input)
-                .arg(&mut output)
-                .launch(LaunchConfig {
-                    grid_dim: (2, 1, 1),
-                    block_dim: (1, 1, 1),
-                    shared_mem_bytes: 0,
-                })
-        }
-        .unwrap();
-        let actual = stream.memcpy_dtov(&output).unwrap();
+        let actual = run(&device, builder, 2);
         let expected = match count {
             0 => [0., 1., 0., 1.],
             3 => [12., 6., 18., 24.],
@@ -144,13 +143,8 @@ fn generic_scalar_folds_preserve_nested_updates_and_empty_identities() {
 
 #[test]
 fn counted_loops_keep_wide_indices_and_shadowed_bounds_in_the_parent_scope() {
-    let device = match CudaContext::new(0) {
-        Ok(device) => device,
-        Err(error) if std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1") => {
-            eprintln!("skipping CUDA: {error:#}");
-            return;
-        }
-        Err(error) => panic!("{error:#}"),
+    let Some(device) = device() else {
+        return;
     };
     let mut builder = ScalarBuilder::default();
     let sum = builder.var();
@@ -168,10 +162,7 @@ fn counted_loops_keep_wide_indices_and_shadowed_bounds_in_the_parent_scope() {
                     + Expr::Sub(Box::new(column.clone()), Box::new(Expr::Const(start)));
                 let value = builder.load(ScalarMemory::Global("input".into()), offset.clone());
                 let body = builder.block(|builder| {
-                    builder.set(
-                        sum,
-                        ScalarExpr::binary(ScalarBinaryOp::Arithmetic(BinaryOp::Add), sum, value),
-                    );
+                    builder.set(sum, arithmetic(BinaryOp::Add, sum, value));
                     Ok(())
                 })?;
                 builder.stmts.push(Stmt::ForLoop {
@@ -183,10 +174,7 @@ fn counted_loops_keep_wide_indices_and_shadowed_bounds_in_the_parent_scope() {
                 });
                 // This access must see the restored outer counter after the inner loop.
                 let value = builder.load(ScalarMemory::Global("input".into()), offset);
-                builder.set(
-                    sum,
-                    ScalarExpr::binary(ScalarBinaryOp::Arithmetic(BinaryOp::Add), sum, value),
-                );
+                builder.set(sum, arithmetic(BinaryOp::Add, sum, value));
                 Ok(())
             },
         )
@@ -203,53 +191,5 @@ fn counted_loops_keep_wide_indices_and_shadowed_bounds_in_the_parent_scope() {
         Expr::BlockIdx(Dim::X),
         sum,
     );
-    let mut ir = TileIR {
-        kernel_name: "wide_shadow".into(),
-        params: vec![
-            KernelParam {
-                name: "input".into(),
-                dtype: DType::F32,
-                is_input: true,
-            },
-            KernelParam {
-                name: "output".into(),
-                dtype: DType::F32,
-                is_input: false,
-            },
-        ],
-        body: Block {
-            stmts: builder.stmts,
-        },
-        shared_mem_bytes: 0,
-    };
-    ir.validate_layouts().unwrap();
-    ir.optimize_indices().unwrap();
-    let graph: TensorGraph<f32> = TensorExpr::constant(vec![0.0], vec![1]).into();
-    let mut tile_graph = TileGraph::from(graph);
-    tile_graph.graph.clear();
-    tile_graph.graph.add_node(ir);
-    let module = device
-        .load_module(Ptx::from_src(PtxGraph::from(tile_graph).to_ptx()))
-        .unwrap();
-    let function = module.load_function("wide_shadow_0").unwrap();
-    let stream = device.default_stream();
-    let input = stream
-        .memcpy_stod(&[1.0f32, 2., 3., 4., 5., 2., 3., 4., 5., 6.])
-        .unwrap();
-    let mut output = stream.alloc_zeros::<f32>(2).unwrap();
-    // SAFETY: Each block reads its five-element row and writes one output;
-    // the nested loop reads only registers, and buffers stay live through readback.
-    unsafe {
-        stream
-            .launch_builder(&function)
-            .arg(&input)
-            .arg(&mut output)
-            .launch(LaunchConfig {
-                grid_dim: (2, 1, 1),
-                block_dim: (1, 1, 1),
-                shared_mem_bytes: 0,
-            })
-    }
-    .unwrap();
-    assert_eq!(stream.memcpy_dtov(&output).unwrap(), vec![18., 27.]);
+    assert_eq!(run(&device, builder, 1), vec![18., 27.]);
 }

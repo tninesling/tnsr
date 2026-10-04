@@ -123,21 +123,30 @@ pub(super) fn view_root<D: TileDType, G>(
     }
     let [input]: [NodeIndex; 1] = operands.try_into().ok()?;
     let (tensor, mut members) = view_root(graph, input)?;
-    let tensor = match &graph[node] {
+    let tensor = apply_view(graph, node, tensor).ok()?;
+    members.push(node);
+    Some((tensor, members))
+}
+
+/// Apply the same pure-view transform during matching and plan materialization.
+pub(super) fn apply_view<D: TileDType, G>(
+    graph: &TensorGraph<D, G>,
+    node: NodeIndex,
+    tensor: VirtualTensor,
+) -> Result<VirtualTensor> {
+    Ok(match &graph[node] {
         TensorGraphNode::Reshape { shape } | TensorGraphNode::Flatten { shape } => {
-            tensor.reshape(shape.clone()).ok()?
+            tensor.reshape(shape.clone())?
         }
-        TensorGraphNode::Permute { axes, .. } => tensor.permute(axes).ok()?,
+        TensorGraphNode::Permute { axes, .. } => tensor.permute(axes)?,
         TensorGraphNode::Transpose { shape } => {
             let mut axes: Vec<_> = (0..shape.len()).collect();
             axes.swap(shape.len() - 2, shape.len() - 1);
-            tensor.permute(&axes).ok()?
+            tensor.permute(&axes)?
         }
         TensorGraphNode::BroadcastAxis { axis, shape } => {
-            tensor.broadcast_axis(*axis, shape[*axis]).ok()?
+            tensor.broadcast_axis(*axis, shape[*axis])?
         }
-        _ => return None,
-    };
-    members.push(node);
-    Some((tensor, members))
+        _ => anyhow::bail!("Expected a pure tensor view"),
+    })
 }

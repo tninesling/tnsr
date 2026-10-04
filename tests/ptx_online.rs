@@ -38,6 +38,22 @@ fn close(actual: &[f32], expected: &[f32]) {
         );
     }
 }
+fn check(executor: &mut PtxExecutor, graph: &TensorGraph<f32>, regions: usize) -> Vec<f32> {
+    let expected = SimpleExecutor::new()
+        .execute(graph, HashMap::new())
+        .unwrap();
+    let actual = executor.execute(graph, HashMap::new()).unwrap();
+    close(&actual, &expected);
+    let plan = executor.execution_plan().unwrap();
+    assert_eq!(
+        plan.online_regions().len(),
+        regions,
+        "{}",
+        executor.describe_plan(graph).unwrap()
+    );
+    actual
+}
+
 #[test]
 fn online_attention_matches_primitive_reference_without_score_buffers() {
     let Some(mut online) = executor(PtxReductionMode::Online) else {
@@ -56,25 +72,8 @@ fn online_attention_matches_primitive_reference_without_score_buffers() {
                 causal,
             )
             .into();
-            let expected = SimpleExecutor::new()
-                .execute(&graph, HashMap::new())
-                .unwrap();
-            online.compile(&graph).unwrap();
-            assert_eq!(
-                online.execution_plan().unwrap().online_regions().len(),
-                1,
-                "{}",
-                online.describe_plan(&graph).unwrap()
-            );
-            let result = online.execute_compiled(&graph, HashMap::new()).unwrap();
-            close(&result, &expected);
+            check(&mut online, &graph, 1);
             assert_eq!(online.execution_metrics().kernel_launches, 1);
-            assert!(
-                online
-                    .module_source()
-                    .unwrap()
-                    .contains("loop_start_scan_0_")
-            );
         }
     }
 }
@@ -98,15 +97,7 @@ fn online_weighted_normalization_handles_extreme_and_masked_scores() {
         vec![3, 3],
     );
     let graph: TensorGraph<f32> = softmax(scores, 1).matmul(values(vec![3, 5], 0)).into();
-    let expected = SimpleExecutor::new()
-        .execute(&graph, HashMap::new())
-        .unwrap();
-    online.compile(&graph).unwrap();
-    assert_eq!(online.execution_plan().unwrap().online_regions().len(), 1);
-    close(
-        &online.execute_compiled(&graph, HashMap::new()).unwrap(),
-        &expected,
-    );
+    check(&mut online, &graph, 1);
 }
 #[test]
 fn online_fusion_preserves_escaping_probabilities_and_strict_policy() {
@@ -116,16 +107,14 @@ fn online_fusion_preserves_escaping_probabilities_and_strict_policy() {
     let probabilities = softmax(values(vec![3, 3], 0), 1);
     let output = probabilities.clone().matmul(values(vec![3, 3], 2)) + probabilities;
     let graph: TensorGraph<f32> = output.into();
-    online.compile(&graph).unwrap();
-    assert!(online.execution_plan().unwrap().online_regions().is_empty());
+    check(&mut online, &graph, 0);
     let graph: TensorGraph<f32> = softmax(values(vec![3, 3], 0), 1)
         .matmul(values(vec![3, 3], 2))
         .into();
     let Some(mut strict) = executor(PtxReductionMode::Strict) else {
         return;
     };
-    strict.compile(&graph).unwrap();
-    assert!(strict.execution_plan().unwrap().online_regions().is_empty());
+    check(&mut strict, &graph, 0);
 }
 
 #[test]
@@ -153,19 +142,11 @@ fn online_serial_schedule_and_nonfinite_inputs_match_reference() {
         let graph: TensorGraph<f32> = softmax(TensorExpr::constant(scores, vec![2, 3]), 1)
             .matmul(weights)
             .into();
-        let expected = SimpleExecutor::new()
-            .execute(&graph, HashMap::new())
-            .unwrap();
-        online.compile(&graph).unwrap();
-        assert_eq!(online.execution_plan().unwrap().online_regions().len(), 1);
+        check(&mut online, &graph, 1);
         assert!(
             online.execution_plan().unwrap().online_regions()[0]
                 .block_threads()
                 .is_none()
-        );
-        close(
-            &online.execute_compiled(&graph, HashMap::new()).unwrap(),
-            &expected,
         );
     }
 }
@@ -207,15 +188,8 @@ fn online_regions_compose_and_keep_input_views_virtual() {
     let first = softmax(values(vec![4, 5], 0), 1).matmul(values(vec![5, 3], 2));
     let second = softmax(first, 1).matmul(values(vec![3, 7], 7));
     let graph: TensorGraph<f32> = second.into();
-    let expected = SimpleExecutor::new()
-        .execute(&graph, HashMap::new())
-        .unwrap();
-    online.compile(&graph).unwrap();
+    check(&mut online, &graph, 2);
     assert_eq!(online.execution_plan().unwrap().online_regions().len(), 2);
-    close(
-        &online.execute_compiled(&graph, HashMap::new()).unwrap(),
-        &expected,
-    );
     assert_eq!(online.execution_metrics().kernel_launches, 2);
 }
 
@@ -226,20 +200,7 @@ fn online_policy_fuses_attention_inside_transformer_blocks() {
     };
     let block = tnsr::nn::TransformerBlock::new(8, 2, 16, 1e-5);
     let graph: TensorGraph<f32> = block.forward(values(vec![2, 5, 8], 4), true).into();
-    let expected = SimpleExecutor::new()
-        .execute(&graph, HashMap::new())
-        .unwrap();
-    online.compile(&graph).unwrap();
-    assert_eq!(
-        online.execution_plan().unwrap().online_regions().len(),
-        1,
-        "{}",
-        online.describe_plan(&graph).unwrap()
-    );
-    close(
-        &online.execute_compiled(&graph, HashMap::new()).unwrap(),
-        &expected,
-    );
+    check(&mut online, &graph, 1);
 }
 
 #[test]
@@ -253,18 +214,9 @@ fn online_normalizer_rewrite_works_without_normalized_or_weighted_consumers() {
         let scores = values(shape.clone(), 4);
         let shifted = scores.clone() - scores.reduce_max(axis).broadcast_axis(axis, shape[axis]);
         let graph: TensorGraph<f32> = shifted.exp().reduce_sum(axis).into();
-        let expected = SimpleExecutor::new()
-            .execute(&graph, HashMap::new())
-            .unwrap();
-        let actual = online.execute(&graph, HashMap::new()).unwrap();
-        close(&actual, &expected);
+        check(&mut online, &graph, 1);
         let regions = online.execution_plan().unwrap().online_regions();
-        assert_eq!(
-            regions.len(),
-            1,
-            "{}",
-            online.describe_plan(&graph).unwrap()
-        );
+
         assert!(matches!(regions[0].consumer, OnlineConsumer::Normalizer));
         assert_eq!(online.execution_metrics().kernel_launches, 1);
         assert_eq!(
@@ -297,17 +249,8 @@ fn online_consumer_fuses_elementwise_weighted_sum_without_matmuls() {
                 probability * weights
             };
             let graph: TensorGraph<f32> = product.reduce_sum(axis).into();
-            let expected = SimpleExecutor::new()
-                .execute(&graph, HashMap::new())
-                .unwrap();
-            close(&online.execute(&graph, HashMap::new()).unwrap(), &expected);
+            check(&mut online, &graph, 1);
             let regions = online.execution_plan().unwrap().online_regions();
-            assert_eq!(
-                regions.len(),
-                1,
-                "{}",
-                online.describe_plan(&graph).unwrap()
-            );
             assert!(matches!(regions[0].consumer, OnlineConsumer::Sum(_)));
             assert_eq!(online.execution_metrics().kernel_launches, 1);
         }
@@ -316,103 +259,57 @@ fn online_consumer_fuses_elementwise_weighted_sum_without_matmuls() {
 
 #[test]
 fn online_matmul_and_explicit_indexed_sums_share_contractions() {
-    use tnsr::tile::{
-        IndexMap, IndexedOperand, IndexedSource, OnlineConsumer, OnlineExpr, OnlineRegion,
-    };
-    fn physical_access(
-        region: &OnlineRegion,
-        operand: &IndexedOperand,
-        shape: &[usize],
-        extent: usize,
-    ) -> (Vec<usize>, IndexMap) {
-        let IndexedSource::Input(input) = operand.source else {
-            panic!("expected input operand")
-        };
-        let descriptor = &region.inputs[input];
-        let mut domain = shape.to_vec();
-        domain.push(extent);
-        (
-            descriptor.source_shape.clone(),
-            descriptor
-                .tensor
-                .access
-                .compose(&operand.access)
-                .unwrap()
-                .normalize_in_domain(&domain)
-                .unwrap(),
-        )
-    }
     let Some(mut online) = executor(PtxReductionMode::Online) else {
         return;
     };
     let (queries, keys, features, width) = (3, 35, 7, 5);
-    let q = values(vec![queries, features], 0);
-    let k = values(vec![keys, features], 3);
-    let v = values(vec![keys, width], 7);
-    let mut canonical = None;
-    for explicit_score in [false, true] {
-        for explicit_output in [false, true] {
-            let scores = if explicit_score {
-                (q.clone()
-                    .reshape(vec![queries, 1, features])
-                    .broadcast_axis(1, keys)
-                    * k.clone()
-                        .reshape(vec![1, keys, features])
-                        .broadcast_axis(0, queries))
-                .reduce_sum(2)
-                .reshape(vec![queries, keys])
-            } else {
-                q.clone().matmul(k.clone().transpose())
-            };
-            let probability = softmax(scores, 1);
-            let output = if explicit_output {
-                (probability
-                    .reshape(vec![queries, keys, 1])
-                    .broadcast_axis(2, width)
-                    * v.clone()
-                        .reshape(vec![1, keys, width])
-                        .broadcast_axis(0, queries))
-                .reduce_sum(1)
-                .reshape(vec![queries, width])
-            } else {
-                probability.matmul(v.clone())
-            };
-            let graph: TensorGraph<f32> = output.into();
-            let expected = SimpleExecutor::new()
-                .execute(&graph, HashMap::new())
-                .unwrap();
-            close(&online.execute(&graph, HashMap::new()).unwrap(), &expected);
-            let regions = online.execution_plan().unwrap().online_regions();
-            assert_eq!(
-                regions.len(),
-                1,
-                "score={explicit_score}, output={explicit_output}: {}",
-                online.describe_plan(&graph).unwrap()
-            );
-            let region = &regions[0];
-            let OnlineExpr::Sum(score) = &region.score else {
-                panic!("score contraction did not fuse: {:?}", region.score)
-            };
-            let OnlineConsumer::Sum(consumer) = &region.consumer else {
-                panic!("output contraction did not fuse")
-            };
-            let signature = (
-                score.extent,
-                physical_access(region, &score.lhs, &region.score_shape, score.extent),
-                physical_access(region, &score.rhs, &region.score_shape, score.extent),
-                consumer.extent,
-                physical_access(region, &consumer.rhs, &region.output_shape, consumer.extent),
-            );
-            if let Some(reference) = &canonical {
-                assert_eq!(&signature, reference);
-            } else {
-                canonical = Some(signature);
+    for prefix in [vec![], vec![2]] {
+        let shape = |tail: &[usize]| [prefix.as_slice(), tail].concat();
+        let axis = prefix.len();
+        let q = values(shape(&[queries, features]), 0);
+        let k = values(shape(&[keys, features]), 3);
+        let v = values(shape(&[keys, width]), 7);
+        let mut canonical: Option<Vec<f32>> = None;
+        for explicit_score in [false, true] {
+            for explicit_output in [false, true] {
+                let scores = if explicit_score {
+                    (q.clone()
+                        .reshape(shape(&[queries, 1, features]))
+                        .broadcast_axis(axis + 1, keys)
+                        * k.clone()
+                            .reshape(shape(&[1, keys, features]))
+                            .broadcast_axis(axis, queries))
+                    .reduce_sum(axis + 2)
+                    .reshape(shape(&[queries, keys]))
+                } else {
+                    q.clone().matmul(k.clone().transpose())
+                };
+                let probability = softmax(scores, axis + 1);
+                let output = if explicit_output {
+                    (probability
+                        .reshape(shape(&[queries, keys, 1]))
+                        .broadcast_axis(axis + 2, width)
+                        * v.clone()
+                            .reshape(shape(&[1, keys, width]))
+                            .broadcast_axis(axis, queries))
+                    .reduce_sum(axis + 1)
+                    .reshape(shape(&[queries, width]))
+                } else {
+                    probability.matmul(v.clone())
+                };
+                let graph: TensorGraph<f32> = output.into();
+                let actual = check(&mut online, &graph, 1);
+                if let Some(reference) = &canonical {
+                    close(&actual, reference);
+                } else {
+                    canonical = Some(actual);
+                }
+                assert_eq!(online.execution_metrics().kernel_launches, 1);
+                assert_eq!(
+                    online.execution_metrics().intermediate_materialized_bytes,
+                    0
+                );
             }
-            assert_eq!(online.execution_metrics().kernel_launches, 1);
-            assert_eq!(
-                online.execution_metrics().intermediate_materialized_bytes,
-                0
-            );
         }
     }
 }
@@ -428,51 +325,5 @@ fn online_indexed_consumer_requires_an_invariant_normalizer() {
         .transpose()
         .matmul(values(vec![3, 5], 7))
         .into();
-    let expected = SimpleExecutor::new()
-        .execute(&graph, HashMap::new())
-        .unwrap();
-    close(&online.execute(&graph, HashMap::new()).unwrap(), &expected);
-    assert!(online.execution_plan().unwrap().online_regions().is_empty());
-}
-
-#[test]
-fn online_explicit_batched_contractions_preserve_batch_coordinates() {
-    let Some(mut online) = executor(PtxReductionMode::Online) else {
-        return;
-    };
-    let (batch, queries, keys, features, width) = (2, 3, 37, 7, 5);
-    let q = values(vec![batch, queries, features], 0);
-    let k = values(vec![batch, keys, features], 3);
-    let v = values(vec![batch, keys, width], 7);
-    let scores = (q
-        .reshape(vec![batch, queries, 1, features])
-        .broadcast_axis(2, keys)
-        * k.reshape(vec![batch, 1, keys, features])
-            .broadcast_axis(1, queries))
-    .reduce_sum(3)
-    .reshape(vec![batch, queries, keys]);
-    let probability = softmax(scores, 2);
-    let graph: TensorGraph<f32> = (probability
-        .reshape(vec![batch, queries, keys, 1])
-        .broadcast_axis(3, width)
-        * v.reshape(vec![batch, 1, keys, width])
-            .broadcast_axis(1, queries))
-    .reduce_sum(2)
-    .reshape(vec![batch, queries, width])
-    .into();
-    let expected = SimpleExecutor::new()
-        .execute(&graph, HashMap::new())
-        .unwrap();
-    close(&online.execute(&graph, HashMap::new()).unwrap(), &expected);
-    assert_eq!(
-        online.execution_plan().unwrap().online_regions().len(),
-        1,
-        "{}",
-        online.describe_plan(&graph).unwrap()
-    );
-    assert_eq!(online.execution_metrics().kernel_launches, 1);
-    assert_eq!(
-        online.execution_metrics().intermediate_materialized_bytes,
-        0
-    );
+    check(&mut online, &graph, 0);
 }

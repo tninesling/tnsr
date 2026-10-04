@@ -6,7 +6,7 @@ mod normalization;
 use crate::tensor::{BinaryOp, ReduceOp, UnaryOp};
 use crate::tile::{IndexExpr, IndexMap, IndexedSource};
 use crate::tile::{OnlineConsumer, OnlineExpr, OnlineRegion, RegionInput, RegionValue, TileDType};
-use contraction::{contraction, view_root};
+use contraction::{apply_view, contraction, view_root};
 use normalization::{Normalization, match_normalization};
 
 impl PtxExecutionPlan {
@@ -304,39 +304,13 @@ fn producer<D: TileDType, G>(
     }
     let operands = graph.inputs(node);
     let indexed = contraction(graph, node);
+    let mut child = |node| producer(graph, node, shape, members, inputs, boundaries, depth + 1);
     let expression = match graph[node] {
-        TensorGraphNode::Unary { op, .. } => OnlineExpr::Unary(
-            op,
-            Box::new(producer(
-                graph,
-                operands[0],
-                shape,
-                members,
-                inputs,
-                boundaries,
-                depth + 1,
-            )?),
-        ),
+        TensorGraphNode::Unary { op, .. } => OnlineExpr::Unary(op, Box::new(child(operands[0])?)),
         TensorGraphNode::Binary { op, .. } => OnlineExpr::Binary(
             op,
-            Box::new(producer(
-                graph,
-                operands[0],
-                shape,
-                members,
-                inputs,
-                boundaries,
-                depth + 1,
-            )?),
-            Box::new(producer(
-                graph,
-                operands[1],
-                shape,
-                members,
-                inputs,
-                boundaries,
-                depth + 1,
-            )?),
+            Box::new(child(operands[0])?),
+            Box::new(child(operands[1])?),
         ),
         _ if indexed.is_some() => {
             let sum = indexed?;
@@ -375,21 +349,7 @@ fn resolve_view<D: TileDType, G>(
     }
     let operands = graph.inputs(node);
     let input = resolve_view(graph, operands[0], members, steps)?;
-    let tensor = match &graph[node] {
-        TensorGraphNode::Reshape { shape } | TensorGraphNode::Flatten { shape } => {
-            input.reshape(shape.clone())?
-        }
-        TensorGraphNode::Permute { axes, .. } => input.permute(axes)?,
-        TensorGraphNode::Transpose { shape } => {
-            let mut axes: Vec<_> = (0..shape.len()).collect();
-            axes.swap(shape.len() - 2, shape.len() - 1);
-            input.permute(&axes)?
-        }
-        TensorGraphNode::BroadcastAxis { axis, shape } => {
-            input.broadcast_axis(*axis, shape[*axis])?
-        }
-        _ => return Ok(input),
-    };
+    let tensor = apply_view(graph, node, input)?;
     steps[position].action = PtxPlanAction::VirtualView;
     steps[position].materialize = false;
     steps[position].virtual_outputs = vec![tensor.clone()];

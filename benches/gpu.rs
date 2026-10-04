@@ -552,5 +552,48 @@ pub fn fusion_benches(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches_group, benches, fusion_benches);
+// End-to-end execution of the same attention graph; compilation is outside timing.
+fn attention_benches(c: &mut Criterion) {
+    use tnsr::nn::scaled_dot_product_attention;
+    use tnsr::ptx::PtxReductionMode;
+    use tnsr::tile::MatMulPrecision;
+    let mut group = c.benchmark_group("attention");
+    for (sequence, width) in [(64, 32), (128, 64), (256, 64), (512, 64)] {
+        let input = |phase| {
+            TensorExpr::constant(
+                (0..sequence * width)
+                    .map(|i| ((i + phase) % 29) as f32 / 29.0 - 0.5)
+                    .collect(),
+                vec![1, sequence, width],
+            )
+        };
+        for causal in [false, true] {
+            let graph: TensorGraph<f32> =
+                scaled_dot_product_attention(input(0), input(3), input(7), causal).into();
+            for mode in [PtxReductionMode::Strict, PtxReductionMode::Online] {
+                let mut executor = PtxExecutor::try_new_with_reduction_mode(mode).unwrap();
+                executor.set_matmul_precision(MatMulPrecision::StrictF32);
+                executor.compile(&graph).unwrap();
+                group.bench_function(
+                    BenchmarkId::new(
+                        format!("{mode:?}"),
+                        format!("{sequence}x{width}/causal={causal}"),
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            std::hint::black_box(
+                                executor
+                                    .execute_compiled(&graph, Default::default())
+                                    .unwrap(),
+                            )
+                        });
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches_group, benches, fusion_benches, attention_benches);
 criterion_main!(benches_group);

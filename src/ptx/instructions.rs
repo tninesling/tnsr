@@ -605,6 +605,19 @@ pub enum Inst<'a> {
         addr: Operand<'a, U64>,
     },
 
+    ConvertTf32Bits {
+        dst: Operand<'a, B32>,
+        src: Operand<'a, B32>,
+    },
+    AsyncCopy {
+        dst: Operand<'a, U64>,
+        src: Operand<'a, U64>,
+        source_bytes: Operand<'a, I32>,
+        copy_bytes: usize,
+    },
+    AsyncCommit,
+    AsyncWait,
+
     WmmaLoadA {
         dtype: crate::tile::DType,
         frags: Vec<Operand<'a, B32>>,

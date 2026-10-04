@@ -31,6 +31,15 @@ pub enum MatMulSharedLayout {
     Swizzled,
 }
 
+/// Bound operand movement to two shared-memory stages.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MatMulPipeline {
+    #[default]
+    Auto,
+    Synchronous,
+    DoubleBuffered,
+}
+
 /// Resource budgets used for conservative occupancy estimates. The register
 /// estimate reserves 128 registers per thread; JIT allocation can vary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,9 +74,8 @@ pub enum MatMulAccumulatorLayout {
     WarpFragment,
 }
 
-/// Single source of truth for lowering and launch geometry. These first schedules
-/// use synchronous shared-memory staging; layouts and deeper pipelines can evolve
-/// without changing the logical region or encoding a GPU tile in its shape.
+/// Single source of truth for launch geometry, shared layouts, and pipeline stages.
+/// Scheduling stays independent of the logical region and its tensor shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatMulSchedule {
     pub plan: MatMulPlan,
@@ -78,11 +86,14 @@ pub struct MatMulSchedule {
     /// Warps that compute output fragments; remaining block warps stage operands.
     pub warp_topology: (usize, usize),
     pub operand_layouts: (SharedLayout, SharedLayout),
+    /// One synchronous stage or two asynchronously copied stages.
+    pub pipeline_stages: usize,
+    /// Raw bytes moved per asynchronous copy group.
+    pub copy_bytes: usize,
     pub operand_dtype: DType,
     /// Storage format at global-memory graph boundaries.
     pub storage_dtype: DType,
     pub accumulator_layout: MatMulAccumulatorLayout,
-    pub pipeline_stages: usize,
 }
 
 impl MatMulSchedule {
@@ -147,6 +158,75 @@ impl MatMulSchedule {
             self.operand_layouts = (a, b);
         }
         Ok(self)
+    }
+
+    /// Select after operand layouts. `contiguous` proves aligned source groups
+    /// can follow the logical matrix columns without crossing a physical row.
+    pub fn with_pipeline(
+        mut self,
+        policy: MatMulPipeline,
+        supports_async: bool,
+        contiguous: bool,
+        resources: MatMulResources,
+    ) -> Self {
+        self.pipeline_stages = 1;
+        self.copy_bytes = 4;
+        let tile = self.block_tile;
+        let pairs_aligned = self.storage_dtype.size_bytes() == 4
+            || (contiguous
+                && self.logical_shape.k.is_multiple_of(2)
+                && self.logical_shape.n.is_multiple_of(2)
+                && [self.operand_layouts.0, self.operand_layouts.1]
+                    .iter()
+                    .all(|layout| layout.row_stride.is_multiple_of(2) && layout.xor_mask & 1 == 0));
+        let operands = self
+            .operand_layouts
+            .0
+            .allocation_bytes(tile.m, self.storage_dtype)
+            + self
+                .operand_layouts
+                .1
+                .allocation_bytes(tile.k, self.storage_dtype);
+        let accumulator = if self.plan == MatMulPlan::ScalarF32 {
+            0
+        } else {
+            SharedLayout::row_major(tile.n).allocation_bytes(tile.m, DType::F32)
+        };
+        let bytes = 2 * operands + accumulator;
+        if supports_async
+            && pairs_aligned
+            && policy != MatMulPipeline::Synchronous
+            && self.logical_shape.k > tile.k
+            && (policy == MatMulPipeline::DoubleBuffered || self.plan != MatMulPlan::ScalarF32)
+            && bytes <= resources.shared_bytes_per_block
+            && resources.shared_bytes_per_sm / bytes >= 2
+        {
+            self.pipeline_stages = 2;
+            let group = 16 / self.storage_dtype.size_bytes();
+            if contiguous
+                && self.logical_shape.k.is_multiple_of(group)
+                && self.logical_shape.n.is_multiple_of(group)
+                && [self.operand_layouts.0, self.operand_layouts.1]
+                    .iter()
+                    .all(|layout| {
+                        layout.row_stride.is_multiple_of(group)
+                            && layout.xor_mask & (group - 1) == 0
+                    })
+            {
+                self.copy_bytes = 16;
+            }
+            // Auto amortizes pipeline startup only on vectorized copies with
+            // several K tiles and computing warps. Explicit mode exercises the other paths.
+            if policy == MatMulPipeline::Auto
+                && (self.copy_bytes != 16
+                    || self.logical_shape.k.div_ceil(tile.k) < 4
+                    || self.warp_topology.0 * self.warp_topology.1 == 1)
+            {
+                self.pipeline_stages = 1;
+                self.copy_bytes = 4;
+            }
+        }
+        self
     }
 
     pub fn thread_count(&self) -> usize {
@@ -289,6 +369,8 @@ impl MatMulSchedule {
                 SharedLayout::row_major(block_tile.k),
                 SharedLayout::row_major(block_tile.n),
             ),
+            pipeline_stages: 1,
+            copy_bytes: 4,
             operand_dtype: if plan == MatMulPlan::TensorCoreTf32 {
                 DType::TF32
             } else {
@@ -300,7 +382,6 @@ impl MatMulSchedule {
             } else {
                 MatMulAccumulatorLayout::ThreadScalar
             },
-            pipeline_stages: 1,
         }
     }
 }
@@ -450,6 +531,122 @@ mod tests {
             assert_eq!(schedule.warp_topology, (1, 1));
         }
     }
+    #[test]
+    fn pipeline_selection_respects_target_tail_alignment_and_resources() {
+        let caps = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            for k in [8, 16, 17, 32, 33, 64, 66, 96] {
+                let base = MatMulSchedule::select_for_dtype(
+                    33,
+                    258,
+                    k,
+                    dtype,
+                    caps,
+                    MatMulPrecision::AllowTf32,
+                )
+                .with_shared_layout(MatMulSharedLayout::Auto, MatMulResources::default())
+                .unwrap();
+                let selected = base.with_pipeline(
+                    MatMulPipeline::DoubleBuffered,
+                    true,
+                    true,
+                    MatMulResources::default(),
+                );
+                let expected =
+                    k > base.block_tile.k && (dtype == DType::F32 || k.is_multiple_of(2));
+                assert_eq!(selected.pipeline_stages, if expected { 2 } else { 1 });
+                for (policy, supported, resources) in [
+                    (
+                        MatMulPipeline::DoubleBuffered,
+                        false,
+                        MatMulResources::default(),
+                    ),
+                    (
+                        MatMulPipeline::Synchronous,
+                        true,
+                        MatMulResources::default(),
+                    ),
+                    (
+                        MatMulPipeline::DoubleBuffered,
+                        true,
+                        MatMulResources {
+                            shared_bytes_per_block: 1024,
+                            ..Default::default()
+                        },
+                    ),
+                ] {
+                    assert_eq!(
+                        base.with_pipeline(policy, supported, true, resources)
+                            .pipeline_stages,
+                        1
+                    );
+                }
+            }
+            let single_warp = MatMulSchedule::select_for_dtype(
+                33,
+                128,
+                128,
+                dtype,
+                caps,
+                MatMulPrecision::AllowTf32,
+            )
+            .with_pipeline(
+                MatMulPipeline::Auto,
+                true,
+                true,
+                MatMulResources::default(),
+            );
+            assert_eq!(single_warp.pipeline_stages, 1);
+            let base = MatMulSchedule::select_for_dtype(
+                128,
+                768,
+                256,
+                dtype,
+                caps,
+                MatMulPrecision::AllowTf32,
+            )
+            .with_shared_layout(MatMulSharedLayout::Auto, MatMulResources::default())
+            .unwrap();
+            let vector = base.with_pipeline(
+                MatMulPipeline::DoubleBuffered,
+                true,
+                true,
+                MatMulResources::default(),
+            );
+            assert_eq!(vector.pipeline_stages, 2);
+            assert_eq!(vector.copy_bytes, 16);
+            assert_eq!(
+                base.with_pipeline(MatMulPipeline::Auto, true, true, MatMulResources::default())
+                    .pipeline_stages,
+                2
+            );
+            assert_eq!(
+                base.with_pipeline(
+                    MatMulPipeline::Auto,
+                    true,
+                    false,
+                    MatMulResources::default()
+                )
+                .pipeline_stages,
+                1
+            );
+            assert_eq!(
+                base.with_pipeline(
+                    MatMulPipeline::DoubleBuffered,
+                    true,
+                    false,
+                    MatMulResources::default()
+                )
+                .copy_bytes,
+                4
+            );
+        }
+    }
+
     #[test]
     fn layout_selection_respects_instruction_alignment_and_memory_budgets() {
         let caps = MatMulCapabilities {

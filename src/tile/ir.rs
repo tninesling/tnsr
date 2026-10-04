@@ -60,6 +60,30 @@ pub enum Stmt {
         layout: MatrixLayout,
     },
 
+    /// Copy disjoint, aligned 4- or 16-byte storage groups into a pipeline stage.
+    /// Out-of-bounds groups are zero-filled; partial groups use synchronous staging.
+    AsyncCopy {
+        dest: TileVar,
+        src_param: String,
+        element_index: Expr,
+        row: Expr,
+        col: Expr,
+        tile_row: Expr,
+        tile_col: Expr,
+        layout: MatrixLayout,
+        copy_bytes: usize,
+    },
+    /// Bind a shared tile to one of two identically laid-out pipeline stages.
+    SelectSharedStage {
+        dest: TileVar,
+        first: TileVar,
+        second: TileVar,
+        stage: Expr,
+    },
+    AsyncCommit,
+    /// Complete this thread's committed copies before a block-wide barrier.
+    AsyncWait,
+
     /// Load one logical matrix element into a scalar register, or zero outside bounds.
     LoadGlobalPredicated {
         dest: TileVar,

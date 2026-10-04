@@ -5,7 +5,7 @@ use super::target::PtxTarget;
 use super::types::{B32, F32, I32, U64};
 use super::{Function, Module};
 use crate::tile::{
-    Dim, Expr, MemorySpace, SharedLayout, Stmt, TileGraph, TileIR, TileLayout, TileVar,
+    DType, Dim, Expr, MemorySpace, SharedLayout, Stmt, TileGraph, TileIR, TileLayout, TileVar,
 };
 use petgraph::{Graph, graph::NodeIndex};
 
@@ -592,6 +592,109 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 store_shared_from_f32(func, ctx.tile_dtypes[dest], shared_address, value);
             }
         }
+        Stmt::AsyncCopy {
+            dest,
+            src_param,
+            element_index,
+            row,
+            col,
+            tile_row,
+            tile_col,
+            layout,
+            copy_bytes,
+        } => {
+            let done = bumpalo::format!(in ctx.arena, "async_copy_done_{}", ctx.label_counter)
+                .into_bump_str();
+            let zero = bumpalo::format!(in ctx.arena, "async_copy_zero_{}", ctx.label_counter)
+                .into_bump_str();
+            ctx.label_counter += 1;
+            // Copy groups are assigned to complete threads, with inactive threads
+            // excluded before addressing shared memory. All threads commit and wait.
+            for (coordinate, extent) in [
+                (tile_row, ctx.tile_dims[dest].0),
+                (tile_col, ctx.tile_dims[dest].1),
+            ] {
+                let coordinate = lower_expr(func, ctx, coordinate);
+                let outside = func.add_predicate_register();
+                func.add_inst(Inst::setp_ge_u64(
+                    outside.clone(),
+                    coordinate,
+                    Operand::imm_u64(extent as u64),
+                ));
+                func.add_inst(Inst::Bra {
+                    condition: outside,
+                    target: done,
+                });
+            }
+            let bytes = func.add_i32_register();
+            func.add_inst(Inst::mov_i32(bytes.clone(), Operand::imm_i32(0)));
+            let address = func.add_u64_register();
+            func.add_inst(Inst::mov_u64(
+                address.clone(),
+                ctx.param_ptrs[src_param].clone(),
+            ));
+            for (coordinate, extent) in [(row, layout.rows), (col, layout.cols)] {
+                let coordinate = lower_expr(func, ctx, coordinate);
+                let outside = func.add_predicate_register();
+                func.add_inst(Inst::setp_ge_u64(
+                    outside.clone(),
+                    coordinate,
+                    Operand::imm_u64(extent as u64),
+                ));
+                func.add_inst(Inst::Bra {
+                    condition: outside,
+                    target: zero,
+                });
+            }
+            let index = lower_expr(func, ctx, element_index);
+            let source = element_address(
+                func,
+                ctx.param_ptrs[src_param].clone(),
+                index,
+                ctx.param_dtypes[src_param],
+            );
+            func.add_inst(Inst::mov_u64(address.clone(), source));
+            func.add_inst(Inst::mov_i32(
+                bytes.clone(),
+                Operand::imm_i32(*copy_bytes as i32),
+            ));
+            func.add_inst(Inst::Label(zero));
+            let destination = shared_coordinate_address(func, ctx, *dest, tile_row, tile_col);
+            func.add_inst(Inst::AsyncCopy {
+                dst: destination,
+                src: address,
+                source_bytes: bytes,
+                copy_bytes: *copy_bytes,
+            });
+            func.add_inst(Inst::Label(done));
+        }
+        Stmt::SelectSharedStage {
+            dest,
+            first,
+            second,
+            stage,
+        } => {
+            let stage = lower_expr(func, ctx, stage);
+            let predicate = func.add_predicate_register();
+            func.add_inst(Inst::setp_ge_u64(
+                predicate.clone(),
+                stage,
+                Operand::imm_u64(1),
+            ));
+            let pointer = func.add_u64_register();
+            func.add_inst(Inst::selp_u64(
+                pointer.clone(),
+                ctx.shared_mem_ptrs[second].clone(),
+                ctx.shared_mem_ptrs[first].clone(),
+                predicate,
+            ));
+            ctx.shared_mem_ptrs.insert(*dest, pointer);
+            ctx.tile_layouts.insert(*dest, ctx.tile_layouts[first]);
+            ctx.tile_dims.insert(*dest, ctx.tile_dims[first]);
+            ctx.tile_dtypes.insert(*dest, ctx.tile_dtypes[first]);
+        }
+        Stmt::AsyncCommit => func.add_inst(Inst::AsyncCommit),
+        Stmt::AsyncWait => func.add_inst(Inst::AsyncWait),
         Stmt::LoadGlobalPredicated {
             dest,
             src_param,
@@ -3286,6 +3389,16 @@ fn lower_tensor_core_matmul<'a>(
             addr: b_address,
             stride: Operand::imm_i32(shared_row_stride(ctx, b_shared) as i32),
         });
+        if schedule.pipeline_stages == 2 && schedule.operand_dtype == DType::TF32 {
+            // Async copies move storage bits. Round only the fragments consumed
+            // by MMA, after the completed copy has been loaded from shared memory.
+            for fragment in a_fragments.iter().chain(&b_fragments) {
+                func.add_inst(Inst::ConvertTf32Bits {
+                    dst: fragment.clone(),
+                    src: fragment.clone(),
+                });
+            }
+        }
         func.add_inst(Inst::WmmaMma {
             dtype: schedule.operand_dtype,
             d_frags: accumulators.clone(),
@@ -3859,9 +3972,12 @@ fn lower_expr_i32<'a>(
 mod tests {
     use super::*;
     use crate::graph::TensorGraph;
-    use crate::ptx::{PtxExecutionPlan, PtxReductionMode};
+    use crate::ptx::{PtxExecutionPlan, PtxPlanAction, PtxReductionMode};
     use crate::tensor::TensorExpr;
-    use crate::tile::{Block, DType, KernelParam, MemorySpace, Stmt, TileIR};
+    use crate::tile::{
+        Block, DType, KernelParam, MatMulPipeline, MatMulPrecision, MatMulSharedLayout,
+        MemorySpace, Stmt, TileIR,
+    };
 
     struct TestFunction {
         // Drop the arena after the function and its bump-backed collections.
@@ -3893,6 +4009,77 @@ mod tests {
         TestFunction {
             function,
             _arena: arena,
+        }
+    }
+
+    #[test]
+    fn pipeline_codegen_orders_wait_publish_prefetch_compute_and_retire() {
+        for sm in [(7, 5), (8, 0)] {
+            let target = PtxTarget {
+                compute_capability: sm,
+                matmul_resources: Default::default(),
+            };
+            for policy in [MatMulPipeline::Synchronous, MatMulPipeline::DoubleBuffered] {
+                let a = TensorExpr::constant(vec![0.25; 33 * 65], vec![33, 65]);
+                let b = TensorExpr::constant(vec![0.5; 65 * 35], vec![65, 35]);
+                let graph: TensorGraph<f32> = a.matmul(b).relu().into();
+                let mut plan =
+                    PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict)
+                        .unwrap();
+                plan.schedule_matmuls(
+                    target.matmul_capabilities(),
+                    MatMulPrecision::AllowTf32,
+                    target.matmul_resources,
+                    MatMulSharedLayout::Auto,
+                    policy,
+                    target.supports_async_copy(),
+                )
+                .unwrap();
+                let mut tiles = TileGraph::from_with_matmul_schedules(
+                    &graph,
+                    target.supports_tf32(),
+                    plan.matmul_schedules(),
+                );
+                tiles.add_matmul_regions(plan.matmul_regions()).unwrap();
+                tiles.set_physical_nodes(
+                    plan.steps()
+                        .iter()
+                        .filter_map(|step| {
+                            (step.action == PtxPlanAction::Kernel).then_some(step.node)
+                        })
+                        .collect(),
+                );
+                tiles.optimize_indices().unwrap();
+                let source = PtxGraph::from(tiles).with_target(target).module_source();
+                let pipelined =
+                    target.supports_async_copy() && policy == MatMulPipeline::DoubleBuffered;
+                assert_eq!(source.contains("cp.async"), pipelined);
+                if !pipelined {
+                    continue;
+                }
+                let start = source.find("loop_body_k_tile:").unwrap();
+                let end = source[start..].find("loop_end_k_tile:").unwrap() + start;
+                let body = &source[start..end];
+                let wait = body.find("cp.async.wait_group 0;").unwrap();
+                let publish = body[wait..].find("bar.sync 0;").unwrap() + wait;
+                let copy = body[publish..].find("cp.async.ca.shared.global").unwrap() + publish;
+                let commit = body[copy..].find("cp.async.commit_group;").unwrap() + copy;
+                let load = body[commit..].find("wmma.load.a.").unwrap() + commit;
+                let rounding = body[load..].find("cvt.rna.tf32.f32").unwrap() + load;
+                let compute = body[rounding..].find("wmma.mma.").unwrap() + rounding;
+                assert!(!body[compute..].contains("bar.sync 0;"));
+                assert_eq!(body.matches("bar.sync 0;").count(), 1);
+                let drain = &source[end..];
+                assert!(
+                    drain.find("cp.async.wait_group 0;").unwrap()
+                        < drain.find("bar.sync 0;").unwrap()
+                );
+                assert!(
+                    drain.find("cp.async.wait_group 0;").unwrap()
+                        < drain.find("wmma.store.d.").unwrap()
+                );
+                assert_eq!(plan.matmul_regions()[0].schedule.pipeline_stages, 2);
+            }
         }
     }
 
@@ -3975,7 +4162,9 @@ mod tests {
                     target.matmul_capabilities(),
                     precision,
                     target.matmul_resources,
-                    crate::tile::MatMulSharedLayout::Auto,
+                    MatMulSharedLayout::Auto,
+                    MatMulPipeline::Auto,
+                    target.supports_async_copy(),
                 )
                 .unwrap();
                 assert_eq!(plan.matmul_regions().len(), 1);

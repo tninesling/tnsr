@@ -5,7 +5,7 @@ use super::types::{CudaDType, F32};
 use crate::Executor;
 use crate::alloc::{AllocStats, CudaBufferPool};
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
-use crate::tile::{IndexMap, MatMulSharedLayout, TileGraph, VirtualTensor};
+use crate::tile::{IndexMap, MatMulPipeline, MatMulSharedLayout, TileGraph, VirtualTensor};
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
@@ -22,7 +22,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 9;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 10;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -64,6 +64,7 @@ pub struct PtxExecutor<D: CudaDType = F32> {
     target: PtxTarget,
     matmul_precision: crate::tile::MatMulPrecision,
     matmul_shared_layout: MatMulSharedLayout,
+    matmul_pipeline: MatMulPipeline,
 }
 
 impl<D: CudaDType> Default for PtxExecutor<D> {
@@ -129,6 +130,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             target,
             matmul_precision: crate::tile::MatMulPrecision::AllowTf32,
             matmul_shared_layout: MatMulSharedLayout::Auto,
+            matmul_pipeline: MatMulPipeline::Auto,
         })
     }
 
@@ -145,6 +147,14 @@ impl<D: CudaDType> PtxExecutor<D> {
     pub fn set_matmul_shared_layout(&mut self, layout: MatMulSharedLayout) {
         if self.matmul_shared_layout != layout {
             self.matmul_shared_layout = layout;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Select synchronous staging or a bounded asynchronous pipeline.
+    pub fn set_matmul_pipeline(&mut self, pipeline: MatMulPipeline) {
+        if self.matmul_pipeline != pipeline {
+            self.matmul_pipeline = pipeline;
             self.compilation_signature = None;
         }
     }
@@ -232,6 +242,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.target,
             self.matmul_precision,
             self.matmul_shared_layout,
+            self.matmul_pipeline,
         );
         let compiled_signature = self
             .compilation_signature
@@ -354,6 +365,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.target,
             self.matmul_precision,
             self.matmul_shared_layout,
+            self.matmul_pipeline,
         );
         let mut execution_plan =
             PtxExecutionPlan::build_with_reduction_mode(graph, self.reduction_mode)?;
@@ -362,6 +374,8 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.target.matmul_resources,
             self.matmul_shared_layout,
+            self.matmul_pipeline,
+            self.target.supports_async_copy(),
         )?;
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,
@@ -788,6 +802,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.target,
             self.matmul_precision,
             self.matmul_shared_layout,
+            self.matmul_pipeline,
         );
         let compiled_signature = self
             .compilation_signature
@@ -1701,6 +1716,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.target,
             self.matmul_precision,
             self.matmul_shared_layout,
+            self.matmul_pipeline,
         );
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
             self.compile(graph)?;
@@ -1804,6 +1820,7 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     target: PtxTarget,
     matmul_precision: crate::tile::MatMulPrecision,
     matmul_shared_layout: MatMulSharedLayout,
+    matmul_pipeline: MatMulPipeline,
 ) -> Vec<u8> {
     let mut signature = Vec::new();
     signature.extend_from_slice(PTX_GRAPH_SIGNATURE_MAGIC);
@@ -1827,6 +1844,11 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
         MatMulSharedLayout::Contiguous => 1,
         MatMulSharedLayout::Padded => 2,
         MatMulSharedLayout::Swizzled => 3,
+    });
+    signature.push(match matmul_pipeline {
+        MatMulPipeline::Auto => 0,
+        MatMulPipeline::Synchronous => 1,
+        MatMulPipeline::DoubleBuffered => 2,
     });
     signature.extend_from_slice(&target.compute_capability.0.to_le_bytes());
     signature.extend_from_slice(&target.compute_capability.1.to_le_bytes());
@@ -2007,6 +2029,7 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
             self.target,
             self.matmul_precision,
             self.matmul_shared_layout,
+            self.matmul_pipeline,
         );
         let needs_compilation = self.module.is_none()
             || self.ptx_graph.is_none()

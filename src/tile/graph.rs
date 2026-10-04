@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use super::builder::TileIRBuilder;
 use super::ir::{
     Conv2dGeometry, DType, Dim, Expr, MatMulLayout, MatMulPlan, MatrixLayout, MaxPool2dGeometry,
-    ReduceOp, TileDType, TileIR,
+    ReduceOp, TileDType, TileIR, TileVar,
 };
 use super::matmul_schedule::{MatMulCapabilities, MatMulPrecision, MatMulSchedule};
 #[cfg(feature = "cuda")]
@@ -659,12 +659,18 @@ impl TileGraph {
             schedule.block_tile.k,
         );
         let threads = schedule.thread_count();
-        let plan = schedule.plan;
-        let operand_dtype = if schedule.plan == MatMulPlan::ScalarF32 {
-            dtype
+        let copy_group = if schedule.pipeline_stages == 2 {
+            schedule.copy_bytes / schedule.storage_dtype.size_bytes()
         } else {
-            schedule.operand_dtype
+            1
         };
+        let plan = schedule.plan;
+        let operand_dtype =
+            if schedule.plan == MatMulPlan::ScalarF32 || schedule.pipeline_stages == 2 {
+                dtype
+            } else {
+                schedule.operand_dtype
+            };
         let a_batch = region
             .map(|(region, _)| batch_element_offset(&region.batch_shape, &region.lhs_shape))
             .unwrap_or(Expr::Const(0));
@@ -681,6 +687,22 @@ impl TileGraph {
             builder.alloc_shared_layout(operand_dtype, tile_m, tile_k, schedule.operand_layouts.0);
         let b_smem =
             builder.alloc_shared_layout(operand_dtype, tile_k, tile_n, schedule.operand_layouts.1);
+        let next_buffers = (schedule.pipeline_stages == 2).then(|| {
+            (
+                builder.alloc_shared_layout(
+                    operand_dtype,
+                    tile_m,
+                    tile_k,
+                    schedule.operand_layouts.0,
+                ),
+                builder.alloc_shared_layout(
+                    operand_dtype,
+                    tile_k,
+                    tile_n,
+                    schedule.operand_layouts.1,
+                ),
+            )
+        });
         let c_smem = match plan {
             MatMulPlan::ScalarF32 => None,
             MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreF16 | MatMulPlan::TensorCoreBF16 => {
@@ -702,16 +724,40 @@ impl TileGraph {
         // Calculate number of K tiles needed
         let k_tiles = k.div_ceil(tile_k);
 
-        // Main tiling loop over K dimension
-        builder.for_loop("k_tile", 0, k_tiles as i64, |builder, _| {
-            for round in 0..tile_m * tile_k / threads {
+        let load =
+            |builder: &mut TileIRBuilder, dest, src: &str, index, bounds, coordinates, layout| {
+                if schedule.pipeline_stages == 2 {
+                    builder.copy_global_to_shared_indexed(
+                        dest,
+                        src,
+                        index,
+                        bounds,
+                        coordinates,
+                        layout,
+                        schedule.copy_bytes,
+                    );
+                } else {
+                    builder.load_global_to_shared_indexed(
+                        dest,
+                        src,
+                        index,
+                        bounds,
+                        coordinates,
+                        layout,
+                    );
+                }
+            };
+        let stage = |builder: &mut TileIRBuilder, buffers: (TileVar, TileVar), k_index: Expr| {
+            for round in 0..(tile_m * tile_k).div_ceil(threads * copy_group) {
                 let ((a_row, a_col), _) = matmul_operand_coordinates(schedule, staging, round);
-                builder.load_global_to_shared_indexed(
-                    a_smem,
+                let (a_row, a_col) = (with_k_tile(&a_row, &k_index), with_k_tile(&a_col, &k_index));
+                load(
+                    builder,
+                    buffers.0,
                     &a_param,
                     operand_indices
                         .as_ref()
-                        .map(|indices| indices[round].0.clone())
+                        .map(|indices| with_k_tile(&indices[round].0, &k_index))
                         .unwrap_or_else(|| a_batch.clone() + a_row.clone() * k + a_col.clone()),
                     (a_row, a_col),
                     operand_staging_coordinates(schedule, true, staging.0, round),
@@ -722,14 +768,16 @@ impl TileGraph {
                     },
                 );
             }
-            for round in 0..tile_k * tile_n / threads {
+            for round in 0..(tile_k * tile_n).div_ceil(threads * copy_group) {
                 let (_, (b_row, b_col)) = matmul_operand_coordinates(schedule, staging, round);
-                builder.load_global_to_shared_indexed(
-                    b_smem,
+                let (b_row, b_col) = (with_k_tile(&b_row, &k_index), with_k_tile(&b_col, &k_index));
+                load(
+                    builder,
+                    buffers.1,
                     &b_param,
                     operand_indices
                         .as_ref()
-                        .map(|indices| indices[round].1.clone())
+                        .map(|indices| with_k_tile(&indices[round].1, &k_index))
                         .unwrap_or_else(|| b_batch.clone() + b_row.clone() * n + b_col.clone()),
                     (b_row, b_col),
                     operand_staging_coordinates(schedule, false, staging.1, round),
@@ -740,14 +788,42 @@ impl TileGraph {
                     },
                 );
             }
-
+        };
+        if let Some(next) = next_buffers {
+            // Each committed group writes one stage. The wait + barrier publishes
+            // the current stage and retires the previous iteration's reads before
+            // that other stage is overwritten. The final drain retires the tail.
+            stage(&mut builder, (a_smem, b_smem), Expr::Const(0));
+            builder.async_commit();
+            builder.for_loop("k_tile", 0, k_tiles as i64, |builder, _| {
+                let current = Expr::BitAnd(Box::new(Expr::Var("k_tile".into())), 1);
+                let next_stage =
+                    Expr::BitAnd(Box::new(Expr::Var("k_tile".into()) + Expr::Const(1)), 1);
+                let a_current = builder.select_shared_stage(a_smem, next.0, current.clone());
+                let b_current = builder.select_shared_stage(b_smem, next.1, current);
+                let a_next = builder.select_shared_stage(a_smem, next.0, next_stage.clone());
+                let b_next = builder.select_shared_stage(b_smem, next.1, next_stage);
+                builder.async_wait();
+                builder.barrier();
+                stage(
+                    builder,
+                    (a_next, b_next),
+                    Expr::Var("k_tile".into()) + Expr::Const(1),
+                );
+                builder.async_commit();
+                builder.matmul(c_reg, a_current, b_current, MatMulLayout::NN, schedule);
+            });
+            // Drain the final zero-filled prefetch before shared memory is reused.
+            builder.async_wait();
             builder.barrier();
-
-            // Compute: C_reg += A_reg @ B_reg
-            builder.matmul(c_reg, a_smem, b_smem, MatMulLayout::NN, schedule);
-
-            builder.barrier();
-        });
+        } else {
+            builder.for_loop("k_tile", 0, k_tiles as i64, |builder, _| {
+                stage(builder, (a_smem, b_smem), Expr::Var("k_tile".into()));
+                builder.barrier();
+                builder.matmul(c_reg, a_smem, b_smem, MatMulLayout::NN, schedule);
+                builder.barrier();
+            });
+        }
 
         if let Some(c_smem) = c_smem {
             builder.convert_layout(c_smem, c_reg);
@@ -1212,6 +1288,26 @@ impl TileGraph {
     }
 }
 
+fn with_k_tile(expr: &Expr, k_tile: &Expr) -> Expr {
+    match expr {
+        Expr::Var(name) if name == "k_tile" => k_tile.clone(),
+        Expr::Add(a, b) => with_k_tile(a, k_tile) + with_k_tile(b, k_tile),
+        Expr::Sub(a, b) => Expr::Sub(
+            Box::new(with_k_tile(a, k_tile)),
+            Box::new(with_k_tile(b, k_tile)),
+        ),
+        Expr::Mul(a, b) => Expr::Mul(
+            Box::new(with_k_tile(a, k_tile)),
+            Box::new(with_k_tile(b, k_tile)),
+        ),
+        Expr::FloorDiv(a, n) => Expr::FloorDiv(Box::new(with_k_tile(a, k_tile)), *n),
+        Expr::Mod(a, n) => Expr::Mod(Box::new(with_k_tile(a, k_tile)), *n),
+        Expr::ShiftRight(a, n) => Expr::ShiftRight(Box::new(with_k_tile(a, k_tile)), *n),
+        Expr::BitAnd(a, n) => Expr::BitAnd(Box::new(with_k_tile(a, k_tile)), *n),
+        _ => expr.clone(),
+    }
+}
+
 fn staging_coordinates(transposed: bool) -> (Expr, Expr) {
     if transposed {
         (Expr::ThreadIdx(Dim::X), Expr::ThreadIdx(Dim::Y))
@@ -1228,14 +1324,21 @@ fn operand_staging_coordinates(
     transposed: bool,
     round: usize,
 ) -> (Expr, Expr) {
-    if schedule.block_threads == (16, 16, 1) {
-        return staging_coordinates(transposed);
-    }
     let (rows, cols) = if lhs {
         (schedule.block_tile.m, schedule.block_tile.k)
     } else {
         (schedule.block_tile.k, schedule.block_tile.n)
     };
+    if schedule.pipeline_stages == 2 && schedule.copy_bytes > schedule.storage_dtype.size_bytes() {
+        let group = schedule.copy_bytes / schedule.storage_dtype.size_bytes();
+        let index = Expr::Const((round * schedule.thread_count()) as i64)
+            + Expr::ThreadIdx(Dim::Y) * schedule.block_threads.0 as usize
+            + Expr::ThreadIdx(Dim::X);
+        return (
+            Expr::FloorDiv(Box::new(index.clone()), cols / group),
+            Expr::Mod(Box::new(index), cols / group) * group,
+        );
+    }
     tile_thread_coordinates(schedule, rows, cols, transposed, round)
 }
 

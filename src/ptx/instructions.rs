@@ -532,6 +532,11 @@ pub enum Inst<'a> {
     ShiftLeftI32(ShiftLeftInst<'a, I32, I32>),
     ShiftRightU64(ShiftRightInst<'a, U64, U64>),
     AndU64(AndInst<'a, U64>),
+    XorU64 {
+        dst: Operand<'a, U64>,
+        a: Operand<'a, U64>,
+        b: Operand<'a, U64>,
+    },
     ShiftRightI32(ShiftRightInst<'a, I32, I32>),
     AndI32(AndInst<'a, I32>),
     SetpU64(SetpInst<'a, U64>),

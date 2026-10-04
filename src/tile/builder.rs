@@ -1,8 +1,8 @@
-use super::MatMulSchedule;
 use super::ir::{
     Block, DType, Dim, Expr, KernelParam, MatMulLayout, MatrixLayout, MemorySpace, ReduceOp, Stmt,
     TileIR, TileLayout, TileVar,
 };
+use super::{MatMulSchedule, SharedLayout};
 
 #[allow(dead_code)]
 #[derive(Default)]
@@ -36,20 +36,30 @@ impl TileIRBuilder {
 
     #[allow(dead_code)]
     pub fn alloc_shared(&mut self, dtype: DType, rows: usize, cols: usize) -> TileVar {
+        self.alloc_shared_layout(dtype, rows, cols, SharedLayout::row_major(cols))
+    }
+
+    pub fn alloc_shared_layout(
+        &mut self,
+        dtype: DType,
+        rows: usize,
+        cols: usize,
+        layout: SharedLayout,
+    ) -> TileVar {
         let var = TileVar(self.next_var);
         self.next_var += 1;
 
         self.stmts.push(Stmt::AllocTile {
             var,
             space: MemorySpace::Shared,
-            layout: TileLayout::SharedRowMajor { row_stride: cols },
+            layout: TileLayout::Shared(layout),
             dtype,
             rows,
             cols,
         });
 
         // Track shared memory usage
-        self.shared_mem_bytes += rows * cols * dtype.size_bytes();
+        self.shared_mem_bytes += layout.allocation_bytes(rows, dtype);
 
         var
     }

@@ -11,7 +11,7 @@ use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::Shape;
 use crate::tile::{
     FusionRegion, MatMulCapabilities, MatMulPrecision, MatMulRegion, MatMulResources,
-    MatMulSchedule, ReductionRegion, ReductionSchedule, VirtualTensor,
+    MatMulSchedule, MatMulSharedLayout, ReductionRegion, ReductionSchedule, VirtualTensor,
 };
 
 const MAX_POINTWISE_REGION_OPS: usize = 64;
@@ -530,7 +530,8 @@ impl PtxExecutionPlan {
         capabilities: MatMulCapabilities,
         precision: MatMulPrecision,
         resources: MatMulResources,
-    ) {
+        shared_layout: MatMulSharedLayout,
+    ) -> Result<()> {
         for schedule in self.matmul_schedules.values_mut() {
             let shape = schedule.logical_shape;
             *schedule = MatMulSchedule::select_with_resources(
@@ -541,7 +542,8 @@ impl PtxExecutionPlan {
                 capabilities,
                 precision,
                 resources,
-            );
+            )
+            .with_shared_layout(shared_layout, resources)?;
         }
         for region in &mut self.matmul_regions {
             region.schedule = MatMulSchedule::select_with_resources(
@@ -552,8 +554,10 @@ impl PtxExecutionPlan {
                 capabilities,
                 precision,
                 resources,
-            );
+            )
+            .with_shared_layout(shared_layout, resources)?;
         }
+        Ok(())
     }
 
     pub fn matmul_schedules(&self) -> &HashMap<NodeIndex, MatMulSchedule> {

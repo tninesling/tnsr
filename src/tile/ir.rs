@@ -1,3 +1,5 @@
+use super::SharedLayout;
+
 pub struct TileIR {
     pub kernel_name: String,
     pub params: Vec<KernelParam>,
@@ -264,9 +266,7 @@ pub struct TileVar(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TileLayout {
     ThreadScalar,
-    SharedRowMajor {
-        row_stride: usize,
-    },
+    Shared(SharedLayout),
     WarpAccumulator {
         operand_dtype: DType,
         block_width: u32,

@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use super::instructions::{Inst, Operand};
+use super::instructions::{AndInst, Inst, Operand};
 use super::target::PtxTarget;
 use super::types::{B32, F32, I32, U64};
 use super::{Function, Module};
-use crate::tile::{Dim, Expr, MemorySpace, Stmt, TileGraph, TileIR, TileLayout, TileVar};
+use crate::tile::{
+    Dim, Expr, MemorySpace, SharedLayout, Stmt, TileGraph, TileIR, TileLayout, TileVar,
+};
 use petgraph::{Graph, graph::NodeIndex};
 
 pub struct PtxGraph {
@@ -442,7 +444,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 }
                 MemorySpace::Shared => {
                     // Calculate size in bytes for this tile
-                    let tile_size_bytes = rows * cols * dtype.size_bytes();
+                    let tile_size_bytes = shared_layout(ctx, *var).allocation_bytes(*rows, *dtype);
 
                     // Get base address of shared memory array
                     let base_ptr = func.add_u64_register();
@@ -515,56 +517,13 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             )));
 
             // Check if destination is shared memory or register
-            if let Some(shared_ptr) = ctx.shared_mem_ptrs.get(dest).cloned() {
+            if ctx.shared_mem_ptrs.contains_key(dest) {
                 // Destination is shared memory: load to temp register, then store to shared
                 let temp_reg = func.add_f32_register();
                 load_global_as_f32(func, dtype, temp_reg.clone(), addr);
 
-                // Calculate offset within shared memory tile: threadIdx.y * cols + threadIdx.x
-                let (_, cols) = ctx.tile_dims.get(dest).expect("Tile dimensions not found");
-
-                // Convert tid.y and tid.x from u32 to i32 for arithmetic
-                let tid_y_i32 = func.add_i32_register();
-                func.add_inst(Inst::mov_i32(
-                    tid_y_i32.clone(),
-                    super::instructions::THREAD_ID.y.clone(),
-                ));
-
-                let tid_x_i32 = func.add_i32_register();
-                func.add_inst(Inst::mov_i32(
-                    tid_x_i32.clone(),
-                    super::instructions::THREAD_ID.x.clone(),
-                ));
-
-                // row_offset = tid_y * cols
-                let row_offset = func.add_i32_register();
-                func.add_inst(Inst::mul_i32(
-                    row_offset.clone(),
-                    tid_y_i32,
-                    Operand::imm_i32(*cols as i32),
-                ));
-
-                // elem_idx = row_offset + tid_x
-                let elem_idx = func.add_i32_register();
-                func.add_inst(Inst::add_i32(elem_idx.clone(), row_offset, tid_x_i32));
-
-                // Convert to u64
-                let elem_idx_u64 = func.add_u64_register();
-                func.add_inst(Inst::convert_u64_i32(elem_idx_u64.clone(), elem_idx));
-
-                // Offset within shared memory uses the destination tile dtype.
-                let dest_dtype = *ctx.tile_dtypes.get(dest).expect("Tile dtype not found");
-                let byte_offset = func.add_u64_register();
-                func.add_inst(Inst::mul_u64(
-                    byte_offset.clone(),
-                    elem_idx_u64,
-                    Operand::imm_u64(dest_dtype.size_bytes() as u64),
-                ));
-
-                // Add offset to base pointer
-                let final_addr = func.add_u64_register();
-                func.add_inst(Inst::add_u64(final_addr.clone(), shared_ptr, byte_offset));
-
+                let dest_dtype = ctx.tile_dtypes[dest];
+                let final_addr = shared_thread_address(func, ctx, *dest);
                 store_shared_from_f32(func, dest_dtype, final_addr, temp_reg);
             } else {
                 // Destination is register: load directly
@@ -948,31 +907,23 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             let k_u64 = func.add_u64_register();
             func.add_inst(Inst::convert_u64_i32(k_u64.clone(), k_idx.clone()));
 
-            // Load A[threadIdx.y][k] from shared memory
-            // Address = a_row_ptr + k * sizeof(A)
-            let k_offset_a = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                k_offset_a.clone(),
-                k_u64.clone(),
-                Operand::imm_u64(a_dtype.size_bytes() as u64),
-            ));
-            func.add_inst(Inst::add_u64(a_addr.clone(), a_row_ptr.clone(), k_offset_a));
+            if shared_layout(ctx, a_smem).xor_mask == 0 {
+                let k_offset_a = multiply_u64(func, k_u64.clone(), a_dtype.size_bytes());
+                func.add_inst(Inst::add_u64(a_addr.clone(), a_row_ptr.clone(), k_offset_a));
+            } else {
+                let address = shared_address(func, ctx, a_smem, tid_y_u64.clone(), k_u64.clone());
+                func.add_inst(Inst::mov_u64(a_addr.clone(), address));
+            }
             load_shared_as_f32(func, a_dtype, a_val.clone(), a_addr.clone());
 
-            // Load B[k][threadIdx.x] from shared memory
-            // Address = b_col_ptr + k * b_cols * sizeof(B)
-            let k_offset_b = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                k_offset_b.clone(),
-                k_u64.clone(),
-                Operand::imm_u64(shared_row_stride(ctx, b_smem) as u64),
-            ));
-            func.add_inst(Inst::mul_u64(
-                k_offset_b.clone(),
-                k_offset_b.clone(),
-                Operand::imm_u64(b_dtype.size_bytes() as u64),
-            ));
-            func.add_inst(Inst::add_u64(b_addr.clone(), b_col_ptr.clone(), k_offset_b));
+            if shared_layout(ctx, b_smem).xor_mask == 0 {
+                let k_offset_b = multiply_u64(func, k_u64.clone(), shared_row_stride(ctx, b_smem));
+                let k_offset_b = multiply_u64(func, k_offset_b, b_dtype.size_bytes());
+                func.add_inst(Inst::add_u64(b_addr.clone(), b_col_ptr.clone(), k_offset_b));
+            } else {
+                let address = shared_address(func, ctx, b_smem, k_u64, tid_x_u64.clone());
+                func.add_inst(Inst::mov_u64(b_addr.clone(), address));
+            }
             load_shared_as_f32(func, b_dtype, b_val.clone(), b_addr.clone());
 
             // Multiply and accumulate: dest += a_val * b_val
@@ -1007,7 +958,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                     block_width,
                     warp_topology,
                 },
-                TileLayout::SharedRowMajor { row_stride },
+                TileLayout::Shared(layout),
             ) => {
                 let done =
                     bumpalo::format!(in ctx.arena, "fragment_store_done_{}", ctx.label_counter)
@@ -1015,7 +966,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 ctx.label_counter += 1;
                 skip_noncomputing_warps(func, block_width, warp_topology.0 * warp_topology.1, done);
                 let (row, col) = warp_coordinates(block_width, warp_topology);
-                let address = if warp_topology == (1, 1) {
+                let address = if warp_topology == (1, 1) && layout.xor_mask == 0 {
                     ctx.shared_mem_ptrs[dest].clone()
                 } else {
                     shared_coordinate_address(func, ctx, *dest, &row, &col)
@@ -1024,11 +975,11 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                     dtype: operand_dtype,
                     addr: address,
                     frags: ctx.fragment_regs[src].clone(),
-                    stride: Operand::imm_i32(row_stride as i32),
+                    stride: Operand::imm_i32(layout.row_stride as i32),
                 });
                 func.add_inst(Inst::Label(done));
             }
-            (TileLayout::SharedRowMajor { .. }, TileLayout::ThreadScalar) => {
+            (TileLayout::Shared(_), TileLayout::ThreadScalar) => {
                 let address = if let Some((row, col)) = coordinates {
                     shared_coordinate_address(func, ctx, *src, row, col)
                 } else {
@@ -3271,7 +3222,10 @@ fn lower_tensor_core_matmul<'a>(
     let (warp_row, warp_col) = warp_coordinates(schedule.block_threads.0, schedule.warp_topology);
 
     for k_offset in (0..schedule.block_tile.k).step_by(schedule.instruction_tile.k) {
-        let (a_address, b_address) = if schedule.warp_topology == (1, 1) {
+        let (a_address, b_address) = if schedule.warp_topology == (1, 1)
+            && shared_layout(ctx, a_shared).xor_mask == 0
+            && shared_layout(ctx, b_shared).xor_mask == 0
+        {
             (
                 shared_address_with_byte_offset(
                     func,
@@ -3343,11 +3297,15 @@ fn lower_tensor_core_matmul<'a>(
     func.add_inst(Inst::Label(done));
 }
 
-fn shared_row_stride(ctx: &LoweringContext<'_>, tile: TileVar) -> usize {
+fn shared_layout(ctx: &LoweringContext<'_>, tile: TileVar) -> SharedLayout {
     match ctx.tile_layouts[&tile] {
-        TileLayout::SharedRowMajor { row_stride } => row_stride,
+        TileLayout::Shared(layout) => layout,
         _ => unreachable!("expected validated shared-memory tile layout"),
     }
+}
+
+fn shared_row_stride(ctx: &LoweringContext<'_>, tile: TileVar) -> usize {
+    shared_layout(ctx, tile).row_stride
 }
 
 fn skip_noncomputing_warps<'a>(
@@ -3458,6 +3416,34 @@ fn shared_coordinate_address<'a>(
 ) -> Operand<'a, U64> {
     let row = lower_expr(func, ctx, row);
     let column = lower_expr(func, ctx, column);
+    shared_address(func, ctx, tile, row, column)
+}
+
+fn shared_address<'a>(
+    func: &mut Function<'a>,
+    ctx: &LoweringContext<'a>,
+    tile: TileVar,
+    row: Operand<'a, U64>,
+    column: Operand<'a, U64>,
+) -> Operand<'a, U64> {
+    let layout = shared_layout(ctx, tile);
+    let column = if layout.xor_mask == 0 {
+        column
+    } else {
+        let bits = func.add_u64_register();
+        func.add_inst(Inst::AndU64(AndInst::new(
+            bits.clone(),
+            row.clone(),
+            Operand::imm_u64(layout.xor_mask as u64),
+        )));
+        let swizzled = func.add_u64_register();
+        func.add_inst(Inst::XorU64 {
+            dst: swizzled.clone(),
+            a: column,
+            b: bits,
+        });
+        swizzled
+    };
     let shared = ctx
         .shared_mem_ptrs
         .get(&tile)
@@ -3809,7 +3795,7 @@ fn lower_expr<'a>(
         Expr::BitAnd(value, mask) => {
             let value = lower_expr(func, ctx, value);
             let result = func.add_u64_register();
-            func.add_inst(Inst::AndU64(super::instructions::AndInst::new(
+            func.add_inst(Inst::AndU64(AndInst::new(
                 result.clone(),
                 value,
                 Operand::imm_u64(*mask),
@@ -3989,7 +3975,9 @@ mod tests {
                     target.matmul_capabilities(),
                     precision,
                     target.matmul_resources,
-                );
+                    crate::tile::MatMulSharedLayout::Auto,
+                )
+                .unwrap();
                 assert_eq!(plan.matmul_regions().len(), 1);
                 let schedule = plan.matmul_regions()[0].schedule;
                 let expect_tf32 = target.supports_tf32() && precision == MatMulPrecision::AllowTf32;
@@ -4070,7 +4058,7 @@ mod tests {
                 "missing shuffle stage for offset {offset}"
             );
         }
-        assert!(source.contains(".shared .align 16 .b8 reduction_partials[4];"));
+        assert!(source.contains(".shared .align 32 .b8 reduction_partials[4];"));
         assert_eq!(source.matches("bar.sync 0;").count(), 1);
     }
 
@@ -4089,7 +4077,7 @@ mod tests {
             .unwrap();
         let source = PtxGraph::from(tile_graph).module_source();
 
-        assert!(source.contains(".shared .align 16 .b8 reduction_partials[512];"));
+        assert!(source.contains(".shared .align 32 .b8 reduction_partials[512];"));
         assert_eq!(source.matches("bar.sync 0;").count(), 8);
         assert!(source.contains("ld.shared.f32"));
         assert!(!source.contains("shfl.sync"));
@@ -4362,7 +4350,7 @@ mod tests {
                 stmts: vec![Stmt::AllocTile {
                     var: TileVar(0),
                     space: MemorySpace::Shared,
-                    layout: TileLayout::SharedRowMajor { row_stride: 16 },
+                    layout: TileLayout::Shared(SharedLayout::row_major(16)),
                     dtype: DType::F32,
                     rows: 16,
                     cols: 16,

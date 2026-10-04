@@ -5,6 +5,8 @@ mod index_egraph;
 mod index_optimization;
 pub mod ir;
 mod layout;
+pub mod shared_layout;
+pub use shared_layout::SharedLayout;
 pub mod matmul_region;
 pub mod matmul_schedule;
 pub mod reduction_region;

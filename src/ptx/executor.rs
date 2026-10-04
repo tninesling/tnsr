@@ -5,7 +5,7 @@ use super::types::{CudaDType, F32};
 use crate::Executor;
 use crate::alloc::{AllocStats, CudaBufferPool};
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
-use crate::tile::{IndexMap, TileGraph, VirtualTensor};
+use crate::tile::{IndexMap, MatMulSharedLayout, TileGraph, VirtualTensor};
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
@@ -22,7 +22,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 8;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 9;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,6 +63,7 @@ pub struct PtxExecutor<D: CudaDType = F32> {
     reduction_mode: PtxReductionMode,
     target: PtxTarget,
     matmul_precision: crate::tile::MatMulPrecision,
+    matmul_shared_layout: MatMulSharedLayout,
 }
 
 impl<D: CudaDType> Default for PtxExecutor<D> {
@@ -127,6 +128,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             reduction_mode,
             target,
             matmul_precision: crate::tile::MatMulPrecision::AllowTf32,
+            matmul_shared_layout: MatMulSharedLayout::Auto,
         })
     }
 
@@ -135,6 +137,14 @@ impl<D: CudaDType> PtxExecutor<D> {
     pub fn set_matmul_precision(&mut self, precision: crate::tile::MatMulPrecision) {
         if self.matmul_precision != precision {
             self.matmul_precision = precision;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Choose shared operand layouts for subsequent compilations.
+    pub fn set_matmul_shared_layout(&mut self, layout: MatMulSharedLayout) {
+        if self.matmul_shared_layout != layout {
+            self.matmul_shared_layout = layout;
             self.compilation_signature = None;
         }
     }
@@ -221,6 +231,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.reduction_mode,
             self.target,
             self.matmul_precision,
+            self.matmul_shared_layout,
         );
         let compiled_signature = self
             .compilation_signature
@@ -342,6 +353,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.reduction_mode,
             self.target,
             self.matmul_precision,
+            self.matmul_shared_layout,
         );
         let mut execution_plan =
             PtxExecutionPlan::build_with_reduction_mode(graph, self.reduction_mode)?;
@@ -349,7 +361,8 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.target.matmul_capabilities(),
             self.matmul_precision,
             self.target.matmul_resources,
-        );
+            self.matmul_shared_layout,
+        )?;
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,
             self.target.supports_tf32()
@@ -774,6 +787,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.reduction_mode,
             self.target,
             self.matmul_precision,
+            self.matmul_shared_layout,
         );
         let compiled_signature = self
             .compilation_signature
@@ -1686,6 +1700,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.reduction_mode,
             self.target,
             self.matmul_precision,
+            self.matmul_shared_layout,
         );
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
             self.compile(graph)?;
@@ -1788,6 +1803,7 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     reduction_mode: PtxReductionMode,
     target: PtxTarget,
     matmul_precision: crate::tile::MatMulPrecision,
+    matmul_shared_layout: MatMulSharedLayout,
 ) -> Vec<u8> {
     let mut signature = Vec::new();
     signature.extend_from_slice(PTX_GRAPH_SIGNATURE_MAGIC);
@@ -1805,6 +1821,12 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     signature.push(match matmul_precision {
         crate::tile::MatMulPrecision::StrictF32 => 0,
         crate::tile::MatMulPrecision::AllowTf32 => 1,
+    });
+    signature.push(match matmul_shared_layout {
+        MatMulSharedLayout::Auto => 0,
+        MatMulSharedLayout::Contiguous => 1,
+        MatMulSharedLayout::Padded => 2,
+        MatMulSharedLayout::Swizzled => 3,
     });
     signature.extend_from_slice(&target.compute_capability.0.to_le_bytes());
     signature.extend_from_slice(&target.compute_capability.1.to_le_bytes());
@@ -1984,6 +2006,7 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
             self.reduction_mode,
             self.target,
             self.matmul_precision,
+            self.matmul_shared_layout,
         );
         let needs_compilation = self.module.is_none()
             || self.ptx_graph.is_none()

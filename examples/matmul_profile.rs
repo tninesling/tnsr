@@ -17,6 +17,7 @@ use tnsr::ptx::{
     types::{BF16, CudaDType, F16, F32},
 };
 use tnsr::tensor::{Parameter, TensorExpr};
+use tnsr::tile::{MatMulPrecision, MatMulSharedLayout};
 use tnsr::{Executor, SimpleExecutor};
 
 struct Launch {
@@ -115,6 +116,20 @@ fn profile<D: CudaDType>() -> Result<()> {
     }
     let graph: TensorGraph<D::HostType> = expression.into();
     let mut executor = PtxExecutor::<D>::try_new_for_dtype()?;
+    if std::env::var("TNSR_PROFILE_STRICT").is_ok() {
+        executor.set_matmul_precision(MatMulPrecision::StrictF32);
+    }
+    let layout = match std::env::var("TNSR_PROFILE_SHARED_LAYOUT")
+        .as_deref()
+        .unwrap_or("auto")
+    {
+        "auto" => MatMulSharedLayout::Auto,
+        "contiguous" => MatMulSharedLayout::Contiguous,
+        "padded" => MatMulSharedLayout::Padded,
+        "swizzled" => MatMulSharedLayout::Swizzled,
+        other => anyhow::bail!("unsupported shared layout {other}"),
+    };
+    executor.set_matmul_shared_layout(layout);
     executor.compile_owned(graph.clone())?;
     let description = executor.describe_plan(&graph)?;
     let source = executor.module_source().context("missing PTX")?;

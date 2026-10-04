@@ -1,4 +1,6 @@
-use super::{DType, MatMulPlan, TileLayout};
+use anyhow::{Result, anyhow, ensure};
+
+use super::{DType, MatMulPlan, SharedLayout, TileLayout};
 
 /// Arithmetic policy, independent of the target's available instructions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -16,6 +18,17 @@ pub struct MatMulCapabilities {
     pub tf32: bool,
     pub f16: bool,
     pub bf16: bool,
+}
+
+/// Deterministic shared-memory layout selection, with explicit alternatives for
+/// controlled comparisons. Swizzles preserve whole WMMA fragments.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MatMulSharedLayout {
+    #[default]
+    Auto,
+    Contiguous,
+    Padded,
+    Swizzled,
 }
 
 /// Resource budgets used for conservative occupancy estimates. The register
@@ -47,11 +60,6 @@ pub struct MatMulTile {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MatMulOperandLayout {
-    RowMajor,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatMulAccumulatorLayout {
     ThreadScalar,
     WarpFragment,
@@ -69,7 +77,7 @@ pub struct MatMulSchedule {
     pub block_threads: (u32, u32, u32),
     /// Warps that compute output fragments; remaining block warps stage operands.
     pub warp_topology: (usize, usize),
-    pub operand_layouts: (MatMulOperandLayout, MatMulOperandLayout),
+    pub operand_layouts: (SharedLayout, SharedLayout),
     pub operand_dtype: DType,
     /// Storage format at global-memory graph boundaries.
     pub storage_dtype: DType,
@@ -78,6 +86,69 @@ pub struct MatMulSchedule {
 }
 
 impl MatMulSchedule {
+    pub fn with_shared_layout(
+        mut self,
+        policy: MatMulSharedLayout,
+        resources: MatMulResources,
+    ) -> Result<Self> {
+        let tensor_core = self.plan != MatMulPlan::ScalarF32;
+        let policy = match policy {
+            MatMulSharedLayout::Auto
+                if tensor_core && self.warp_topology.0 * self.warp_topology.1 > 1 =>
+            {
+                MatMulSharedLayout::Padded
+            }
+            MatMulSharedLayout::Auto => MatMulSharedLayout::Contiguous,
+            explicit => explicit,
+        };
+        let layout = |cols| -> Result<SharedLayout> {
+            match policy {
+                MatMulSharedLayout::Padded => SharedLayout::padded(
+                    cols,
+                    if !tensor_core {
+                        1
+                    } else {
+                        SharedLayout::wmma_alignment(self.operand_dtype)
+                            / self.operand_dtype.size_bytes()
+                    },
+                ),
+                MatMulSharedLayout::Swizzled => {
+                    SharedLayout::swizzled(cols, if tensor_core { 16 } else { 1 })
+                }
+                _ => Ok(SharedLayout::row_major(cols)),
+            }
+        };
+        ensure!(
+            self.block_tile.m > 0 && self.block_tile.n > 0 && self.block_tile.k > 0,
+            "matmul block tile dimensions must be positive"
+        );
+        let (a, b) = (layout(self.block_tile.k)?, layout(self.block_tile.n)?);
+        a.validate(self.block_tile.m, self.block_tile.k, self.operand_dtype)?;
+        b.validate(self.block_tile.k, self.block_tile.n, self.operand_dtype)?;
+        let c = SharedLayout::row_major(self.block_tile.n);
+        c.validate(self.block_tile.m, self.block_tile.n, DType::F32)?;
+        self.operand_layouts = (
+            SharedLayout::row_major(self.block_tile.k),
+            SharedLayout::row_major(self.block_tile.n),
+        );
+        let accumulator_bytes = if tensor_core {
+            c.allocation_bytes(self.block_tile.m, DType::F32)
+        } else {
+            0
+        };
+        let shared_bytes = a
+            .allocation_bytes(self.block_tile.m, self.operand_dtype)
+            .checked_add(b.allocation_bytes(self.block_tile.k, self.operand_dtype))
+            .and_then(|bytes| bytes.checked_add(accumulator_bytes))
+            .ok_or_else(|| anyhow!("matmul shared allocation size overflows usize"))?;
+        if shared_bytes <= resources.shared_bytes_per_block
+            && resources.shared_bytes_per_sm / shared_bytes >= 2
+        {
+            self.operand_layouts = (a, b);
+        }
+        Ok(self)
+    }
+
     pub fn thread_count(&self) -> usize {
         self.block_threads.0 as usize
             * self.block_threads.1 as usize
@@ -214,7 +285,10 @@ impl MatMulSchedule {
             } else {
                 (8, 1)
             },
-            operand_layouts: (MatMulOperandLayout::RowMajor, MatMulOperandLayout::RowMajor),
+            operand_layouts: (
+                SharedLayout::row_major(block_tile.k),
+                SharedLayout::row_major(block_tile.n),
+            ),
             operand_dtype: if plan == MatMulPlan::TensorCoreTf32 {
                 DType::TF32
             } else {
@@ -374,6 +448,51 @@ mod tests {
                 }
             );
             assert_eq!(schedule.warp_topology, (1, 1));
+        }
+    }
+    #[test]
+    fn layout_selection_respects_instruction_alignment_and_memory_budgets() {
+        let caps = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            let base = MatMulSchedule::select_for_dtype(
+                512,
+                512,
+                512,
+                dtype,
+                caps,
+                MatMulPrecision::AllowTf32,
+            );
+            for policy in [MatMulSharedLayout::Padded, MatMulSharedLayout::Swizzled] {
+                let selected = base
+                    .with_shared_layout(policy, MatMulResources::default())
+                    .unwrap();
+                assert!(
+                    selected
+                        .operand_layouts
+                        .0
+                        .supports_wmma(selected.operand_dtype)
+                );
+                assert!(
+                    selected
+                        .operand_layouts
+                        .1
+                        .supports_wmma(selected.operand_dtype)
+                );
+                let constrained = base
+                    .with_shared_layout(
+                        policy,
+                        MatMulResources {
+                            shared_bytes_per_block: 1024,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(constrained.operand_layouts, base.operand_layouts);
+            }
         }
     }
 }

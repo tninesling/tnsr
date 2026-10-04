@@ -9,7 +9,7 @@ use tnsr::ptx::{
     types::{BF16, CudaDType, F16, F32},
 };
 use tnsr::tensor::TensorExpr;
-use tnsr::tile::MatMulPrecision;
+use tnsr::tile::{MatMulPrecision, MatMulSharedLayout};
 use tnsr::{Executor, SimpleExecutor};
 
 fn values<D: CudaDType>(shape: Vec<usize>, period: usize) -> TensorExpr<D::HostType> {
@@ -129,25 +129,35 @@ fn check_multiwarp<D: CudaDType>(epsilon: f32) {
             .unwrap();
         for precision in [MatMulPrecision::StrictF32, MatMulPrecision::AllowTf32] {
             executor.set_matmul_precision(precision);
-            let actual = executor.execute(&graph, HashMap::new()).unwrap();
-            assert_eq!(actual.len(), expected.len());
-            for (a, b) in actual.iter().zip(&expected) {
-                assert!((a.to_f32().unwrap() - b.to_f32().unwrap()).abs() <= epsilon);
-            }
-            let schedule = executor.execution_plan().unwrap().matmul_regions()[0].schedule;
-            assert_eq!(
-                (schedule.block_tile.m, schedule.block_tile.n),
-                if precision == MatMulPrecision::AllowTf32 {
-                    expected_tile
-                } else {
-                    (16, 16)
+            for policy in [
+                MatMulSharedLayout::Contiguous,
+                MatMulSharedLayout::Padded,
+                MatMulSharedLayout::Swizzled,
+                MatMulSharedLayout::Auto,
+            ] {
+                executor.set_matmul_shared_layout(policy);
+                let compilations = executor.compilation_count();
+                let actual = executor.execute(&graph, HashMap::new()).unwrap();
+                assert_eq!(executor.compilation_count(), compilations + 1);
+                assert_eq!(actual.len(), expected.len());
+                for (a, b) in actual.iter().zip(&expected) {
+                    assert!((a.to_f32().unwrap() - b.to_f32().unwrap()).abs() <= epsilon);
                 }
-            );
-            assert_eq!(executor.execution_metrics().kernel_launches, 1);
-            assert_eq!(
-                executor.execution_metrics().intermediate_materialized_bytes,
-                0
-            );
+                let schedule = executor.execution_plan().unwrap().matmul_regions()[0].schedule;
+                assert_eq!(
+                    (schedule.block_tile.m, schedule.block_tile.n),
+                    if precision == MatMulPrecision::AllowTf32 {
+                        expected_tile
+                    } else {
+                        (16, 16)
+                    }
+                );
+                assert_eq!(executor.execution_metrics().kernel_launches, 1);
+                assert_eq!(
+                    executor.execution_metrics().intermediate_materialized_bytes,
+                    0
+                );
+            }
         }
     }
 }

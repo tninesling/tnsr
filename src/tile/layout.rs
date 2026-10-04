@@ -43,8 +43,9 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
             } => {
                 let valid = match (space, layout) {
                     (MemorySpace::Register, TileLayout::ThreadScalar) => true,
-                    (MemorySpace::Shared, TileLayout::SharedRowMajor { row_stride }) => {
-                        *row_stride == *cols
+                    (MemorySpace::Shared, TileLayout::Shared(layout)) => {
+                        layout.validate(*rows, *cols, *dtype)?;
+                        true
                     }
                     (
                         MemorySpace::Fragment,
@@ -81,7 +82,7 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
             Stmt::LoadSharedToReg { dest, src } => {
                 let source = get(tiles, src)?;
                 anyhow::ensure!(
-                    matches!(source.layout, TileLayout::SharedRowMajor { .. }),
+                    matches!(source.layout, TileLayout::Shared(_)),
                     "operand binding requires a shared tile"
                 );
                 get(tiles, dest)?;
@@ -98,9 +99,19 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                     matches!(layout, MatMulLayout::NN),
                     "matmul transposes must be expressed by logical access maps"
                 );
-                for (var, rows, cols) in [
-                    (a, schedule.block_tile.m, schedule.block_tile.k),
-                    (b, schedule.block_tile.k, schedule.block_tile.n),
+                for (var, rows, cols, physical) in [
+                    (
+                        a,
+                        schedule.block_tile.m,
+                        schedule.block_tile.k,
+                        schedule.operand_layouts.0,
+                    ),
+                    (
+                        b,
+                        schedule.block_tile.k,
+                        schedule.block_tile.n,
+                        schedule.operand_layouts.1,
+                    ),
                 ] {
                     let tile = get(tiles, var)?;
                     let dtype = if schedule.plan == MatMulPlan::ScalarF32 {
@@ -109,12 +120,25 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
                         schedule.operand_dtype
                     };
                     anyhow::ensure!(
-                        tile.layout == TileLayout::SharedRowMajor { row_stride: cols }
+                        tile.layout == TileLayout::Shared(physical)
                             && tile.rows == rows
                             && tile.cols == cols
                             && tile.dtype == dtype,
                         "matmul operand {} layout does not match its schedule",
                         var.0
+                    );
+                }
+                if schedule.plan != MatMulPlan::ScalarF32 {
+                    anyhow::ensure!(
+                        schedule
+                            .operand_layouts
+                            .0
+                            .supports_wmma(schedule.operand_dtype)
+                            && schedule
+                                .operand_layouts
+                                .1
+                                .supports_wmma(schedule.operand_dtype),
+                        "matmul layout is incompatible with WMMA fragments"
                     );
                 }
                 let dest = get(tiles, dest)?;
@@ -139,13 +163,14 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
             } => {
                 let (dest, src) = (get(tiles, dest)?, get(tiles, src)?);
                 let valid = match (src.layout, dest.layout) {
-                    (TileLayout::WarpAccumulator { .. }, TileLayout::SharedRowMajor { .. }) => {
-                        coordinates.is_none()
+                    (TileLayout::WarpAccumulator { .. }, TileLayout::Shared(layout)) => {
+                        layout.supports_wmma(DType::F32)
+                            && coordinates.is_none()
                             && src.rows == dest.rows
                             && src.cols == dest.cols
                             && dest.dtype == DType::F32
                     }
-                    (TileLayout::SharedRowMajor { .. }, TileLayout::ThreadScalar) => {
+                    (TileLayout::Shared(_), TileLayout::ThreadScalar) => {
                         dest.rows == 1 && dest.cols == 1 && dest.dtype == DType::F32
                     }
                     (TileLayout::ThreadScalar, TileLayout::ThreadScalar) => {
@@ -192,7 +217,7 @@ fn validate(block: &Block, tiles: &mut HashMap<TileVar, Tile>) -> Result<()> {
             }
             Stmt::LoadGlobalToSharedPredicated { dest, .. } => {
                 anyhow::ensure!(
-                    matches!(get(tiles, dest)?.layout, TileLayout::SharedRowMajor { .. }),
+                    matches!(get(tiles, dest)?.layout, TileLayout::Shared(_)),
                     "staged operand load requires a shared tile"
                 );
             }

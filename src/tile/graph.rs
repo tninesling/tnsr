@@ -677,8 +677,10 @@ impl TileGraph {
             Expr::Const(0)
         };
 
-        let a_smem = builder.alloc_shared(operand_dtype, tile_m, tile_k);
-        let b_smem = builder.alloc_shared(operand_dtype, tile_k, tile_n);
+        let a_smem =
+            builder.alloc_shared_layout(operand_dtype, tile_m, tile_k, schedule.operand_layouts.0);
+        let b_smem =
+            builder.alloc_shared_layout(operand_dtype, tile_k, tile_n, schedule.operand_layouts.1);
         let c_smem = match plan {
             MatMulPlan::ScalarF32 => None,
             MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreF16 | MatMulPlan::TensorCoreBF16 => {
@@ -752,17 +754,8 @@ impl TileGraph {
             builder.barrier();
         }
         let output = |builder: &mut TileIRBuilder, round: usize| {
-            let (local_row, local_col) = if schedule.block_threads == (16, 16, 1) {
-                staging_coordinates(false)
-            } else {
-                let index = Expr::Const((round * schedule.thread_count()) as i64)
-                    + Expr::ThreadIdx(Dim::Y) * schedule.block_threads.0 as usize
-                    + Expr::ThreadIdx(Dim::X);
-                (
-                    Expr::FloorDiv(Box::new(index.clone()), tile_n),
-                    Expr::Mod(Box::new(index), tile_n),
-                )
-            };
+            let (local_row, local_col) =
+                tile_thread_coordinates(schedule, tile_m, tile_n, false, round);
             // Pointwise consumers require one scalar per thread. Scalar accumulators
             // already match; fragment accumulators need an explicit shared exchange.
             let matmul_element = if let Some(c_smem) = c_smem {
@@ -1243,6 +1236,26 @@ fn operand_staging_coordinates(
     } else {
         (schedule.block_tile.k, schedule.block_tile.n)
     };
+    tile_thread_coordinates(schedule, rows, cols, transposed, round)
+}
+
+fn tile_thread_coordinates(
+    schedule: MatMulSchedule,
+    rows: usize,
+    cols: usize,
+    transposed: bool,
+    round: usize,
+) -> (Expr, Expr) {
+    if schedule.block_threads == (16, 16, 1) {
+        return staging_coordinates(transposed);
+    }
+    let width = if transposed { rows } else { cols };
+    if width == schedule.block_threads.0 as usize {
+        let row = Expr::ThreadIdx(Dim::Y)
+            + Expr::Const((round * schedule.block_threads.1 as usize) as i64);
+        let col = Expr::ThreadIdx(Dim::X);
+        return if transposed { (col, row) } else { (row, col) };
+    }
     let index = Expr::Const((round * schedule.thread_count()) as i64)
         + Expr::ThreadIdx(Dim::Y) * schedule.block_threads.0 as usize
         + Expr::ThreadIdx(Dim::X);

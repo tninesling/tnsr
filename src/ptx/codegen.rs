@@ -212,7 +212,7 @@ impl<'a> fmt::Display for Function<'a> {
             )?;
         }
         for (name, size) in &self.shared_memory {
-            writeln!(f, "    .shared .align 16 .b8 {name}[{size}];")?;
+            writeln!(f, "    .shared .align 32 .b8 {name}[{size}];")?;
         }
         if !self.predicate_registers.is_empty() {
             writeln!(f, "    .reg .pred %p<{}>;", self.predicate_registers.len())?;
@@ -650,6 +650,7 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::ShiftLeftI32(inst) => write!(f, "{inst}"),
             Inst::ShiftRightU64(inst) => write!(f, "{inst}"),
             Inst::AndU64(inst) => write!(f, "{inst}"),
+            Inst::XorU64 { dst, a, b } => write!(f, "xor.b64 {dst}, {a}, {b};"),
             Inst::ShiftRightI32(inst) => write!(f, "{inst}"),
             Inst::AndI32(inst) => write!(f, "{inst}"),
             Inst::SetpU64(inst) => write!(f, "{inst}"),

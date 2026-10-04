@@ -1,4 +1,4 @@
-use std::fmt::Write as _;
+use std::fmt::{self, Display, Write as _};
 
 use super::*;
 use crate::tile::{DType, FusionCost, FusionFeatures, FusionScorer, TileDType};
@@ -11,9 +11,36 @@ pub enum PtxFusionPolicy {
     Greedy,
 }
 
+/// The graph partition represented by a scored alternative. Labels are kept
+/// in `Display` so profiling consumers can match variants rather than strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FusionAlternativeKind {
+    KeepFusion,
+    MaterializeProducers,
+    SplitFullEpilogue,
+    MaterializeProducersAndSplitFullEpilogue,
+    SplitMatMulEpilogue,
+    SplitPointwiseRegion,
+}
+
+impl Display for FusionAlternativeKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::KeepFusion => "keep fusion",
+            Self::MaterializeProducers => "materialize producers",
+            Self::SplitFullEpilogue => "split full epilogue",
+            Self::MaterializeProducersAndSplitFullEpilogue => {
+                "materialize producers and split full epilogue"
+            }
+            Self::SplitMatMulEpilogue => "split matmul epilogue",
+            Self::SplitPointwiseRegion => "split pointwise region",
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FusionAlternative {
-    pub name: &'static str,
+    pub kind: FusionAlternativeKind,
     pub features: Vec<FusionFeatures>,
     pub cost: FusionCost,
     pub selected: bool,
@@ -61,7 +88,7 @@ impl PtxExecutionPlan {
                     } else {
                         "rejected"
                     },
-                    alternative.name,
+                    alternative.kind,
                     cost.total_ns(),
                     cost.launch_ns,
                     cost.traffic_ns,
@@ -130,11 +157,21 @@ impl PtxExecutionPlan {
             let mut candidates = Vec::new();
             // At most three alternatives to the existing region. Materializing
             // producers also lets neighboring pointwise operations fuse normally.
-            for (name, cut_producers, cut_epilogue) in [
-                ("materialize producers", true, false),
-                ("split full epilogue", false, true),
-                ("materialize producers and split full epilogue", true, true),
+            for kind in [
+                FusionAlternativeKind::MaterializeProducers,
+                FusionAlternativeKind::SplitFullEpilogue,
+                FusionAlternativeKind::MaterializeProducersAndSplitFullEpilogue,
             ] {
+                let cut_producers = matches!(
+                    kind,
+                    FusionAlternativeKind::MaterializeProducers
+                        | FusionAlternativeKind::MaterializeProducersAndSplitFullEpilogue
+                );
+                let cut_epilogue = matches!(
+                    kind,
+                    FusionAlternativeKind::SplitFullEpilogue
+                        | FusionAlternativeKind::MaterializeProducersAndSplitFullEpilogue
+                );
                 if (cut_producers && producers.is_empty()) || (cut_epilogue && full.is_empty()) {
                     continue;
                 }
@@ -176,7 +213,7 @@ impl PtxExecutionPlan {
                 if let Some(plan) =
                     self.repartition(graph, &order, reductions, self.matmul_regions.clone())?
                 {
-                    candidates.push((name, plan));
+                    candidates.push((kind, plan));
                 }
             }
             decisions.push(self.choose(graph, scorer, anchor, candidates));
@@ -206,7 +243,7 @@ impl PtxExecutionPlan {
                 if let Some(plan) =
                     self.repartition(graph, &order, self.reduction_regions.clone(), matmuls)?
                 {
-                    candidates.push(("split matmul epilogue", plan));
+                    candidates.push((FusionAlternativeKind::SplitMatMulEpilogue, plan));
                 }
             }
             decisions.push(self.choose(graph, scorer, anchor, candidates));
@@ -246,12 +283,11 @@ impl PtxExecutionPlan {
             let candidates = match plan {
                 Ok(mut plan) => {
                     plan.matmul_schedules = self.matmul_schedules.clone();
-                    vec![("split pointwise region", plan)]
+                    vec![(FusionAlternativeKind::SplitPointwiseRegion, plan)]
                 }
                 Err(error)
-                    if error
-                        .to_string()
-                        .contains("fusion plan contraction contains a cycle") =>
+                    if error.downcast_ref::<FusionPlanError>()
+                        == Some(&FusionPlanError::ContractionCycle) =>
                 {
                     Vec::new()
                 }
@@ -290,9 +326,8 @@ impl PtxExecutionPlan {
                 Ok(Some(plan))
             }
             Err(error)
-                if error
-                    .to_string()
-                    .contains("fusion plan contraction contains a cycle") =>
+                if error.downcast_ref::<FusionPlanError>()
+                    == Some(&FusionPlanError::ContractionCycle) =>
             {
                 Ok(None)
             }
@@ -305,12 +340,12 @@ impl PtxExecutionPlan {
         graph: &TensorGraph<D, G>,
         scorer: &dyn FusionScorer,
         node: NodeIndex,
-        candidates: Vec<(&'static str, Self)>,
+        candidates: Vec<(FusionAlternativeKind, Self)>,
     ) -> FusionDecision {
         let features = self.fusion_features(graph);
         let cost = scorer.score(&features);
         let mut alternatives = vec![FusionAlternative {
-            name: "keep fusion",
+            kind: FusionAlternativeKind::KeepFusion,
             features,
             cost,
             selected: false,
@@ -318,7 +353,7 @@ impl PtxExecutionPlan {
         let mut selected = 0;
         let mut best = cost.total_ns();
         let mut winner = None;
-        for (name, plan) in candidates {
+        for (kind, plan) in candidates {
             let features = plan.fusion_features(graph);
             let cost = scorer.score(&features);
             if cost.total_ns() < best {
@@ -327,7 +362,7 @@ impl PtxExecutionPlan {
                 winner = Some(plan);
             }
             alternatives.push(FusionAlternative {
-                name,
+                kind,
                 features,
                 cost,
                 selected: false,
@@ -409,8 +444,8 @@ mod tests {
                 .iter()
                 .find(|alternative| alternative.selected)
                 .unwrap()
-                .name,
-            "materialize producers"
+                .kind,
+            FusionAlternativeKind::MaterializeProducers
         );
         assert!(
             decision.alternatives[0]

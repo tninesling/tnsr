@@ -4016,6 +4016,7 @@ mod tests {
     fn pipeline_codegen_orders_wait_publish_prefetch_compute_and_retire() {
         for sm in [(7, 5), (8, 0)] {
             let target = PtxTarget {
+                multiprocessor_count: 1,
                 compute_capability: sm,
                 matmul_resources: Default::default(),
             };
@@ -4101,6 +4102,7 @@ mod tests {
         for (target, expect_tf32) in [
             (
                 PtxTarget {
+                    multiprocessor_count: 1,
                     matmul_resources: Default::default(),
                     compute_capability: (7, 5),
                 },
@@ -4108,6 +4110,7 @@ mod tests {
             ),
             (
                 PtxTarget {
+                    multiprocessor_count: 1,
                     matmul_resources: Default::default(),
                     compute_capability: (8, 0),
                 },
@@ -4148,6 +4151,7 @@ mod tests {
         for compute_capability in [(6, 1), (7, 5), (8, 0), (8, 9)] {
             for precision in [MatMulPrecision::AllowTf32, MatMulPrecision::StrictF32] {
                 let target = super::super::target::PtxTarget {
+                    multiprocessor_count: 1,
                     compute_capability,
                     matmul_resources: Default::default(),
                 };

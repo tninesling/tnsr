@@ -6,6 +6,7 @@ use crate::tile::MatMulResources;
 /// CUDA target properties that affect generated PTX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PtxTarget {
+    pub multiprocessor_count: usize,
     pub compute_capability: (u32, u32),
     pub matmul_resources: MatMulResources,
 }
@@ -20,6 +21,9 @@ impl PtxTarget {
                 .context("CUDA resource budget is negative")
         };
         Ok(Self {
+            multiprocessor_count: attribute(
+                CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+            )?,
             matmul_resources: MatMulResources {
                 shared_bytes_per_block: attribute(
                     CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK,
@@ -59,6 +63,7 @@ impl PtxTarget {
 
     pub(crate) const fn sm80() -> Self {
         Self {
+            multiprocessor_count: 1,
             compute_capability: (8, 0),
             matmul_resources: MatMulResources {
                 shared_bytes_per_block: 48 * 1024,
@@ -84,6 +89,7 @@ mod tests {
             ((8, 9), MatMulPlan::TensorCoreTf32),
         ] {
             let target = PtxTarget {
+                multiprocessor_count: 1,
                 compute_capability,
                 matmul_resources: MatMulResources::default(),
             };
@@ -136,6 +142,7 @@ mod half_tests {
             ),
         ] {
             let caps = PtxTarget {
+                multiprocessor_count: 1,
                 compute_capability: sm,
                 matmul_resources: MatMulResources::default(),
             }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use tnsr::graph::TensorGraph;
 use tnsr::nn::{TransformerBlock, layer_norm, softmax};
-use tnsr::ptx::{PtxExecutor, PtxReductionMode};
+use tnsr::ptx::{PtxExecutor, PtxFusionPolicy, PtxReductionMode};
 use tnsr::tensor::{Parameter, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
 
@@ -1287,4 +1287,55 @@ fn ptx_index_optimization_hoists_irregular_batch_decoding_and_preserves_precisio
             }
         }
     }
+}
+
+#[test]
+fn ptx_cost_aware_fusion_preserves_cheap_neighbors_and_cache_policy() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let shape = vec![4096, 32];
+    let input = TensorExpr::constant(vec![0.25; 4096 * 32], shape.clone());
+    let mut expensive = input.clone();
+    for _ in 0..4 {
+        expensive = (expensive.exp() + TensorExpr::constant(vec![0.125], vec![1])).log();
+    }
+    let expensive_sum = expensive.clone().reduce_sum(1).broadcast(shape.clone());
+    let cheap = input.relu();
+    let cheap_reduction = cheap.reduce_sum(1).log().broadcast(shape);
+    let graph: TensorGraph<f32> = ((expensive / expensive_sum).relu() + cheap_reduction).into();
+    let expected = execute_cpu(&graph);
+    ptx.compile(&graph).unwrap();
+    let actual = ptx.execute_compiled(&graph, HashMap::new()).unwrap();
+    eprintln!(
+        "{}\n{:#?}",
+        ptx.describe_plan(&graph).unwrap(),
+        ptx.execution_plan().unwrap()
+    );
+    assert_close(&actual, &expected, 1e-5);
+    let plan = ptx.execution_plan().unwrap();
+    assert!(
+        plan.reduction_regions()
+            .iter()
+            .any(|region| region.producer_operations.is_empty()
+                && !region.full_epilogue_operations.is_empty())
+    );
+    assert!(
+        plan.reduction_regions()
+            .iter()
+            .any(|region| !region.producer_operations.is_empty()
+                && !region.epilogue_operations.is_empty())
+    );
+    assert!(plan.describe_fusion().contains("rejected keep fusion"));
+    assert!(plan.describe_fusion().contains("selected keep fusion"));
+    let compiled = ptx.compilation_count();
+    ptx.set_fusion_policy(PtxFusionPolicy::Greedy);
+    let greedy = ptx.execute(&graph, HashMap::new()).unwrap();
+    assert_close(&greedy, &actual, 1e-6);
+    assert_eq!(ptx.compilation_count(), compiled + 1);
+    assert!(ptx.execution_plan().unwrap().fusion_decisions().is_empty());
+    ptx.set_fusion_policy(PtxFusionPolicy::CostAware);
+    let restored = ptx.execute(&graph, HashMap::new()).unwrap();
+    assert_close(&restored, &actual, 1e-6);
+    assert_eq!(ptx.compilation_count(), compiled + 2);
 }

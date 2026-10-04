@@ -1,11 +1,13 @@
 use super::graph::PtxGraph;
-use super::plan::{PtxExecutionPlan, PtxPlanAction, PtxReductionMode};
+use super::plan::{PtxExecutionPlan, PtxFusionPolicy, PtxPlanAction, PtxReductionMode};
 use super::target::PtxTarget;
 use super::types::{CudaDType, F32};
 use crate::Executor;
 use crate::alloc::{AllocStats, CudaBufferPool};
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
-use crate::tile::{IndexMap, MatMulPipeline, MatMulSharedLayout, TileGraph, VirtualTensor};
+use crate::tile::{
+    AnalyticalFusionScorer, IndexMap, MatMulPipeline, MatMulSharedLayout, TileGraph, VirtualTensor,
+};
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
@@ -22,7 +24,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 10;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 11;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -32,6 +34,7 @@ pub struct PtxCompileMetrics {
     pub ptx_source_bytes: usize,
     pub compile_time: Duration,
     pub index_optimization_time: Duration,
+    pub fusion_selection_time: Duration,
 }
 
 /// Measurements from the most recent successful graph execution.
@@ -61,6 +64,7 @@ pub struct PtxExecutor<D: CudaDType = F32> {
     execution_metrics: PtxExecutionMetrics,
     kernel_launches: Cell<usize>,
     reduction_mode: PtxReductionMode,
+    fusion_policy: PtxFusionPolicy,
     target: PtxTarget,
     matmul_precision: crate::tile::MatMulPrecision,
     matmul_shared_layout: MatMulSharedLayout,
@@ -127,6 +131,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             execution_metrics: PtxExecutionMetrics::default(),
             kernel_launches: Cell::new(0),
             reduction_mode,
+            fusion_policy: PtxFusionPolicy::CostAware,
             target,
             matmul_precision: crate::tile::MatMulPrecision::AllowTf32,
             matmul_shared_layout: MatMulSharedLayout::Auto,
@@ -155,6 +160,14 @@ impl<D: CudaDType> PtxExecutor<D> {
     pub fn set_matmul_pipeline(&mut self, pipeline: MatMulPipeline) {
         if self.matmul_pipeline != pipeline {
             self.matmul_pipeline = pipeline;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Use cost-aware selection or the previous greedy fusion for ablations.
+    pub fn set_fusion_policy(&mut self, policy: PtxFusionPolicy) {
+        if self.fusion_policy != policy {
+            self.fusion_policy = policy;
             self.compilation_signature = None;
         }
     }
@@ -243,6 +256,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
+            self.fusion_policy,
         );
         let compiled_signature = self
             .compilation_signature
@@ -366,6 +380,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
+            self.fusion_policy,
         );
         let mut execution_plan =
             PtxExecutionPlan::build_with_reduction_mode(graph, self.reduction_mode)?;
@@ -377,6 +392,20 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_pipeline,
             self.target.supports_async_copy(),
         )?;
+        let fusion_started = Instant::now();
+        if self.fusion_policy == PtxFusionPolicy::CostAware {
+            execution_plan.select_fusion(
+                graph,
+                &AnalyticalFusionScorer {
+                    multiprocessor_count: self.target.multiprocessor_count,
+                    registers_per_sm: self.target.matmul_resources.registers_per_sm,
+                    shared_bytes_per_sm: self.target.matmul_resources.shared_bytes_per_sm,
+                    threads_per_sm: self.target.matmul_resources.threads_per_sm,
+                    ..AnalyticalFusionScorer::default()
+                },
+            )?;
+        }
+        let fusion_selection_time = fusion_started.elapsed();
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,
             self.target.supports_tf32()
@@ -428,6 +457,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             ptx_source_bytes,
             compile_time: started.elapsed(),
             index_optimization_time,
+            fusion_selection_time,
         };
 
         Ok(())
@@ -803,6 +833,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
+            self.fusion_policy,
         );
         let compiled_signature = self
             .compilation_signature
@@ -1717,6 +1748,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
+            self.fusion_policy,
         );
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
             self.compile(graph)?;
@@ -1821,6 +1853,7 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     matmul_precision: crate::tile::MatMulPrecision,
     matmul_shared_layout: MatMulSharedLayout,
     matmul_pipeline: MatMulPipeline,
+    fusion_policy: PtxFusionPolicy,
 ) -> Vec<u8> {
     let mut signature = Vec::new();
     signature.extend_from_slice(PTX_GRAPH_SIGNATURE_MAGIC);
@@ -1850,8 +1883,13 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
         MatMulPipeline::Synchronous => 1,
         MatMulPipeline::DoubleBuffered => 2,
     });
+    signature.push(match fusion_policy {
+        PtxFusionPolicy::CostAware => 0,
+        PtxFusionPolicy::Greedy => 1,
+    });
     signature.extend_from_slice(&target.compute_capability.0.to_le_bytes());
     signature.extend_from_slice(&target.compute_capability.1.to_le_bytes());
+    signature_usize(&mut signature, target.multiprocessor_count);
     for budget in [
         target.matmul_resources.shared_bytes_per_block,
         target.matmul_resources.shared_bytes_per_sm,
@@ -2030,6 +2068,7 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
+            self.fusion_policy,
         );
         let needs_compilation = self.module.is_none()
             || self.ptx_graph.is_none()

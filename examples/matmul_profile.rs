@@ -13,7 +13,7 @@ use cudarc::nvrtc::Ptx;
 use num_traits::{Float, ToPrimitive, cast};
 use tnsr::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use tnsr::ptx::{
-    PtxExecutor, PtxPlanAction,
+    PtxExecutor, PtxFusionPolicy, PtxPlanAction,
     types::{BF16, CudaDType, F16, F32},
 };
 use tnsr::tensor::{Parameter, TensorExpr};
@@ -141,6 +141,9 @@ fn profile<D: CudaDType>() -> Result<()> {
             other => anyhow::bail!("unsupported matmul pipeline {other}"),
         },
     );
+    if std::env::var("TNSR_PROFILE_FUSION").as_deref() == Ok("greedy") {
+        executor.set_fusion_policy(PtxFusionPolicy::Greedy);
+    }
     executor.compile_owned(graph.clone())?;
     let description = executor.describe_plan(&graph)?;
     let source = executor.module_source().context("missing PTX")?;
@@ -151,6 +154,17 @@ fn profile<D: CudaDType>() -> Result<()> {
     let plan = executor
         .execution_plan()
         .context("missing execution plan")?;
+    if std::env::var("TNSR_PROFILE_FUSION_DIAGNOSTICS").as_deref() == Ok("1") {
+        eprint!("{}", plan.describe_fusion());
+        eprintln!(
+            "fusion_selection_us={:.3}",
+            executor
+                .compile_metrics()
+                .fusion_selection_time
+                .as_secs_f64()
+                * 1e6
+        );
+    }
     let device = CudaContext::new(0)?;
     let stream = device.default_stream();
     // Optional PTX-only experiment: resident timings use this module; executor

@@ -1,3 +1,7 @@
+mod fusion;
+mod fusion_features;
+pub use fusion::{FusionAlternative, FusionDecision, PtxFusionPolicy};
+
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
@@ -77,6 +81,7 @@ pub struct PtxExecutionPlan {
     matmul_regions: Vec<MatMulRegion>,
     matmul_schedules: HashMap<NodeIndex, MatMulSchedule>,
     graph_output: Option<NodeIndex>,
+    fusion_decisions: Vec<FusionDecision>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -511,6 +516,7 @@ impl PtxExecutionPlan {
             matmul_regions,
             matmul_schedules,
             graph_output,
+            fusion_decisions: Vec::new(),
         })
     }
 
@@ -726,6 +732,11 @@ fn form_reduction_regions<D: crate::tile::TileDType, G>(
         {
             broadcast_members.clear();
             full_epilogue_members.clear();
+        }
+        // Broadcast bridges are written only by the full-domain epilogue.
+        // Without one, export the reduced value and leave the bridge virtual.
+        if full_epilogue_members.is_empty() {
+            broadcast_members.clear();
         }
         if producer_members.is_empty()
             && epilogue_members.is_empty()

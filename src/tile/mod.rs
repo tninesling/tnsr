@@ -1,6 +1,8 @@
 pub mod access;
 pub mod builder;
+pub mod fusion_cost;
 pub mod graph;
+pub use fusion_cost::{AnalyticalFusionScorer, FusionCost, FusionFeatures, FusionScorer};
 mod index_egraph;
 mod index_optimization;
 pub mod ir;

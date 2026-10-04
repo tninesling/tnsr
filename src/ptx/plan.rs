@@ -9,7 +9,10 @@ use petgraph::visit::EdgeRef;
 
 use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::tensor::Shape;
-use crate::tile::{FusionRegion, MatMulRegion, ReductionRegion, ReductionSchedule, VirtualTensor};
+use crate::tile::{
+    FusionRegion, MatMulCapabilities, MatMulPrecision, MatMulRegion, MatMulResources,
+    MatMulSchedule, ReductionRegion, ReductionSchedule, VirtualTensor,
+};
 
 const MAX_POINTWISE_REGION_OPS: usize = 64;
 const MAX_VIRTUAL_INDEX_OPS: usize = 64;
@@ -71,7 +74,7 @@ pub struct PtxExecutionPlan {
     regions: Vec<FusionRegion>,
     reduction_regions: Vec<ReductionRegion>,
     matmul_regions: Vec<MatMulRegion>,
-    matmul_schedules: HashMap<NodeIndex, crate::tile::MatMulSchedule>,
+    matmul_schedules: HashMap<NodeIndex, MatMulSchedule>,
     graph_output: Option<NodeIndex>,
 }
 
@@ -485,17 +488,17 @@ impl PtxExecutionPlan {
                 let lhs = graph[inputs[0]].shape();
                 matmul_schedules.insert(
                     step.node,
-                    crate::tile::MatMulSchedule::select_for_dtype(
+                    MatMulSchedule::select_for_dtype(
                         shape[shape.len() - 2],
                         shape[shape.len() - 1],
                         lhs[lhs.len() - 1],
                         D::TILE_DTYPE,
-                        crate::tile::MatMulCapabilities {
+                        MatMulCapabilities {
                             tf32: true,
                             f16: false,
                             bf16: false,
                         },
-                        crate::tile::MatMulPrecision::AllowTf32,
+                        MatMulPrecision::AllowTf32,
                     ),
                 );
             }
@@ -524,33 +527,36 @@ impl PtxExecutionPlan {
 
     pub(crate) fn schedule_matmuls(
         &mut self,
-        capabilities: crate::tile::MatMulCapabilities,
-        precision: crate::tile::MatMulPrecision,
+        capabilities: MatMulCapabilities,
+        precision: MatMulPrecision,
+        resources: MatMulResources,
     ) {
         for schedule in self.matmul_schedules.values_mut() {
             let shape = schedule.logical_shape;
-            *schedule = crate::tile::MatMulSchedule::select_for_dtype(
+            *schedule = MatMulSchedule::select_with_resources(
                 shape.m,
                 shape.n,
                 shape.k,
                 schedule.storage_dtype,
                 capabilities,
                 precision,
+                resources,
             );
         }
         for region in &mut self.matmul_regions {
-            region.schedule = crate::tile::MatMulSchedule::select_for_dtype(
+            region.schedule = MatMulSchedule::select_with_resources(
                 region.m,
                 region.n,
                 region.k,
                 region.inputs[0].tensor.dtype,
                 capabilities,
                 precision,
+                resources,
             );
         }
     }
 
-    pub fn matmul_schedules(&self) -> &HashMap<NodeIndex, crate::tile::MatMulSchedule> {
+    pub fn matmul_schedules(&self) -> &HashMap<NodeIndex, MatMulSchedule> {
         &self.matmul_schedules
     }
 

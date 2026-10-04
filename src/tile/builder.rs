@@ -115,7 +115,19 @@ impl TileIRBuilder {
     }
 
     pub fn convert_layout(&mut self, dest: TileVar, src: TileVar) {
-        self.stmts.push(Stmt::ConvertLayout { dest, src });
+        self.stmts.push(Stmt::ConvertLayout {
+            dest,
+            src,
+            coordinates: None,
+        });
+    }
+
+    pub fn extract_scalar(&mut self, dest: TileVar, src: TileVar, coordinates: (Expr, Expr)) {
+        self.stmts.push(Stmt::ConvertLayout {
+            dest,
+            src,
+            coordinates: Some(coordinates),
+        });
     }
 
     pub fn load_global_predicated(

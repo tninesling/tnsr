@@ -1,10 +1,13 @@
 use anyhow::{Context, Result};
-use cudarc::driver::CudaContext;
+use cudarc::driver::{CudaContext, sys::CUdevice_attribute};
+
+use crate::tile::MatMulResources;
 
 /// CUDA target properties that affect generated PTX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PtxTarget {
     pub compute_capability: (u32, u32),
+    pub matmul_resources: MatMulResources,
 }
 
 impl PtxTarget {
@@ -12,7 +15,25 @@ impl PtxTarget {
         let (major, minor) = context
             .compute_capability()
             .context("Failed to query CUDA compute capability")?;
+        let attribute = |attribute| -> Result<usize> {
+            usize::try_from(context.attribute(attribute)?)
+                .context("CUDA resource budget is negative")
+        };
         Ok(Self {
+            matmul_resources: MatMulResources {
+                shared_bytes_per_block: attribute(
+                    CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK,
+                )?,
+                shared_bytes_per_sm: attribute(
+                    CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR,
+                )?,
+                registers_per_sm: attribute(
+                    CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR,
+                )?,
+                threads_per_sm: attribute(
+                    CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR,
+                )?,
+            },
             compute_capability: (
                 u32::try_from(major).context("CUDA compute capability major is negative")?,
                 u32::try_from(minor).context("CUDA compute capability minor is negative")?,
@@ -35,6 +56,12 @@ impl PtxTarget {
     pub(crate) const fn sm80() -> Self {
         Self {
             compute_capability: (8, 0),
+            matmul_resources: MatMulResources {
+                shared_bytes_per_block: 48 * 1024,
+                shared_bytes_per_sm: 64 * 1024,
+                registers_per_sm: 64 * 1024,
+                threads_per_sm: 1024,
+            },
         }
     }
 }
@@ -52,7 +79,10 @@ mod tests {
             ((8, 0), MatMulPlan::TensorCoreTf32),
             ((8, 9), MatMulPlan::TensorCoreTf32),
         ] {
-            let target = PtxTarget { compute_capability };
+            let target = PtxTarget {
+                compute_capability,
+                matmul_resources: MatMulResources::default(),
+            };
             assert_eq!(
                 MatMulSchedule::select(
                     128,
@@ -103,6 +133,7 @@ mod half_tests {
         ] {
             let caps = PtxTarget {
                 compute_capability: sm,
+                matmul_resources: MatMulResources::default(),
             }
             .matmul_capabilities();
             for (dtype, expected) in [(DType::F16, f16), (DType::BF16, bf16)] {

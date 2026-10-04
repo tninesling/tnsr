@@ -110,3 +110,59 @@ fn f16_matmul_layout_views() {
 fn bf16_matmul_layout_views() {
     check_views::<BF16>(0.008);
 }
+
+// Both expanded schedules must handle partial tiles, transposed operands,
+// two-sided batch broadcasts, and scalar epilogues for every storage dtype.
+fn check_multiwarp<D: CudaDType>(epsilon: f32) {
+    let Ok(mut executor) = PtxExecutor::<D>::try_new_for_dtype() else {
+        return;
+    };
+    for (m, k, n, expected_tile) in [(33, 65, 257, (16, 32)), (257, 65, 259, (32, 32))] {
+        let graph: TensorGraph<D::HostType> = (values::<D>(vec![2, 1, k, m], 7)
+            .swap_axes(2, 3)
+            .matmul(values::<D>(vec![1, 3, n, k], 5).swap_axes(2, 3))
+            + values::<D>(vec![n], 3))
+        .relu()
+        .into();
+        let expected = SimpleExecutor::<D::HostType>::new()
+            .execute(&graph, HashMap::new())
+            .unwrap();
+        for precision in [MatMulPrecision::StrictF32, MatMulPrecision::AllowTf32] {
+            executor.set_matmul_precision(precision);
+            let actual = executor.execute(&graph, HashMap::new()).unwrap();
+            assert_eq!(actual.len(), expected.len());
+            for (a, b) in actual.iter().zip(&expected) {
+                assert!((a.to_f32().unwrap() - b.to_f32().unwrap()).abs() <= epsilon);
+            }
+            let schedule = executor.execution_plan().unwrap().matmul_regions()[0].schedule;
+            assert_eq!(
+                (schedule.block_tile.m, schedule.block_tile.n),
+                if precision == MatMulPrecision::AllowTf32 {
+                    expected_tile
+                } else {
+                    (16, 16)
+                }
+            );
+            assert_eq!(executor.execution_metrics().kernel_launches, 1);
+            assert_eq!(
+                executor.execution_metrics().intermediate_materialized_bytes,
+                0
+            );
+        }
+    }
+}
+
+#[test]
+fn f32_multiwarp_matmul_views_and_epilogue() {
+    check_multiwarp::<F32>(1e-6);
+}
+
+#[test]
+fn f16_multiwarp_matmul_views_and_epilogue() {
+    check_multiwarp::<F16>(0.001);
+}
+
+#[test]
+fn bf16_multiwarp_matmul_views_and_epilogue() {
+    check_multiwarp::<BF16>(0.002);
+}

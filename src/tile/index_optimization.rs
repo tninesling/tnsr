@@ -55,7 +55,21 @@ fn roots(stmt: &mut Stmt) -> Vec<&mut Expr> {
             coordinates: Some((row, col)),
             ..
         } => vec![row, col],
-        Stmt::ForLoop { start, end, .. } => vec![start, end],
+        Stmt::ForLoop {
+            start,
+            end,
+            carries,
+            ..
+        } => {
+            let mut roots = vec![start, end];
+            for carry in carries {
+                roots.extend(carry.initial.index_roots());
+            }
+            roots
+        }
+        Stmt::LoadScalar { index, .. } | Stmt::StoreScalar { index, .. } => vec![index],
+        Stmt::SetScalar { value, .. } => value.index_roots(),
+        Stmt::If { condition, .. } => condition.index_roots(),
         Stmt::SelectSharedStage { stage, .. } => vec![stage],
         _ => Vec::new(),
     }
@@ -83,7 +97,7 @@ fn normalize(block: &mut Block, cache: &mut HashMap<Expr, Expr>) -> Result<()> {
             };
             *root = value;
         }
-        if let Stmt::ForLoop { body, .. } = stmt {
+        if let Stmt::ForLoop { body, .. } | Stmt::If { body, .. } = stmt {
             normalize(body, cache)?;
         }
     }
@@ -137,6 +151,10 @@ fn collect(
                 .entry(loop_var.clone())
                 .and_modify(|value| *value = None)
                 .or_insert(Some(inner.clone()));
+            collect(body, &inner, usage, variables, names);
+        } else if let Stmt::If { body, .. } = stmt {
+            let mut inner = scope.clone();
+            inner.push(index);
             collect(body, &inner, usage, variables, names);
         }
     }
@@ -208,7 +226,7 @@ fn place(block: &mut Block, scope: &Scope, bindings: &BTreeMap<Expr, Binding>) {
         for root in roots(&mut stmt) {
             substitute(root, bindings);
         }
-        if let Stmt::ForLoop { body, .. } = &mut stmt {
+        if let Stmt::ForLoop { body, .. } | Stmt::If { body, .. } = &mut stmt {
             let mut inner = scope.clone();
             inner.push(index);
             place(body, &inner, bindings);
@@ -329,6 +347,7 @@ mod tests {
                     start,
                     end,
                     body,
+                    ..
                 } => {
                     for i in evaluate(start, env)..evaluate(end, env) {
                         env.insert(loop_var.clone(), i);
@@ -349,11 +368,13 @@ mod tests {
             loop_var: "outer".into(),
             start: Expr::Const(0),
             end: Expr::Const(7),
+            carries: Vec::new(),
             body: Block {
                 stmts: vec![Stmt::ForLoop {
                     loop_var: "inner".into(),
                     start: Expr::Const(0),
                     end: Expr::Const(3),
+                    carries: Vec::new(),
                     body: Block {
                         stmts: vec![load(address)],
                     },

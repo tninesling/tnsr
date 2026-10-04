@@ -503,6 +503,7 @@ impl TileIRBuilder {
             loop_var: var,
             start: Expr::Const(start),
             end: Expr::Const(end),
+            carries: Vec::new(),
             body: Block {
                 stmts: body_builder.stmts,
             },

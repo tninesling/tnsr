@@ -310,6 +310,12 @@ impl<D: CudaDType> PtxExecutor<D> {
                             .context("Missing compiled reduction region kernel")?
                     )
                 }
+                PtxPlanAction::OnlineRegion(id) => format!(
+                    "kernel {} schedule=Online",
+                    ptx_graph
+                        .region_kernel_name(plan.regions().len() + id)
+                        .context("Missing online region kernel")?
+                ),
                 PtxPlanAction::MatMulRegion(region_id) => format!(
                     "kernel {} schedule={:?}",
                     ptx_graph
@@ -405,6 +411,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                 },
             )?;
         }
+        if self.reduction_mode == PtxReductionMode::Online {
+            execution_plan.fuse_online(graph)?;
+        }
         let fusion_selection_time = fusion_started.elapsed();
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,
@@ -415,6 +424,34 @@ impl<D: CudaDType> PtxExecutor<D> {
         tile_graph.add_fusion_regions(execution_plan.regions())?;
         tile_graph.add_reduction_regions(execution_plan.reduction_regions())?;
         tile_graph.add_matmul_regions(execution_plan.matmul_regions())?;
+        // Only emit kernels selected by the final plan; fused-away regions retain
+        // diagnostic metadata but must not bloat the loaded module.
+        tile_graph.region_kernels.retain(|k| {
+            execution_plan
+                .steps()
+                .iter()
+                .any(|s| s.action == PtxPlanAction::PointwiseRegion(k.region_id))
+        });
+        tile_graph.reduction_region_kernels.retain(|k| {
+            execution_plan
+                .steps()
+                .iter()
+                .any(|s| s.action == PtxPlanAction::ReductionRegion(k.region_id))
+        });
+        tile_graph.matmul_region_kernels.retain(|k| {
+            execution_plan
+                .steps()
+                .iter()
+                .any(|s| s.action == PtxPlanAction::MatMulRegion(k.region_id))
+        });
+        for (id, region) in execution_plan.online_regions().iter().enumerate() {
+            tile_graph
+                .region_kernels
+                .push(crate::tile::graph::TileRegionKernel {
+                    region_id: execution_plan.regions().len() + id,
+                    ir: region.lower_to_tile_ir(id)?,
+                });
+        }
         tile_graph.set_physical_nodes(
             execution_plan
                 .steps()
@@ -437,6 +474,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         | PtxPlanAction::PointwiseRegion(_)
                         | PtxPlanAction::ReductionRegion(_)
                         | PtxPlanAction::MatMulRegion(_)
+                        | PtxPlanAction::OnlineRegion(_)
                 )
             })
             .count();
@@ -645,44 +683,51 @@ impl<D: CudaDType> PtxExecutor<D> {
             .collect())
     }
 
-    fn execute_pointwise_region(
+    fn execute_scalar_region(
         &self,
         module: &Arc<CudaModule>,
         ptx_graph: &PtxGraph,
-        region_id: usize,
         step: &super::plan::PtxPlanStep,
     ) -> Result<RegionValues<D::HostType>> {
+        let plan = self
+            .execution_plan
+            .as_ref()
+            .context("Scalar region plan unavailable")?;
+        let (kernel_id, inputs, threads) = match step.action {
+            PtxPlanAction::PointwiseRegion(id) => (id, &plan.regions()[id].inputs, None),
+            PtxPlanAction::OnlineRegion(id) => {
+                let region = &plan.online_regions()[id];
+                (
+                    plan.regions().len() + id,
+                    &region.inputs,
+                    region.block_threads(),
+                )
+            }
+            _ => anyhow::bail!("Expected a scalar region step"),
+        };
         let kernel_name = ptx_graph
-            .region_kernel_name(region_id)
-            .context("Missing compiled pointwise region kernel")?;
+            .region_kernel_name(kernel_id)
+            .context("Scalar region kernel unavailable")?;
         let input_values: Vec<_> = step
             .inputs
             .iter()
             .map(|input| {
                 self.values.get(input).cloned().with_context(|| {
-                    format!(
-                        "Pointwise region input node {} is unavailable",
-                        input.index()
-                    )
+                    format!("Scalar region input node {} is unavailable", input.index())
                 })
             })
             .collect::<Result<_>>()?;
-        let len = checked_element_count(&step.shape, "Pointwise region")?;
-        let region = self
-            .execution_plan
-            .as_ref()
-            .and_then(|plan| plan.regions().get(region_id))
-            .context("Pointwise region metadata is unavailable")?;
+        let len = checked_element_count(&step.shape, "Scalar region")?;
         anyhow::ensure!(
-            region.inputs.len() == input_values.len(),
-            "Pointwise region input binding count mismatch"
+            inputs.len() == input_values.len(),
+            "Scalar region input binding count mismatch"
         );
-        for (input, descriptor) in input_values.iter().zip(&region.inputs) {
+        for (input, descriptor) in input_values.iter().zip(inputs) {
             let expected =
-                checked_element_count(&descriptor.source_shape, "Pointwise region input storage")?;
+                checked_element_count(&descriptor.source_shape, "Scalar region input storage")?;
             anyhow::ensure!(
                 input.len() == expected,
-                "Pointwise region input length {} does not match storage length {expected}",
+                "Scalar region input length {} does not match storage length {expected}",
                 input.len(),
             );
         }
@@ -691,8 +736,20 @@ impl<D: CudaDType> PtxExecutor<D> {
             outputs.push(self.take_buffer(len)?);
         }
         if len != 0 {
-            let launch_len = u32::try_from(len)
-                .context("Pointwise region output is too large for a CUDA launch")?;
+            let config = if let Some(threads) = threads {
+                LaunchConfig {
+                    grid_dim: (
+                        u32::try_from(len / step.shape[step.shape.len() - 1])
+                            .context("Scalar grid too large")?,
+                        1,
+                        1,
+                    ),
+                    block_dim: (threads, 1, 1),
+                    shared_mem_bytes: 0,
+                }
+            } else {
+                LaunchConfig::for_num_elems(u32::try_from(len).context("Scalar output too large")?)
+            };
             let function = module.load_function(kernel_name)?;
             let stream = self.device.default_stream();
             let mut launcher = stream.launch_builder(&function);
@@ -703,7 +760,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                 launcher.arg(output);
             }
             self.record_kernel_launch();
-            unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+            // SAFETY: Storage lengths and output extent are checked; generated
+            // kernels guard output lanes and traverse valid input coordinates.
+            unsafe { launcher.launch(config) }
                 .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
         }
         Ok(step
@@ -890,9 +949,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                 }
                 continue;
             }
-            if let PtxPlanAction::PointwiseRegion(region_id) = plan_step.action {
-                let region_outputs =
-                    self.execute_pointwise_region(module, ptx_graph, region_id, plan_step)?;
+            if matches!(
+                plan_step.action,
+                PtxPlanAction::PointwiseRegion(_) | PtxPlanAction::OnlineRegion(_)
+            ) {
+                let region_outputs = self.execute_scalar_region(module, ptx_graph, plan_step)?;
                 for (output_node, output) in region_outputs {
                     let bytes = output.len() * std::mem::size_of::<D::HostType>();
                     self.execution_metrics.materialized_values += 1;
@@ -1867,6 +1928,7 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     signature.push(match reduction_mode {
         PtxReductionMode::Strict => 0,
         PtxReductionMode::DeterministicTree => 1,
+        PtxReductionMode::Online => 2,
     });
     signature.push(match matmul_precision {
         crate::tile::MatMulPrecision::StrictF32 => 0,

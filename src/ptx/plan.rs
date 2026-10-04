@@ -1,5 +1,6 @@
 mod fusion;
 mod fusion_features;
+mod online;
 pub use fusion::{FusionAlternative, FusionAlternativeKind, FusionDecision, PtxFusionPolicy};
 
 use std::collections::{HashMap, HashSet};
@@ -60,6 +61,9 @@ pub enum PtxReductionMode {
     Strict,
     /// Permit a fixed warp reduction tree for eligible regions.
     DeterministicTree,
+    /// Allow online normalization rewrites as well as deterministic trees.
+    /// Results are numerically equivalent, rather than bitwise identical.
+    Online,
 }
 
 /// Physical action used to produce values in a PTX execution plan.
@@ -72,6 +76,7 @@ pub enum PtxPlanAction {
     PointwiseRegion(usize),
     ReductionRegion(usize),
     MatMulRegion(usize),
+    OnlineRegion(usize),
 }
 
 /// One physical step in a PTX execution plan.
@@ -98,6 +103,7 @@ pub struct PtxExecutionPlan {
     regions: Vec<FusionRegion>,
     reduction_regions: Vec<ReductionRegion>,
     matmul_regions: Vec<MatMulRegion>,
+    online_regions: Vec<crate::tile::OnlineRegion>,
     matmul_schedules: HashMap<NodeIndex, MatMulSchedule>,
     graph_output: Option<NodeIndex>,
     fusion_decisions: Vec<FusionDecision>,
@@ -533,6 +539,7 @@ impl PtxExecutionPlan {
             reduction_regions,
             matmul_regions,
             matmul_schedules,
+            online_regions: Vec::new(),
             graph_output,
             fusion_decisions: Vec::new(),
         })
@@ -705,7 +712,7 @@ fn form_reduction_regions<D: crate::tile::TileDType, G>(
 
         let mut broadcast_members = Vec::new();
         let mut full_epilogue_set = HashSet::new();
-        if reduction_mode == PtxReductionMode::DeterministicTree
+        if reduction_mode != PtxReductionMode::Strict
             || input_shape
                 .get(match &graph[anchor] {
                     TensorGraphNode::ReduceAxis { axis, .. } => *axis,
@@ -745,7 +752,7 @@ fn form_reduction_regions<D: crate::tile::TileDType, G>(
         }
         let mut full_epilogue_members: Vec<_> = full_epilogue_set.iter().copied().collect();
         full_epilogue_members.sort_by_key(|node| positions[node]);
-        if reduction_mode == PtxReductionMode::DeterministicTree
+        if reduction_mode != PtxReductionMode::Strict
             && full_epilogue_members.len() > MAX_COOPERATIVE_FULL_EPILOGUE_OPS
         {
             broadcast_members.clear();
@@ -800,7 +807,7 @@ fn form_reduction_regions<D: crate::tile::TileDType, G>(
             full_epilogue_members,
             outputs,
         )?;
-        if reduction_mode == PtxReductionMode::DeterministicTree {
+        if reduction_mode != PtxReductionMode::Strict {
             let reduction_extent = region.input_shape[region.axis];
             if reduction_extent >= MIN_BLOCK_REDUCTION_AXIS
                 || !region.full_epilogue_operations.is_empty()

@@ -252,6 +252,31 @@ pub enum Stmt {
         output_shape: Vec<usize>,
     },
 
+    /// Assign an f32 scalar expression, including loop-state updates.
+    SetScalar {
+        dest: TileVar,
+        value: super::ScalarExpr,
+    },
+    LoadScalar {
+        dest: TileVar,
+        source: super::ScalarMemory,
+        index: Expr,
+    },
+    StoreScalar {
+        target: super::ScalarMemory,
+        index: Expr,
+        value: TileVar,
+    },
+    /// The reduction result is complete in lane zero of each full active warp.
+    WarpReduce {
+        dest: TileVar,
+        src: TileVar,
+        op: crate::tensor::ReduceOp,
+    },
+    If {
+        condition: super::ScalarPredicate,
+        body: Block,
+    },
     ReductionRegion {
         region: Box<super::ReductionRegion>,
     },
@@ -273,11 +298,15 @@ pub enum Stmt {
     /// Synchronization barrier
     Barrier,
 
-    /// For loop
+    /// Counted loop over wrapping-u64 index expressions.
+    /// Bounds are evaluated in the enclosing scope before binding the counter.
+    /// Carries are initialized before the loop, then updated by body assignments.
+    /// They remain available after the loop, including when it has zero iterations.
     ForLoop {
         loop_var: String,
         start: Expr,
         end: Expr,
+        carries: Vec<super::LoopCarry>,
         body: Block,
     },
 }

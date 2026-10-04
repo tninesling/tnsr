@@ -347,7 +347,7 @@ pub(crate) fn input_coordinate_index(input: &RegionInput, iterations: &[Expr]) -
         })
 }
 
-fn lower_index_expr(expression: &IndexExpr, iterations: &[Expr]) -> Result<Expr> {
+pub(crate) fn lower_index_expr(expression: &IndexExpr, iterations: &[Expr]) -> Result<Expr> {
     match expression {
         IndexExpr::IterDim(dimension) => iterations
             .get(*dimension)

@@ -115,7 +115,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         anyhow::ensure!(
             <D::HostType as crate::tile::TileDType>::TILE_DTYPE != crate::tile::DType::BF16
                 || target.compute_capability.0 >= 8,
-            "Native BF16 PTX storage requires SM80 or newer; use the CUDA backend for f32 boundary conversion on older GPUs"
+            "Native BF16 PTX storage requires SM80 or newer; use the CPU backend on older GPUs"
         );
         Ok(PtxExecutor {
             device,

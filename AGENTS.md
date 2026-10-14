@@ -13,4 +13,4 @@
 - Unsafe: minimize and isolate; gate SIMD with `#[cfg(target_arch = "x86_64")]` and `is_x86_feature_detected!("avx2")`; document safety invariants.
 - Features: CUDA is optional; enable via `--features cuda` for GPU paths/benches.
 - Tests style: colocate under `#[cfg(test)]`; use epsilon comparisons for floats.
-- CUDA kernels: static PTX in `src/cuda/kernels.ptx`; loaded at runtime via `src/cuda/mod.rs`.
+- CUDA kernels: lower Tile IR to generated PTX via `src/ptx`; loaded and launched by `src/ptx/executor.rs`.

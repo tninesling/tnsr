@@ -1,5 +1,8 @@
 # Fusion Baseline
 
+Static CUDA measurements below are historical baselines. The static executor has
+since been removed; current GPU execution uses tiled PTX.
+
 This document records the unfused PTX baseline used to evaluate the general
 fusion implementation. Run it with:
 

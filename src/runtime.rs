@@ -5,8 +5,6 @@ use petgraph::graph::NodeIndex;
 use std::collections::HashMap;
 
 #[cfg(feature = "cuda")]
-use crate::cuda::CudaExecutor;
-#[cfg(feature = "cuda")]
 use crate::ptx::PtxExecutor;
 #[cfg(feature = "cuda")]
 use crate::ptx::types::{BF16, F16, F32};
@@ -18,7 +16,7 @@ use anyhow::Context;
 pub enum Backend {
     /// CPU-based execution using SimpleExecutor
     Cpu,
-    /// GPU-based execution using CUDA (requires `cuda` feature)
+    /// Compatibility alias for tiled PTX execution (requires `cuda` feature)
     #[cfg(feature = "cuda")]
     Cuda,
     /// GPU-based execution using PTX JIT compilation (requires `cuda` feature)
@@ -35,9 +33,6 @@ pub enum Backend {
 pub enum Runtime<D = f32> {
     /// CPU-based executor
     Cpu(SimpleExecutor<D>),
-    /// GPU-based executor
-    #[cfg(feature = "cuda")]
-    Cuda(CudaExecutor),
     /// PTX JIT executor
     #[cfg(feature = "cuda")]
     Ptx(PtxExecutor),
@@ -52,44 +47,18 @@ pub enum Runtime<D = f32> {
 impl Runtime<f32> {
     /// Create a runtime with automatic backend selection.
     ///
-    /// When the `ptx` feature is enabled, prefers the Tile IR/PTX executor.
-    /// Otherwise, prefers static CUDA and falls back to CPU if CUDA is unavailable.
+    /// Prefers tiled PTX execution when `cuda` is enabled, falling back to CPU
+    /// if GPU initialization fails. The `ptx` feature is a compatibility alias.
     pub fn new() -> Self {
-        #[cfg(all(feature = "cuda", feature = "ptx"))]
+        #[cfg(feature = "cuda")]
         {
-            // PTX feature enabled: try PTX first, then CUDA, then CPU
             match PtxExecutor::<F32>::try_new() {
                 Ok(executor) => {
-                    tracing::info!("Runtime initialized with PTX JIT backend");
+                    tracing::info!("Runtime initialized with tiled PTX backend");
                     Runtime::Ptx(executor)
                 }
-                Err(e) => {
-                    tracing::warn!("PTX initialization failed: {}, trying CUDA", e);
-                    match CudaExecutor::try_new() {
-                        Ok(executor) => {
-                            tracing::info!("Runtime initialized with CUDA backend");
-                            Runtime::Cuda(executor)
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "CUDA initialization failed: {}, falling back to CPU",
-                                e
-                            );
-                            Runtime::Cpu(SimpleExecutor::new())
-                        }
-                    }
-                }
-            }
-        }
-        #[cfg(all(feature = "cuda", not(feature = "ptx")))]
-        {
-            match CudaExecutor::try_new() {
-                Ok(executor) => {
-                    tracing::info!("Runtime initialized with CUDA backend");
-                    Runtime::Cuda(executor)
-                }
-                Err(e) => {
-                    tracing::warn!("CUDA initialization failed: {}, falling back to CPU", e);
+                Err(error) => {
+                    tracing::warn!("PTX initialization failed: {}, falling back to CPU", error);
                     Runtime::Cpu(SimpleExecutor::new())
                 }
             }
@@ -105,13 +74,7 @@ impl Runtime<f32> {
         match backend {
             Backend::Cpu => Ok(Runtime::Cpu(SimpleExecutor::new())),
             #[cfg(feature = "cuda")]
-            Backend::Cuda => {
-                let executor =
-                    CudaExecutor::try_new().context("Failed to initialize CUDA executor")?;
-                Ok(Runtime::Cuda(executor))
-            }
-            #[cfg(feature = "cuda")]
-            Backend::Ptx => {
+            Backend::Cuda | Backend::Ptx => {
                 let executor =
                     PtxExecutor::<F32>::try_new().context("Failed to initialize PTX executor")?;
                 Ok(Runtime::Ptx(executor))
@@ -125,7 +88,7 @@ macro_rules! impl_half_runtime {
         impl Runtime<$dtype> {
             /// Create a half-precision runtime with automatic backend selection.
             pub fn new() -> Self {
-                #[cfg(all(feature = "cuda", feature = "ptx"))]
+                #[cfg(feature = "cuda")]
                 {
                     match PtxExecutor::<$marker>::try_new_for_dtype() {
                         Ok(executor) => Runtime::$variant(executor),
@@ -133,31 +96,6 @@ macro_rules! impl_half_runtime {
                             tracing::warn!(
                                 concat!(
                                     "PTX initialization failed for ",
-                                    $name,
-                                    ": {}, trying CUDA"
-                                ),
-                                error
-                            );
-                            CudaExecutor::try_new()
-                                .map_or_else(|_| Runtime::Cpu(SimpleExecutor::new()), Runtime::Cuda)
-                        }
-                    }
-                }
-                #[cfg(all(feature = "cuda", not(feature = "ptx")))]
-                {
-                    match CudaExecutor::try_new() {
-                        Ok(executor) => {
-                            tracing::info!(concat!(
-                                "Runtime initialized with CUDA backend (",
-                                $name,
-                                ")"
-                            ));
-                            Runtime::Cuda(executor)
-                        }
-                        Err(error) => {
-                            tracing::warn!(
-                                concat!(
-                                    "CUDA initialization failed for ",
                                     $name,
                                     ": {}, falling back to CPU"
                                 ),
@@ -178,11 +116,7 @@ macro_rules! impl_half_runtime {
                 match backend {
                     Backend::Cpu => Ok(Runtime::Cpu(SimpleExecutor::new())),
                     #[cfg(feature = "cuda")]
-                    Backend::Cuda => Ok(Runtime::Cuda(
-                        CudaExecutor::try_new().context("Failed to initialize CUDA executor")?,
-                    )),
-                    #[cfg(feature = "cuda")]
-                    Backend::Ptx => Ok(Runtime::$variant(
+                    Backend::Cuda | Backend::Ptx => Ok(Runtime::$variant(
                         PtxExecutor::<$marker>::try_new_for_dtype()
                             .context("Failed to initialize PTX executor")?,
                     )),
@@ -210,8 +144,6 @@ where
         match self {
             Runtime::Cpu(_) => Backend::Cpu,
             #[cfg(feature = "cuda")]
-            Runtime::Cuda(_) => Backend::Cuda,
-            #[cfg(feature = "cuda")]
             Runtime::Ptx(_) => Backend::Ptx,
             #[cfg(feature = "cuda")]
             Runtime::PtxF16(_) | Runtime::PtxBF16(_) => Backend::Ptx,
@@ -229,7 +161,7 @@ where
         {
             matches!(
                 self,
-                Runtime::Cuda(_) | Runtime::Ptx(_) | Runtime::PtxF16(_) | Runtime::PtxBF16(_)
+                Runtime::Ptx(_) | Runtime::PtxF16(_) | Runtime::PtxBF16(_)
             )
         }
         #[cfg(not(feature = "cuda"))]
@@ -243,32 +175,6 @@ where
     pub fn get_value(&self, node_idx: NodeIndex) -> Option<Vec<D>> {
         match self {
             Runtime::Cpu(executor) => executor.get_value(node_idx),
-            #[cfg(feature = "cuda")]
-            Runtime::Cuda(executor) => {
-                use std::any::TypeId;
-                if TypeId::of::<D>() == TypeId::of::<f32>() {
-                    executor
-                        .get_value(node_idx)
-                        // Safety: D is f32 at runtime, so the transmute is a no-op.
-                        .map(|v| unsafe { std::mem::transmute::<Vec<f32>, Vec<D>>(v) })
-                } else if TypeId::of::<D>() == TypeId::of::<half::f16>() {
-                    executor.get_value(node_idx).map(|values| {
-                        let values: Vec<half::f16> =
-                            values.into_iter().map(half::f16::from_f32).collect();
-                        // Safety: the TypeId check proves D is f16.
-                        unsafe { std::mem::transmute::<Vec<half::f16>, Vec<D>>(values) }
-                    })
-                } else if TypeId::of::<D>() == TypeId::of::<half::bf16>() {
-                    executor.get_value(node_idx).map(|values| {
-                        let values: Vec<half::bf16> =
-                            values.into_iter().map(half::bf16::from_f32).collect();
-                        // Safety: the TypeId check proves D is bf16.
-                        unsafe { std::mem::transmute::<Vec<half::bf16>, Vec<D>>(values) }
-                    })
-                } else {
-                    None
-                }
-            }
             #[cfg(feature = "cuda")]
             Runtime::Ptx(executor) => executor.get_value(node_idx).map(|values| {
                 values
@@ -316,55 +222,6 @@ where
         match self {
             Runtime::Cpu(executor) => executor.execute(graph, inputs),
             #[cfg(feature = "cuda")]
-            Runtime::Cuda(executor) => {
-                use std::any::TypeId;
-                if TypeId::of::<D>() != TypeId::of::<f32>()
-                    && TypeId::of::<D>() != TypeId::of::<half::f16>()
-                    && TypeId::of::<D>() != TypeId::of::<half::bf16>()
-                {
-                    anyhow::bail!("CUDA backend only supports f32, f16, and bf16")
-                }
-
-                if TypeId::of::<D>() == TypeId::of::<f32>() {
-                    // Safety: the TypeId check proves D is f32, so these
-                    // container transmutations preserve layout and ownership.
-                    let graph = unsafe {
-                        &*(graph as *const TensorGraph<D, G> as *const TensorGraph<f32, G>)
-                    };
-                    let inputs = unsafe {
-                        std::mem::transmute::<HashMap<String, Vec<D>>, HashMap<String, Vec<f32>>>(
-                            inputs,
-                        )
-                    };
-                    let result = executor.execute(graph, inputs);
-                    return unsafe {
-                        std::mem::transmute::<Result<Vec<f32>>, Result<Vec<D>>>(result)
-                    };
-                }
-
-                let graph_f32 = graph.clone().map_dtype(|value| value.to_f32().unwrap());
-                let inputs_f32 = inputs
-                    .into_iter()
-                    .map(|(name, values)| {
-                        (
-                            name,
-                            values
-                                .into_iter()
-                                .map(|value| value.to_f32().unwrap())
-                                .collect(),
-                        )
-                    })
-                    .collect();
-                executor
-                    .execute(&graph_f32, inputs_f32)?
-                    .into_iter()
-                    .map(|value| {
-                        D::from(value)
-                            .context("CUDA result cannot be represented by the requested dtype")
-                    })
-                    .collect()
-            }
-            #[cfg(feature = "cuda")]
             Runtime::Ptx(executor) => execute_native_ptx(executor, graph, inputs),
             #[cfg(feature = "cuda")]
             Runtime::PtxF16(executor) => execute_native_ptx(executor, graph, inputs),
@@ -376,59 +233,6 @@ where
     fn get_gradients(&self, graph: &TensorGraph<D, WithGrad>) -> HashMap<usize, Vec<D>> {
         match self {
             Runtime::Cpu(executor) => executor.get_gradients(graph),
-            #[cfg(feature = "cuda")]
-            Runtime::Cuda(executor) => {
-                use std::any::TypeId;
-                if TypeId::of::<D>() == TypeId::of::<f32>() {
-                    // Safety: D is f32 at runtime, so transmute is a no-op.
-                    let graph = unsafe {
-                        &*(graph as *const TensorGraph<D, WithGrad>
-                            as *const TensorGraph<f32, WithGrad>)
-                    };
-                    let result = executor.get_gradients(graph);
-                    unsafe {
-                        std::mem::transmute::<HashMap<usize, Vec<f32>>, HashMap<usize, Vec<D>>>(
-                            result,
-                        )
-                    }
-                } else if TypeId::of::<D>() == TypeId::of::<half::f16>() {
-                    graph
-                        .gradient_metadata()
-                        .param_to_grad
-                        .iter()
-                        .filter_map(|(param_id, node_idx)| {
-                            executor.get_value(*node_idx).map(|values| {
-                                let values: Vec<half::f16> =
-                                    values.into_iter().map(half::f16::from_f32).collect();
-                                // Safety: the TypeId check proves D is f16.
-                                let values = unsafe {
-                                    std::mem::transmute::<Vec<half::f16>, Vec<D>>(values)
-                                };
-                                (*param_id, values)
-                            })
-                        })
-                        .collect()
-                } else if TypeId::of::<D>() == TypeId::of::<half::bf16>() {
-                    graph
-                        .gradient_metadata()
-                        .param_to_grad
-                        .iter()
-                        .filter_map(|(param_id, node_idx)| {
-                            executor.get_value(*node_idx).map(|values| {
-                                let values: Vec<half::bf16> =
-                                    values.into_iter().map(half::bf16::from_f32).collect();
-                                // Safety: the TypeId check proves D is bf16.
-                                let values = unsafe {
-                                    std::mem::transmute::<Vec<half::bf16>, Vec<D>>(values)
-                                };
-                                (*param_id, values)
-                            })
-                        })
-                        .collect()
-                } else {
-                    HashMap::new()
-                }
-            }
             #[cfg(feature = "cuda")]
             Runtime::Ptx(executor) => graph
                 .gradient_metadata()

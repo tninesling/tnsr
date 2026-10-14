@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
 use tnsr::nn::TransformerBlock;
 use tnsr::ptx::PtxExecutor;
@@ -61,13 +60,6 @@ fn transformer_benchmarks(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("cpu", case.name), |benchmark| {
             benchmark
                 .iter(|| std::hint::black_box(cpu.execute(&cpu_graph, HashMap::new()).unwrap()));
-        });
-
-        let cuda_graph = Arc::clone(&graph);
-        let mut cuda = CudaExecutor::new();
-        group.bench_function(BenchmarkId::new("static_cuda", case.name), |benchmark| {
-            benchmark
-                .iter(|| std::hint::black_box(cuda.execute(&cuda_graph, HashMap::new()).unwrap()));
         });
 
         let compile_graph = Arc::clone(&graph);

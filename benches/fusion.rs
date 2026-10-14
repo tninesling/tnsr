@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
 use tnsr::nn::{layer_norm, softmax};
 use tnsr::ptx::{PtxExecutor, PtxReductionMode};
@@ -87,11 +86,6 @@ fn fusion_benchmarks(c: &mut Criterion) {
         let mut cpu = SimpleExecutor::new();
         group.bench_function(BenchmarkId::new("cpu", name), |benchmark| {
             benchmark.iter(|| cpu.execute(&graph, HashMap::new()).unwrap())
-        });
-
-        let mut cuda = CudaExecutor::new();
-        group.bench_function(BenchmarkId::new("static_cuda", name), |benchmark| {
-            benchmark.iter(|| cuda.execute(&graph, HashMap::new()).unwrap())
         });
 
         let mut ptx = PtxExecutor::new();

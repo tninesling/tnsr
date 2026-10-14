@@ -8,8 +8,7 @@ Tensors are core to modern ML. To train a model, you describe a computation whic
 
 The `tnsr` runtime can execute a tensor expression in a few different ways:
 1. It can execute the expression directly using naive implementations of each operation on CPU.
-2. It can execute the expression with statically-provided CUDA kernels on GPU.
-3. It can JIT-compile the expression to PTX kernels, which are then executed on GPU.
+2. It can JIT-compile the expression to PTX kernels, which are then executed on GPU.
 
 
 ## Computation as a graph
@@ -34,7 +33,7 @@ After rewriting the graph, we can apply operator fusion. This combines multiple 
 
 ## Memory reuse
 
-CPU, CUDA, and PTX executors perform liveness analysis on every execution and
+CPU and tiled PTX executors perform liveness analysis on every execution and
 return dead intermediate buffers to exact-size pools. Outputs and gradients
 remain available until the next execution; gradients can be returned earlier
 with `release_gradients`. Consequently, `get_value` is only guaranteed for
@@ -45,7 +44,7 @@ pinned output and gradient nodes after execution.
 `tnsr::nn::Gpt` composes learned token and position embeddings, causal
 transformer blocks, final layer normalization, and a tied language-model head.
 Indexed embedding and cross-entropy operations avoid one-hot vocabulary tensors
-and support autograd on both CPU and static CUDA executors.
+and support autograd on both CPU and tiled PTX executors.
 
 Run the self-contained character-level training and generation example on CPU:
 
@@ -93,14 +92,15 @@ Burn aims to encode more information about tensors in the type system. A `burn::
 
 ## CUDA Support
 
-The CUDA backend can be enabled via the `cuda` feature. This uses static PTX
-kernels in `src/cuda/`. Regenerate the indexed-operation module with CUDA 12.9
-or newer using:
+Enable the tiled PTX backend with `--features cuda`. `Runtime::new()` selects
+it automatically and falls back to CPU if GPU initialization fails. Explicit
+`Backend::Cuda` and `Backend::Ptx` selections both use the tiled executor and
+return initialization errors instead of falling back. `runtime.backend()` reports
+`Backend::Ptx` for either GPU selection. The `ptx` feature remains a compatibility
+alias and is no longer required to select tiled execution.
 
-```bash
-nvcc --ptx --gpu-architecture=compute_61 --use_fast_math \
-  --output-file src/cuda/indexed_kernels.ptx src/cuda/indexed_kernels.cu
-```
+The static executor and checked-in kernels have been removed. Direct users of
+`tnsr::cuda::CudaExecutor` should use `tnsr::ptx::PtxExecutor` or `Runtime`.
 
 ## Benchmarking
 
@@ -108,8 +108,7 @@ Benchmarks are defined in `benches/` using `criterion`. To run the benchmarks:
 
 - `cargo bench --bench cpu` - Benchmark SIMD kernels against naive
   implementation on CPU.
-- `cargo bench --bench gpu --features cuda` - Benchmark CUDA kernels
-  against naive implementation on GPU.
+- `cargo bench --bench gpu --features cuda` - Benchmark tiled PTX execution on GPU.
 
 ## Tracing
 
@@ -122,10 +121,8 @@ start of your program. The resulting trace file can be loaded in Perfetto.
 
 ### Half precision
 
-`Runtime::<half::f16>` and `Runtime::<half::bf16>` support CPU, CUDA, and PTX
-execution. CPU matmul and reductions accumulate in f32. The static CUDA backend
-converts graphs and inputs to f32, runs its existing kernels, and narrows results
-at the host boundary.
+`Runtime::<half::f16>` and `Runtime::<half::bf16>` support CPU and tiled PTX
+execution. CPU matmul and reductions accumulate in f32.
 
 The PTX backend keeps graph buffers in native 16-bit storage, including fused
 pointwise, reduction, and batched matmul regions, with f32 scalar computation and
@@ -136,8 +133,8 @@ cores on SM80+, including fused epilogues. Small shapes and
 f32 graphs; it never converts an f32 graph to FP16/BF16.
 
 Native BF16 PTX requires SM80+. On older GPUs, automatic runtime selection falls
-back to the static CUDA backend's f32 conversion path. Half embedding gradients
-sum repeated indices in f32 per output element and narrow once, avoiding atomics
+back to CPU; explicitly selecting a GPU backend returns an initialization error.
+Half embedding gradients sum repeated indices in f32 per output element and narrow once, avoiding atomics
 on half buffers; this correctness fallback can be slower for large vocabularies.
 
 ### Automatically fused online attention
@@ -148,4 +145,4 @@ consumers, then generates ordinary scalar loops with carried state. Eligible f32
 probability matrices, including attention inside the existing transformer API.
 The same normalization rule also works without attention or matmuls.
 See [online attention](docs/online-attention.md) for activation, legality checks,
-resident benchmarks, and current schedule limits.
+benchmarks and current schedule limits.

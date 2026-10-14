@@ -1,5 +1,8 @@
 # Transformer and CUDA Handoff
 
+Historical handoff: the static CUDA executor described here has since been removed.
+Current GPU execution uses the tiled PTX backend.
+
 ## Branch and commits
 
 Branch: `feature/transformer-cuda-handoff`

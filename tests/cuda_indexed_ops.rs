@@ -2,15 +2,18 @@
 
 use std::collections::HashMap;
 
-use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
 use tnsr::nn::{Gpt, GptConfig};
+use tnsr::ptx::PtxExecutor;
 use tnsr::tensor::{ExprKind, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
 
-fn cuda_executor() -> Option<CudaExecutor> {
-    match CudaExecutor::try_new() {
-        Ok(executor) => Some(executor),
+fn cuda_executor() -> Option<PtxExecutor> {
+    match PtxExecutor::try_new() {
+        Ok(mut executor) => {
+            executor.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+            Some(executor)
+        }
         Err(error)
             if std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1")
                 && error
@@ -20,7 +23,7 @@ fn cuda_executor() -> Option<CudaExecutor> {
             eprintln!("skipping CUDA test: {error:#}");
             None
         }
-        Err(error) => panic!("CudaExecutor initialization failed: {error:#}"),
+        Err(error) => panic!("PtxExecutor initialization failed: {error:#}"),
     }
 }
 

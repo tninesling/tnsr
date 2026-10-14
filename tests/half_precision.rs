@@ -255,10 +255,10 @@ fn test_ptx_lowering_converts_f16_storage_to_f32_compute() {
 
 #[cfg(feature = "cuda")]
 #[test]
-fn test_cuda_executor_accepts_bf16_graphs() {
-    use tnsr::cuda::CudaExecutor;
+fn test_ptx_executor_accepts_bf16_graphs() {
+    use tnsr::ptx::{PtxExecutor, types::BF16};
 
-    let Ok(mut executor) = CudaExecutor::try_new() else {
+    let Ok(mut executor) = PtxExecutor::<BF16>::try_new_for_dtype() else {
         return;
     };
     let x = TensorExpr::<bf16>::input("x", vec![4]);

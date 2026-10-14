@@ -25,8 +25,7 @@ default = ["parallel"]
 cuda = ["cudarc"]
 fusion = []
 parallel = ["rayon"]
-# Use PTX JIT executor (tiled) instead of static CUDA kernels
-# Only meaningful when cuda feature is enabled
+# Compatibility alias; `cuda` always uses the tiled PTX executor
 ptx = []
 
 [[bench]]

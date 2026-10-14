@@ -2,7 +2,8 @@
 
 Tracking issue: [#37 Implement memory allocator for tensors](https://github.com/tninesling/tnsr/issues/37)
 
-Status: implemented for CPU, static CUDA, and PTX executors.
+Status: implemented for CPU and tiled PTX executors. The original static CUDA
+executor was removed after tiled execution became the default GPU path.
 
 ## Background
 
@@ -141,7 +142,7 @@ Same structure on GPU:
   device's stream.
 - cudarc allocations are stream-ordered, so reuse on the same stream needs no
   synchronization. Multi-stream would need events; explicitly out of scope.
-- `CudaExecutor::values` becomes pooled handles; same last-use eviction.
+- `PtxExecutor::values` becomes pooled handles; same last-use eviction.
 
 Validation: `cargo nextest run --features cuda`; `cargo bench --bench gpu
 --features cuda` (pooling should help alloc-heavy graphs); no numeric changes vs

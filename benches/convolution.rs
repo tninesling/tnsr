@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
 use tnsr::ptx::PtxExecutor;
 use tnsr::tensor::{Parameter, TensorExpr};
@@ -23,11 +22,6 @@ fn convolution_benchmarks(c: &mut Criterion) {
         let mut cpu = SimpleExecutor::new();
         group.bench_function(BenchmarkId::new("cpu", name), |benchmark| {
             benchmark.iter(|| cpu.execute(&graph, HashMap::new()).unwrap())
-        });
-
-        let mut cuda = CudaExecutor::new();
-        group.bench_function(BenchmarkId::new("static_cuda", name), |benchmark| {
-            benchmark.iter(|| cuda.execute(&graph, HashMap::new()).unwrap())
         });
 
         let mut ptx = PtxExecutor::new();

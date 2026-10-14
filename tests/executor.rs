@@ -1337,31 +1337,45 @@ fn fusion_ptx_executor_simple_chain() {
 
 #[test]
 #[cfg(feature = "cuda")]
-fn test_default_backend_cuda() {
+fn test_default_backend_uses_tiled_cuda_or_cpu_fallback() {
+    use tnsr::Backend;
     let runtime = create_runtime();
-    let backend = runtime.backend();
-    eprintln!("Default backend with cuda feature: {:?}", backend);
-    #[cfg(not(feature = "ptx"))]
-    {
-        use tnsr::runtime::Backend;
-        assert_eq!(
-            backend,
-            Backend::Cuda,
-            "Should use CUDA backend when ptx feature is disabled"
-        );
+    match Runtime::<f32>::with_backend(Backend::Cuda) {
+        Ok(explicit) => {
+            assert!(matches!(explicit, Runtime::Ptx(_)));
+            assert!(matches!(runtime, Runtime::Ptx(_)));
+            assert_eq!(runtime.backend(), Backend::Ptx);
+            assert!(runtime.is_cuda());
+        }
+        Err(error) => {
+            assert_ne!(
+                std::env::var("TNSR_REQUIRE_CUDA").as_deref(),
+                Ok("1"),
+                "{error:#}"
+            );
+            assert!(runtime.is_cpu());
+        }
     }
 }
 
 #[test]
-#[cfg(all(feature = "cuda", feature = "ptx"))]
-fn test_default_backend_ptx() {
-    let runtime = create_runtime();
-    let backend = runtime.backend();
-    eprintln!("Default backend with ptx feature: {:?}", backend);
-    use tnsr::runtime::Backend;
-    assert_eq!(
-        backend,
-        Backend::Ptx,
-        "Should use PTX backend when ptx feature is enabled"
-    );
+#[cfg(feature = "cuda")]
+fn test_half_backend_uses_native_tiled_cuda_or_cpu_fallback() {
+    use tnsr::Backend;
+    macro_rules! check {
+        ($dtype:ty, $variant:ident) => {
+            let automatic = Runtime::<$dtype>::new();
+            match Runtime::<$dtype>::with_backend(Backend::Cuda) {
+                Ok(explicit) => {
+                    assert!(matches!(explicit, Runtime::$variant(_)));
+                    assert!(matches!(automatic, Runtime::$variant(_)));
+                    assert_eq!(automatic.backend(), Backend::Ptx);
+                    assert!(automatic.is_cuda());
+                }
+                Err(_) => assert!(automatic.is_cpu()),
+            }
+        };
+    }
+    check!(half::f16, PtxF16);
+    check!(half::bf16, PtxBF16);
 }

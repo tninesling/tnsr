@@ -2,19 +2,15 @@
 
 Tracking issue: [#15 Implement operator fusion](https://github.com/tninesling/tnsr/issues/15)
 
-Status: accepted; Stages 0-4 and Stage 5b are complete. Stage 5 parallel
-reduction scheduling is next.
+Status: the PTX execution planner now includes general pointwise regions,
+virtual views, strict and cooperative reductions, batched matmul epilogues,
+target-aware schedules and layouts, pipelined operand copies, and bounded
+cost-based fusion selection. Opt-in online normalization composes with indexed
+contractions and lowers through scalar loops with carried state.
 
-Implemented through Stage 5b: PTX execution plans, observability, structural
-access maps, virtual view paths, general same-shape pointwise DAG regions,
-composed broadcast/reindex loads, and strict-order single-anchor reduction
-regions with producer, reduced-shape epilogue, and costed broadcast-back
-full-shape epilogue fusion. Stage 5b deliberately uses a strict-order serial
-schedule with one reduction anchor per region. Full-shape serial epilogues are
-limited to axes of at most 32 elements; larger axes keep a parallel pointwise
-epilogue because lost parallelism and producer recomputation outweigh the saved
-launch. Warp, block, and persistent reduction schedules are not implemented
-yet.
+Remaining compiler work includes broader scheduling search, operand-producer
+and convolution anchor fusion, tensor-core attention, and additional targets.
+Static CUDA has been removed; tiled PTX is the production GPU path.
 
 Primary reference: [DNNFusion, PLDI 2021](references/dnnfusion-pldi-2021.pdf).
 
@@ -45,7 +41,7 @@ maps, then combine them with ideas from newer systems:
 The semantic `TensorGraph` remains unchanged. Fusion runs after autograd has
 produced the executable forward/backward graph and creates a backend-specific
 `ExecutionPlan`. This avoids teaching autograd how to differentiate arbitrary
-fused regions and allows CPU, static CUDA, and PTX backends to make different
+fused regions and allows CPU and PTX backends to make different
 planning decisions.
 
 ## Motivation
@@ -432,7 +428,7 @@ debugging, and public output lookup continue to work. Internal graph nodes are
 not assigned buffers unless selected for materialization.
 
 `PtxExecutor` will compile and execute plan steps rather than traversing the
-original graph and loading one kernel per node. CPU and static CUDA executors do
+original graph and loading one kernel per node. The CPU executor does
 not need to adopt the PTX plan immediately.
 
 ## Candidate Region Formation
@@ -681,8 +677,8 @@ usually virtual or fused, with no regressions on adversarial layouts.
 - Complete through Stage 5b: fuse pointwise producers, reduced-shape
   epilogues, and cost-effective broadcast-back full-shape epilogues around one
   reduction anchor.
-- Next: add warp/block and persistent reduction schedule families and select
-  among them using reduction extent and target resource limits.
+- Complete: cooperative warp/block reduction schedules.
+- Follow-up: persistent reductions and broader target-aware schedule selection.
 - Preserve the serial schedule for strict numerical ordering; require an
   explicit numerical policy before selecting reassociating tree reductions.
 
@@ -752,7 +748,7 @@ regression when a profile entry is absent.
 - End-to-end benchmarks cover transformer forward/backward, GPT generation,
   LeNet, convolution, and representative synthetic regions.
 - Report compile/JIT separately from steady-state execution.
-- Compare against the unfused Tile PTX backend and static CUDA baseline.
+- Compare against unfused Tile PTX and external benchmark adapters.
 
 ## Risks and Mitigations
 

@@ -6,9 +6,9 @@ use std::alloc::System;
 use std::collections::HashMap;
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
-#[cfg(feature = "cuda")]
-use tnsr::cuda::CudaExecutor;
 use tnsr::graph::TensorGraph;
+#[cfg(feature = "cuda")]
+use tnsr::ptx::PtxExecutor;
 use tnsr::tensor::{Parameter, TensorExpr};
 use tnsr::{Executor, SimpleExecutor};
 
@@ -120,14 +120,47 @@ fn reset_stats_keeps_cached_buffers() {
     assert!(executor.stats().pool_hits > 0);
 }
 
+/// Repeated normalization fibers keep multiple physical steps even with
+/// pointwise fusion, so this exercises liveness and allocation rather than
+/// relying on a unary chain that the tiled planner eliminates.
+#[cfg(feature = "cuda")]
+fn device_chain_graph(depth: usize, len: usize) -> TensorGraph<f32> {
+    let mut expression = TensorExpr::input("x", vec![len / 64, 64]);
+    for _ in 0..depth {
+        expression = expression.reduce_mean(1).broadcast_axis(1, 64).relu();
+    }
+    expression.into()
+}
+
+#[cfg(feature = "cuda")]
+fn ptx_executor() -> Option<PtxExecutor> {
+    match PtxExecutor::try_new() {
+        Ok(executor) => Some(executor),
+        Err(error)
+            if std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1")
+                && error
+                    .to_string()
+                    .starts_with("Failed to initialize CUDA device 0") =>
+        {
+            eprintln!("skipping CUDA test: {error:#}");
+            None
+        }
+        Err(error) => panic!("PTX initialization failed: {error:#}"),
+    }
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_chain_reuses_device_buffers() {
-    let graph = chain_graph(20);
-    let mut executor = CudaExecutor::try_new().unwrap();
+    let graph = device_chain_graph(20, LEN);
+    let Some(mut executor) = ptx_executor() else {
+        return;
+    };
     let inputs = HashMap::from([("x".to_string(), vec![1.0f32; LEN])]);
 
-    executor.execute(&graph, inputs).unwrap();
+    let output = executor.execute(&graph, inputs).unwrap();
+    assert_eq!(output, vec![1.0f32; LEN]);
+    assert!(executor.execution_metrics().kernel_launches >= 20);
 
     assert!(executor.stats().pool_hits > 0);
     assert!(executor.stats().peak_live_bytes <= 3 * NODE_BYTES);
@@ -139,29 +172,44 @@ fn cuda_chain_reuses_device_buffers() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_deep_chain_fits_in_vram_via_pooling() {
+    // The unfused reduction stress graph has three operations per layer.
+    // Give recursive graph/compiler traversals more than libtest's default stack.
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(check_deep_device_chain)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[cfg(feature = "cuda")]
+fn check_deep_device_chain() {
     use cudarc::driver::result;
 
     // Create the executor first so the CUDA context is initialized.
-    let mut executor = CudaExecutor::try_new().unwrap();
+    let Some(mut executor) = ptx_executor() else {
+        return;
+    };
 
     // Query free VRAM and pick a buffer size that occupies ~25% of it,
     // so 3 live buffers (input + output + one spare) stay well under the
     // device limit.
     let (free_bytes, _total_bytes) = result::mem_get_info().unwrap();
     let elem_bytes = std::mem::size_of::<f32>();
-    let buf_len = (free_bytes / 4) / elem_bytes;
+    let buf_len = ((free_bytes / 4) / elem_bytes / 64) * 64;
     let buf_bytes = buf_len * elem_bytes;
-    let depth = 200; // cumulative = 200 * buf_bytes, far exceeding VRAM
+    let depth = 200;
 
-    let mut expr = TensorExpr::<f32>::input("x", vec![buf_len]);
-    for _ in 0..depth {
-        expr = -expr;
-    }
-    let graph: TensorGraph<f32> = expr.into();
+    let graph = device_chain_graph(depth, buf_len);
 
     let inputs = HashMap::from([("x".to_string(), vec![1.0f32; buf_len])]);
 
     executor.execute(&graph, inputs).unwrap();
+
+    // Count actual materializations: virtual broadcasts and fused producers
+    // must not turn this into a graph that would fit without liveness reuse.
+    assert!(executor.execution_metrics().materialized_bytes > free_bytes);
+    assert!(executor.execution_metrics().kernel_launches >= depth);
 
     // The pool should reuse buffers, keeping peak live bytes at O(1).
     assert!(

@@ -1,4 +1,4 @@
-//! Persistent JSON-lines inference worker for the real forty-five model.
+//! Persistent JSON-lines inference and PPO worker for the real forty-five model.
 mod forty_five;
 use anyhow::{Context, Result, bail, ensure};
 use forty_five::{Model, Observations};
@@ -116,6 +116,10 @@ fn run() -> Result<()> {
                     .context("PPO trainer has not initialized")?
                     .advance_schedule(update),
                 Request::Save { directory } => {
+                    ensure!(
+                        !Path::new(&directory).exists(),
+                        "checkpoint directory already exists"
+                    );
                     worker.model.parameters.save(
                         Path::new(&directory),
                         serde_json::to_value(&worker.model.config)?,

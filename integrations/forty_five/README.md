@@ -85,3 +85,53 @@ and Adam currently run on the host; CUDA gradients are copied back each
 microbatch, and updated parameters are uploaded on the next execution. Training
 is synchronous. Saved archives restore model weights for inference/export or a
 fresh optimizer; exact optimizer/RNG resumption and bf16 autocast are not provided.
+
+## Real rollout, training, evaluation and serving handoff
+
+```sh
+/path/to/forty-five/.venv/bin/python integrations/forty_five/train.py \
+  /path/to/forty-five/models/v8.4.onnx \
+  --forty-five-root /path/to/forty-five --backend cuda \
+  --output target/forty_five_validation/training \
+  --updates 2 --num-envs 2 --hands-per-update 2 --microbatch 8 \
+  --compare-rollout --eval-games 2 --export-onnx
+```
+
+This synchronous driver calls the original Rust `collect_trajectory` through
+`collect_rollout_rust`, retaining game/reward rules, legal categorical sampling,
+GAE and hand grouping. The optional rollout comparison uses the same seed and
+checks observations, chosen actions, values, log-probabilities, advantages and
+returns against the original model. Each update saves a fresh named archive and
+checks predictions against a PyTorch restore and a fresh native worker.
+Evaluation uses the existing greedy arena with both opposite seat pairs and
+compares native and restored-PyTorch outcomes on the same deals. Two games are a
+compatibility smoke test, not evidence of improved playing strength.
+
+`--fixed-opponent-prob` retains the original collector's team assignment/mixing.
+`--opponent-snapshot` accepts a frozen `.pt`, `.onnx` or native archive (defaults to
+the initialization). The bidding anchor always remains the frozen initialization.
+Every update gets a separately selectable checkpoint; restored models can enter
+forty-five's existing `SelfPlayManager` snapshot pool and evaluation/selection
+flow. This smoke driver writes into its new output directory and does not invoke
+`maybe_promote_best`, replace serving weights, or resume/interrupt other runs.
+Use the existing project's promotion gates for any candidate selected afterward.
+
+The final weights are also written as an original-format PyTorch checkpoint.
+`--export-onnx` calls forty-five's existing serving exporter, checks the ONNX graph,
+and compares ONNX Runtime against restored PyTorch over the phase/padding probes.
+For a separate handoff:
+
+```sh
+/path/to/forty-five/.venv/bin/python integrations/forty_five/restore.py \
+  target/forty_five_validation/training/update-0002 /tmp/trained.pt \
+  --forty-five-root /path/to/forty-five --onnx /tmp/trained.onnx
+```
+
+Reports separate rollout and PPO elapsed time (including graph compilation and
+transfers), retain compiled-shape counts, and count JSON request/response bytes.
+CUDA transfer payload lower bounds count one full f32 parameter upload and named
+gradient download per microbatch; they exclude inputs/constants, extra result
+copies and allocator overhead. Weights and gradients currently cross the host
+boundary on every microbatch. Resident versioned parameters, device accumulation/
+clipping/Adam, and then mixed precision are the next performance work; matching
+the original PyTorch bf16 production throughput has not been established.

@@ -138,6 +138,8 @@ impl TileGraph {
                     | TensorGraphNode::ReduceAxis { .. }
                     | TensorGraphNode::Transpose { .. }
                     | TensorGraphNode::Permute { .. }
+                    | TensorGraphNode::Narrow { .. }
+                    | TensorGraphNode::Concat { .. }
                     | TensorGraphNode::Embedding { .. }
                     | TensorGraphNode::EmbeddingBackward { .. }
                     | TensorGraphNode::IndexedCrossEntropy { .. }
@@ -313,6 +315,12 @@ impl TileGraph {
                     vocabulary,
                     input_shapes[1].iter().product(),
                 )
+            }
+            TensorGraphNode::Narrow { axis, start, .. } => {
+                super::segments::narrow(dtype, input_shapes[0], shape, axis, start)
+            }
+            TensorGraphNode::Concat { axis, .. } => {
+                super::segments::concat(dtype, input_shapes, shape, axis)
             }
             TensorGraphNode::Transpose { .. } => {
                 let input_shape = input_shapes.first().map(|s| s.to_vec()).unwrap_or_default();

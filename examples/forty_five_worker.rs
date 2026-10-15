@@ -25,12 +25,26 @@ fn runtime(backend: &str) -> Result<Runtime<f32>> {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
-    Infer { batch: Observations },
-    Save { directory: String },
+    Infer {
+        batch: Observations,
+    },
+    Save {
+        directory: String,
+    },
+    Train {
+        batch: Box<forty_five::ppo::Batch>,
+        settings: forty_five::ppo::Settings,
+        #[serde(default)]
+        return_gradients: bool,
+    },
+    Schedule {
+        update: usize,
+    },
 }
 struct Worker {
     model: Model,
     backend: String,
+    trainer: Option<forty_five::ppo::Trainer>,
     predictions: HashMap<usize, (TensorGraph<f32>, Runtime<f32>)>,
 }
 impl Worker {
@@ -71,6 +85,7 @@ fn run() -> Result<()> {
     let mut worker = Worker {
         model,
         backend: args[2].clone(),
+        trainer: None,
         predictions: HashMap::new(),
     };
     let mut output = std::io::BufWriter::new(std::io::stdout().lock());
@@ -78,6 +93,28 @@ fn run() -> Result<()> {
         let response = (|| -> Result<serde_json::Value> {
             match serde_json::from_str::<Request>(&line?)? {
                 Request::Infer { batch } => worker.infer(&batch),
+                Request::Train {
+                    batch,
+                    settings,
+                    return_gradients,
+                } => {
+                    if worker.trainer.is_none() {
+                        worker.trainer = Some(forty_five::ppo::Trainer::new(
+                            &settings,
+                            worker.backend.clone(),
+                        )?);
+                    }
+                    worker
+                        .trainer
+                        .as_mut()
+                        .context("PPO trainer missing")?
+                        .step(&worker.model, &batch, &settings, return_gradients)
+                }
+                Request::Schedule { update } => worker
+                    .trainer
+                    .as_mut()
+                    .context("PPO trainer has not initialized")?
+                    .advance_schedule(update),
                 Request::Save { directory } => {
                     worker.model.parameters.save(
                         Path::new(&directory),

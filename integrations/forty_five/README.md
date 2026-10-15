@@ -52,3 +52,36 @@ Weights keep PyTorch's `[out, in]` layout; graph transposes make them usable by
 `tnsr::nn::linear`. Saved archives contain weights/model config, not implicit
 optimizer or RNG resumption state. `export.load_archive` restores them into the
 original PyTorch architecture for the existing serving/export pipeline.
+
+## PPO parity
+
+The `train` request takes a `ppo::Batch`, `settings` and optional
+`return_gradients`. Advantages must already be normalized **over the whole
+rollout**. One request performs one hand minibatch: it accumulates microbatch
+losses/gradients by transition count, clips their global norm, then applies Adam
+with policy/value parameter groups. Bidding KL uses frozen legal-action anchor
+probabilities/log-probabilities and preserves the original per-microbatch bidding
+normalization. Runtime coefficients keep compiled graphs reusable. `schedule`
+with `update` advances the cosine learning rates once per completed rollout.
+
+```sh
+/path/to/forty-five/.venv/bin/python integrations/forty_five/validate_ppo.py \
+  /path/to/forty-five/models/v8.4.onnx \
+  --forty-five-root /path/to/forty-five \
+  --output target/forty_five_validation/ppo
+```
+
+The oracle is the existing `forty_five_ai.train.ppo_update` in CPU f32, including
+weighted microbatches, clipping, entropy, bidding-anchor KL, two Adam updates and
+scheduler steps. Every named clipped gradient and updated parameter is checked;
+reports retain per-parameter errors. The fixed batch exercises both signs of
+advantages, policy/value clipping, every phase and all-padding. Small committed
+shared/separate-critic golden fixtures run in CPU/PTX tests. Regenerate with
+`generate_ppo_fixture.py --forty-five-root ROOT` (and `--separate` into a fresh
+`tiny-separate` directory).
+
+This worker trains in f32 on either backend. Gradient accumulation, norm clipping
+and Adam currently run on the host; CUDA gradients are copied back each
+microbatch, and updated parameters are uploaded on the next execution. Training
+is synchronous. Saved archives restore model weights for inference/export or a
+fresh optimizer; exact optimizer/RNG resumption and bf16 autocast are not provided.

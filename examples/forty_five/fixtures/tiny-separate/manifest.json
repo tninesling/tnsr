@@ -1,0 +1,860 @@
+{
+  "version": 1,
+  "dtype": "f32-le",
+  "data_file": "weights.f32",
+  "config": {
+    "token_dim": 8,
+    "token_heads": 2,
+    "token_layers": 1,
+    "token_max_tokens": 16,
+    "token_vocab_size": 64,
+    "token_type_vocab_size": 6,
+    "phase_embed_dim": 4,
+    "num_phases": 6,
+    "use_phase_heads": true,
+    "use_card_conditioned_actions": true,
+    "use_separate_critic": true,
+    "use_privileged_critic": false,
+    "use_rope": false,
+    "use_swiglu": true
+  },
+  "tensors": [
+    {
+      "name": "bid_head.bias",
+      "shape": [
+        5
+      ],
+      "offset": 0,
+      "count": 5,
+      "group": "policy"
+    },
+    {
+      "name": "bid_head.weight",
+      "shape": [
+        5,
+        8
+      ],
+      "offset": 5,
+      "count": 40,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_cards.bias",
+      "shape": [
+        8
+      ],
+      "offset": 45,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_cards.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 53,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_count_embedding.weight",
+      "shape": [
+        6,
+        8
+      ],
+      "offset": 117,
+      "count": 48,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.0.bias",
+      "shape": [
+        24
+      ],
+      "offset": 165,
+      "count": 24,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.0.weight",
+      "shape": [
+        24
+      ],
+      "offset": 189,
+      "count": 24,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.1.bias",
+      "shape": [
+        8
+      ],
+      "offset": 213,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.1.weight",
+      "shape": [
+        8,
+        24
+      ],
+      "offset": 221,
+      "count": 192,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.3.bias",
+      "shape": [
+        1
+      ],
+      "offset": 413,
+      "count": 1,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.3.weight",
+      "shape": [
+        1,
+        8
+      ],
+      "offset": 414,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_bias.bias",
+      "shape": [
+        1
+      ],
+      "offset": 422,
+      "count": 1,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_bias.weight",
+      "shape": [
+        1,
+        8
+      ],
+      "offset": 423,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_keys.bias",
+      "shape": [
+        8
+      ],
+      "offset": 431,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_keys.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 439,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_query.bias",
+      "shape": [
+        8
+      ],
+      "offset": 503,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_query.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 511,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.attention.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 575,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.attention.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 583,
+      "count": 64,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.attention.qkv_proj.bias",
+      "shape": [
+        24
+      ],
+      "offset": 647,
+      "count": 24,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.attention.qkv_proj.weight",
+      "shape": [
+        24,
+        8
+      ],
+      "offset": 671,
+      "count": 192,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.attn_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 863,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.attn_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 871,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.feed_forward.down_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 879,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.feed_forward.down_proj.weight",
+      "shape": [
+        8,
+        22
+      ],
+      "offset": 887,
+      "count": 176,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.feed_forward.gate_proj.bias",
+      "shape": [
+        22
+      ],
+      "offset": 1063,
+      "count": 22,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.feed_forward.gate_proj.weight",
+      "shape": [
+        22,
+        8
+      ],
+      "offset": 1085,
+      "count": 176,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.feed_forward.up_proj.bias",
+      "shape": [
+        22
+      ],
+      "offset": 1261,
+      "count": 22,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.feed_forward.up_proj.weight",
+      "shape": [
+        22,
+        8
+      ],
+      "offset": 1283,
+      "count": 176,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.ffn_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 1459,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.encoder.layers.0.ffn_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 1467,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.output_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 1475,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.output_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 1483,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.position_embedding.weight",
+      "shape": [
+        16,
+        8
+      ],
+      "offset": 1491,
+      "count": 128,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.token_embedding.weight",
+      "shape": [
+        64,
+        8
+      ],
+      "offset": 1619,
+      "count": 512,
+      "group": "value"
+    },
+    {
+      "name": "critic_encoder.token_type_embedding.weight",
+      "shape": [
+        6,
+        8
+      ],
+      "offset": 2131,
+      "count": 48,
+      "group": "value"
+    },
+    {
+      "name": "phase_embedding.weight",
+      "shape": [
+        6,
+        4
+      ],
+      "offset": 2179,
+      "count": 24,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.key_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2203,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.key_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 2211,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.query_norm.bias",
+      "shape": [
+        12
+      ],
+      "offset": 2275,
+      "count": 12,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.query_norm.weight",
+      "shape": [
+        12
+      ],
+      "offset": 2287,
+      "count": 12,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.query_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2299,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.query_proj.weight",
+      "shape": [
+        8,
+        12
+      ],
+      "offset": 2307,
+      "count": 96,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.value_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2403,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.value_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 2411,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.0.bias",
+      "shape": [
+        20
+      ],
+      "offset": 2475,
+      "count": 20,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.0.weight",
+      "shape": [
+        20
+      ],
+      "offset": 2495,
+      "count": 20,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.1.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2515,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.1.weight",
+      "shape": [
+        8,
+        20
+      ],
+      "offset": 2523,
+      "count": 160,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.3.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2683,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.3.weight",
+      "shape": [
+        8
+      ],
+      "offset": 2691,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "suit_head.bias",
+      "shape": [
+        4
+      ],
+      "offset": 2699,
+      "count": 4,
+      "group": "policy"
+    },
+    {
+      "name": "suit_head.weight",
+      "shape": [
+        4,
+        8
+      ],
+      "offset": 2703,
+      "count": 32,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attention.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2735,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attention.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 2743,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attention.qkv_proj.bias",
+      "shape": [
+        24
+      ],
+      "offset": 2807,
+      "count": 24,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attention.qkv_proj.weight",
+      "shape": [
+        24,
+        8
+      ],
+      "offset": 2831,
+      "count": 192,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attn_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 3023,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attn_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 3031,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.down_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 3039,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.down_proj.weight",
+      "shape": [
+        8,
+        22
+      ],
+      "offset": 3047,
+      "count": 176,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.gate_proj.bias",
+      "shape": [
+        22
+      ],
+      "offset": 3223,
+      "count": 22,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.gate_proj.weight",
+      "shape": [
+        22,
+        8
+      ],
+      "offset": 3245,
+      "count": 176,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.up_proj.bias",
+      "shape": [
+        22
+      ],
+      "offset": 3421,
+      "count": 22,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.up_proj.weight",
+      "shape": [
+        22,
+        8
+      ],
+      "offset": 3443,
+      "count": 176,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.ffn_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 3619,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.ffn_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 3627,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.output_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 3635,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.output_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 3643,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.position_embedding.weight",
+      "shape": [
+        16,
+        8
+      ],
+      "offset": 3651,
+      "count": 128,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.token_embedding.weight",
+      "shape": [
+        64,
+        8
+      ],
+      "offset": 3779,
+      "count": 512,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.token_type_embedding.weight",
+      "shape": [
+        6,
+        8
+      ],
+      "offset": 4291,
+      "count": 48,
+      "group": "policy"
+    },
+    {
+      "name": "value_pool.pool.key_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 4339,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.key_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 4347,
+      "count": 64,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.query_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 4411,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.query_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 4419,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.query_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 4427,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.query_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 4435,
+      "count": 64,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.value_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 4499,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.value_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 4507,
+      "count": 64,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.query",
+      "shape": [
+        8
+      ],
+      "offset": 4571,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.0.bias",
+      "shape": [
+        16
+      ],
+      "offset": 4579,
+      "count": 16,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.0.weight",
+      "shape": [
+        16
+      ],
+      "offset": 4595,
+      "count": 16,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.1.bias",
+      "shape": [
+        8
+      ],
+      "offset": 4611,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.1.weight",
+      "shape": [
+        8,
+        16
+      ],
+      "offset": 4619,
+      "count": 128,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.3.bias",
+      "shape": [
+        4
+      ],
+      "offset": 4747,
+      "count": 4,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.3.weight",
+      "shape": [
+        4,
+        8
+      ],
+      "offset": 4751,
+      "count": 32,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.5.bias",
+      "shape": [
+        1
+      ],
+      "offset": 4783,
+      "count": 1,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.5.weight",
+      "shape": [
+        1,
+        4
+      ],
+      "offset": 4784,
+      "count": 4,
+      "group": "value"
+    }
+  ]
+}

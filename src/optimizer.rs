@@ -113,6 +113,16 @@ impl<D: num_traits::Float> Adam<D> {
         }
     }
 
+    /// Change the learning rate without resetting moments or the timestep.
+    pub fn set_learning_rate(&mut self, lr: f32) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            lr.is_finite() && lr >= 0.0,
+            "Adam learning rate must be finite and nonnegative"
+        );
+        self.lr = lr;
+        Ok(())
+    }
+
     /// Set the decay rates `(beta1, beta2)` for the first and second moments.
     pub fn betas(mut self, beta1: f32, beta2: f32) -> Self {
         self.beta1 = beta1;

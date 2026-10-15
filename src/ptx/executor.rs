@@ -1,3 +1,7 @@
+mod replay;
+pub use replay::PtxReplayMetrics;
+use replay::{IndexRequirement, ReplayState};
+
 use super::graph::PtxGraph;
 use super::plan::{PtxExecutionPlan, PtxFusionPolicy, PtxPlanAction, PtxReductionMode};
 use super::readback::materialize_host_view;
@@ -9,7 +13,7 @@ use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
 use crate::tile::{AnalyticalFusionScorer, MatMulPipeline, MatMulSharedLayout, TileGraph};
 use anyhow::{Context as _, Result};
 use cudarc::driver::{
-    CudaContext, CudaFunction, CudaModule, CudaSlice, LaunchConfig, PushKernelArg,
+    CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, LaunchConfig, PushKernelArg,
 };
 use cudarc::nvrtc::Ptx;
 use num_traits::ToPrimitive;
@@ -17,7 +21,7 @@ use petgraph::visit::EdgeRef;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
@@ -46,12 +50,37 @@ pub struct PtxExecutionMetrics {
     pub materialized_bytes: usize,
     pub intermediate_materialized_bytes: usize,
     pub device_copies: usize,
+    /// Host graph launches; `kernel_launches` still counts physical GPU kernels.
+    pub graph_launches: usize,
+}
+
+impl PtxExecutionMetrics {
+    fn add_work(&mut self, other: &Self) {
+        self.kernel_launches += other.kernel_launches;
+        self.materialized_values += other.materialized_values;
+        self.materialized_bytes += other.materialized_bytes;
+        self.intermediate_materialized_bytes += other.intermediate_materialized_bytes;
+        self.device_copies += other.device_copies;
+        self.graph_launches += other.graph_launches;
+    }
 }
 
 /// PTX executor that compiles TensorGraph → TileGraph → PtxGraph → PTX string
 /// and executes kernels via cudarc
 pub struct PtxExecutor<D: CudaDType = F32> {
     device: Arc<CudaContext>,
+    stream: Arc<CudaStream>,
+    stream_gate: Arc<Mutex<()>>,
+    // Destroy graphs before any referenced bindings, modules or workspace.
+    replay: Option<ReplayState<D>>,
+    replay_enabled: bool,
+    replay_blocked: bool,
+    replay_metrics: PtxReplayMetrics,
+    capturing: Cell<bool>,
+    allocation_frozen: Cell<bool>,
+    replay_frame_active: bool,
+    capture_indices: RefCell<Vec<IndexRequirement>>,
+    pending_replay_work: PtxExecutionMetrics,
     bindings: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
     sources: super::sources::SourceCache<D>,
     module: Option<Arc<CudaModule>>,
@@ -122,6 +151,19 @@ impl<D: CudaDType> PtxExecutor<D> {
         device: Arc<CudaContext>,
         reduction_mode: PtxReductionMode,
     ) -> Result<Self> {
+        Self::with_stream(
+            device.default_stream(),
+            reduction_mode,
+            Arc::new(Mutex::new(())),
+        )
+    }
+
+    pub(crate) fn with_stream(
+        stream: Arc<CudaStream>,
+        reduction_mode: PtxReductionMode,
+        stream_gate: Arc<Mutex<()>>,
+    ) -> Result<Self> {
+        let device = stream.context().clone();
         let target = PtxTarget::from_context(&device)?;
         anyhow::ensure!(
             <D::HostType as crate::tile::TileDType>::TILE_DTYPE != crate::tile::DType::BF16
@@ -130,6 +172,17 @@ impl<D: CudaDType> PtxExecutor<D> {
         );
         Ok(PtxExecutor {
             device,
+            stream,
+            stream_gate,
+            replay: None,
+            replay_enabled: false,
+            replay_blocked: false,
+            replay_metrics: PtxReplayMetrics::default(),
+            capturing: Cell::new(false),
+            allocation_frozen: Cell::new(false),
+            replay_frame_active: false,
+            capture_indices: RefCell::new(Vec::new()),
+            pending_replay_work: PtxExecutionMetrics::default(),
             bindings: HashMap::new(),
             sources: super::sources::SourceCache::default(),
             module: None,
@@ -156,7 +209,10 @@ impl<D: CudaDType> PtxExecutor<D> {
     /// Select matmul arithmetic for subsequent compilations. Changing the policy
     /// invalidates the compilation signature so execute recompiles cached graphs.
     pub fn set_matmul_precision(&mut self, precision: crate::tile::MatMulPrecision) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
         if self.matmul_precision != precision {
+            self.invalidate_replay();
             self.matmul_precision = precision;
             self.compilation_signature = None;
         }
@@ -164,7 +220,10 @@ impl<D: CudaDType> PtxExecutor<D> {
 
     /// Choose shared operand layouts for subsequent compilations.
     pub fn set_matmul_shared_layout(&mut self, layout: MatMulSharedLayout) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
         if self.matmul_shared_layout != layout {
+            self.invalidate_replay();
             self.matmul_shared_layout = layout;
             self.compilation_signature = None;
         }
@@ -172,7 +231,10 @@ impl<D: CudaDType> PtxExecutor<D> {
 
     /// Select synchronous staging or a bounded asynchronous pipeline.
     pub fn set_matmul_pipeline(&mut self, pipeline: MatMulPipeline) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
         if self.matmul_pipeline != pipeline {
+            self.invalidate_replay();
             self.matmul_pipeline = pipeline;
             self.compilation_signature = None;
         }
@@ -180,16 +242,20 @@ impl<D: CudaDType> PtxExecutor<D> {
 
     /// Use cost-aware selection or the previous greedy fusion for ablations.
     pub fn set_fusion_policy(&mut self, policy: PtxFusionPolicy) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
         if self.fusion_policy != policy {
+            self.invalidate_replay();
             self.fusion_policy = policy;
             self.compilation_signature = None;
         }
     }
 
     fn take_buffer(&self, len: usize) -> Result<CudaSlice<D::HostType>> {
-        self.pool
-            .borrow_mut()
-            .take(&self.device.default_stream(), len)
+        if self.allocation_frozen.get() {
+            return self.pool.borrow_mut().take_cached(len);
+        }
+        self.pool.borrow_mut().take(&self.stream.clone(), len)
     }
 
     fn validate_indices(
@@ -199,12 +265,23 @@ impl<D: CudaDType> PtxExecutor<D> {
         operation: &str,
     ) -> Result<()> {
         if let Some(result) = self.sources.validate_input(indices, upper, operation) {
+            if self.capturing.get() {
+                self.capture_indices.borrow_mut().push(IndexRequirement {
+                    key: Arc::as_ptr(indices) as usize,
+                    upper,
+                    operation: operation.to_owned(),
+                });
+            }
             return result;
         }
+        anyhow::ensure!(
+            !self.capturing.get(),
+            "computed indices require uncaptured validation"
+        );
         let mut host_indices = vec![D::HostType::default(); indices.len()];
         if !host_indices.is_empty() {
-            self.device
-                .default_stream()
+            self.stream
+                .clone()
                 .memcpy_dtoh(indices.as_ref(), &mut host_indices)
                 .with_context(|| format!("Failed to validate PTX {operation} indices"))?;
         }
@@ -253,6 +330,10 @@ impl<D: CudaDType> PtxExecutor<D> {
 
     pub fn execution_metrics(&self) -> &PtxExecutionMetrics {
         &self.execution_metrics
+    }
+
+    pub(crate) fn execution_stream(&self) -> Arc<CudaStream> {
+        self.stream.clone()
     }
 
     pub fn execution_plan(&self) -> Option<&PtxExecutionPlan> {
@@ -385,11 +466,17 @@ impl<D: CudaDType> PtxExecutor<D> {
 
     /// Discard cached device buffers to release VRAM held by the executor.
     pub fn clear_pool(&mut self) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        self.invalidate_replay();
         self.pool.get_mut().clear();
     }
 
     /// Release pinned gradient buffers before the next execution.
     pub fn release_gradients(&mut self, graph: &TensorGraph<D::HostType, WithGrad>) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        self.invalidate_replay();
         for grad_node in graph.gradient_metadata().param_to_grad.values() {
             if let Some(buf) = self.values.remove(grad_node) {
                 self.recycle_value(buf);
@@ -404,6 +491,13 @@ impl<D: CudaDType> PtxExecutor<D> {
 
     /// Compile a borrowed graph without cloning tensor data.
     pub fn compile<G>(&mut self, graph: &TensorGraph<D::HostType, G>) -> Result<()> {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        self.compile_impl(graph)
+    }
+
+    fn compile_impl<G>(&mut self, graph: &TensorGraph<D::HostType, G>) -> Result<()> {
+        self.invalidate_replay();
         let started = Instant::now();
         let graph_nodes = graph.graph.node_count();
         let signature = graph_compilation_signature(
@@ -541,11 +635,12 @@ impl<D: CudaDType> PtxExecutor<D> {
 
     /// Get the value of a specific node from the executor's cache after execution
     pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<Vec<D::HostType>> {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
         self.values.get(&node_idx).and_then(|cuda_slice| {
             let readback_started = Instant::now();
             let mut storage = vec![D::HostType::default(); cuda_slice.len()];
-            self.device
-                .default_stream()
+            self.stream.clone()
                 .memcpy_dtoh(cuda_slice.as_ref(), &mut storage)
                 .ok()?;
             let plan = self.execution_plan.as_ref()?;
@@ -601,7 +696,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             .as_ref()
             .and_then(|plan| plan.matmul_schedules().get(&node))
             .context("Matmul schedule is unavailable")?;
-        let stream = self.device.default_stream();
+        let stream = self.stream.clone();
         if k == 0 {
             stream
                 .memset_zeros(&mut output)
@@ -695,7 +790,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         }
 
         let function = self.kernel_function(module, kernel_name)?;
-        let stream = self.device.default_stream();
+        let stream = self.stream.clone();
         let mut launcher = stream.launch_builder(&function);
         for input in &input_values {
             launcher.arg(input.as_ref());
@@ -798,7 +893,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                 LaunchConfig::for_num_elems(u32::try_from(len).context("Scalar output too large")?)
             };
             let function = self.kernel_function(module, kernel_name)?;
-            let stream = self.device.default_stream();
+            let stream = self.stream.clone();
             let mut launcher = stream.launch_builder(&function);
             for input in &input_values {
                 launcher.arg(input.as_ref());
@@ -891,7 +986,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             let launch_len = u32::try_from(len)
                 .context("Reduction region output is too large for a CUDA launch")?;
             let function = self.kernel_function(module, kernel_name)?;
-            let stream = self.device.default_stream();
+            let stream = self.stream.clone();
             let mut launcher = stream.launch_builder(&function);
             for input in &input_values {
                 launcher.arg(input.as_ref());
@@ -930,6 +1025,9 @@ impl<D: CudaDType> PtxExecutor<D> {
         graph: &TensorGraph<D::HostType, G>,
         inputs: HashMap<String, Vec<D::HostType>>,
     ) -> Result<Vec<D::HostType>> {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        self.invalidate_replay();
         self.execute_compiled_impl(graph, inputs, true)
     }
 
@@ -975,7 +1073,9 @@ impl<D: CudaDType> PtxExecutor<D> {
             .clone();
         let plan_steps = execution_plan.steps();
         let graph_output = execution_plan.graph_output().context("Graph is empty")?;
-        self.sources.prune();
+        if !self.replay_frame_active {
+            self.sources.prune();
+        }
         let old_values: Vec<_> = self.values.drain().map(|(_, value)| value).collect();
         for value in old_values {
             self.recycle_value(value);
@@ -1076,7 +1176,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                 })
             } else {
                 self.sources
-                    .get(node, &self.device, |len| self.take_buffer(len))?
+                    .get(node, &self.stream, |len| self.take_buffer(len))?
             };
             if let Some(binding) = binding {
                 self.execution_metrics.device_copies += usize::from(binding.uploaded);
@@ -1095,7 +1195,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             }
             let result = match node {
                 TensorGraphNode::Constant { data, .. } => {
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut device_data = self.take_buffer(data.len())?;
                     if !data.is_empty() {
                         self.execution_metrics.device_copies += 1;
@@ -1115,7 +1215,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         "Input '{name}' has {} values but declared shape {shape:?} requires {expected_len}",
                         val.len()
                     );
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut device_data = self.take_buffer(val.len())?;
                     if !val.is_empty() {
                         self.execution_metrics.device_copies += 1;
@@ -1130,7 +1230,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let v = data
                         .lock()
                         .map_err(|e| anyhow!("Failed to lock parameter data: {}", e))?;
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut device_data = self.take_buffer(v.len())?;
                     if !v.is_empty() {
                         self.execution_metrics.device_copies += 1;
@@ -1152,7 +1252,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .context("Missing input value for unary operation")?;
 
                     let len = input.len();
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
                         let f = self.kernel_function(module, kernel_name)?;
@@ -1181,7 +1281,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .context("Missing input value for fused unary operation")?;
 
                     let len = input.len();
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
                         let f = self.kernel_function(module, kernel_name)?;
@@ -1214,7 +1314,7 @@ impl<D: CudaDType> PtxExecutor<D> {
 
                     let len = lhs.len();
                     anyhow::ensure!(rhs.len() == len, "Binary operand length mismatch");
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
                         let f = self.kernel_function(module, kernel_name)?;
@@ -1248,7 +1348,7 @@ impl<D: CudaDType> PtxExecutor<D> {
 
                     let len = lhs.len();
                     anyhow::ensure!(rhs.len() == len, "Gt operand length mismatch");
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
                         let f = self.kernel_function(module, kernel_name)?;
@@ -1273,7 +1373,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                             .kernel_name(*node_idx)
                             .context("Missing segment kernel")?;
                         let function = self.kernel_function(module, kernel_name)?;
-                        let stream = self.device.default_stream();
+                        let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         for input in planned_inputs {
                             launcher.arg(
@@ -1311,7 +1411,7 @@ impl<D: CudaDType> PtxExecutor<D> {
 
                     let len = values.len();
                     anyhow::ensure!(condition.len() == len, "Mask operand length mismatch");
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
                         let f = self.kernel_function(module, kernel_name)?;
@@ -1388,7 +1488,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let launch_len = u32::try_from(output_len)
                             .context("Embedding output is too large for a CUDA launch")?;
                         let function = self.kernel_function(module, kernel_name)?;
-                        let stream = self.device.default_stream();
+                        let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(weight.as_ref());
                         launcher.arg(indices.as_ref());
@@ -1430,7 +1530,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     );
                     self.validate_indices(indices, output_shape[0], "EmbeddingBackward")?;
                     let output_len: usize = output_shape.iter().product();
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
                         stream
@@ -1496,7 +1596,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let launch_len = u32::try_from(row_count)
                             .context("IndexedCrossEntropy output is too large for a CUDA launch")?;
                         let function = self.kernel_function(module, kernel_name)?;
-                        let stream = self.device.default_stream();
+                        let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(logits.as_ref());
                         launcher.arg(targets.as_ref());
@@ -1557,7 +1657,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                             "IndexedCrossEntropyBackward output is too large for a CUDA launch",
                         )?;
                         let function = self.kernel_function(module, kernel_name)?;
-                        let stream = self.device.default_stream();
+                        let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(logits.as_ref());
                         launcher.arg(targets.as_ref());
@@ -1584,7 +1684,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let out_shape = graph.graph[*node_idx].shape();
                     let out_len: usize = out_shape.iter().product();
 
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut out = self.take_buffer(out_len)?;
                     if out_len != 0 {
                         let f = self.kernel_function(module, kernel_name)?;
@@ -1615,7 +1715,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let out_shape = graph.graph[*node_idx].shape();
                     let out_len: usize = out_shape.iter().product();
 
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut out = self.take_buffer(out_len)?;
                     if out_len != 0 {
                         let f = self.kernel_function(module, kernel_name)?;
@@ -1643,7 +1743,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .context("Missing input for permutation")?;
 
                     let len = input.len();
-                    let stream = self.device.default_stream();
+                    let stream = self.stream.clone();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
                         let f = self.kernel_function(module, kernel_name)?;
@@ -1674,8 +1774,8 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
                         self.execution_metrics.device_copies += 1;
-                        self.device
-                            .default_stream()
+                        self.stream
+                            .clone()
                             .memcpy_dtod(input.as_ref(), &mut output)
                             .context("Failed to copy contiguous view")?;
                     }
@@ -1698,7 +1798,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
                         let function = self.kernel_function(module, kernel_name)?;
-                        let stream = self.device.default_stream();
+                        let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher
                             .arg(input.as_ref())
@@ -1732,7 +1832,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
                         let function = self.kernel_function(module, kernel_name)?;
-                        let stream = self.device.default_stream();
+                        let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher
                             .arg(grad_output.as_ref())
@@ -1767,7 +1867,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
                         let function = self.kernel_function(module, kernel_name)?;
-                        let stream = self.device.default_stream();
+                        let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher
                             .arg(input.as_ref())
@@ -1798,7 +1898,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
                         let function = self.kernel_function(module, kernel_name)?;
-                        let stream = self.device.default_stream();
+                        let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(input.as_ref()).arg(&mut output);
                         self.record_kernel_launch();
@@ -1833,7 +1933,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
                         let function = self.kernel_function(module, kernel_name)?;
-                        let stream = self.device.default_stream();
+                        let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher
                             .arg(input.as_ref())
@@ -1897,8 +1997,8 @@ impl<D: CudaDType> PtxExecutor<D> {
         let mut storage_host = vec![D::HostType::default(); out_device.len()];
         if !storage_host.is_empty() {
             self.execution_metrics.device_copies += 1;
-            self.device
-                .default_stream()
+            self.stream
+                .clone()
                 .memcpy_dtoh(out_device.as_ref(), &mut storage_host)
                 .context("Failed to copy output from CUDA device to host")?;
         }
@@ -1950,6 +2050,9 @@ impl<D: CudaDType> PtxExecutor<D> {
         inputs: HashMap<String, Vec<D::HostType>>,
         bindings: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
     ) -> Result<()> {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        self.pending_replay_work = PtxExecutionMetrics::default();
         for (node, value) in &bindings {
             let source = graph
                 .graph
@@ -1981,11 +2084,21 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.fusion_policy,
         );
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
-            self.compile(graph)?;
+            self.compile_impl(graph)?;
+        }
+        if self.replay_enabled
+            && !self.replay_blocked
+            && self.run_replay(graph, &inputs, &bindings)?
+        {
+            return Ok(());
         }
         self.bindings = bindings;
         let result = self.execute_compiled_impl(graph, inputs, false);
         self.bindings.clear();
+        self.execution_metrics
+            .add_work(&std::mem::take(&mut self.pending_replay_work));
+        self.kernel_launches
+            .set(self.execution_metrics.kernel_launches);
         result.map(|_| ())
     }
 
@@ -2310,5 +2423,26 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
         }
 
         result
+    }
+}
+
+fn lock_stream(gate: &Mutex<()>) -> MutexGuard<'_, ()> {
+    match gate.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+impl<D: CudaDType> Drop for PtxExecutor<D> {
+    fn drop(&mut self) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        self.replay = None;
+        self.bindings.clear();
+        self.values.clear();
+        self.sources.clear();
+        self.pool.get_mut().clear();
+        self.functions.get_mut().clear();
+        self.module = None;
     }
 }

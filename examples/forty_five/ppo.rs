@@ -43,6 +43,7 @@ pub struct Settings {
     pub min_learning_rate: f32,
     /// Opt into fixed parallel reduction trees. Storage and matmul stay f32.
     pub tree_reductions: bool,
+    pub cuda_graphs: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -58,6 +59,7 @@ impl Default for Settings {
             scheduler_updates: 1000,
             min_learning_rate: 1e-6,
             tree_reductions: false,
+            cuda_graphs: false,
         }
     }
 }
@@ -320,8 +322,8 @@ impl Trainer {
     pub fn new(settings: &Settings, backend: String) -> Result<Self> {
         settings.validate()?;
         ensure!(
-            !settings.tree_reductions || backend == "cuda",
-            "tree reductions require the CUDA backend"
+            !(settings.tree_reductions || settings.cuda_graphs) || backend == "cuda",
+            "tree reductions and CUDA Graphs require the CUDA backend"
         );
         Ok(Self {
             #[cfg(feature = "cuda")]
@@ -345,6 +347,7 @@ impl Trainer {
         let total_started = Instant::now();
         let mut timing = [0f64; 7];
         let kernel_launches = std::cell::Cell::new(0usize);
+        let graph_launches = std::cell::Cell::new(0usize);
         let materialized_bytes = std::cell::Cell::new(0usize);
         let intermediate_bytes = std::cell::Cell::new(0usize);
         let mut graph_nodes = 0usize;
@@ -355,8 +358,9 @@ impl Trainer {
                 && settings.value_learning_rate == self.initial.value_learning_rate
                 && settings.scheduler_updates == self.initial.scheduler_updates
                 && settings.min_learning_rate == self.initial.min_learning_rate
-                && settings.tree_reductions == self.initial.tree_reductions,
-            "optimizer initial rates/schedule/reduction policy cannot change without starting a fresh worker"
+                && settings.tree_reductions == self.initial.tree_reductions
+                && settings.cuda_graphs == self.initial.cuda_graphs,
+            "optimizer initial rates/schedule/execution policy cannot change without starting a fresh worker"
         );
         #[cfg(feature = "cuda")]
         {
@@ -373,7 +377,12 @@ impl Trainer {
                         )
                     })
                     .collect();
-                self.resident = Some(ResidentAdam::new(
+                let constructor = if settings.cuda_graphs {
+                    ResidentAdam::new_with_graph_replay
+                } else {
+                    ResidentAdam::new
+                };
+                self.resident = Some(constructor(
                     parameters,
                     vec![
                         AdamGroup::new(settings.learning_rate),
@@ -455,6 +464,7 @@ impl Trainer {
             #[cfg(feature = "cuda")]
             if let Runtime::Ptx(executor) = &compiled.executor {
                 let execution = executor.execution_metrics();
+                graph_launches.set(graph_launches.get() + execution.graph_launches);
                 kernel_launches.set(kernel_launches.get() + execution.kernel_launches);
                 materialized_bytes.set(materialized_bytes.get() + execution.materialized_bytes);
                 intermediate_bytes
@@ -552,6 +562,29 @@ impl Trainer {
             .map(|(key, value)| (key.into(), serde_json::json!(value)))
             .collect();
         let mut result = serde_json::json!({"metrics":metrics,"gradient_norm_before_clip":norm,"gradient_scale":scale,"optimizer_steps":self.steps,"compiled_shapes":self.compiled.len()});
+        #[cfg(feature = "cuda")]
+        if settings.cuda_graphs {
+            let states: Vec<_> = self
+                .compiled
+                .values()
+                .filter_map(|compiled| {
+                    if let Runtime::Ptx(executor) = &compiled.executor {
+                        Some(executor.replay_metrics())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            result["cuda_graphs"] = serde_json::json!({
+                "active_shapes":states.iter().filter(|state| state.active).count(),
+                "captures":states.iter().map(|state| state.captures).sum::<usize>(),
+                "warmup_executions":states.iter().map(|state| state.warmup_executions).sum::<usize>(),
+                "graph_launches":graph_launches.get(),
+                "fallbacks":states.iter().map(|state| state.fallbacks).sum::<usize>(),
+                "stable_binding_bytes":states.iter().map(|state| state.stable_binding_bytes).sum::<usize>(),
+                "fallback_reasons":states.iter().filter_map(|state| state.last_fallback.as_deref()).collect::<Vec<_>>()
+            });
+        }
         if self.profile {
             result["profile"] = serde_json::json!({
                 "compile_cache_seconds":timing[0], "input_seconds":timing[1],
@@ -560,6 +593,7 @@ impl Trainer {
                 "clip_adam_finite_check_seconds":timing[6],
                 "total_seconds":total_started.elapsed().as_secs_f64(),
                 "kernel_launches":kernel_launches.get(),"graph_nodes":graph_nodes,
+                "graph_launches":graph_launches.get(),
                 "materialized_bytes":materialized_bytes.get(),
                 "intermediate_materialized_bytes":intermediate_bytes.get()
             });

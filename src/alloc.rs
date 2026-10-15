@@ -198,6 +198,17 @@ where
     }
 
     /// Return a device buffer to the pool for reuse on the same stream.
+    pub(crate) fn take_cached(
+        &mut self,
+        len: usize,
+    ) -> anyhow::Result<cudarc::driver::CudaSlice<D>> {
+        self.inner
+            .take_or_try_with(len, len * std::mem::size_of::<D>(), || {
+                anyhow::bail!("CUDA capture workspace miss for {len} elements")
+            })
+    }
+
+    /// Return a device buffer to the pool for reuse on the same stream.
     pub fn give(&mut self, buf: cudarc::driver::CudaSlice<D>) {
         self.inner.give(buf.len(), buf);
     }

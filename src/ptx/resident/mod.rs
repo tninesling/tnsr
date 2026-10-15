@@ -9,11 +9,11 @@ use crate::tensor::{Parameter, ParameterStorage, Shape};
 use crate::tile::VirtualTensor;
 use anyhow::{Context, Result, ensure};
 pub use config::{AdamGroup, AdamMoments, ResidentStep};
-use cudarc::driver::{CudaContext, CudaSlice, LaunchConfig, PushKernelArg};
+use cudarc::driver::{CudaContext, CudaSlice, CudaStream, LaunchConfig, PushKernelArg};
 use reduction::Reduction;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub(crate) struct DeviceValue<D: CudaDType = F32> {
     pub storage: Arc<CudaSlice<D::HostType>>,
@@ -35,6 +35,10 @@ struct ResidentParameter {
 /// Writers must be serialized; host changes during an update are rejected.
 pub struct ResidentAdam {
     device: Arc<CudaContext>,
+    stream: Arc<CudaStream>,
+    stream_gate: Arc<Mutex<()>>,
+    readback_stream: Arc<CudaStream>,
+    replay: bool,
     parameters: Vec<ResidentParameter>,
     groups: Vec<AdamGroup>,
     gradients: Arc<CudaSlice<f32>>,
@@ -56,6 +60,23 @@ impl ResidentAdam {
     /// Register shared parameters once, with explicit optimizer group indices.
     /// Duplicate references to the same storage/group are deduplicated.
     pub fn new(parameters: Vec<(Parameter<f32>, usize)>, groups: Vec<AdamGroup>) -> Result<Self> {
+        Self::initialize(parameters, groups, false)
+    }
+
+    /// Use a private stream and cache graph-safe repeated model executions.
+    /// Unsupported graphs retain the checked uncaptured path.
+    pub fn new_with_graph_replay(
+        parameters: Vec<(Parameter<f32>, usize)>,
+        groups: Vec<AdamGroup>,
+    ) -> Result<Self> {
+        Self::initialize(parameters, groups, true)
+    }
+
+    fn initialize(
+        parameters: Vec<(Parameter<f32>, usize)>,
+        groups: Vec<AdamGroup>,
+        replay: bool,
+    ) -> Result<Self> {
         ensure!(
             !parameters.is_empty() && !groups.is_empty(),
             "resident training requires parameters/groups"
@@ -64,7 +85,28 @@ impl ResidentAdam {
             group.validate()?;
         }
         let device = CudaContext::new(0).context("initialize resident training CUDA device")?;
-        let stream = device.default_stream();
+        let stream = if replay {
+            device.new_stream()?
+        } else {
+            device.default_stream()
+        };
+        // Published parameter readers can run on another host thread while a
+        // model capture is being recorded. Keep those copies off its stream.
+        let readback_stream = if replay {
+            device.new_stream()?
+        } else {
+            stream.clone()
+        };
+        let stream_gate = Arc::new(Mutex::new(()));
+        if replay {
+            // SAFETY: this context/stream cannot escape the resident API. Every
+            // model/accumulation/optimizer operation uses the same ordered stream;
+            // executor entry points and destruction share a gate with capture.
+            // The only second-stream reads are immutable published weights: the
+            // health readback completes their writes before publication, and the
+            // reader retains their allocation through a blocking D2H copy.
+            unsafe { device.disable_event_tracking() };
+        }
         let mut unique = BTreeMap::new();
         for (parameter, group) in parameters {
             ensure!(
@@ -132,11 +174,15 @@ impl ResidentAdam {
         let gradients = Arc::new(stream.alloc_zeros(padded_len)?);
         let moment = stream.alloc_zeros(padded_len)?;
         let variance = stream.alloc_zeros(padded_len)?;
-        let norm = Reduction::new(device.clone(), padded_len, true)?;
-        let health = Reduction::new(device.clone(), padded_len, false)?;
+        let norm = Reduction::new(stream.clone(), stream_gate.clone(), padded_len, true)?;
+        let health = Reduction::new(stream.clone(), stream_gate.clone(), padded_len, false)?;
         let update_kernels = kernels::Kernels::compile(&device, ir)?;
         Ok(Self {
             device,
+            stream,
+            stream_gate,
+            readback_stream,
+            replay,
             parameters: resident,
             groups,
             gradients,
@@ -163,13 +209,18 @@ impl ResidentAdam {
     /// Select reduction ordering explicitly; parameters, gradients and Adam state
     /// remain f32. Tree ordering can differ from increasing-index accumulation.
     pub fn executor_with_reduction_mode(&self, mode: PtxReductionMode) -> Result<PtxExecutor> {
-        PtxExecutor::with_context(self.device.clone(), mode)
+        PtxExecutor::with_stream(self.stream.clone(), mode, self.stream_gate.clone()).map(
+            |mut executor| {
+                executor.enable_graph_replay(self.replay);
+                executor
+            },
+        )
     }
 
     /// Start a new accumulation interval, importing explicit host mutations once.
     /// Host changes retain Adam moments, matching an in-place host weight edit.
     pub fn begin_step(&mut self) -> Result<()> {
-        let stream = self.device.default_stream();
+        let stream = self.stream.clone();
         for parameter in &mut self.parameters {
             if parameter.storage.revision()? != parameter.revision {
                 let host = parameter.storage.lock()?;
@@ -202,6 +253,10 @@ impl ResidentAdam {
         ensure!(
             Arc::ptr_eq(&executor.context(), &self.device),
             "resident executor context mismatch"
+        );
+        ensure!(
+            Arc::ptr_eq(&executor.execution_stream(), &self.stream),
+            "resident executor stream mismatch"
         );
         let mut bindings = HashMap::new();
         for node in graph.graph.node_indices() {
@@ -255,7 +310,7 @@ impl ResidentAdam {
         }
         self.kernel_launches += self.parameters.len();
         let kernels = &self.accumulate_kernels[&key];
-        let stream = self.device.default_stream();
+        let stream = self.stream.clone();
         let gradients =
             Arc::get_mut(&mut self.gradients).context("resident gradient buffer still borrowed")?;
         for (index, (parameter, value)) in self.parameters.iter().zip(&values).enumerate() {
@@ -300,7 +355,7 @@ impl ResidentAdam {
             .context("Adam timestep overflow")?;
         let exponent =
             i32::try_from(next_step).context("Adam bias-correction timestep exceeds i32")?;
-        let stream = self.device.default_stream();
+        let stream = self.stream.clone();
         let settings = self
             .groups
             .iter()
@@ -366,14 +421,13 @@ impl ResidentAdam {
         );
         self.kernel_launches += self.health.executor.execution_metrics().kernel_launches;
         for (parameter, weight) in self.parameters.iter_mut().zip(weights) {
-            let device = self.device.clone();
+            let stream = self.readback_stream.clone();
             let latest = weight.clone();
             parameter.revision = parameter.storage.publish_device(
                 parameter.revision,
                 Arc::new(move || {
                     let mut host = vec![0.0; latest.len()];
-                    device
-                        .default_stream()
+                    stream
                         .memcpy_dtoh(latest.as_ref(), &mut host)
                         .context("read resident parameter")?;
                     Ok(host)
@@ -414,8 +468,8 @@ impl ResidentAdam {
             "gradient diagnostics require a successful step"
         );
         let mut host = vec![0.0; self.padded_len];
-        self.device
-            .default_stream()
+        self.stream
+            .clone()
             .memcpy_dtoh(self.gradients.as_ref(), &mut host)?;
         Ok(self
             .parameters
@@ -436,7 +490,7 @@ impl ResidentAdam {
     pub fn moments(&self) -> Result<HashMap<usize, AdamMoments>> {
         let mut m = vec![0.0; self.padded_len];
         let mut v = vec![0.0; self.padded_len];
-        let stream = self.device.default_stream();
+        let stream = self.stream.clone();
         stream.memcpy_dtoh(&self.moment, &mut m)?;
         stream.memcpy_dtoh(&self.variance, &mut v)?;
         Ok(self

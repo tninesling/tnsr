@@ -1,3 +1,6 @@
+mod activations;
+pub use activations::{clamp, gelu, maximum, minimum, sigmoid, silu};
+
 use std::collections::HashMap;
 
 use anyhow::Result;

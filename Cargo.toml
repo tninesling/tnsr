@@ -67,3 +67,7 @@ test-log = "0.2.18"
 [[example]]
 name = "matmul_profile"
 required-features = ["cuda"]
+
+[[example]]
+name = "forty_five_worker"
+test = true

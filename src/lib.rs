@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use num_traits::Float;
@@ -154,7 +154,7 @@ enum Value<D> {
     /// Constant data shared with the graph.
     Constant(Arc<Vec<D>>),
     /// Parameter data shared with the graph (and the optimizer).
-    Parameter(Arc<Mutex<Vec<D>>>),
+    Parameter(Arc<crate::tensor::ParameterStorage<D>>),
 }
 
 impl<D> Value<D> {

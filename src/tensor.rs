@@ -3,8 +3,10 @@ use crate::graph::TensorGraphNode;
 use petgraph::graph::NodeIndex;
 use std::collections::HashMap;
 use std::ops::{Add, Div, Mul, Sub};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+mod storage;
+pub use storage::{ParameterGuard, ParameterStorage};
 
 static PARAM_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -149,7 +151,7 @@ impl ReduceOp {
 #[derive(Clone)]
 pub struct Parameter<D: DType> {
     id: usize,
-    data: Arc<Mutex<Vec<D>>>,
+    data: Arc<crate::tensor::ParameterStorage<D>>,
     shape: Shape,
 }
 
@@ -158,14 +160,14 @@ impl<D: DType> Parameter<D> {
         let id = PARAM_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         Self {
             id,
-            data: Arc::new(Mutex::new(data)),
+            data: Arc::new(ParameterStorage::new(data)),
             shape,
         }
     }
     pub fn new_with_id(id: usize, data: Vec<D>, shape: Shape) -> Self {
         Self {
             id,
-            data: Arc::new(Mutex::new(data)),
+            data: Arc::new(ParameterStorage::new(data)),
             shape,
         }
     }
@@ -356,7 +358,7 @@ pub enum ExprKind<D: DType> {
     },
     Parameter {
         id: usize,
-        data: Arc<Mutex<Vec<D>>>,
+        data: Arc<crate::tensor::ParameterStorage<D>>,
     },
     /// Reference to an existing node in a graph (used for gradients)
     NodeRef {
@@ -502,7 +504,7 @@ impl<D: DType> TensorExpr<D> {
             shape,
             kind: ExprKind::Parameter {
                 id,
-                data: Arc::new(Mutex::new(data)),
+                data: Arc::new(ParameterStorage::new(data)),
             },
         }))
     }
@@ -512,7 +514,7 @@ impl<D: DType> TensorExpr<D> {
             shape,
             kind: ExprKind::Parameter {
                 id,
-                data: Arc::new(Mutex::new(data)),
+                data: Arc::new(ParameterStorage::new(data)),
             },
         }))
     }

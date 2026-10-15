@@ -2,3 +2,6 @@ data/
 target/
 mnist_trace.json
 .serena/
+
+__pycache__/
+*.py[cod]

@@ -1,0 +1,681 @@
+{
+  "version": 1,
+  "dtype": "f32-le",
+  "data_file": "weights.f32",
+  "config": {
+    "token_dim": 8,
+    "token_heads": 2,
+    "token_layers": 1,
+    "token_max_tokens": 16,
+    "token_vocab_size": 64,
+    "token_type_vocab_size": 6,
+    "phase_embed_dim": 4,
+    "num_phases": 6,
+    "use_phase_heads": true,
+    "use_card_conditioned_actions": true,
+    "use_separate_critic": false,
+    "use_privileged_critic": false,
+    "use_rope": false,
+    "use_swiglu": true
+  },
+  "tensors": [
+    {
+      "name": "bid_head.bias",
+      "shape": [
+        5
+      ],
+      "offset": 0,
+      "count": 5,
+      "group": "policy"
+    },
+    {
+      "name": "bid_head.weight",
+      "shape": [
+        5,
+        8
+      ],
+      "offset": 5,
+      "count": 40,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_cards.bias",
+      "shape": [
+        8
+      ],
+      "offset": 45,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_cards.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 53,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_count_embedding.weight",
+      "shape": [
+        6,
+        8
+      ],
+      "offset": 117,
+      "count": 48,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.0.bias",
+      "shape": [
+        24
+      ],
+      "offset": 165,
+      "count": 24,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.0.weight",
+      "shape": [
+        24
+      ],
+      "offset": 189,
+      "count": 24,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.1.bias",
+      "shape": [
+        8
+      ],
+      "offset": 213,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.1.weight",
+      "shape": [
+        8,
+        24
+      ],
+      "offset": 221,
+      "count": 192,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.3.bias",
+      "shape": [
+        1
+      ],
+      "offset": 413,
+      "count": 1,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.discard_trunk.3.weight",
+      "shape": [
+        1,
+        8
+      ],
+      "offset": 414,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_bias.bias",
+      "shape": [
+        1
+      ],
+      "offset": 422,
+      "count": 1,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_bias.weight",
+      "shape": [
+        1,
+        8
+      ],
+      "offset": 423,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_keys.bias",
+      "shape": [
+        8
+      ],
+      "offset": 431,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_keys.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 439,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_query.bias",
+      "shape": [
+        8
+      ],
+      "offset": 503,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "card_action_heads.play_query.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 511,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "phase_embedding.weight",
+      "shape": [
+        6,
+        4
+      ],
+      "offset": 575,
+      "count": 24,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.key_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 599,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.key_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 607,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.query_norm.bias",
+      "shape": [
+        12
+      ],
+      "offset": 671,
+      "count": 12,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.query_norm.weight",
+      "shape": [
+        12
+      ],
+      "offset": 683,
+      "count": 12,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.query_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 695,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.query_proj.weight",
+      "shape": [
+        8,
+        12
+      ],
+      "offset": 703,
+      "count": 96,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.value_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 799,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_pool.value_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 807,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.0.bias",
+      "shape": [
+        20
+      ],
+      "offset": 871,
+      "count": 20,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.0.weight",
+      "shape": [
+        20
+      ],
+      "offset": 891,
+      "count": 20,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.1.bias",
+      "shape": [
+        8
+      ],
+      "offset": 911,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.1.weight",
+      "shape": [
+        8,
+        20
+      ],
+      "offset": 919,
+      "count": 160,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.3.bias",
+      "shape": [
+        8
+      ],
+      "offset": 1079,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "policy_trunk.3.weight",
+      "shape": [
+        8
+      ],
+      "offset": 1087,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "suit_head.bias",
+      "shape": [
+        4
+      ],
+      "offset": 1095,
+      "count": 4,
+      "group": "policy"
+    },
+    {
+      "name": "suit_head.weight",
+      "shape": [
+        4,
+        8
+      ],
+      "offset": 1099,
+      "count": 32,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attention.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 1131,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attention.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 1139,
+      "count": 64,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attention.qkv_proj.bias",
+      "shape": [
+        24
+      ],
+      "offset": 1203,
+      "count": 24,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attention.qkv_proj.weight",
+      "shape": [
+        24,
+        8
+      ],
+      "offset": 1227,
+      "count": 192,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attn_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 1419,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.attn_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 1427,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.down_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 1435,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.down_proj.weight",
+      "shape": [
+        8,
+        22
+      ],
+      "offset": 1443,
+      "count": 176,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.gate_proj.bias",
+      "shape": [
+        22
+      ],
+      "offset": 1619,
+      "count": 22,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.gate_proj.weight",
+      "shape": [
+        22,
+        8
+      ],
+      "offset": 1641,
+      "count": 176,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.up_proj.bias",
+      "shape": [
+        22
+      ],
+      "offset": 1817,
+      "count": 22,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.feed_forward.up_proj.weight",
+      "shape": [
+        22,
+        8
+      ],
+      "offset": 1839,
+      "count": 176,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.ffn_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2015,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.encoder.layers.0.ffn_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 2023,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.output_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2031,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.output_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 2039,
+      "count": 8,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.position_embedding.weight",
+      "shape": [
+        16,
+        8
+      ],
+      "offset": 2047,
+      "count": 128,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.token_embedding.weight",
+      "shape": [
+        64,
+        8
+      ],
+      "offset": 2175,
+      "count": 512,
+      "group": "policy"
+    },
+    {
+      "name": "token_encoder.token_type_embedding.weight",
+      "shape": [
+        6,
+        8
+      ],
+      "offset": 2687,
+      "count": 48,
+      "group": "policy"
+    },
+    {
+      "name": "value_pool.pool.key_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2735,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.key_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 2743,
+      "count": 64,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.query_norm.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2807,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.query_norm.weight",
+      "shape": [
+        8
+      ],
+      "offset": 2815,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.query_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2823,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.query_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 2831,
+      "count": 64,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.value_proj.bias",
+      "shape": [
+        8
+      ],
+      "offset": 2895,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.pool.value_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "offset": 2903,
+      "count": 64,
+      "group": "value"
+    },
+    {
+      "name": "value_pool.query",
+      "shape": [
+        8
+      ],
+      "offset": 2967,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.0.bias",
+      "shape": [
+        16
+      ],
+      "offset": 2975,
+      "count": 16,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.0.weight",
+      "shape": [
+        16
+      ],
+      "offset": 2991,
+      "count": 16,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.1.bias",
+      "shape": [
+        8
+      ],
+      "offset": 3007,
+      "count": 8,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.1.weight",
+      "shape": [
+        8,
+        16
+      ],
+      "offset": 3015,
+      "count": 128,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.3.bias",
+      "shape": [
+        4
+      ],
+      "offset": 3143,
+      "count": 4,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.3.weight",
+      "shape": [
+        4,
+        8
+      ],
+      "offset": 3147,
+      "count": 32,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.5.bias",
+      "shape": [
+        1
+      ],
+      "offset": 3179,
+      "count": 1,
+      "group": "value"
+    },
+    {
+      "name": "value_trunk.5.weight",
+      "shape": [
+        1,
+        4
+      ],
+      "offset": 3180,
+      "count": 4,
+      "group": "value"
+    }
+  ]
+}

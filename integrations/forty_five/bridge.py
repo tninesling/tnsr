@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import time
 
 
 class Worker:
     def __init__(self, executable: Path, archive: Path, backend: str):
+        self.timing = {}
         self.process = subprocess.Popen([str(executable.resolve()), str(archive.resolve()), backend],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         text=True, bufsize=1)
@@ -14,11 +16,18 @@ class Worker:
     def request(self, op: str, **fields):
         if self.process.poll() is not None:
             raise RuntimeError(f"tnsr worker exited: {self.process.returncode}")
-        self.process.stdin.write(json.dumps(dict(op=op, **fields), allow_nan=False) + "\n")
+        began = time.monotonic()
+        payload = json.dumps(dict(op=op, **fields), allow_nan=False) + "\n"
+        self.process.stdin.write(payload)
         self.process.stdin.flush()
         line = self.process.stdout.readline()
         if not line:
             raise RuntimeError(f"tnsr worker closed its output (exit {self.process.poll()})")
+        record = self.timing.setdefault(op, dict(requests=0, seconds=0., sent_bytes=0, received_bytes=0))
+        record["requests"] += 1
+        record["seconds"] += time.monotonic() - began
+        record["sent_bytes"] += len(payload.encode())
+        record["received_bytes"] += len(line.encode())
         result = json.loads(line)
         if "error" in result:
             raise RuntimeError(result["error"])

@@ -1,6 +1,8 @@
+mod cycles;
 mod fusion;
 mod fusion_features;
 mod online;
+mod views;
 pub use fusion::{FusionAlternative, FusionAlternativeKind, FusionDecision, PtxFusionPolicy};
 
 use std::collections::{HashMap, HashSet};
@@ -134,35 +136,52 @@ impl PtxExecutionPlan {
         let (matmul_regions, matmul_claimed) = form_matmul_regions(graph, &order, &claimed, true)?;
         claimed.extend(matmul_claimed);
         let regions = form_pointwise_regions(graph, &order, &claimed)?;
-        match Self::build_with_regions(
+        Self::build_refining_regions(
             graph,
             &order,
             regions,
             reduction_regions,
             matmul_regions,
             graph_output,
-        ) {
-            Ok(plan) => Ok(plan),
-            Err(error)
-                if error.downcast_ref::<FusionPlanError>()
-                    == Some(&FusionPlanError::ContractionCycle) =>
-            {
-                // A region containing only its matmul anchor cannot contract
-                // graph edges into a cycle. Keep batch-aware dispatch when the
-                // broader fusion partition must be abandoned.
-                let (standalone_matmuls, _) =
-                    form_matmul_regions(graph, &order, &HashSet::new(), false)?;
-                Self::build_with_regions(
-                    graph,
-                    &order,
-                    Vec::new(),
-                    Vec::new(),
-                    standalone_matmuls,
-                    graph_output,
-                )
+        )
+    }
+
+    fn build_refining_regions<D: crate::tile::TileDType, G>(
+        graph: &TensorGraph<D, G>,
+        order: &[NodeIndex],
+        mut regions: Vec<FusionRegion>,
+        mut reduction_regions: Vec<ReductionRegion>,
+        mut matmul_regions: Vec<MatMulRegion>,
+        graph_output: Option<NodeIndex>,
+    ) -> Result<Self> {
+        for _ in 0..=order.len() {
+            match Self::build_with_regions(
+                graph,
+                order,
+                regions.clone(),
+                reduction_regions.clone(),
+                matmul_regions.clone(),
+                graph_output,
+            ) {
+                Ok(plan) => return Ok(plan),
+                Err(error) => {
+                    let Some(conflicts) = error.downcast_ref::<cycles::CycleMembers>() else {
+                        return Err(error);
+                    };
+                    if !cycles::refine(
+                        graph,
+                        order,
+                        &conflicts.0,
+                        &mut regions,
+                        &mut reduction_regions,
+                        &mut matmul_regions,
+                    )? {
+                        return Err(error);
+                    }
+                }
             }
-            Err(error) => Err(error),
         }
+        anyhow::bail!("fusion cycle repair did not converge")
     }
 
     fn build_with_regions<D: crate::tile::TileDType, G>(
@@ -269,8 +288,15 @@ impl PtxExecutionPlan {
                 quotient.add_edge(quotient_nodes[source], quotient_nodes[target], ());
             }
         }
-        let physical_order =
-            toposort(&quotient, None).map_err(|_| FusionPlanError::ContractionCycle)?;
+        let physical_order = toposort(&quotient, None).map_err(|_| {
+            cycles::cycle_error(
+                &quotient,
+                &units,
+                &regions,
+                &reduction_regions,
+                &matmul_regions,
+            )
+        })?;
 
         let virtual_view_path = virtual_view_paths(
             graph,
@@ -472,15 +498,27 @@ impl PtxExecutionPlan {
                     } else {
                         consumer_regions.len()
                     };
-                    let expensive_reduction_access = graph
-                        .graph
-                        .neighbors_directed(node_index, Direction::Outgoing)
-                        .filter_map(|consumer| node_to_reduction_region.get(&consumer))
-                        .any(|&region_id| {
-                            let region = &reduction_regions[region_id];
-                            region.input_shape[region.axis] > MAX_SERIAL_FULL_EPILOGUE_AXIS
-                                && !view_output.access.is_identity()
-                        });
+                    let mut expensive_reduction_access = false;
+                    if !view_output.access.is_identity() {
+                        for region_id in graph
+                            .graph
+                            .neighbors_directed(node_index, Direction::Outgoing)
+                            .filter_map(|consumer| node_to_reduction_region.get(&consumer))
+                        {
+                            let region = &reduction_regions[*region_id];
+                            if region.input_shape[region.axis] > MAX_SERIAL_FULL_EPILOGUE_AXIS
+                                || views::reduction_lane_stride_worsens(
+                                    &view_output,
+                                    graph[view_output.source].shape(),
+                                    region.axis,
+                                    region.schedule,
+                                )?
+                            {
+                                expensive_reduction_access = true;
+                                break;
+                            }
+                        }
+                    }
                     if action == PtxPlanAction::VirtualView
                         && consumer_count != 0
                         && (expensive_reduction_access
@@ -1203,7 +1241,7 @@ mod tests {
     }
 
     #[test]
-    fn contraction_cycle_fallback_retains_independent_batched_matmuls() {
+    fn contraction_cycle_refinement_retains_safe_batched_epilogues() {
         let input = TensorExpr::constant(vec![0.25; 3 * 2 * 2], vec![3, 2, 2]);
         let weight = || TensorExpr::constant(vec![0.5; 4], vec![2, 2]);
         let hidden = input.matmul(weight()).exp();
@@ -1228,7 +1266,7 @@ mod tests {
         assert!(
             plan.matmul_regions()
                 .iter()
-                .all(|region| region.members.len() == 1 && region.epilogue_operations.is_empty())
+                .any(|region| !region.epilogue_operations.is_empty())
         );
     }
 

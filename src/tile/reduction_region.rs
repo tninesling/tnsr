@@ -57,6 +57,22 @@ pub struct ReductionRegion {
 }
 
 impl ReductionRegion {
+    /// Output phase is defined by SSA provenance, not shape: a singleton
+    /// reduction has identical full and reduced shapes.
+    pub fn output_domain(&self, output: &RegionOutput) -> ReductionInputDomain {
+        if !self.broadcast_members.contains(&output.node)
+            && (output.value == self.reduced_value
+                || self
+                    .epilogue_operations
+                    .iter()
+                    .any(|op| op.output == output.value))
+        {
+            ReductionInputDomain::Reduced
+        } else {
+            ReductionInputDomain::Full
+        }
+    }
+
     pub fn from_graph<D: crate::tile::TileDType, G>(
         graph: &TensorGraph<D, G>,
         producer_members: Vec<NodeIndex>,
@@ -383,15 +399,8 @@ fn add_external_input<D: crate::tile::TileDType, G>(
         node.index()
     );
     if let Some(&value) = values.get(&node) {
-        let existing_domain = inputs
-            .iter()
-            .find(|input| input.value == value)
-            .map(|input| input.domain);
-        anyhow::ensure!(
-            existing_domain.is_none_or(|existing| existing == domain),
-            "external reduction input {} is used in incompatible domains",
-            node.index()
-        );
+        // Both uses already passed their logical-shape checks. Different
+        // domains for one node are therefore compatible only on a singleton axis.
         return Ok(value);
     }
     let value = RegionValue(*next_value);

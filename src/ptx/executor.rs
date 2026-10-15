@@ -23,7 +23,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 12;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 13;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -427,6 +427,16 @@ impl<D: CudaDType> PtxExecutor<D> {
         if self.reduction_mode == PtxReductionMode::Online {
             execution_plan.fuse_online(graph)?;
         }
+        // Candidate repartitioning can change virtual operand bindings. Recompute
+        // copy/layout eligibility with the final plan and the selected precision.
+        execution_plan.schedule_matmuls(
+            self.target.matmul_capabilities(),
+            self.matmul_precision,
+            self.target.matmul_resources,
+            self.matmul_shared_layout,
+            self.matmul_pipeline,
+            self.target.supports_async_copy(),
+        )?;
         let fusion_selection_time = fusion_started.elapsed();
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,

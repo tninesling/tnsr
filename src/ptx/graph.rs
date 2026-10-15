@@ -2145,8 +2145,10 @@ fn lower_serial_reduction_region<'a>(
     for operation in &region.producer_operations {
         emit_region_op(func, operation, &mut values);
     }
-    for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
-        if shape == &region.input_shape && values.contains_key(&output.value) {
+    for (index, output) in region.outputs.iter().enumerate() {
+        if region.output_domain(output) == ReductionInputDomain::Full
+            && values.contains_key(&output.value)
+        {
             let value = values[&output.value].clone();
             store_param_f32_at(
                 func,
@@ -2193,7 +2195,9 @@ fn lower_serial_reduction_region<'a>(
             // zero accumulator because there are no per-element divisions.
             accumulator
         };
-    values.clear();
+    if region.input_shape != region.output_shape {
+        values.clear();
+    }
     values.insert(region.reduced_value, reduced.clone());
     for (index, input) in region.inputs.iter().enumerate() {
         if input.domain == ReductionInputDomain::Reduced {
@@ -2207,8 +2211,8 @@ fn lower_serial_reduction_region<'a>(
         emit_region_op(func, operation, &mut values);
     }
     let reduced_values = values.clone();
-    for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
-        if shape == &region.input_shape {
+    for (index, output) in region.outputs.iter().enumerate() {
+        if region.output_domain(output) == ReductionInputDomain::Full {
             continue;
         }
         let value = values
@@ -2257,9 +2261,8 @@ fn lower_serial_reduction_region<'a>(
         for operation in &region.full_epilogue_operations {
             emit_region_op(func, operation, &mut values);
         }
-        for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate()
-        {
-            if shape == &region.input_shape {
+        for (index, output) in region.outputs.iter().enumerate() {
+            if region.output_domain(output) == ReductionInputDomain::Full {
                 let value = values
                     .get(&output.value)
                     .expect("full reduction epilogue output SSA value is unavailable")
@@ -2393,8 +2396,10 @@ fn lower_cooperative_reduction_region<'a>(
     for operation in &region.producer_operations {
         emit_region_op(func, operation, &mut values);
     }
-    for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
-        if shape == &region.input_shape && values.contains_key(&output.value) {
+    for (index, output) in region.outputs.iter().enumerate() {
+        if region.output_domain(output) == ReductionInputDomain::Full
+            && values.contains_key(&output.value)
+        {
             store_param_f32_at(
                 func,
                 ctx,
@@ -2580,7 +2585,9 @@ fn lower_cooperative_reduction_region<'a>(
         } else {
             reduced_accumulator
         };
-    values.clear();
+    if region.input_shape != region.output_shape {
+        values.clear();
+    }
     values.insert(region.reduced_value, reduced);
     for (index, input) in region.inputs.iter().enumerate() {
         if input.domain == ReductionInputDomain::Reduced {
@@ -2606,8 +2613,8 @@ fn lower_cooperative_reduction_region<'a>(
         condition: not_leader,
         target: skip_store,
     });
-    for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate() {
-        if shape != &region.input_shape {
+    for (index, output) in region.outputs.iter().enumerate() {
+        if region.output_domain(output) == ReductionInputDomain::Reduced {
             let value = values
                 .get(&output.value)
                 .expect("reduction region output SSA value is unavailable")
@@ -2665,9 +2672,8 @@ fn lower_cooperative_reduction_region<'a>(
         for operation in &region.full_epilogue_operations {
             emit_region_op(func, operation, &mut values);
         }
-        for (index, (output, shape)) in region.outputs.iter().zip(&region.output_shapes).enumerate()
-        {
-            if shape == &region.input_shape {
+        for (index, output) in region.outputs.iter().enumerate() {
+            if region.output_domain(output) == ReductionInputDomain::Full {
                 let value = values
                     .get(&output.value)
                     .expect("full reduction epilogue output SSA value is unavailable")

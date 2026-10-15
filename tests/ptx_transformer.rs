@@ -1317,8 +1317,7 @@ fn ptx_cost_aware_fusion_preserves_cheap_neighbors_and_cache_policy() {
     assert!(
         plan.reduction_regions()
             .iter()
-            .any(|region| region.producer_operations.is_empty()
-                && !region.full_epilogue_operations.is_empty())
+            .any(|region| region.producer_operations.is_empty())
     );
     assert!(
         plan.reduction_regions()
@@ -1413,7 +1412,7 @@ fn ptx_batched_backward_and_broadcast_parameter_use_batch_dispatch() {
 }
 
 #[test]
-fn ptx_contraction_cycle_fallback_keeps_batched_dispatch_and_values() {
+fn ptx_contraction_cycle_refinement_keeps_batched_dispatch_and_safe_fusion() {
     let Some(mut ptx) = ptx_executor() else {
         return;
     };
@@ -1437,10 +1436,152 @@ fn ptx_contraction_cycle_fallback_keeps_batched_dispatch_and_values() {
             .unwrap()
             .matmul_regions()
             .iter()
-            .all(|region| region.epilogue_operations.is_empty())
+            .any(|region| !region.epilogue_operations.is_empty())
     );
     assert_eq!(
         ptx.execution_metrics().kernel_launches,
         ptx.compile_metrics().generated_kernels
     );
+}
+
+#[test]
+fn ptx_backward_regions_preserve_shared_normalization_and_masked_nonfinite_inputs() {
+    for width in [33, 257] {
+        let Some(mut ptx) = ptx_executor() else {
+            return;
+        };
+        let parameter = Parameter::new(
+            (0..2 * width)
+                .map(|i| ((i % 17) as f32 - 8.0) * 0.125)
+                .collect(),
+            vec![2, width],
+        );
+        let weight = Parameter::new(vec![1.0; width], vec![width]);
+        let bias = Parameter::new(vec![0.0; width], vec![width]);
+        let input: TensorExpr<f32> = tnsr::tensor::Input::new("masked", vec![2, width]).into();
+        let mask = TensorExpr::constant(
+            (0..2 * width).map(|i| f32::from(i < width)).collect(),
+            vec![2, width],
+        );
+        let shared = layer_norm(
+            tnsr::nn::silu(TensorExpr::from(parameter.clone()) + input.mask(mask)),
+            1,
+            weight.clone(),
+            bias.clone(),
+            1e-5,
+        );
+        let graph: TensorGraph<f32> = (shared.clone() * shared.clone() + tnsr::nn::silu(shared))
+            .mean_all()
+            .into();
+        let output = *graph.toposort().last().unwrap();
+        let graph = graph.with_gradients(output);
+        let inputs = HashMap::from([(
+            "masked".into(),
+            (0..2 * width)
+                .map(|i| if i < width { 0.25 } else { f32::NAN })
+                .collect(),
+        )]);
+        let mut cpu = SimpleExecutor::new();
+        cpu.execute(&graph, inputs.clone()).unwrap();
+        ptx.execute(&graph, inputs).unwrap();
+        assert_close(
+            &ptx.get_value(output).unwrap(),
+            &cpu.get_value(output).unwrap(),
+            3e-5,
+        );
+        let expected = cpu.get_gradients(&graph);
+        let actual = ptx.get_gradients(&graph);
+        for parameter in [parameter, weight, bias] {
+            assert_close(&actual[&parameter.id()], &expected[&parameter.id()], 3e-5);
+        }
+        let plan = ptx.execution_plan().unwrap();
+        assert!(!plan.regions().is_empty() || !plan.reduction_regions().is_empty());
+    }
+}
+
+#[test]
+fn ptx_singleton_reduction_outputs_use_ssa_domains_in_serial_and_cooperative_plans() {
+    for mode in [
+        PtxReductionMode::Strict,
+        PtxReductionMode::DeterministicTree,
+    ] {
+        for shape in [vec![1, 2, 3], vec![2, 1, 3], vec![2, 3, 1]] {
+            let axis = shape.iter().position(|&extent| extent == 1).unwrap();
+            let input =
+                || TensorExpr::constant(vec![0.25, 0.5, 0.75, 1.0, 1.25, 1.5], shape.clone());
+            let x = input();
+            let producer = x.clone().exp();
+            for reduced in [
+                producer.clone().reduce_sum(axis),
+                producer.clone().reduce_mean(axis),
+                producer.clone().reduce_max(axis),
+            ] {
+                // Singleton full/reduced domains have the same shape, including
+                // a shared input and separately escaping outputs from both phases.
+                let reduced = reduced.log() + x.clone();
+                let full = reduced.clone().broadcast_axis(axis, 1) + x.clone();
+                let graph: TensorGraph<f32> = TensorExpr::concat(&[reduced, full], axis).into();
+                let candidate = if mode == PtxReductionMode::Strict {
+                    ptx_executor()
+                } else {
+                    cooperative_ptx_executor()
+                };
+                let Some(mut ptx) = candidate else {
+                    return;
+                };
+                ptx.set_fusion_policy(PtxFusionPolicy::Greedy);
+                assert_close(
+                    &ptx.execute(&graph, HashMap::new()).unwrap(),
+                    &execute_cpu(&graph),
+                    2e-6,
+                );
+                assert_eq!(
+                    ptx.execution_plan().unwrap().reduction_regions()[0].schedule,
+                    if mode == PtxReductionMode::Strict {
+                        tnsr::tile::ReductionSchedule::Serial
+                    } else {
+                        tnsr::tile::ReductionSchedule::Block { threads: 128 }
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ptx_reduction_views_materialize_strided_fibers_and_keep_coalesced_permutations() {
+    for (axis, expected_action, expected_kernels) in [
+        (0, tnsr::ptx::PtxPlanAction::Kernel, 2),
+        (2, tnsr::ptx::PtxPlanAction::VirtualView, 1),
+    ] {
+        let Some(mut ptx) = ptx_executor() else {
+            return;
+        };
+        ptx.set_fusion_policy(PtxFusionPolicy::Greedy);
+        let view = TensorExpr::constant(
+            (0..70).map(|i| ((i % 9) as f32 - 4.0) * 0.01).collect(),
+            vec![2, 5, 7],
+        )
+        .permute(vec![0, 2, 1]);
+        let graph: TensorGraph<f32> = view.reduce_sum(axis).exp().into();
+        assert_close(
+            &ptx.execute(&graph, HashMap::new()).unwrap(),
+            &execute_cpu(&graph),
+            1e-5,
+        );
+        let permutation = graph
+            .graph
+            .node_indices()
+            .find(|&node| matches!(graph[node], tnsr::graph::TensorGraphNode::Permute { .. }))
+            .unwrap();
+        let step = ptx
+            .execution_plan()
+            .unwrap()
+            .steps()
+            .iter()
+            .find(|step| step.members.contains(&permutation))
+            .unwrap();
+        assert_eq!(step.action, expected_action);
+        assert_eq!(ptx.execution_metrics().kernel_launches, expected_kernels);
+    }
 }

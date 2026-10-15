@@ -21,6 +21,9 @@ pub struct FusionFeatures {
     pub shared_bytes_per_block: usize,
     pub threads_per_block: usize,
     pub active_threads: usize,
+    /// Estimated input working set for one serial reduction block, accounting
+    /// for smaller broadcast storage. Zero for other kernel classes.
+    pub serial_working_set_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -106,10 +109,18 @@ impl FusionScorer for AnalyticalFusionScorer {
                 .saturating_mul(self.multiprocessor_count.max(1))
                 .div_ceil(parallelism.max(1))
                 .clamp(1, 64);
+            // Small rows can reuse SM-local cache despite an underfilled grid.
+            // Wide multi-input serial rows cannot: use the SM shared-memory
+            // budget as a conservative cache-capacity proxy for that case.
+            let memory_slowdown = if kernel.serial_working_set_bytes > self.shared_bytes_per_sm {
+                slowdown
+            } else {
+                slowdown.min(4)
+            };
             cost.pressure_ns = cost.pressure_ns.saturating_add(
                 compute
                     .saturating_mul(slowdown - 1)
-                    .saturating_add(traffic.saturating_mul(slowdown.min(4) - 1)),
+                    .saturating_add(traffic.saturating_mul(memory_slowdown - 1)),
             );
         }
         cost

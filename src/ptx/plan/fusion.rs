@@ -306,13 +306,34 @@ impl PtxExecutionPlan {
         reductions: Vec<ReductionRegion>,
         matmuls: Vec<MatMulRegion>,
     ) -> Result<Option<Self>> {
-        let claimed = reductions
+        let proposed: HashSet<_> = reductions
             .iter()
             .flat_map(|region| &region.members)
             .chain(matmuls.iter().flat_map(|region| &region.members))
             .copied()
             .collect();
-        let regions = form_pointwise_regions(graph, order, &claimed)?;
+        let freed: HashSet<_> = self
+            .reduction_regions
+            .iter()
+            .flat_map(|region| &region.members)
+            .chain(
+                self.matmul_regions
+                    .iter()
+                    .flat_map(|region| &region.members),
+            )
+            .filter(|node| !proposed.contains(node))
+            .copied()
+            .collect();
+        // Keep already-legal pointwise partitions. Only materialized members
+        // participate in new groups; regrouping unrelated backward components
+        // reintroduces cycles and makes each local cost query a global search.
+        let claimed: HashSet<_> = order
+            .iter()
+            .filter(|node| !freed.contains(node))
+            .copied()
+            .collect();
+        let mut regions = self.regions.clone();
+        regions.extend(form_pointwise_regions(graph, order, &claimed)?);
         match Self::build_with_regions(
             graph,
             order,

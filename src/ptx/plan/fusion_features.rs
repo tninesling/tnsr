@@ -94,6 +94,20 @@ impl PtxExecutionPlan {
                         };
                         features.threads_per_block = if threads == 1 { 256 } else { threads };
                         features.active_threads = reduced.saturating_mul(threads);
+                        if threads == 1 {
+                            let row_elements = region.input_shape[region.axis]
+                                .saturating_mul(features.threads_per_block);
+                            features.serial_working_set_bytes = region
+                                .inputs
+                                .iter()
+                                .filter(|input| input.domain == ReductionInputDomain::Full)
+                                .map(|input| {
+                                    count(&input.source_shape)
+                                        .min(row_elements)
+                                        .saturating_mul(bytes)
+                                })
+                                .fold(0usize, usize::saturating_add);
+                        }
                         features.estimated_registers_per_thread += 16;
                         if threads > 32 {
                             features.shared_bytes_per_block = threads.saturating_mul(4);

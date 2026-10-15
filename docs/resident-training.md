@@ -39,7 +39,11 @@ first layer passes 182 CPU / 349 all-feature CUDA-required tests and clippy.
 `ptx::resident::ResidentAdam` registers nonempty f32 parameters with explicit
 `AdamGroup` indices. Shared references to the same storage/group are deduplicated;
 conflicting IDs/groups are rejected. `executor()` creates compatible model
-executors on the owner's context. Each interval calls `begin_step()`, then
+executors with strict-order reductions on the owner's context.
+`executor_with_reduction_mode(PtxReductionMode::DeterministicTree)` explicitly
+permits fixed warp/block f32 reduction trees, including standalone reductions.
+This changes accumulation order, while keeping storage and Adam state f32.
+Each interval calls `begin_step()`, then
 `accumulate()` for each weighted-loss microbatch, then `step(max_grad_norm)`.
 The loss graph supplies transition weighting; accumulation adds each logical
 gradient exactly once through its general virtual index map on CUDA.

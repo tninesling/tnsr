@@ -91,27 +91,34 @@ def run(args):
                   batch_sha256=hashlib.sha256(json.dumps(native,sort_keys=True).encode()).hexdigest(),
                   transitions=args.transitions, microbatch=args.microbatch, warmups=args.warmups,
                   repeats=args.repeats, anchor_kl_coef=args.anchor_kl_coef,
+                  native_reduction_mode="deterministic_tree_f32" if args.tree_reductions else "strict_f32",
                   external_workloads="left running; monitor GPU samples for contention",
                   cases={})
     (args.output / "batch.json").write_text(json.dumps(native))
     settings = dict(microbatch=args.microbatch, anchor_kl_coef=args.anchor_kl_coef,
                     scheduler_updates=1000,learning_rate=5e-5,value_learning_rate=2e-4,entropy_coef=.005)
+    baseline_settings = settings.copy()
+    if args.tree_reductions:
+        settings["tree_reductions"] = True
     if args.anchor_kl_coef:
         native["anchor"] = anchor_outputs(model, native)
     native_request = dict(op="train", batch=native, settings=settings)
     (args.output / "requests.jsonl").write_text((json.dumps(native_request)+"\n") * args.native_profile_steps)
+    (args.output / "baseline-requests.jsonl").write_text(
+        (json.dumps(dict(op="train", batch=native, settings=baseline_settings))+"\n") * args.native_profile_steps)
     worker = Worker(args.worker, args.archive, "cuda")
     baseline_worker = Worker(args.baseline_worker, args.archive, "cuda") if args.baseline_worker else None
-    def native_step(target=worker):
+    def native_step(target=worker, options=settings):
         if args.anchor_kl_coef:
             native["anchor"] = anchor_outputs(model, native)
-        return target.request("train", batch=native, settings=settings)
+        return target.request("train", batch=native, settings=options)
     cases = {}
     if baseline_worker:
-        cases["tnsr_baseline_strict_f32"] = lambda: native_step(baseline_worker)
+        cases["tnsr_baseline_strict_f32"] = lambda: native_step(baseline_worker, baseline_settings)
         report["cases"]["tnsr_baseline_strict_f32"] = dict(samples=[])
         report["baseline_worker_sha256"] = hashlib.sha256(args.baseline_worker.read_bytes()).hexdigest()
-    cases["tnsr_strict_f32"] = native_step
+    native_label = "tnsr_tree_f32" if args.tree_reductions else "tnsr_strict_f32"
+    cases[native_label] = native_step
     report["worker_sha256"] = hashlib.sha256(args.worker.read_bytes()).hexdigest()
     modes = [("pytorch_eager_strict_f32",False,False),("pytorch_eager_bf16",True,False)]
     if args.compile:
@@ -131,7 +138,7 @@ def run(args):
                            transitions_per_microbatch=args.microbatch)
         cases[label] = step
         report["cases"][label] = dict(updater_sha256=digest,samples=[],fused_adam=args.fused_adam)
-    report["cases"]["tnsr_strict_f32"] = dict(samples=[])
+    report["cases"][native_label] = dict(samples=[])
     try:
         # Interleave modes to reduce drift from the pre-existing GPU workload.
         for iteration in range(args.warmups + args.repeats):
@@ -190,6 +197,7 @@ def main():
     parser.add_argument("--fused-adam",action="store_true",default=None)
     parser.add_argument("--profile-torch",action="store_true")
     parser.add_argument("--compile",action="store_true")
+    parser.add_argument("--tree-reductions",action="store_true",help="opt native training into fixed f32 reduction trees")
     parser.add_argument("--anchor-kl-coef",type=float,default=0.)
     args=parser.parse_args()
     if min(args.transitions,args.microbatch,args.repeats,args.native_profile_steps)<1 or args.warmups<0:

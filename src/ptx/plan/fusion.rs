@@ -1,4 +1,5 @@
 use std::fmt::{self, Display, Write as _};
+use std::sync::Arc;
 
 use super::*;
 use crate::tile::{DType, FusionCost, FusionFeatures, FusionScorer, TileDType};
@@ -41,7 +42,8 @@ impl Display for FusionAlternativeKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FusionAlternative {
     pub kind: FusionAlternativeKind,
-    pub features: Vec<FusionFeatures>,
+    /// Complete ordered kernel features, shared across alternatives/decisions.
+    pub features: Vec<Arc<FusionFeatures>>,
     pub cost: FusionCost,
     pub selected: bool,
 }
@@ -118,6 +120,10 @@ impl PtxExecutionPlan {
         }
         let order = graph.toposort();
         let mut decisions = Vec::new();
+        // A large backward plan has thousands of mostly unchanged kernels in
+        // hundreds of alternatives. Retain every feature without duplicating
+        // its shape/allocation for every local decision.
+        let mut feature_pool = HashMap::new();
         // Anchors survive partitioning, so region indices can change safely.
         let anchors: Vec<_> = self
             .reduction_regions
@@ -216,7 +222,7 @@ impl PtxExecutionPlan {
                     candidates.push((kind, plan));
                 }
             }
-            decisions.push(self.choose(graph, scorer, anchor, candidates));
+            decisions.push(self.choose(graph, scorer, anchor, candidates, &mut feature_pool));
         }
         let anchors: Vec<_> = self
             .matmul_regions
@@ -246,7 +252,7 @@ impl PtxExecutionPlan {
                     candidates.push((FusionAlternativeKind::SplitMatMulEpilogue, plan));
                 }
             }
-            decisions.push(self.choose(graph, scorer, anchor, candidates));
+            decisions.push(self.choose(graph, scorer, anchor, candidates, &mut feature_pool));
         }
         // Same-shape pointwise SSA shares producers already. Compare one balanced
         // cut to relieve live-value pressure without enumerating every partition.
@@ -293,7 +299,7 @@ impl PtxExecutionPlan {
                 }
                 Err(error) => return Err(error),
             };
-            decisions.push(self.choose(graph, scorer, members[0], candidates));
+            decisions.push(self.choose(graph, scorer, members[0], candidates, &mut feature_pool));
         }
         self.fusion_decisions = decisions;
         Ok(())
@@ -362,12 +368,13 @@ impl PtxExecutionPlan {
         scorer: &dyn FusionScorer,
         node: NodeIndex,
         candidates: Vec<(FusionAlternativeKind, Self)>,
+        feature_pool: &mut HashMap<FusionFeatures, Arc<FusionFeatures>>,
     ) -> FusionDecision {
         let features = self.fusion_features(graph);
         let cost = scorer.score(&features);
         let mut alternatives = vec![FusionAlternative {
             kind: FusionAlternativeKind::KeepFusion,
-            features,
+            features: share_features(features, feature_pool),
             cost,
             selected: false,
         }];
@@ -384,7 +391,7 @@ impl PtxExecutionPlan {
             }
             alternatives.push(FusionAlternative {
                 kind,
-                features,
+                features: share_features(features, feature_pool),
                 cost,
                 selected: false,
             });
@@ -395,6 +402,23 @@ impl PtxExecutionPlan {
         }
         FusionDecision { node, alternatives }
     }
+}
+
+fn share_features(
+    features: Vec<FusionFeatures>,
+    pool: &mut HashMap<FusionFeatures, Arc<FusionFeatures>>,
+) -> Vec<Arc<FusionFeatures>> {
+    features
+        .into_iter()
+        .map(|feature| {
+            if let Some(shared) = pool.get(&feature) {
+                return shared.clone();
+            }
+            let shared = Arc::new(feature.clone());
+            pool.insert(feature, shared.clone());
+            shared
+        })
+        .collect()
 }
 
 pub(super) fn outputs<D: TileDType, G>(
@@ -491,6 +515,47 @@ mod tests {
             assert!(!plan.reduction_regions()[0].producer_operations.is_empty());
             assert!(plan.fusion_decisions()[0].alternatives[0].selected);
         }
+    }
+
+    #[test]
+    fn shared_diagnostics_retain_complete_cost_inputs() {
+        let normalize = |name| {
+            let input = TensorExpr::<f32>::input(name, vec![1024, 32]).relu();
+            input.clone() / input.reduce_sum(1).broadcast(vec![1024, 32])
+        };
+        let graph: TensorGraph<f32> = [
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p",
+        ]
+        .into_iter()
+        .map(normalize)
+        .reduce(|left, right| left + right)
+        .unwrap()
+        .into();
+        let mut plan = PtxExecutionPlan::build(&graph).unwrap();
+        let scorer = AnalyticalFusionScorer {
+            multiprocessor_count: 76,
+            ..Default::default()
+        };
+        plan.select_fusion(&graph, &scorer).unwrap();
+        let mut pointers = HashSet::new();
+        let mut total = 0;
+        for alternative in plan.fusion_decisions().iter().flat_map(|d| &d.alternatives) {
+            let restored: Vec<_> = alternative
+                .features
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect();
+            assert_eq!(scorer.score(&restored), alternative.cost);
+            for feature in &alternative.features {
+                pointers.insert(Arc::as_ptr(feature));
+                total += 1;
+            }
+        }
+        assert!(
+            total > pointers.len() * 2,
+            "common kernels should share diagnostic storage: {total} entries, {} allocations",
+            pointers.len()
+        );
     }
 
     #[test]

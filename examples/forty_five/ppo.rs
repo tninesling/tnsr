@@ -345,6 +345,8 @@ impl Trainer {
         let total_started = Instant::now();
         let mut timing = [0f64; 7];
         let kernel_launches = std::cell::Cell::new(0usize);
+        let materialized_bytes = std::cell::Cell::new(0usize);
+        let intermediate_bytes = std::cell::Cell::new(0usize);
         let mut graph_nodes = 0usize;
         settings.validate()?;
         batch.validate(model, settings)?;
@@ -452,8 +454,11 @@ impl Trainer {
             timing[2] += started.elapsed().as_secs_f64();
             #[cfg(feature = "cuda")]
             if let Runtime::Ptx(executor) = &compiled.executor {
-                kernel_launches
-                    .set(kernel_launches.get() + executor.execution_metrics().kernel_launches);
+                let execution = executor.execution_metrics();
+                kernel_launches.set(kernel_launches.get() + execution.kernel_launches);
+                materialized_bytes.set(materialized_bytes.get() + execution.materialized_bytes);
+                intermediate_bytes
+                    .set(intermediate_bytes.get() + execution.intermediate_materialized_bytes);
             }
             graph_nodes = compiled.graph.graph.node_count();
             let started = Instant::now();
@@ -554,7 +559,9 @@ impl Trainer {
                 "gradient_extraction_seconds":timing[4], "accumulate_seconds":timing[5],
                 "clip_adam_finite_check_seconds":timing[6],
                 "total_seconds":total_started.elapsed().as_secs_f64(),
-                "kernel_launches":kernel_launches.get(),"graph_nodes":graph_nodes
+                "kernel_launches":kernel_launches.get(),"graph_nodes":graph_nodes,
+                "materialized_bytes":materialized_bytes.get(),
+                "intermediate_materialized_bytes":intermediate_bytes.get()
             });
         }
         if return_gradients {

@@ -102,6 +102,7 @@ pub struct PtxPlanStep {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PtxExecutionPlan {
     steps: Vec<PtxPlanStep>,
+    value_locations: HashMap<NodeIndex, (usize, usize)>,
     regions: Vec<FusionRegion>,
     reduction_regions: Vec<ReductionRegion>,
     matmul_regions: Vec<MatMulRegion>,
@@ -576,8 +577,9 @@ impl PtxExecutionPlan {
                 );
             }
         }
-        Ok(Self {
+        let mut plan = Self {
             steps,
+            value_locations: HashMap::new(),
             regions,
             reduction_regions,
             matmul_regions,
@@ -585,7 +587,9 @@ impl PtxExecutionPlan {
             online_regions: Vec::new(),
             graph_output,
             fusion_decisions: Vec::new(),
-        })
+        };
+        plan.index_values();
+        Ok(plan)
     }
 
     pub fn steps(&self) -> &[PtxPlanStep] {
@@ -660,21 +664,27 @@ impl PtxExecutionPlan {
     }
 
     pub fn virtual_value(&self, node: NodeIndex) -> Option<&VirtualTensor> {
-        self.steps.iter().find_map(|step| {
-            step.outputs
-                .iter()
-                .position(|&output| output == node)
-                .map(|position| &step.virtual_outputs[position])
-        })
+        let &(step, output) = self.value_locations.get(&node)?;
+        self.steps[step].virtual_outputs.get(output)
     }
 
     pub fn value_shape(&self, node: NodeIndex) -> Option<&Shape> {
-        self.steps.iter().find_map(|step| {
-            step.outputs
-                .iter()
-                .position(|&output| output == node)
-                .map(|position| &step.output_shapes[position])
-        })
+        let &(step, output) = self.value_locations.get(&node)?;
+        self.steps[step].output_shapes.get(output)
+    }
+
+    fn index_values(&mut self) {
+        self.value_locations = self
+            .steps
+            .iter()
+            .enumerate()
+            .flat_map(|(step, plan)| {
+                plan.outputs
+                    .iter()
+                    .enumerate()
+                    .map(move |(output, &node)| (node, (step, output)))
+            })
+            .collect();
     }
 }
 

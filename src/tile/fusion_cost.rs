@@ -5,7 +5,7 @@ use super::DType;
 
 /// Compiler-visible features for one candidate kernel. Counts are estimates,
 /// not measurements of physical register allocation or cache behavior.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct FusionFeatures {
     pub storage_dtype: Option<DType>,
     pub logical_shape: Vec<usize>,

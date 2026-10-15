@@ -8,7 +8,9 @@ use crate::alloc::{AllocStats, CudaBufferPool};
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
 use crate::tile::{AnalyticalFusionScorer, MatMulPipeline, MatMulSharedLayout, TileGraph};
 use anyhow::{Context as _, Result};
-use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
+use cudarc::driver::{
+    CudaContext, CudaFunction, CudaModule, CudaSlice, LaunchConfig, PushKernelArg,
+};
 use cudarc::nvrtc::Ptx;
 use num_traits::ToPrimitive;
 use petgraph::visit::EdgeRef;
@@ -53,12 +55,13 @@ pub struct PtxExecutor<D: CudaDType = F32> {
     bindings: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
     sources: super::sources::SourceCache<D>,
     module: Option<Arc<CudaModule>>,
+    functions: RefCell<HashMap<String, Arc<CudaFunction>>>,
     values: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
     pool: RefCell<CudaBufferPool<D::HostType>>,
     stats: AllocStats,
     /// Stores the PtxGraph to access kernel names during execution
     ptx_graph: Option<Box<PtxGraph>>,
-    execution_plan: Option<Box<PtxExecutionPlan>>,
+    execution_plan: Option<Arc<PtxExecutionPlan>>,
     compilation_signature: Option<Vec<u8>>,
     compilation_count: usize,
     compile_metrics: PtxCompileMetrics,
@@ -130,6 +133,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             bindings: HashMap::new(),
             sources: super::sources::SourceCache::default(),
             module: None,
+            functions: RefCell::new(HashMap::new()),
             values: HashMap::new(),
             pool: RefCell::new(CudaBufferPool::default()),
             stats: AllocStats::default(),
@@ -353,6 +357,16 @@ impl<D: CudaDType> PtxExecutor<D> {
         self.kernel_launches.set(self.kernel_launches.get() + 1);
     }
 
+    fn kernel_function(&self, module: &Arc<CudaModule>, name: &str) -> Result<Arc<CudaFunction>> {
+        let mut functions = self.functions.borrow_mut();
+        if let Some(function) = functions.get(name) {
+            return Ok(function.clone());
+        }
+        let function = Arc::new(module.load_function(name)?);
+        functions.insert(name.to_owned(), function.clone());
+        Ok(function)
+    }
+
     fn recycle_value(&self, value: Arc<CudaSlice<D::HostType>>) -> usize {
         let bytes = value.len() * std::mem::size_of::<D::HostType>();
         if let Ok(value) = Arc::try_unwrap(value) {
@@ -508,8 +522,9 @@ impl<D: CudaDType> PtxExecutor<D> {
             .load_module(Ptx::from_src(&ptx_src))
             .context("Failed to load PTX module with cudarc")?;
         self.module = Some(cuda_module);
+        self.functions.get_mut().clear();
         self.ptx_graph = Some(Box::new(ptx_graph));
-        self.execution_plan = Some(Box::new(execution_plan));
+        self.execution_plan = Some(Arc::new(execution_plan));
         self.compilation_signature = Some(signature);
         self.compilation_count += 1;
         self.compile_metrics = PtxCompileMetrics {
@@ -594,7 +609,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             return Ok(output);
         }
         let module = self.module.as_ref().context("PTX module is not compiled")?;
-        let function = module.load_function(kernel_name)?;
+        let function = self.kernel_function(module, kernel_name)?;
         let config = LaunchConfig {
             grid_dim: (
                 u32::try_from(n.div_ceil(schedule.block_tile.n))
@@ -679,7 +694,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             outputs.push(self.take_buffer(output_len)?);
         }
 
-        let function = module.load_function(kernel_name)?;
+        let function = self.kernel_function(module, kernel_name)?;
         let stream = self.device.default_stream();
         let mut launcher = stream.launch_builder(&function);
         for input in &input_values {
@@ -782,7 +797,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             } else {
                 LaunchConfig::for_num_elems(u32::try_from(len).context("Scalar output too large")?)
             };
-            let function = module.load_function(kernel_name)?;
+            let function = self.kernel_function(module, kernel_name)?;
             let stream = self.device.default_stream();
             let mut launcher = stream.launch_builder(&function);
             for input in &input_values {
@@ -875,7 +890,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         if len != 0 {
             let launch_len = u32::try_from(len)
                 .context("Reduction region output is too large for a CUDA launch")?;
-            let function = module.load_function(kernel_name)?;
+            let function = self.kernel_function(module, kernel_name)?;
             let stream = self.device.default_stream();
             let mut launcher = stream.launch_builder(&function);
             for input in &input_values {
@@ -956,8 +971,9 @@ impl<D: CudaDType> PtxExecutor<D> {
         let execution_plan = self
             .execution_plan
             .as_ref()
-            .context("No PTX execution plan available. Call compile_owned() first.")?;
-        let plan_steps = execution_plan.steps().to_vec();
+            .context("No PTX execution plan available. Call compile_owned() first.")?
+            .clone();
+        let plan_steps = execution_plan.steps();
         let graph_output = execution_plan.graph_output().context("Graph is empty")?;
         self.sources.prune();
         let old_values: Vec<_> = self.values.drain().map(|(_, value)| value).collect();
@@ -966,7 +982,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         }
         let mut live_bytes = 0usize;
 
-        for plan_step in &plan_steps {
+        for plan_step in plan_steps {
             let node_idx = &plan_step.node;
             let planned_inputs = &plan_step.inputs;
             let node = &graph[*node_idx];
@@ -1139,7 +1155,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
-                        let f = module.load_function(kernel_name)?;
+                        let f = self.kernel_function(module, kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input.as_ref());
@@ -1168,7 +1184,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
-                        let f = module.load_function(kernel_name)?;
+                        let f = self.kernel_function(module, kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input.as_ref());
@@ -1201,7 +1217,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
-                        let f = module.load_function(kernel_name)?;
+                        let f = self.kernel_function(module, kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(lhs.as_ref());
@@ -1235,7 +1251,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
-                        let f = module.load_function(kernel_name)?;
+                        let f = self.kernel_function(module, kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(lhs.as_ref());
@@ -1256,7 +1272,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let kernel_name = ptx_graph
                             .kernel_name(*node_idx)
                             .context("Missing segment kernel")?;
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         for input in planned_inputs {
@@ -1298,7 +1314,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
-                        let f = module.load_function(kernel_name)?;
+                        let f = self.kernel_function(module, kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(values.as_ref());
@@ -1371,7 +1387,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     if output_len != 0 {
                         let launch_len = u32::try_from(output_len)
                             .context("Embedding output is too large for a CUDA launch")?;
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(weight.as_ref());
@@ -1432,7 +1448,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let launch_len = u32::try_from(launch_elements).context(
                             "EmbeddingBackward grad_output is too large for a CUDA launch",
                         )?;
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(indices.as_ref());
                         launcher.arg(grad_output.as_ref());
@@ -1479,7 +1495,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     if row_count != 0 {
                         let launch_len = u32::try_from(row_count)
                             .context("IndexedCrossEntropy output is too large for a CUDA launch")?;
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(logits.as_ref());
@@ -1540,7 +1556,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let launch_len = u32::try_from(output_len).context(
                             "IndexedCrossEntropyBackward output is too large for a CUDA launch",
                         )?;
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(logits.as_ref());
@@ -1571,7 +1587,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut out = self.take_buffer(out_len)?;
                     if out_len != 0 {
-                        let f = module.load_function(kernel_name)?;
+                        let f = self.kernel_function(module, kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(out_len as u32);
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input.as_ref());
@@ -1602,7 +1618,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut out = self.take_buffer(out_len)?;
                     if out_len != 0 {
-                        let f = module.load_function(kernel_name)?;
+                        let f = self.kernel_function(module, kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(out_len as u32);
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input.as_ref());
@@ -1630,7 +1646,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let stream = self.device.default_stream();
                     let mut out = self.take_buffer(len)?;
                     if len != 0 {
-                        let f = module.load_function(kernel_name)?;
+                        let f = self.kernel_function(module, kernel_name)?;
                         let cfg = LaunchConfig::for_num_elems(len as u32);
                         let mut launcher = stream.launch_builder(&f);
                         launcher.arg(input.as_ref());
@@ -1681,7 +1697,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let output_len: usize = node.shape().iter().product();
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher
@@ -1715,7 +1731,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let output_len: usize = node.shape().iter().product();
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher
@@ -1750,7 +1766,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let output_len: usize = node.shape().iter().product();
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher
@@ -1781,7 +1797,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let output_len: usize = node.shape().iter().product();
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(input.as_ref()).arg(&mut output);
@@ -1816,7 +1832,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                     let output_len: usize = node.shape().iter().product();
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
-                        let function = module.load_function(kernel_name)?;
+                        let function = self.kernel_function(module, kernel_name)?;
                         let stream = self.device.default_stream();
                         let mut launcher = stream.launch_builder(&function);
                         launcher

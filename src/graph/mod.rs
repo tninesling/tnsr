@@ -56,6 +56,7 @@ use petgraph::visit::EdgeRef;
 use crate::tensor::{BinaryOp, DType, ReduceOp, TensorExpr, UnaryOp};
 
 pub mod fusion;
+mod gradient_pruning;
 pub mod liveness;
 pub mod rewrite;
 
@@ -374,6 +375,7 @@ where
 
     /// Create a new graph with gradient computation nodes for automatic differentiation.
     pub fn with_gradients(mut self, loss_node: NodeIndex) -> TensorGraph<D, WithGrad> {
+        let forward_nodes = self.graph.node_count();
         let mut param_to_grad: HashMap<usize, NodeIndex> = HashMap::new();
         let mut gradient_nodes: HashSet<NodeIndex> = HashSet::new();
         let mut node_to_grad: HashMap<NodeIndex, NodeIndex> = HashMap::new();
@@ -1196,6 +1198,13 @@ where
                 }
             }
         }
+
+        self.graph = gradient_pruning::retain_parameter_gradients(
+            self.graph,
+            forward_nodes,
+            &mut param_to_grad,
+            &mut gradient_nodes,
+        );
 
         // Liveness pins sink nodes. A gradient shared with another backward
         // branch is not a sink, so give that parameter a dedicated sink view.

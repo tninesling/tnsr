@@ -73,6 +73,21 @@ def gpu_status():
         "--format=csv,noheader,nounits"], text=True).strip()
 
 
+def process_gpu_memory(pid):
+    """Whole worker process MiB, sampled outside the timed interval."""
+    try:
+        rows = subprocess.check_output([
+            "nvidia-smi", "--query-compute-apps=pid,used_gpu_memory",
+            "--format=csv,noheader,nounits"], text=True).splitlines()
+        for row in rows:
+            process, memory = row.split(",", 1)
+            if process.strip() == str(pid):
+                return int(memory.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        pass
+    return None
+
+
 def run(args):
     import torch
     torch.set_num_threads(2)
@@ -92,14 +107,21 @@ def run(args):
                   transitions=args.transitions, microbatch=args.microbatch, warmups=args.warmups,
                   repeats=args.repeats, anchor_kl_coef=args.anchor_kl_coef,
                   native_reduction_mode="deterministic_tree_f32" if args.tree_reductions else "strict_f32",
+                  native_graph_replay=args.cuda_graphs,
+                  baseline_tree_reductions=args.baseline_tree_reductions,
+                  native_memory_accounting="whole worker process MiB, including modules/workspace/graph; sampled outside timing",
                   external_workloads="left running; monitor GPU samples for contention",
                   cases={})
     (args.output / "batch.json").write_text(json.dumps(native))
     settings = dict(microbatch=args.microbatch, anchor_kl_coef=args.anchor_kl_coef,
                     scheduler_updates=1000,learning_rate=5e-5,value_learning_rate=2e-4,entropy_coef=.005)
     baseline_settings = settings.copy()
+    if args.baseline_tree_reductions:
+        baseline_settings["tree_reductions"] = True
     if args.tree_reductions:
         settings["tree_reductions"] = True
+    if args.cuda_graphs:
+        settings["cuda_graphs"] = True
     if args.anchor_kl_coef:
         native["anchor"] = anchor_outputs(model, native)
     native_request = dict(op="train", batch=native, settings=settings)
@@ -113,12 +135,18 @@ def run(args):
             native["anchor"] = anchor_outputs(model, native)
         return target.request("train", batch=native, settings=options)
     cases = {}
+    baseline_label = "tnsr_baseline_tree_f32" if args.baseline_tree_reductions else "tnsr_baseline_strict_f32"
     if baseline_worker:
-        cases["tnsr_baseline_strict_f32"] = lambda: native_step(baseline_worker, baseline_settings)
-        report["cases"]["tnsr_baseline_strict_f32"] = dict(samples=[])
+        cases[baseline_label] = lambda: native_step(baseline_worker, baseline_settings)
+        report["cases"][baseline_label] = dict(samples=[])
         report["baseline_worker_sha256"] = hashlib.sha256(args.baseline_worker.read_bytes()).hexdigest()
     native_label = "tnsr_tree_f32" if args.tree_reductions else "tnsr_strict_f32"
+    if args.cuda_graphs:
+        native_label = native_label.replace("tnsr_", "tnsr_graph_")
     cases[native_label] = native_step
+    native_pids = {native_label: worker.process.pid}
+    if baseline_worker:
+        native_pids[baseline_label] = baseline_worker.process.pid
     report["worker_sha256"] = hashlib.sha256(args.worker.read_bytes()).hexdigest()
     modes = [("pytorch_eager_strict_f32",False,False),("pytorch_eager_bf16",True,False)]
     if args.compile:
@@ -152,7 +180,15 @@ def run(args):
                 metrics = result.get("metrics", result)
                 if not all(math.isfinite(float(value)) for value in metrics.values()):
                     raise ValueError(f"nonfinite metrics in {label}")
+                if label == native_label and args.cuda_graphs:
+                    state = result.get("cuda_graphs", {})
+                    if not state.get("active_shapes") or state.get("fallbacks"):
+                        raise RuntimeError(f"requested graph benchmark fell back: {state}")
                 sample = dict(seconds=seconds,gpu_status=gpu_status())
+                if label in native_pids:
+                    sample["worker_gpu_memory_mib"] = process_gpu_memory(native_pids[label])
+                if "cuda_graphs" in result:
+                    sample["graph_replay"] = result["cuda_graphs"]
                 if label.startswith("tnsr") and "profile" in result:
                     sample["profile"] = result["profile"]
                 if iteration >= args.warmups:
@@ -189,6 +225,7 @@ def main():
     parser.add_argument("--worker",type=Path,default=Path("target/release/examples/forty_five_worker"))
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--baseline-worker",type=Path,help="optional second native binary for interleaved before/after measurements")
+    parser.add_argument("--baseline-tree-reductions",action="store_true",help="select tree ordering in a compatible baseline worker too")
     parser.add_argument("--transitions",type=int,default=64)
     parser.add_argument("--microbatch",type=int,default=8)
     parser.add_argument("--warmups",type=int,default=2)
@@ -197,6 +234,7 @@ def main():
     parser.add_argument("--fused-adam",action="store_true",default=None)
     parser.add_argument("--profile-torch",action="store_true")
     parser.add_argument("--compile",action="store_true")
+    parser.add_argument("--cuda-graphs",action="store_true",help="enable private-stream native model replay")
     parser.add_argument("--tree-reductions",action="store_true",help="opt native training into fixed f32 reduction trees")
     parser.add_argument("--anchor-kl-coef",type=float,default=0.)
     args=parser.parse_args()

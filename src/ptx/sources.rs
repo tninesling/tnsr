@@ -3,7 +3,7 @@ use super::types::CudaDType;
 use crate::graph::TensorGraphNode;
 use crate::tensor::ParameterStorage;
 use anyhow::{Context, Result};
-use cudarc::driver::{CudaContext, CudaSlice};
+use cudarc::driver::{CudaSlice, CudaStream};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -47,6 +47,12 @@ impl<D: CudaDType> Default for SourceCache<D> {
     }
 }
 impl<D: CudaDType> SourceCache<D> {
+    pub fn clear(&mut self) {
+        self.index_facts.get_mut().clear();
+        self.parameters.get_mut().clear();
+        self.constants.get_mut().clear();
+    }
+
     pub fn prune(&self) {
         self.index_facts.borrow_mut().clear();
         self.parameters
@@ -137,11 +143,30 @@ impl<D: CudaDType> SourceCache<D> {
         })())
     }
 
+    /// Replay requirements use stable allocation identities, never raw pointer
+    /// dereferences. Input facts are refreshed after staging; immutable constants
+    /// can rebuild their facts lazily from the retained host allocation.
+    pub fn validate_key(&self, key: usize, upper: usize, operation: &str) -> Option<Result<()>> {
+        let allocation = self
+            .index_facts
+            .borrow()
+            .get(&key)
+            .and_then(|entry| entry.allocation.upgrade())
+            .or_else(|| {
+                self.constants
+                    .borrow()
+                    .values()
+                    .find(|entry| Arc::as_ptr(&entry.value) as usize == key)
+                    .map(|entry| entry.value.clone())
+            })?;
+        self.validate_input(&allocation, upper, operation)
+    }
+
     /// Return the source buffer and whether this call uploaded host data.
     pub fn get(
         &self,
         node: &TensorGraphNode<D::HostType>,
-        device: &Arc<CudaContext>,
+        stream: &Arc<CudaStream>,
         allocate: impl FnOnce(usize) -> Result<CudaSlice<D::HostType>>,
     ) -> Result<Option<SourceBinding<D>>> {
         match node {
@@ -160,8 +185,7 @@ impl<D: CudaDType> SourceCache<D> {
                 let revision = host.revision();
                 let mut value = allocate(host.len())?;
                 if !host.is_empty() {
-                    device
-                        .default_stream()
+                    stream
                         .memcpy_htod(host.as_slice(), &mut value)
                         .context("upload parameter")?;
                 }
@@ -191,8 +215,7 @@ impl<D: CudaDType> SourceCache<D> {
                 }
                 let mut value = allocate(data.len())?;
                 if !data.is_empty() {
-                    device
-                        .default_stream()
+                    stream
                         .memcpy_htod(data.as_slice(), &mut value)
                         .context("upload constant")?;
                 }

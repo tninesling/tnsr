@@ -63,7 +63,7 @@ fn cuda_forty_five_model_parity() {
     check("cuda");
 }
 
-fn check_ppo(backend: &str, fixture: &str, tree_reductions: bool) {
+fn check_ppo(backend: &str, fixture: &str, tree_reductions: bool, cuda_graphs: bool) {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/forty_five/fixtures")
         .join(fixture);
@@ -74,6 +74,7 @@ fn check_ppo(backend: &str, fixture: &str, tree_reductions: bool) {
     let mut settings: forty_five::ppo::Settings =
         serde_json::from_value(reference["settings"].clone()).unwrap();
     settings.tree_reductions = tree_reductions;
+    settings.cuda_graphs = cuda_graphs;
     let mut trainer = forty_five::ppo::Trainer::new(&settings, backend.into()).unwrap();
     for (step, expected) in reference["steps"].as_array().unwrap().iter().enumerate() {
         let actual = trainer.step(&model, &batch, &settings, true).unwrap();
@@ -101,8 +102,23 @@ fn check_ppo(backend: &str, fixture: &str, tree_reductions: bool) {
             }
         }
         assert_eq!(actual["compiled_shapes"], 2);
+        if cuda_graphs && step > 0 {
+            assert_eq!(
+                actual["cuda_graphs"]["active_shapes"], 2,
+                "{}",
+                actual["cuda_graphs"]
+            );
+            assert_eq!(
+                actual["cuda_graphs"]["fallbacks"], 0,
+                "{}",
+                actual["cuda_graphs"]
+            );
+        }
         let mut changed = settings.clone();
         changed.tree_reductions = !tree_reductions;
+        assert!(trainer.step(&model, &batch, &changed, false).is_err());
+        changed = settings.clone();
+        changed.cuda_graphs = !cuda_graphs;
         assert!(trainer.step(&model, &batch, &changed, false).is_err());
         let rates = trainer.advance_schedule(step + 1).unwrap();
         for (index, key) in ["policy_learning_rate", "value_learning_rate"]
@@ -120,8 +136,8 @@ fn check_ppo(backend: &str, fixture: &str, tree_reductions: bool) {
 }
 #[test]
 fn cpu_forty_five_ppo_parity() {
-    check_ppo("cpu", "tiny", false);
-    check_ppo("cpu", "tiny-separate", false);
+    check_ppo("cpu", "tiny", false, false);
+    check_ppo("cpu", "tiny-separate", false, false);
 }
 #[cfg(feature = "cuda")]
 #[test]
@@ -134,8 +150,8 @@ fn cuda_forty_five_ppo_parity() {
         );
         return;
     }
-    check_ppo("cuda", "tiny", false);
-    check_ppo("cuda", "tiny-separate", false);
+    check_ppo("cuda", "tiny", false, false);
+    check_ppo("cuda", "tiny-separate", false, false);
 }
 
 #[cfg(feature = "cuda")]
@@ -149,8 +165,8 @@ fn cuda_forty_five_tree_ppo_parity() {
         );
         return;
     }
-    check_ppo("cuda", "tiny", true);
-    check_ppo("cuda", "tiny-separate", true);
+    check_ppo("cuda", "tiny", true, false);
+    check_ppo("cuda", "tiny-separate", true, false);
 }
 
 #[test]
@@ -201,4 +217,19 @@ fn separate_critic_gradient_isolation() {
         }
         assert!(active);
     }
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_forty_five_graph_ppo_parity() {
+    if let Err(error) = runtime("cuda") {
+        assert_ne!(
+            std::env::var("TNSR_REQUIRE_CUDA").as_deref(),
+            Ok("1"),
+            "{error:#}"
+        );
+        return;
+    }
+    check_ppo("cuda", "tiny", false, true);
+    check_ppo("cuda", "tiny-separate", false, true);
 }

@@ -195,6 +195,7 @@ fn ptx_reports_fused_pointwise_plan_metrics() {
             materialized_bytes: 32,
             intermediate_materialized_bytes: 0,
             device_copies: 2,
+            graph_launches: 0,
         }
     );
 }

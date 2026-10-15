@@ -1,13 +1,12 @@
 use super::graph::PtxGraph;
 use super::plan::{PtxExecutionPlan, PtxFusionPolicy, PtxPlanAction, PtxReductionMode};
+use super::readback::materialize_host_view;
 use super::target::PtxTarget;
 use super::types::{CudaDType, F32};
 use crate::Executor;
 use crate::alloc::{AllocStats, CudaBufferPool};
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
-use crate::tile::{
-    AnalyticalFusionScorer, IndexMap, MatMulPipeline, MatMulSharedLayout, TileGraph, VirtualTensor,
-};
+use crate::tile::{AnalyticalFusionScorer, MatMulPipeline, MatMulSharedLayout, TileGraph};
 use anyhow::{Context as _, Result};
 use cudarc::driver::{CudaContext, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
@@ -1871,54 +1870,6 @@ fn validate_batch_broadcast(input_shape: &[usize], output_batch_shape: &[usize])
         );
     }
     Ok(())
-}
-
-fn materialize_host_view<T: Copy>(
-    storage: Vec<T>,
-    view: &VirtualTensor,
-    source_shape: &[usize],
-) -> Result<Vec<T>> {
-    anyhow::ensure!(
-        view.predicate.is_none(),
-        "Predicated virtual outputs are not yet supported at the host boundary"
-    );
-    if view.shape == source_shape && view.access == IndexMap::identity(view.shape.len()) {
-        return Ok(storage);
-    }
-    let output_len = checked_element_count(&view.shape, "Virtual output")?;
-    let mut output = Vec::with_capacity(output_len);
-    for linear_output in 0..output_len {
-        let mut remainder = linear_output;
-        let mut output_index = vec![0; view.shape.len()];
-        for dimension in (0..view.shape.len()).rev() {
-            let extent = view.shape[dimension];
-            anyhow::ensure!(extent > 0, "non-empty virtual output has a zero extent");
-            output_index[dimension] = remainder % extent;
-            remainder /= extent;
-        }
-        let source_index = view.source_index(&output_index)?;
-        anyhow::ensure!(
-            source_index.len() == source_shape.len(),
-            "Virtual output source rank does not match its storage shape"
-        );
-        let mut linear_source = 0usize;
-        for (&coordinate, &extent) in source_index.iter().zip(source_shape) {
-            anyhow::ensure!(
-                coordinate < extent,
-                "Virtual output source coordinate {coordinate} exceeds extent {extent}"
-            );
-            linear_source = linear_source
-                .checked_mul(extent)
-                .and_then(|offset| offset.checked_add(coordinate))
-                .context("Virtual output source index overflowed usize")?;
-        }
-        output.push(
-            *storage
-                .get(linear_source)
-                .context("Virtual output source index exceeds its storage buffer")?,
-        );
-    }
-    Ok(output)
 }
 
 fn checked_element_count(shape: &[usize], description: &str) -> Result<usize> {

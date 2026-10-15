@@ -110,6 +110,7 @@ impl PtxExecutionPlan {
             step.release_after.clear();
         }
         assign_plan_liveness(graph, &mut self.steps);
+        self.index_values();
         Ok(())
     }
 }

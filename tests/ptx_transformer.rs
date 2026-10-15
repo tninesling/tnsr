@@ -122,8 +122,13 @@ fn ptx_cooperative_block_fuses_large_softmax_epilogue() {
 
     ptx.compile_owned(graph.clone()).unwrap();
     let plan = ptx.execution_plan().unwrap();
-    assert_eq!(plan.reduction_regions().len(), 1);
-    let region = &plan.reduction_regions()[0];
+    // The standalone maximum now also receives a cooperative schedule.
+    assert_eq!(plan.reduction_regions().len(), 2);
+    let region = plan
+        .reduction_regions()
+        .iter()
+        .find(|region| !region.full_epilogue_operations.is_empty())
+        .unwrap();
     assert_eq!(
         region.schedule,
         tnsr::tile::ReductionSchedule::Block { threads: 128 }
@@ -1496,6 +1501,50 @@ fn ptx_backward_regions_preserve_shared_normalization_and_masked_nonfinite_input
         }
         let plan = ptx.execution_plan().unwrap();
         assert!(!plan.regions().is_empty() || !plan.reduction_regions().is_empty());
+    }
+}
+
+#[test]
+fn ptx_tree_standalone_reductions_cover_schedule_boundaries() {
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    for width in [0, 1, 31, 32, 255, 256, 683] {
+        let input = TensorExpr::constant(
+            (0..4 * width)
+                .map(|i| ((i % 17) as f32 - 8.) * 0.125)
+                .collect(),
+            vec![4, width],
+        );
+        for reduced in [
+            input.clone().reduce_sum(1),
+            input.clone().reduce_mean(1),
+            input.clone().reduce_max(1),
+        ] {
+            let graph: TensorGraph<f32> = reduced.into();
+            let expected = execute_cpu(&graph);
+            let actual = ptx.execute(&graph, HashMap::new()).unwrap();
+            for (a, b) in actual.iter().zip(&expected) {
+                assert!(a == b || (a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-4);
+            }
+            let region = &ptx.execution_plan().unwrap().reduction_regions()[0];
+            assert!(region.producer_operations.is_empty());
+            assert!(region.epilogue_operations.is_empty());
+            assert_eq!(
+                region.schedule,
+                match width {
+                    0..32 => tnsr::tile::ReductionSchedule::Serial,
+                    32..256 => tnsr::tile::ReductionSchedule::Subgroup { width: 32 },
+                    _ => tnsr::tile::ReductionSchedule::Block { threads: 128 },
+                }
+            );
+            // The same fixed tree must replay exactly on the same data.
+            let again = ptx.execute(&graph, HashMap::new()).unwrap();
+            assert_eq!(
+                actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                again.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+            );
+        }
     }
 }
 

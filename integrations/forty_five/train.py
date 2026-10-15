@@ -65,12 +65,16 @@ def run(args):
     runner=FortyFiveSelfPlayRunnerAdapter(num_envs=args.num_envs,seed=args.seed)
     report=dict(source=str(args.source.resolve()),backend=args.backend,seed=args.seed,
                 separate_critic=initial.use_separate_critic,torch_version=torch.__version__,parameter_bytes=parameter_bytes,updates=[],
-                mode='synchronous f32; host Adam and JSON/host observation transfers',
+                mode='synchronous f32; resident CUDA Adam, host CPU Adam, JSON/host observations',
+                reduction_mode='deterministic_tree_f32' if args.tree_reductions else 'strict_f32',
+                transfer_accounting='training payload lower bounds; excludes observations, inference, archive saves and diagnostics',
                 arguments={key:str(value) if isinstance(value,Path) else value for key,value in vars(args).items()})
     if args.source.is_file(): report['source_sha256']=hashlib.sha256(args.source.read_bytes()).hexdigest()
     settings=dict(learning_rate=args.learning_rate,value_learning_rate=args.value_learning_rate,
                   entropy_coef=args.entropy_coef,anchor_kl_coef=args.anchor_kl_coef,
                   microbatch=args.microbatch,scheduler_updates=args.updates)
+    if args.tree_reductions:
+        settings['tree_reductions'] = True
     with Worker(args.worker,archive,args.backend) as worker:
         policy=Policy(worker)
         for update in range(args.updates):
@@ -119,8 +123,8 @@ def run(args):
                         rollout=asdict(stats),rollout_seconds=rollout_seconds,ppo_seconds=ppo_seconds,
                         torch_rollout_seconds=baseline_seconds,rollout_max_absolute_errors=baseline_error,
                         optimizer_updates=metrics,learning_rates=rates,
-                        cuda_parameter_upload_bytes_lower_bound=parameter_bytes*sum(m['microbatches'] for m in metrics) if args.backend=='cuda' else 0,
-                        cuda_gradient_download_bytes_lower_bound=parameter_bytes*sum(m['microbatches'] for m in metrics) if args.backend=='cuda' else 0,checkpoint=str(saved.resolve()),checkpoint_parity=interchange)
+                        cuda_parameter_upload_bytes_lower_bound=parameter_bytes if args.backend=='cuda' and update==0 else 0,
+                        cuda_gradient_download_bytes_lower_bound=0,checkpoint=str(saved.resolve()),checkpoint_parity=interchange)
             report['updates'].append(record)
             (args.output/'report.json').write_text(json.dumps(report,indent=2))
             print(json.dumps({key:value for key,value in record.items() if key!='optimizer_updates'}),flush=True)
@@ -162,6 +166,7 @@ def main():
     parser.add_argument('--hands-per-update',type=int,default=2)
     parser.add_argument('--hands-per-minibatch',type=int,default=2)
     parser.add_argument('--microbatch',type=int,default=8)
+    parser.add_argument('--tree-reductions',action='store_true',help='opt into fixed f32 reduction trees on CUDA')
     parser.add_argument('--epochs',type=int,default=1)
     parser.add_argument('--learning-rate',type=float,default=5e-5)
     parser.add_argument('--value-learning-rate',type=float,default=2e-4)
@@ -175,6 +180,8 @@ def main():
     parser.add_argument('--compare-rollout',action='store_true')
     parser.add_argument('--export-onnx',action='store_true')
     args=parser.parse_args()
+    if args.tree_reductions and args.backend != 'cuda':
+        parser.error('tree reductions require --backend cuda')
     for field in ['updates','num_envs','hands_per_update','hands_per_minibatch','microbatch','epochs','max_eval_steps']:
         if getattr(args,field)<1:parser.error(f'{field} must be positive')
     for field in ['entropy_coef','final_entropy_coef','anchor_kl_coef','learning_rate','value_learning_rate']:

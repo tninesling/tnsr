@@ -157,7 +157,13 @@ impl ResidentAdam {
 
     /// Create a model executor on the same CUDA context/stream as this owner.
     pub fn executor(&self) -> Result<PtxExecutor> {
-        PtxExecutor::with_context(self.device.clone(), PtxReductionMode::Strict)
+        self.executor_with_reduction_mode(PtxReductionMode::Strict)
+    }
+
+    /// Select reduction ordering explicitly; parameters, gradients and Adam state
+    /// remain f32. Tree ordering can differ from increasing-index accumulation.
+    pub fn executor_with_reduction_mode(&self, mode: PtxReductionMode) -> Result<PtxExecutor> {
+        PtxExecutor::with_context(self.device.clone(), mode)
     }
 
     /// Start a new accumulation interval, importing explicit host mutations once.

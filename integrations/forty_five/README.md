@@ -80,10 +80,13 @@ shared/separate-critic golden fixtures run in CPU/PTX tests. Regenerate with
 `generate_ppo_fixture.py --forty-five-root ROOT` (and `--separate` into a fresh
 `tiny-separate` directory).
 
-This worker trains in f32 on either backend. Gradient accumulation, norm clipping
-and Adam currently run on the host; CUDA gradients are copied back each
-microbatch, and updated parameters are uploaded on the next execution. Training
-is synchronous. Saved archives restore model weights for inference/export or a
+This worker trains in f32 on either backend. CUDA uses resident parameters,
+gradient accumulation, clipping and Adam; the CPU backend uses host Adam.
+Strict-order model reductions remain the default. `--tree-reductions` opts the
+CUDA training/validation/benchmark scripts into fixed parallel f32 trees;
+the JSON equivalent is `settings.tree_reductions=true`. The policy stays fixed
+for the lifetime of a trainer. Matmul remains strict f32. Training is synchronous.
+Saved archives restore model weights for inference/export or a
 fresh optimizer; exact optimizer/RNG resumption and bf16 autocast are not provided.
 
 ## Real rollout, training, evaluation and serving handoff
@@ -129,9 +132,9 @@ For a separate handoff:
 
 Reports separate rollout and PPO elapsed time (including graph compilation and
 transfers), retain compiled-shape counts, and count JSON request/response bytes.
-CUDA transfer payload lower bounds count one full f32 parameter upload and named
-gradient download per microbatch; they exclude inputs/constants, extra result
-copies and allocator overhead. Weights and gradients currently cross the host
-boundary on every microbatch. Resident versioned parameters, device accumulation/
-clipping/Adam, and then mixed precision are the next performance work; matching
-the original PyTorch bf16 production throughput has not been established.
+CUDA training payload lower bounds count the initial resident parameter upload;
+normal updates do not download named gradients. These bounds exclude observation
+transfers, constants, inference, checkpoint exports and explicit diagnostics.
+Use Nsight traces for actual transfer counts. Stable buffers/replay and mixed
+precision are the next performance work; matching the original PyTorch bf16
+production throughput has not been established.

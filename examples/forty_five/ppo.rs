@@ -41,6 +41,8 @@ pub struct Settings {
     pub microbatch: usize,
     pub scheduler_updates: usize,
     pub min_learning_rate: f32,
+    /// Opt into fixed parallel reduction trees. Storage and matmul stay f32.
+    pub tree_reductions: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -55,6 +57,7 @@ impl Default for Settings {
             microbatch: 1024,
             scheduler_updates: 1000,
             min_learning_rate: 1e-6,
+            tree_reductions: false,
         }
     }
 }
@@ -316,6 +319,10 @@ pub struct Trainer {
 impl Trainer {
     pub fn new(settings: &Settings, backend: String) -> Result<Self> {
         settings.validate()?;
+        ensure!(
+            !settings.tree_reductions || backend == "cuda",
+            "tree reductions require the CUDA backend"
+        );
         Ok(Self {
             #[cfg(feature = "cuda")]
             resident: None,
@@ -345,8 +352,9 @@ impl Trainer {
             settings.learning_rate == self.initial.learning_rate
                 && settings.value_learning_rate == self.initial.value_learning_rate
                 && settings.scheduler_updates == self.initial.scheduler_updates
-                && settings.min_learning_rate == self.initial.min_learning_rate,
-            "optimizer initial rates/schedule cannot change without starting a fresh worker"
+                && settings.min_learning_rate == self.initial.min_learning_rate
+                && settings.tree_reductions == self.initial.tree_reductions,
+            "optimizer initial rates/schedule/reduction policy cannot change without starting a fresh worker"
         );
         #[cfg(feature = "cuda")]
         {
@@ -395,7 +403,12 @@ impl Trainer {
                 let (graph, output) = build(model, size, settings.clip_eps)?;
                 #[cfg(feature = "cuda")]
                 let executor = if let Some(resident) = &self.resident {
-                    let mut executor = resident.executor()?;
+                    let mode = if settings.tree_reductions {
+                        tnsr::ptx::PtxReductionMode::DeterministicTree
+                    } else {
+                        tnsr::ptx::PtxReductionMode::Strict
+                    };
+                    let mut executor = resident.executor_with_reduction_mode(mode)?;
                     executor.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
                     Runtime::Ptx(executor)
                 } else {

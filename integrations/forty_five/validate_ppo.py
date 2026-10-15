@@ -72,7 +72,7 @@ def reference_step(model, anchor, batch, optimizer, microbatch, entropy, anchor_
     return metrics, gradients
 
 
-def validate(source, root, executable, output, backends, tiny=False, steps=2):
+def validate(source, root, executable, output, backends, tiny=False, steps=2, tree_reductions=False):
     import numpy as np
     import torch
     torch.set_num_threads(2)
@@ -90,6 +90,9 @@ def validate(source, root, executable, output, backends, tiny=False, steps=2):
     report = dict(source=str(source.resolve()), torch_version=torch.__version__,
                   separate_critic=model.use_separate_critic, backends={})
     for backend in backends:
+        native_settings = settings.copy()
+        if tree_reductions and backend == 'cuda':
+            native_settings['tree_reductions'] = True
         oracle = copy.deepcopy(model)
         optimizer = torch.optim.Adam([dict(params=oracle.policy_parameters(),lr=5e-5),
                                       dict(params=oracle.value_parameters(),lr=2e-4)])
@@ -98,7 +101,7 @@ def validate(source, root, executable, output, backends, tiny=False, steps=2):
         with Worker(executable,archive,backend) as worker:
             for step in range(steps):
                 metrics, gradients = reference_step(oracle,anchor,original,optimizer,3,.005,.03)
-                actual=worker.request('train',batch=native,settings=settings,return_gradients=True)
+                actual=worker.request('train',batch=native,settings=native_settings,return_gradients=True)
                 torch.testing.assert_close(torch.tensor(list(actual['metrics'].values())),
                     torch.tensor([metrics[k] for k in actual['metrics']]),atol=3e-5,rtol=5e-4)
                 errors={}
@@ -124,7 +127,8 @@ def validate(source, root, executable, output, backends, tiny=False, steps=2):
                             gradient_norm_before_clip=actual['gradient_norm_before_clip'],compiled_shapes=actual['compiled_shapes'])
                 results.append(result)
                 print(backend,step+1,json.dumps({k:v for k,v in result.items() if not k.endswith('_errors')}),flush=True)
-        report['backends'][backend]=dict(steps=results,elapsed_seconds=time.monotonic()-start)
+        report['backends'][backend]=dict(steps=results,elapsed_seconds=time.monotonic()-start,
+            reduction_mode='deterministic_tree_f32' if native_settings.get('tree_reductions') else 'strict_f32')
     (output/'report.json').write_text(json.dumps(report,indent=2))
     return report
 
@@ -138,6 +142,7 @@ def main():
     parser.add_argument('--backends',nargs='+',choices=['cpu','cuda'],default=['cpu','cuda'])
     parser.add_argument('--tiny',action='store_true')
     parser.add_argument('--steps',type=int,default=2)
+    parser.add_argument('--tree-reductions',action='store_true',help='use fixed f32 reduction trees on CUDA')
     args=parser.parse_args()
-    validate(args.source,args.forty_five_root,args.worker,args.output,args.backends,args.tiny,args.steps)
+    validate(args.source,args.forty_five_root,args.worker,args.output,args.backends,args.tiny,args.steps,args.tree_reductions)
 if __name__=='__main__':main()

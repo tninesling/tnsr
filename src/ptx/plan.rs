@@ -61,7 +61,7 @@ pub enum PtxReductionMode {
     /// Preserve the existing increasing-index accumulation order.
     #[default]
     Strict,
-    /// Permit a fixed warp reduction tree for eligible regions.
+    /// Permit a fixed warp/block reduction tree for eligible regions.
     DeterministicTree,
     /// Allow online normalization rewrites as well as deterministic trees.
     /// Results are numerically equivalent, rather than bitwise identical.
@@ -809,6 +809,7 @@ fn form_reduction_regions<D: crate::tile::TileDType, G>(
         if producer_members.is_empty()
             && epilogue_members.is_empty()
             && full_epilogue_members.is_empty()
+            && reduction_mode == PtxReductionMode::Strict
         {
             continue;
         }

@@ -219,6 +219,11 @@ pub enum Stmt {
         dest: TileVar,
         src: TileVar,
     },
+    /// Correctly rounded f32 square root.
+    Sqrt {
+        dest: TileVar,
+        src: TileVar,
+    },
     Relu {
         dest: TileVar,
         src: TileVar,

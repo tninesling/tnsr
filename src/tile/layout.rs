@@ -222,6 +222,7 @@ fn validate(
             Stmt::Neg { dest, src }
             | Stmt::Exp { dest, src }
             | Stmt::Log { dest, src }
+            | Stmt::Sqrt { dest, src }
             | Stmt::Relu { dest, src } => {
                 for var in [dest, src] {
                     anyhow::ensure!(

@@ -1335,6 +1335,11 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             let ln2 = Operand::imm_f32(std::f32::consts::LN_2);
             func.add_inst(Inst::mul_f32(dest_reg, log2_result, ln2));
         }
+        Stmt::Sqrt { dest, src } => {
+            let dst = ctx.get_or_alloc_reg(func, *dest);
+            let src = ctx.get_or_alloc_reg(func, *src);
+            func.add_inst(Inst::SqrtF32(super::instructions::UnaryInst::new(dst, src)));
+        }
         Stmt::Relu { dest, src } => {
             let dest_reg = ctx.get_or_alloc_reg(func, *dest);
             let src_reg = ctx.get_or_alloc_reg(func, *src);

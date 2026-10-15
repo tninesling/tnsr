@@ -25,23 +25,116 @@ struct ConstantEntry<D: CudaDType> {
 pub(super) struct SourceCache<D: CudaDType> {
     parameters: RefCell<HashMap<usize, ParameterEntry<D>>>,
     constants: RefCell<HashMap<usize, ConstantEntry<D>>>,
+    index_facts: RefCell<HashMap<usize, IndexEntry<D>>>,
+}
+
+struct IndexEntry<D: CudaDType> {
+    allocation: Weak<CudaSlice<D::HostType>>,
+    facts: IndexFacts,
+}
+
+struct IndexFacts {
+    maximum: Option<usize>,
+    error: Option<String>,
 }
 impl<D: CudaDType> Default for SourceCache<D> {
     fn default() -> Self {
         Self {
             parameters: RefCell::new(HashMap::new()),
             constants: RefCell::new(HashMap::new()),
+            index_facts: RefCell::new(HashMap::new()),
         }
     }
 }
 impl<D: CudaDType> SourceCache<D> {
     pub fn prune(&self) {
+        self.index_facts.borrow_mut().clear();
         self.parameters
             .borrow_mut()
             .retain(|_, entry| entry.source.strong_count() > 0);
         self.constants
             .borrow_mut()
             .retain(|_, entry| entry.source.strong_count() > 0);
+    }
+
+    /// Host-provided inputs can be validated without reading them back. Weak
+    /// allocation identity prevents stale facts when a pooled pointer is reused.
+    pub fn record_input(&self, device: &Arc<CudaSlice<D::HostType>>, values: &[D::HostType]) {
+        use num_traits::ToPrimitive;
+        let mut facts = IndexFacts {
+            maximum: None,
+            error: None,
+        };
+        for (position, value) in values.iter().enumerate() {
+            let Some(value) = value.to_f32() else {
+                facts.error = Some("index cannot be represented as f32".into());
+                break;
+            };
+            let index = value as usize;
+            let reason = if !value.is_finite() {
+                Some("must be finite")
+            } else if value < 0.0 {
+                Some("must be non-negative")
+            } else if value.fract() != 0.0 {
+                Some("must be an integer")
+            } else if index as f32 != value {
+                Some("cannot be represented as usize")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                facts.error = Some(format!(
+                    "index at position {position} {reason}, got {value}"
+                ));
+                break;
+            }
+            facts.maximum = Some(facts.maximum.map_or(index, |old| old.max(index)));
+        }
+        self.index_facts.borrow_mut().insert(
+            Arc::as_ptr(device) as usize,
+            IndexEntry {
+                allocation: Arc::downgrade(device),
+                facts,
+            },
+        );
+    }
+
+    pub fn validate_input(
+        &self,
+        device: &Arc<CudaSlice<D::HostType>>,
+        upper: usize,
+        operation: &str,
+    ) -> Option<Result<()>> {
+        let key = Arc::as_ptr(device) as usize;
+        if !self.index_facts.borrow().contains_key(&key) {
+            // Constant indices are also known on the host. Derive facts lazily
+            // so large non-index constants are never scanned for this purpose.
+            let host = self
+                .constants
+                .borrow()
+                .values()
+                .find(|entry| Arc::ptr_eq(&entry.value, device))
+                .and_then(|entry| entry.source.upgrade());
+            if let Some(host) = host {
+                self.record_input(device, host.as_slice());
+            }
+        }
+        let facts = self.index_facts.borrow();
+        let IndexEntry { allocation, facts } = facts.get(&(Arc::as_ptr(device) as usize))?;
+        if !allocation.ptr_eq(&Arc::downgrade(device)) || allocation.strong_count() == 0 {
+            return None;
+        }
+        Some((|| {
+            if let Some(error) = &facts.error {
+                anyhow::bail!("{operation} {error}");
+            }
+            anyhow::ensure!(
+                facts.maximum.is_none_or(|index| index < upper),
+                "{operation} index is out of range: {:?} >= {upper}",
+                facts.maximum
+            );
+            Ok(())
+        })())
     }
 
     /// Return the source buffer and whether this call uploaded host data.

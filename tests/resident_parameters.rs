@@ -101,3 +101,61 @@ fn reused_parameter_id_does_not_reuse_unrelated_storage() {
         [9.0]
     );
 }
+
+#[test]
+fn host_index_facts_refresh_and_computed_indices_keep_validation() {
+    use tnsr::tensor::Input;
+    let Some(mut executor) = executor() else {
+        return;
+    };
+    let indices: TensorExpr<f32> = Input::new("indices", vec![1]).into();
+    let weight = || TensorExpr::constant(vec![10.0, 20.0, 30.0], vec![3, 1]);
+    let graph: TensorGraph<f32> = weight().embedding(indices.clone()).into();
+    let feed = |value| HashMap::from([("indices".into(), vec![value])]);
+    assert_eq!(
+        executor.compile_and_execute(&graph, feed(1.0)).unwrap(),
+        [20.0]
+    );
+    assert!(
+        executor
+            .compile_and_execute(&graph, feed(0.5))
+            .unwrap_err()
+            .to_string()
+            .contains("integer")
+    );
+    assert!(
+        executor
+            .compile_and_execute(&graph, feed(3.0))
+            .unwrap_err()
+            .to_string()
+            .contains("out of range")
+    );
+    assert_eq!(
+        executor.compile_and_execute(&graph, feed(2.0)).unwrap(),
+        [30.0]
+    );
+    let computed: TensorGraph<f32> = weight()
+        .embedding(indices - TensorExpr::constant(vec![1.0], vec![1]))
+        .into();
+    assert_eq!(
+        executor.compile_and_execute(&computed, feed(3.0)).unwrap(),
+        [30.0]
+    );
+    assert!(
+        executor
+            .compile_and_execute(&computed, feed(0.0))
+            .unwrap_err()
+            .to_string()
+            .contains("non-negative")
+    );
+    let constant: TensorGraph<f32> = weight()
+        .embedding(TensorExpr::constant(vec![f32::NAN], vec![1]))
+        .into();
+    assert!(
+        executor
+            .compile_and_execute(&constant, HashMap::new())
+            .unwrap_err()
+            .to_string()
+            .contains("finite")
+    );
+}

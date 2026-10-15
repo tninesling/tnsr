@@ -1,0 +1,1512 @@
+{
+  "issue": 91,
+  "baseline_revision": "2145dd8b9c96e1480d3137369aa83d11e4771148",
+  "notes": "Paired baseline and resident binary, interleaved with original PyTorch cases. Two excluded warmups and three timed samples; external GPU work left running. CUDA tests, full-model validation, throughput and Nsight runs are sequential.",
+  "paired-micro8": {
+    "archive": "/home/taylor/code/tnsr/target/forty_five_validation/final-driver/initial",
+    "archive_weights_sha256": "b821a77c01972e1ca2cf15941f63b94f21748a40ce70d10378e1ca9c019882c9",
+    "model_source_sha256": "e78ea90e3d48c6db68aaefdcbb1b40f97891c1e55d22f227ef9a847e086b12cb",
+    "train_source_sha256": "1f2452ed028d54dab9f85fdc7eddb05acac572bac24ecdda77525d59a45ce827",
+    "torch_version": "2.11.0+cu130",
+    "gpu": "NVIDIA GeForce RTX 4080",
+    "batch_sha256": "21da32f0bfd41163a766bc444c6fa4dac7870489263b077a53fb72be1f806821",
+    "transitions": 64,
+    "microbatch": 8,
+    "warmups": 2,
+    "repeats": 3,
+    "anchor_kl_coef": 0.0,
+    "external_workloads": "left running; monitor GPU samples for contention",
+    "cases": {
+      "tnsr_baseline_strict_f32": {
+        "samples": [
+          {
+            "seconds": 0.8842051059982623,
+            "gpu_status": "75, 9516, 181.05, 2760",
+            "profile": {
+              "accumulate_seconds": 0.04182717500000001,
+              "clip_adam_finite_check_seconds": 0.037912927,
+              "compile_cache_seconds": 8.266e-06,
+              "execute_seconds": 0.425862104,
+              "gradient_extraction_seconds": 0.37636695600000003,
+              "graph_nodes": 4484,
+              "input_seconds": 0.00014651899999999998,
+              "kernel_launches": 25592,
+              "metrics_seconds": 0.000313554,
+              "total_seconds": 0.882630914
+            }
+          },
+          {
+            "seconds": 0.9152902789974178,
+            "gpu_status": "79, 9516, 178.67, 2760",
+            "profile": {
+              "accumulate_seconds": 0.049652435,
+              "clip_adam_finite_check_seconds": 0.039113061,
+              "compile_cache_seconds": 6.872e-06,
+              "execute_seconds": 0.419646542,
+              "gradient_extraction_seconds": 0.404687474,
+              "graph_nodes": 4484,
+              "input_seconds": 0.00014508700000000002,
+              "kernel_launches": 25592,
+              "metrics_seconds": 0.000251706,
+              "total_seconds": 0.913704926
+            }
+          },
+          {
+            "seconds": 0.87919351200253,
+            "gpu_status": "72, 9520, 180.43, 2760",
+            "profile": {
+              "accumulate_seconds": 0.043745608000000005,
+              "clip_adam_finite_check_seconds": 0.040022654,
+              "compile_cache_seconds": 7.824e-06,
+              "execute_seconds": 0.41912489,
+              "gradient_extraction_seconds": 0.37372613500000007,
+              "graph_nodes": 4484,
+              "input_seconds": 0.00015381,
+              "kernel_launches": 25592,
+              "metrics_seconds": 0.00028345599999999996,
+              "total_seconds": 0.87728751
+            }
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 2.7842088420002256,
+            "gpu_status": "80, 8383, 217.24, 2745",
+            "profile": {
+              "accumulate_seconds": 0.043359907,
+              "clip_adam_finite_check_seconds": 0.05605825,
+              "compile_cache_seconds": 0.487030548,
+              "execute_seconds": 1.8023699429999998,
+              "gradient_extraction_seconds": 0.392053493,
+              "graph_nodes": 4484,
+              "input_seconds": 0.00017408800000000003,
+              "kernel_launches": 25592,
+              "metrics_seconds": 0.000246649,
+              "total_seconds": 2.781509279
+            }
+          },
+          {
+            "seconds": 0.9434319579995645,
+            "gpu_status": "71, 9506, 181.65, 2760",
+            "profile": {
+              "accumulate_seconds": 0.050453042000000003,
+              "clip_adam_finite_check_seconds": 0.037743698,
+              "compile_cache_seconds": 6.552e-06,
+              "execute_seconds": 0.436048911,
+              "gradient_extraction_seconds": 0.416475121,
+              "graph_nodes": 4484,
+              "input_seconds": 0.000154113,
+              "kernel_launches": 25592,
+              "metrics_seconds": 0.000229054,
+              "total_seconds": 0.941336619
+            }
+          }
+        ],
+        "median_seconds": 0.8842051059982623,
+        "min_seconds": 0.87919351200253,
+        "max_seconds": 0.9152902789974178,
+        "transitions_per_second": 72.38139608766949
+      },
+      "pytorch_eager_strict_f32": {
+        "updater_sha256": "1756f1311f5fa076f3671eaa8ee7836ce0a747e80fbdcaf2b89ae30f6c25f085",
+        "samples": [
+          {
+            "seconds": 0.1999965799986967,
+            "gpu_status": "75, 9516, 184.42, 2760"
+          },
+          {
+            "seconds": 0.23271995699906256,
+            "gpu_status": "79, 9516, 175.29, 2760"
+          },
+          {
+            "seconds": 0.213266687002033,
+            "gpu_status": "72, 9520, 178.81, 2760"
+          }
+        ],
+        "fused_adam": null,
+        "warmup_samples": [
+          {
+            "seconds": 0.7839245799987111,
+            "gpu_status": "84, 9342, 224.37, 2760"
+          },
+          {
+            "seconds": 0.21689639299802366,
+            "gpu_status": "71, 9512, 183.99, 2760"
+          }
+        ],
+        "median_seconds": 0.213266687002033,
+        "min_seconds": 0.1999965799986967,
+        "max_seconds": 0.23271995699906256,
+        "transitions_per_second": 300.0937506915457
+      },
+      "pytorch_eager_bf16": {
+        "updater_sha256": "15f7fd8646c0932757a5dd547abfe39d227ebffd13e19b7dc4fa4e0b69351136",
+        "samples": [
+          {
+            "seconds": 0.2335308840010839,
+            "gpu_status": "67, 9516, 178.28, 2760"
+          },
+          {
+            "seconds": 0.25246617200173205,
+            "gpu_status": "79, 9520, 175.29, 2760"
+          },
+          {
+            "seconds": 0.2662724449983216,
+            "gpu_status": "72, 9520, 178.81, 2760"
+          }
+        ],
+        "fused_adam": null,
+        "warmup_samples": [
+          {
+            "seconds": 0.3906126839974604,
+            "gpu_status": "84, 9428, 224.37, 2760"
+          },
+          {
+            "seconds": 0.25551635100055137,
+            "gpu_status": "60, 9516, 178.69, 2760"
+          }
+        ],
+        "median_seconds": 0.25246617200173205,
+        "min_seconds": 0.2335308840010839,
+        "max_seconds": 0.2662724449983216,
+        "transitions_per_second": 253.49930841253826
+      },
+      "pytorch_compiled_bf16": {
+        "updater_sha256": "15f7fd8646c0932757a5dd547abfe39d227ebffd13e19b7dc4fa4e0b69351136",
+        "samples": [
+          {
+            "seconds": 0.1392444980010623,
+            "gpu_status": "67, 9516, 178.28, 2760"
+          },
+          {
+            "seconds": 0.17870011800187058,
+            "gpu_status": "65, 9520, 173.72, 2760"
+          },
+          {
+            "seconds": 0.1976657549967058,
+            "gpu_status": "61, 9520, 174.79, 2760"
+          }
+        ],
+        "fused_adam": null,
+        "warmup_samples": [
+          {
+            "seconds": 14.91597438899771,
+            "gpu_status": "50, 9506, 173.18, 2760"
+          },
+          {
+            "seconds": 0.17023144700215198,
+            "gpu_status": "60, 9516, 178.69, 2760"
+          }
+        ],
+        "median_seconds": 0.17870011800187058,
+        "min_seconds": 0.1392444980010623,
+        "max_seconds": 0.1976657549967058,
+        "transitions_per_second": 358.14190116723967
+      },
+      "tnsr_strict_f32": {
+        "samples": [
+          {
+            "seconds": 0.2570470899991051,
+            "gpu_status": "75, 9516, 184.42, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.002471402,
+              "compile_cache_seconds": 5.1247000000000006e-05,
+              "execute_seconds": 0.168160354,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 0.00035039500000000004,
+              "kernel_launches": 26856,
+              "metrics_seconds": 0.08363602099999999,
+              "total_seconds": 0.254769135
+            }
+          },
+          {
+            "seconds": 0.24904187599895522,
+            "gpu_status": "79, 9516, 178.67, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.001820047,
+              "compile_cache_seconds": 4.8701e-05,
+              "execute_seconds": 0.168421669,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 0.000376791,
+              "kernel_launches": 26856,
+              "metrics_seconds": 0.076140862,
+              "total_seconds": 0.246907132
+            }
+          },
+          {
+            "seconds": 0.25618119000137085,
+            "gpu_status": "72, 9520, 180.43, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.003786703,
+              "compile_cache_seconds": 3.7940999999999995e-05,
+              "execute_seconds": 0.16456369199999998,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 0.00030084999999999997,
+              "kernel_launches": 26856,
+              "metrics_seconds": 0.085930376,
+              "total_seconds": 0.254716315
+            }
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 1.926485011998011,
+            "gpu_status": "96, 9122, 74.52, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.053624981,
+              "compile_cache_seconds": 0.400016879,
+              "execute_seconds": 1.3516070470000001,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 0.000104869,
+              "kernel_launches": 26856,
+              "metrics_seconds": 0.11863481000000001,
+              "total_seconds": 1.9244793119999999
+            }
+          },
+          {
+            "seconds": 0.25636111100175185,
+            "gpu_status": "71, 9506, 183.99, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.001911521,
+              "compile_cache_seconds": 0.0037594819999999998,
+              "execute_seconds": 0.164042414,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 0.000330626,
+              "kernel_launches": 26856,
+              "metrics_seconds": 0.08464819900000001,
+              "total_seconds": 0.25480366
+            }
+          }
+        ],
+        "median_seconds": 0.25618119000137085,
+        "min_seconds": 0.24904187599895522,
+        "max_seconds": 0.2570470899991051,
+        "transitions_per_second": 249.82318178652199
+      }
+    },
+    "baseline_worker_sha256": "21c3e519155c3ab8d967c6a700544c3c928186f154f8c1d3e5018271e434fe95",
+    "worker_sha256": "f73c8b58d6b5d6dd33672ae35487da4bddd6575fe304fbbf3463e93b186875f1"
+  },
+  "paired-micro64": {
+    "archive": "/home/taylor/code/tnsr/target/forty_five_validation/final-driver/initial",
+    "archive_weights_sha256": "b821a77c01972e1ca2cf15941f63b94f21748a40ce70d10378e1ca9c019882c9",
+    "model_source_sha256": "e78ea90e3d48c6db68aaefdcbb1b40f97891c1e55d22f227ef9a847e086b12cb",
+    "train_source_sha256": "1f2452ed028d54dab9f85fdc7eddb05acac572bac24ecdda77525d59a45ce827",
+    "torch_version": "2.11.0+cu130",
+    "gpu": "NVIDIA GeForce RTX 4080",
+    "batch_sha256": "21da32f0bfd41163a766bc444c6fa4dac7870489263b077a53fb72be1f806821",
+    "transitions": 64,
+    "microbatch": 64,
+    "warmups": 2,
+    "repeats": 3,
+    "anchor_kl_coef": 0.0,
+    "external_workloads": "left running; monitor GPU samples for contention",
+    "cases": {
+      "tnsr_baseline_strict_f32": {
+        "samples": [
+          {
+            "seconds": 0.19665223300034995,
+            "gpu_status": "44, 13818, 174.94, 2760",
+            "profile": {
+              "accumulate_seconds": 0.005235497,
+              "clip_adam_finite_check_seconds": 0.038454013,
+              "compile_cache_seconds": 5.71e-07,
+              "execute_seconds": 0.103612501,
+              "gradient_extraction_seconds": 0.046869053,
+              "graph_nodes": 4484,
+              "input_seconds": 3.4996e-05,
+              "kernel_launches": 3199,
+              "metrics_seconds": 3.3964e-05,
+              "total_seconds": 0.194344221
+            }
+          },
+          {
+            "seconds": 0.27903392699954566,
+            "gpu_status": "99, 13818, 123.06, 2760",
+            "profile": {
+              "accumulate_seconds": 0.005396503,
+              "clip_adam_finite_check_seconds": 0.041033759,
+              "compile_cache_seconds": 9.71e-07,
+              "execute_seconds": 0.180147569,
+              "gradient_extraction_seconds": 0.050084334,
+              "graph_nodes": 4484,
+              "input_seconds": 3.5327e-05,
+              "kernel_launches": 3199,
+              "metrics_seconds": 2.648e-05,
+              "total_seconds": 0.276814062
+            }
+          },
+          {
+            "seconds": 0.37805518100140034,
+            "gpu_status": "99, 13820, 178.73, 2760",
+            "profile": {
+              "accumulate_seconds": 0.004702087,
+              "clip_adam_finite_check_seconds": 0.041042526,
+              "compile_cache_seconds": 8.22e-07,
+              "execute_seconds": 0.280698329,
+              "gradient_extraction_seconds": 0.04908474,
+              "graph_nodes": 4484,
+              "input_seconds": 3.6068e-05,
+              "kernel_launches": 3199,
+              "metrics_seconds": 9.8317e-05,
+              "total_seconds": 0.375756926
+            }
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 1.811594408001838,
+            "gpu_status": "22, 10207, 68.46, 2505",
+            "profile": {
+              "accumulate_seconds": 0.005401742,
+              "clip_adam_finite_check_seconds": 0.068724914,
+              "compile_cache_seconds": 0.416508153,
+              "execute_seconds": 1.2650608,
+              "gradient_extraction_seconds": 0.053394854,
+              "graph_nodes": 4484,
+              "input_seconds": 0.000112343,
+              "kernel_launches": 3199,
+              "metrics_seconds": 2.8314e-05,
+              "total_seconds": 1.809285494
+            }
+          },
+          {
+            "seconds": 0.21131238300222321,
+            "gpu_status": "52, 13688, 146.65, 2760",
+            "profile": {
+              "accumulate_seconds": 0.00503605,
+              "clip_adam_finite_check_seconds": 0.04784409,
+              "compile_cache_seconds": 7.91e-07,
+              "execute_seconds": 0.109465718,
+              "gradient_extraction_seconds": 0.047144325,
+              "graph_nodes": 4484,
+              "input_seconds": 3.717e-05,
+              "kernel_launches": 3199,
+              "metrics_seconds": 2.5468e-05,
+              "total_seconds": 0.209642651
+            }
+          }
+        ],
+        "median_seconds": 0.27903392699954566,
+        "min_seconds": 0.19665223300034995,
+        "max_seconds": 0.37805518100140034,
+        "transitions_per_second": 229.36278999544098
+      },
+      "pytorch_eager_strict_f32": {
+        "updater_sha256": "1756f1311f5fa076f3671eaa8ee7836ce0a747e80fbdcaf2b89ae30f6c25f085",
+        "samples": [
+          {
+            "seconds": 0.023504002998379292,
+            "gpu_status": "44, 13818, 142.16, 2760"
+          },
+          {
+            "seconds": 0.035971399000118254,
+            "gpu_status": "99, 13820, 123.06, 2760"
+          },
+          {
+            "seconds": 0.042131317997700535,
+            "gpu_status": "84, 13820, 233.36, 2760"
+          }
+        ],
+        "fused_adam": null,
+        "warmup_samples": [
+          {
+            "seconds": 0.6094955350017699,
+            "gpu_status": "82, 13530, 208.29, 2760"
+          },
+          {
+            "seconds": 0.022244015999604017,
+            "gpu_status": "44, 13818, 174.94, 2760"
+          }
+        ],
+        "median_seconds": 0.035971399000118254,
+        "min_seconds": 0.023504002998379292,
+        "max_seconds": 0.042131317997700535,
+        "transitions_per_second": 1779.1912958344935
+      },
+      "pytorch_eager_bf16": {
+        "updater_sha256": "15f7fd8646c0932757a5dd547abfe39d227ebffd13e19b7dc4fa4e0b69351136",
+        "samples": [
+          {
+            "seconds": 0.03000108000196633,
+            "gpu_status": "44, 13818, 142.16, 2760"
+          },
+          {
+            "seconds": 0.047064632999536116,
+            "gpu_status": "99, 13820, 123.06, 2760"
+          },
+          {
+            "seconds": 0.045118627000192646,
+            "gpu_status": "84, 13820, 233.36, 2760"
+          }
+        ],
+        "fused_adam": null,
+        "warmup_samples": [
+          {
+            "seconds": 0.21953146400119294,
+            "gpu_status": "82, 13612, 228.64, 2760"
+          },
+          {
+            "seconds": 0.034562040000309935,
+            "gpu_status": "44, 13818, 174.94, 2760"
+          }
+        ],
+        "median_seconds": 0.045118627000192646,
+        "min_seconds": 0.03000108000196633,
+        "max_seconds": 0.047064632999536116,
+        "transitions_per_second": 1418.482880689759
+      },
+      "pytorch_compiled_bf16": {
+        "updater_sha256": "15f7fd8646c0932757a5dd547abfe39d227ebffd13e19b7dc4fa4e0b69351136",
+        "samples": [
+          {
+            "seconds": 0.023485547997552203,
+            "gpu_status": "44, 13818, 142.16, 2760"
+          },
+          {
+            "seconds": 0.032101729997521034,
+            "gpu_status": "99, 13820, 123.06, 2760"
+          },
+          {
+            "seconds": 0.029338976000872208,
+            "gpu_status": "84, 13820, 233.36, 2760"
+          }
+        ],
+        "fused_adam": null,
+        "warmup_samples": [
+          {
+            "seconds": 13.003887535000104,
+            "gpu_status": "52, 13688, 146.65, 2760"
+          },
+          {
+            "seconds": 0.030546101999789244,
+            "gpu_status": "44, 13818, 174.94, 2760"
+          }
+        ],
+        "median_seconds": 0.029338976000872208,
+        "min_seconds": 0.023485547997552203,
+        "max_seconds": 0.032101729997521034,
+        "transitions_per_second": 2181.3985599939606
+      },
+      "tnsr_strict_f32": {
+        "samples": [
+          {
+            "seconds": 0.09007035699687549,
+            "gpu_status": "44, 13818, 142.16, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.001949122,
+              "compile_cache_seconds": 4.7109e-05,
+              "execute_seconds": 0.048195525,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 3.2752e-05,
+              "kernel_launches": 3483,
+              "metrics_seconds": 0.038209419,
+              "total_seconds": 0.088517155
+            }
+          },
+          {
+            "seconds": 0.17018193200055975,
+            "gpu_status": "99, 13818, 123.06, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.005881861,
+              "compile_cache_seconds": 4.4485e-05,
+              "execute_seconds": 0.089726647,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 3.0848e-05,
+              "kernel_launches": 3483,
+              "metrics_seconds": 0.072622668,
+              "total_seconds": 0.168379166
+            }
+          },
+          {
+            "seconds": 0.18031582700132276,
+            "gpu_status": "84, 13820, 233.36, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.005999565,
+              "compile_cache_seconds": 5.2289e-05,
+              "execute_seconds": 0.097760375,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 4.8222e-05,
+              "kernel_launches": 3483,
+              "metrics_seconds": 0.074595183,
+              "total_seconds": 0.17854881
+            }
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 1.9059833050014277,
+            "gpu_status": "2, 12738, 129.70, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.053280658,
+              "compile_cache_seconds": 0.423813782,
+              "execute_seconds": 1.425194687,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 5.5716e-05,
+              "kernel_launches": 3483,
+              "metrics_seconds": 0.001433466,
+              "total_seconds": 1.903844654
+            }
+          },
+          {
+            "seconds": 0.09091488800186198,
+            "gpu_status": "44, 13816, 174.94, 2760",
+            "profile": {
+              "accumulate_seconds": 0.0,
+              "clip_adam_finite_check_seconds": 0.00256564,
+              "compile_cache_seconds": 4.4163000000000004e-05,
+              "execute_seconds": 0.048500794,
+              "gradient_extraction_seconds": 0.0,
+              "graph_nodes": 4484,
+              "input_seconds": 2.8684e-05,
+              "kernel_launches": 3483,
+              "metrics_seconds": 0.038117946,
+              "total_seconds": 0.089315417
+            }
+          }
+        ],
+        "median_seconds": 0.17018193200055975,
+        "min_seconds": 0.09007035699687549,
+        "max_seconds": 0.18031582700132276,
+        "transitions_per_second": 376.06812455149174
+      }
+    },
+    "baseline_worker_sha256": "21c3e519155c3ab8d967c6a700544c3c928186f154f8c1d3e5018271e434fe95",
+    "worker_sha256": "f73c8b58d6b5d6dd33672ae35487da4bddd6575fe304fbbf3463e93b186875f1"
+  },
+  "correctness": {
+    "shared": {
+      "source": "/home/taylor/code/forty-five/models/v8.4.onnx",
+      "torch_version": "2.11.0+cu130",
+      "separate_critic": false,
+      "cuda": {
+        "steps": [
+          {
+            "step": 1,
+            "metrics": {
+              "approx_kl": 0.03499056166037917,
+              "bid_anchor_kl": 1.8274914168614487e-06,
+              "clip_fraction": 0.5000000111758709,
+              "entropy": 0.5924615795956925,
+              "loss": 0.09735116735100746,
+              "policy_loss": -0.06281160935759544,
+              "value_loss": 0.32625004928559065
+            },
+            "gradient_max_absolute_error": 4.246830940246582e-07,
+            "weight_max_absolute_error": 9.909272193908691e-07,
+            "parameter_count": 140,
+            "gradient_norm_before_clip": 34.32753647936577,
+            "compiled_shapes": 2
+          },
+          {
+            "step": 2,
+            "metrics": {
+              "approx_kl": 0.36564906407147646,
+              "bid_anchor_kl": 8.44343475137066e-07,
+              "clip_fraction": 0.6250000111758709,
+              "entropy": 0.5327237197197974,
+              "loss": 0.03502127714455128,
+              "policy_loss": -0.1119588203728199,
+              "value_loss": 0.29928738437592983
+            },
+            "gradient_max_absolute_error": 3.390014171600342e-07,
+            "weight_max_absolute_error": 2.993270754814148e-06,
+            "parameter_count": 140,
+            "gradient_norm_before_clip": 0.9696303336196093,
+            "compiled_shapes": 2
+          }
+        ]
+      }
+    },
+    "separate": {
+      "source": "/home/taylor/code/forty-five/checkpoints/v9-2x2-20261004/width-256-separate/best.pt",
+      "torch_version": "2.11.0+cu130",
+      "separate_critic": true,
+      "cuda": {
+        "steps": [
+          {
+            "step": 1,
+            "metrics": {
+              "approx_kl": 0.03499050298705697,
+              "bid_anchor_kl": 2.194464002513996e-06,
+              "clip_fraction": 0.5000000111758709,
+              "entropy": 0.6060536915902048,
+              "loss": 0.09728292375802994,
+              "policy_loss": -0.06281192228198051,
+              "value_loss": 0.3262500911951065
+            },
+            "gradient_max_absolute_error": 2.0116567611694336e-07,
+            "weight_max_absolute_error": 4.768022336065769e-06,
+            "parameter_count": 229,
+            "gradient_norm_before_clip": 9.681468636572527,
+            "compiled_shapes": 2
+          },
+          {
+            "step": 2,
+            "metrics": {
+              "approx_kl": 0.046699760016053915,
+              "bid_anchor_kl": 3.4147752785429475e-06,
+              "clip_fraction": 0.6250000111758709,
+              "entropy": 0.6317989819217473,
+              "loss": 0.10263269022107124,
+              "policy_loss": -0.11002182401716709,
+              "value_loss": 0.4316268047550693
+            },
+            "gradient_max_absolute_error": 1.475214958190918e-06,
+            "weight_max_absolute_error": 1.3533164747059345e-05,
+            "parameter_count": 229,
+            "gradient_norm_before_clip": 2.6178414054550725,
+            "compiled_shapes": 2
+          }
+        ]
+      }
+    }
+  },
+  "gpu_traces": {
+    "updates_per_trace": 3,
+    "notes": "Three complete updates per trace, including first-use uploads/initialization. Counts divided by three are amortized, not steady-state upload counts. Device-to-host traffic consists of small metrics/norm/health scalars in resident runs. GPU durations include external contention and profiling overhead; do not add to CPU stages.",
+    "before-micro8": {
+      "kernel_launches_per_update": 25592.0,
+      "kernel_duration_seconds_per_update": 0.15165665333333334,
+      "top_10_kernel_rows_trace_totals": [
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1771667",
+          "Instances": "24",
+          "Avg (ns)": "73819.5",
+          "Med (ns)": "73857.0",
+          "Min (ns)": "73313",
+          "Max (ns)": "74273",
+          "StdDev (ns)": "274.3",
+          "Name": "reduce_axis_2247"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1769842",
+          "Instances": "24",
+          "Avg (ns)": "73743.4",
+          "Med (ns)": "73809.0",
+          "Min (ns)": "72961",
+          "Max (ns)": "74305",
+          "StdDev (ns)": "344.8",
+          "Name": "reduce_axis_4228"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1769555",
+          "Instances": "24",
+          "Avg (ns)": "73731.5",
+          "Med (ns)": "73728.5",
+          "Min (ns)": "73249",
+          "Max (ns)": "74497",
+          "StdDev (ns)": "351.6",
+          "Name": "reduce_axis_4232"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1769333",
+          "Instances": "24",
+          "Avg (ns)": "73722.2",
+          "Med (ns)": "73777.0",
+          "Min (ns)": "73185",
+          "Max (ns)": "74209",
+          "StdDev (ns)": "291.1",
+          "Name": "reduce_axis_2256"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1768660",
+          "Instances": "24",
+          "Avg (ns)": "73694.2",
+          "Med (ns)": "73680.5",
+          "Min (ns)": "73249",
+          "Max (ns)": "74241",
+          "StdDev (ns)": "291.0",
+          "Name": "reduce_axis_1401"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1767892",
+          "Instances": "24",
+          "Avg (ns)": "73662.2",
+          "Med (ns)": "73633.0",
+          "Min (ns)": "73216",
+          "Max (ns)": "74209",
+          "StdDev (ns)": "303.2",
+          "Name": "reduce_axis_1405"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1670226",
+          "Instances": "24",
+          "Avg (ns)": "69592.8",
+          "Med (ns)": "67137.0",
+          "Min (ns)": "59808",
+          "Max (ns)": "110145",
+          "StdDev (ns)": "11749.1",
+          "Name": "matmul_region_112_4596"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1637108",
+          "Instances": "24",
+          "Avg (ns)": "68212.8",
+          "Med (ns)": "67456.0",
+          "Min (ns)": "59905",
+          "Max (ns)": "102114",
+          "StdDev (ns)": "7520.8",
+          "Name": "matmul_region_154_4638"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1613874",
+          "Instances": "24",
+          "Avg (ns)": "67244.8",
+          "Med (ns)": "67297.0",
+          "Min (ns)": "66433",
+          "Max (ns)": "68033",
+          "StdDev (ns)": "348.3",
+          "Name": "matmul_region_126_4610"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "1607538",
+          "Instances": "24",
+          "Avg (ns)": "66980.8",
+          "Med (ns)": "67313.0",
+          "Min (ns)": "59937",
+          "Max (ns)": "67777",
+          "StdDev (ns)": "1524.7",
+          "Name": "matmul_region_140_4624"
+        }
+      ],
+      "memory_time_rows_trace_totals": [
+        {
+          "Time (%)": "61.4",
+          "Total Time (ns)": "77955171",
+          "Count": "9600",
+          "Avg (ns)": "8120.3",
+          "Med (ns)": "704.0",
+          "Min (ns)": "255",
+          "Max (ns)": "77473",
+          "StdDev (ns)": "17113.4",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Time (%)": "37.9",
+          "Total Time (ns)": "48130285",
+          "Count": "3648",
+          "Avg (ns)": "13193.6",
+          "Med (ns)": "1248.0",
+          "Min (ns)": "544",
+          "Max (ns)": "73921",
+          "StdDev (ns)": "20424.6",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        },
+        {
+          "Time (%)": "0.7",
+          "Total Time (ns)": "856335",
+          "Count": "915",
+          "Avg (ns)": "935.9",
+          "Med (ns)": "928.0",
+          "Min (ns)": "256",
+          "Max (ns)": "3680",
+          "StdDev (ns)": "322.8",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "63815",
+          "Count": "72",
+          "Avg (ns)": "886.3",
+          "Med (ns)": "896.0",
+          "Min (ns)": "863",
+          "Max (ns)": "993",
+          "StdDev (ns)": "27.2",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        }
+      ],
+      "memory_size_rows_trace_totals": [
+        {
+          "Total (MB)": "946.146",
+          "Count": "9600",
+          "Avg (MB)": "0.099",
+          "Med (MB)": "0.000",
+          "Min (MB)": "0.000",
+          "Max (MB)": "0.786",
+          "StdDev (MB)": "0.222",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Total (MB)": "578.130",
+          "Count": "3648",
+          "Avg (MB)": "0.158",
+          "Med (MB)": "0.002",
+          "Min (MB)": "0.000",
+          "Max (MB)": "0.786",
+          "StdDev (MB)": "0.273",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        },
+        {
+          "Total (MB)": "311.111",
+          "Count": "915",
+          "Avg (MB)": "0.340",
+          "Med (MB)": "0.008",
+          "Min (MB)": "0.000",
+          "Max (MB)": "6.291",
+          "StdDev (MB)": "0.531",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Total (MB)": "0.590",
+          "Count": "72",
+          "Avg (MB)": "0.008",
+          "Med (MB)": "0.008",
+          "Min (MB)": "0.008",
+          "Max (MB)": "0.008",
+          "StdDev (MB)": "0.000",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        }
+      ]
+    },
+    "after-micro8": {
+      "kernel_launches_per_update": 26856.0,
+      "kernel_duration_seconds_per_update": 0.21072711233333333,
+      "top_10_kernel_rows_trace_totals": [
+        {
+          "Time (%)": "3.1",
+          "Total Time (ns)": "19589857",
+          "Instances": "24",
+          "Avg (ns)": "816244.0",
+          "Med (ns)": "49376.0",
+          "Min (ns)": "49089",
+          "Max (ns)": "2619614",
+          "StdDev (ns)": "1109626.4",
+          "Name": "reduce_axis_2723"
+        },
+        {
+          "Time (%)": "1.9",
+          "Total Time (ns)": "12209936",
+          "Instances": "24",
+          "Avg (ns)": "508747.3",
+          "Med (ns)": "25696.5",
+          "Min (ns)": "25441",
+          "Max (ns)": "2538558",
+          "StdDev (ns)": "963051.6",
+          "Name": "reduce_axis_4286"
+        },
+        {
+          "Time (%)": "1.7",
+          "Total Time (ns)": "10633275",
+          "Instances": "24",
+          "Avg (ns)": "443053.1",
+          "Med (ns)": "49424.5",
+          "Min (ns)": "49120",
+          "Max (ns)": "2600542",
+          "StdDev (ns)": "900607.6",
+          "Name": "reduce_axis_3936"
+        },
+        {
+          "Time (%)": "1.7",
+          "Total Time (ns)": "10582429",
+          "Instances": "24",
+          "Avg (ns)": "440934.5",
+          "Med (ns)": "49393.0",
+          "Min (ns)": "49088",
+          "Max (ns)": "2653535",
+          "StdDev (ns)": "896537.1",
+          "Name": "reduce_axis_3771"
+        },
+        {
+          "Time (%)": "1.4",
+          "Total Time (ns)": "8674852",
+          "Instances": "24",
+          "Avg (ns)": "361452.2",
+          "Med (ns)": "60369.0",
+          "Min (ns)": "53889",
+          "Max (ns)": "2567551",
+          "StdDev (ns)": "816652.9",
+          "Name": "matmul_region_132_4616"
+        },
+        {
+          "Time (%)": "1.3",
+          "Total Time (ns)": "8402402",
+          "Instances": "24",
+          "Avg (ns)": "350100.1",
+          "Med (ns)": "55216.0",
+          "Min (ns)": "55008",
+          "Max (ns)": "2435324",
+          "StdDev (ns)": "796971.7",
+          "Name": "matmul_region_29_4513"
+        },
+        {
+          "Time (%)": "1.2",
+          "Total Time (ns)": "7669820",
+          "Instances": "24",
+          "Avg (ns)": "319575.8",
+          "Med (ns)": "54096.5",
+          "Min (ns)": "53793",
+          "Max (ns)": "2453213",
+          "StdDev (ns)": "728817.4",
+          "Name": "matmul_region_167_4651"
+        },
+        {
+          "Time (%)": "1.1",
+          "Total Time (ns)": "7042163",
+          "Instances": "24",
+          "Avg (ns)": "293423.5",
+          "Med (ns)": "4800.0",
+          "Min (ns)": "4768",
+          "Max (ns)": "2329468",
+          "StdDev (ns)": "780080.6",
+          "Name": "broadcast_axis_379"
+        },
+        {
+          "Time (%)": "1.0",
+          "Total Time (ns)": "6430475",
+          "Instances": "24",
+          "Avg (ns)": "267936.5",
+          "Med (ns)": "49457.0",
+          "Min (ns)": "49120",
+          "Max (ns)": "2639039",
+          "StdDev (ns)": "684226.6",
+          "Name": "reduce_axis_382"
+        },
+        {
+          "Time (%)": "1.0",
+          "Total Time (ns)": "6335433",
+          "Instances": "24",
+          "Avg (ns)": "263976.4",
+          "Med (ns)": "25696.5",
+          "Min (ns)": "25536",
+          "Max (ns)": "2626302",
+          "StdDev (ns)": "728008.5",
+          "Name": "reduce_axis_4258"
+        }
+      ],
+      "memory_time_rows_trace_totals": [
+        {
+          "Time (%)": "78.2",
+          "Total Time (ns)": "6106082",
+          "Count": "889",
+          "Avg (ns)": "6868.5",
+          "Med (ns)": "480.0",
+          "Min (ns)": "255",
+          "Max (ns)": "2598590",
+          "StdDev (ns)": "87862.0",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Time (%)": "20.5",
+          "Total Time (ns)": "1600091",
+          "Count": "1568",
+          "Avg (ns)": "1020.5",
+          "Med (ns)": "864.0",
+          "Min (ns)": "255",
+          "Max (ns)": "37441",
+          "StdDev (ns)": "2649.2",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Time (%)": "0.8",
+          "Total Time (ns)": "63684",
+          "Count": "72",
+          "Avg (ns)": "884.5",
+          "Med (ns)": "896.0",
+          "Min (ns)": "863",
+          "Max (ns)": "992",
+          "StdDev (ns)": "27.5",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        },
+        {
+          "Time (%)": "0.5",
+          "Total Time (ns)": "37825",
+          "Count": "30",
+          "Avg (ns)": "1260.8",
+          "Med (ns)": "1248.0",
+          "Min (ns)": "895",
+          "Max (ns)": "1920",
+          "StdDev (ns)": "260.0",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        }
+      ],
+      "memory_size_rows_trace_totals": [
+        {
+          "Total (MB)": "749.857",
+          "Count": "1568",
+          "Avg (MB)": "0.478",
+          "Med (MB)": "0.003",
+          "Min (MB)": "0.000",
+          "Max (MB)": "24.080",
+          "StdDev (MB)": "2.363",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Total (MB)": "39.833",
+          "Count": "889",
+          "Avg (MB)": "0.045",
+          "Med (MB)": "0.000",
+          "Min (MB)": "0.000",
+          "Max (MB)": "0.786",
+          "StdDev (MB)": "0.156",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Total (MB)": "0.590",
+          "Count": "72",
+          "Avg (MB)": "0.008",
+          "Med (MB)": "0.008",
+          "Min (MB)": "0.008",
+          "Max (MB)": "0.008",
+          "StdDev (MB)": "0.000",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        },
+        {
+          "Total (MB)": "0.001",
+          "Count": "30",
+          "Avg (MB)": "0.000",
+          "Med (MB)": "0.000",
+          "Min (MB)": "0.000",
+          "Max (MB)": "0.000",
+          "StdDev (MB)": "0.000",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        }
+      ]
+    },
+    "before-micro64": {
+      "kernel_launches_per_update": 3199.0,
+      "kernel_duration_seconds_per_update": 0.11702751033333333,
+      "top_10_kernel_rows_trace_totals": [
+        {
+          "Time (%)": "2.4",
+          "Total Time (ns)": "8507106",
+          "Instances": "3",
+          "Avg (ns)": "2835702.0",
+          "Med (ns)": "2833345.0",
+          "Min (ns)": "2786592",
+          "Max (ns)": "2887169",
+          "StdDev (ns)": "50329.9",
+          "Name": "matmul_region_182_4666"
+        },
+        {
+          "Time (%)": "2.2",
+          "Total Time (ns)": "7872573",
+          "Instances": "3",
+          "Avg (ns)": "2624191.0",
+          "Med (ns)": "2809505.0",
+          "Min (ns)": "1928759",
+          "Max (ns)": "3134309",
+          "StdDev (ns)": "623773.7",
+          "Name": "matmul_region_112_4596"
+        },
+        {
+          "Time (%)": "2.1",
+          "Total Time (ns)": "7444663",
+          "Instances": "3",
+          "Avg (ns)": "2481554.3",
+          "Med (ns)": "2483901.0",
+          "Min (ns)": "2473661",
+          "Max (ns)": "2487101",
+          "StdDev (ns)": "7020.6",
+          "Name": "reduce_axis_3755"
+        },
+        {
+          "Time (%)": "2.1",
+          "Total Time (ns)": "7214613",
+          "Instances": "3",
+          "Avg (ns)": "2404871.0",
+          "Med (ns)": "2216890.0",
+          "Min (ns)": "2199514",
+          "Max (ns)": "2798209",
+          "StdDev (ns)": "340751.5",
+          "Name": "reduce_axis_3962"
+        },
+        {
+          "Time (%)": "1.9",
+          "Total Time (ns)": "6643471",
+          "Instances": "3",
+          "Avg (ns)": "2214490.3",
+          "Med (ns)": "2774433.0",
+          "Min (ns)": "1041005",
+          "Max (ns)": "2828033",
+          "StdDev (ns)": "1016621.4",
+          "Name": "matmul_region_140_4624"
+        },
+        {
+          "Time (%)": "1.9",
+          "Total Time (ns)": "6546317",
+          "Instances": "3",
+          "Avg (ns)": "2182105.7",
+          "Med (ns)": "2790177.0",
+          "Min (ns)": "946892",
+          "Max (ns)": "2809248",
+          "StdDev (ns)": "1069768.9",
+          "Name": "matmul_region_154_4638"
+        },
+        {
+          "Time (%)": "1.9",
+          "Total Time (ns)": "6503788",
+          "Instances": "3",
+          "Avg (ns)": "2167929.3",
+          "Med (ns)": "2799777.0",
+          "Min (ns)": "670472",
+          "Max (ns)": "3033539",
+          "StdDev (ns)": "1302092.6",
+          "Name": "matmul_region_168_4652"
+        },
+        {
+          "Time (%)": "1.8",
+          "Total Time (ns)": "6471276",
+          "Instances": "3",
+          "Avg (ns)": "2157092.0",
+          "Med (ns)": "2801985.0",
+          "Min (ns)": "860746",
+          "Max (ns)": "2808545",
+          "StdDev (ns)": "1122673.4",
+          "Name": "matmul_region_126_4610"
+        },
+        {
+          "Time (%)": "1.6",
+          "Total Time (ns)": "5573762",
+          "Instances": "3",
+          "Avg (ns)": "1857920.7",
+          "Med (ns)": "2737089.0",
+          "Min (ns)": "98273",
+          "Max (ns)": "2738400",
+          "StdDev (ns)": "1523899.7",
+          "Name": "reduce_axis_3571"
+        },
+        {
+          "Time (%)": "1.5",
+          "Total Time (ns)": "5326463",
+          "Instances": "3",
+          "Avg (ns)": "1775487.7",
+          "Med (ns)": "2446525.0",
+          "Min (ns)": "394853",
+          "Max (ns)": "2485085",
+          "StdDev (ns)": "1195820.1",
+          "Name": "reduce_axis_3824"
+        }
+      ],
+      "memory_time_rows_trace_totals": [
+        {
+          "Time (%)": "84.4",
+          "Total Time (ns)": "43875510",
+          "Count": "1200",
+          "Avg (ns)": "36562.9",
+          "Med (ns)": "832.0",
+          "Min (ns)": "256",
+          "Max (ns)": "713192",
+          "StdDev (ns)": "114011.0",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Time (%)": "12.3",
+          "Total Time (ns)": "6390790",
+          "Count": "456",
+          "Avg (ns)": "14014.9",
+          "Med (ns)": "2096.5",
+          "Min (ns)": "896",
+          "Max (ns)": "67553",
+          "StdDev (ns)": "20949.0",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        },
+        {
+          "Time (%)": "3.3",
+          "Total Time (ns)": "1697468",
+          "Count": "814",
+          "Avg (ns)": "2085.3",
+          "Med (ns)": "992.0",
+          "Min (ns)": "256",
+          "Max (ns)": "58881",
+          "StdDev (ns)": "3055.1",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "8160",
+          "Count": "9",
+          "Avg (ns)": "906.7",
+          "Med (ns)": "896.0",
+          "Min (ns)": "895",
+          "Max (ns)": "928",
+          "StdDev (ns)": "16.0",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        }
+      ],
+      "memory_size_rows_trace_totals": [
+        {
+          "Total (MB)": "2188.444",
+          "Count": "814",
+          "Avg (MB)": "2.689",
+          "Med (MB)": "0.066",
+          "Min (MB)": "0.000",
+          "Max (MB)": "50.332",
+          "StdDev (MB)": "4.419",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Total (MB)": "440.432",
+          "Count": "1200",
+          "Avg (MB)": "0.367",
+          "Med (MB)": "0.000",
+          "Min (MB)": "0.000",
+          "Max (MB)": "6.291",
+          "StdDev (MB)": "1.116",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Total (MB)": "72.440",
+          "Count": "456",
+          "Avg (MB)": "0.159",
+          "Med (MB)": "0.002",
+          "Min (MB)": "0.000",
+          "Max (MB)": "0.786",
+          "StdDev (MB)": "0.273",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        },
+        {
+          "Total (MB)": "0.590",
+          "Count": "9",
+          "Avg (MB)": "0.066",
+          "Med (MB)": "0.066",
+          "Min (MB)": "0.066",
+          "Max (MB)": "0.066",
+          "StdDev (MB)": "0.000",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        }
+      ]
+    },
+    "after-micro64": {
+      "kernel_launches_per_update": 3483.0,
+      "kernel_duration_seconds_per_update": 0.10558912733333334,
+      "top_10_kernel_rows_trace_totals": [
+        {
+          "Time (%)": "1.4",
+          "Total Time (ns)": "4462867",
+          "Instances": "3",
+          "Avg (ns)": "1487622.3",
+          "Med (ns)": "1585298.0",
+          "Min (ns)": "320963",
+          "Max (ns)": "2556606",
+          "StdDev (ns)": "1121017.5",
+          "Name": "reduce_axis_1401"
+        },
+        {
+          "Time (%)": "1.4",
+          "Total Time (ns)": "4286995",
+          "Instances": "3",
+          "Avg (ns)": "1428998.3",
+          "Med (ns)": "1060684.0",
+          "Min (ns)": "420997",
+          "Max (ns)": "2805314",
+          "StdDev (ns)": "1234092.2",
+          "Name": "matmul_region_154_4638"
+        },
+        {
+          "Time (%)": "1.3",
+          "Total Time (ns)": "4114514",
+          "Instances": "3",
+          "Avg (ns)": "1371504.7",
+          "Med (ns)": "876171.0",
+          "Min (ns)": "419941",
+          "Max (ns)": "2818402",
+          "StdDev (ns)": "1273644.5",
+          "Name": "matmul_region_182_4666"
+        },
+        {
+          "Time (%)": "1.2",
+          "Total Time (ns)": "3890062",
+          "Instances": "3",
+          "Avg (ns)": "1296687.3",
+          "Med (ns)": "1704372.0",
+          "Min (ns)": "323364",
+          "Max (ns)": "1862326",
+          "StdDev (ns)": "846614.5",
+          "Name": "reduce_axis_4228"
+        },
+        {
+          "Time (%)": "1.2",
+          "Total Time (ns)": "3809645",
+          "Instances": "3",
+          "Avg (ns)": "1269881.7",
+          "Med (ns)": "640487.0",
+          "Min (ns)": "422245",
+          "Max (ns)": "2746913",
+          "StdDev (ns)": "1283792.6",
+          "Name": "matmul_region_126_4610"
+        },
+        {
+          "Time (%)": "1.1",
+          "Total Time (ns)": "3385287",
+          "Instances": "3",
+          "Avg (ns)": "1128429.0",
+          "Med (ns)": "1594514.0",
+          "Min (ns)": "80545",
+          "Max (ns)": "1710228",
+          "StdDev (ns)": "909336.6",
+          "Name": "broadcast_axis_249"
+        },
+        {
+          "Time (%)": "1.0",
+          "Total Time (ns)": "3218374",
+          "Instances": "3",
+          "Avg (ns)": "1072791.3",
+          "Med (ns)": "1435217.0",
+          "Min (ns)": "139394",
+          "Max (ns)": "1643763",
+          "StdDev (ns)": "815043.4",
+          "Name": "matmul_region_44_4528"
+        },
+        {
+          "Time (%)": "0.9",
+          "Total Time (ns)": "2941411",
+          "Instances": "3",
+          "Avg (ns)": "980470.3",
+          "Med (ns)": "77697.0",
+          "Min (ns)": "77665",
+          "Max (ns)": "2786049",
+          "StdDev (ns)": "1563677.0",
+          "Name": "broadcast_axis_155"
+        },
+        {
+          "Time (%)": "0.9",
+          "Total Time (ns)": "2914818",
+          "Instances": "3",
+          "Avg (ns)": "971606.0",
+          "Med (ns)": "472389.0",
+          "Min (ns)": "98081",
+          "Max (ns)": "2344348",
+          "StdDev (ns)": "1203470.8",
+          "Name": "reduce_axis_4270"
+        },
+        {
+          "Time (%)": "0.9",
+          "Total Time (ns)": "2830242",
+          "Instances": "3",
+          "Avg (ns)": "943414.0",
+          "Med (ns)": "394853.0",
+          "Min (ns)": "394469",
+          "Max (ns)": "2040920",
+          "StdDev (ns)": "950468.1",
+          "Name": "matmul_region_14_4498"
+        }
+      ],
+      "memory_time_rows_trace_totals": [
+        {
+          "Time (%)": "80.2",
+          "Total Time (ns)": "14935567",
+          "Count": "448",
+          "Avg (ns)": "33338.3",
+          "Med (ns)": "832.0",
+          "Min (ns)": "256",
+          "Max (ns)": "765481",
+          "StdDev (ns)": "111280.0",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Time (%)": "19.6",
+          "Total Time (ns)": "3657076",
+          "Count": "1483",
+          "Avg (ns)": "2466.0",
+          "Med (ns)": "928.0",
+          "Min (ns)": "256",
+          "Max (ns)": "995340",
+          "StdDev (ns)": "26034.5",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "11999",
+          "Count": "9",
+          "Avg (ns)": "1333.2",
+          "Med (ns)": "1312.0",
+          "Min (ns)": "992",
+          "Max (ns)": "1600",
+          "StdDev (ns)": "222.8",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "8224",
+          "Count": "9",
+          "Avg (ns)": "913.8",
+          "Med (ns)": "927.0",
+          "Min (ns)": "896",
+          "Max (ns)": "929",
+          "StdDev (ns)": "16.9",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        }
+      ],
+      "memory_size_rows_trace_totals": [
+        {
+          "Total (MB)": "2741.391",
+          "Count": "1483",
+          "Avg (MB)": "1.849",
+          "Med (MB)": "0.003",
+          "Min (MB)": "0.000",
+          "Max (MB)": "50.332",
+          "StdDev (MB)": "4.186",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Total (MB)": "147.096",
+          "Count": "448",
+          "Avg (MB)": "0.328",
+          "Med (MB)": "0.000",
+          "Min (MB)": "0.000",
+          "Max (MB)": "6.291",
+          "StdDev (MB)": "1.061",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Total (MB)": "0.590",
+          "Count": "9",
+          "Avg (MB)": "0.066",
+          "Med (MB)": "0.066",
+          "Min (MB)": "0.066",
+          "Max (MB)": "0.066",
+          "StdDev (MB)": "0.000",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        },
+        {
+          "Total (MB)": "0.000",
+          "Count": "9",
+          "Avg (MB)": "0.000",
+          "Med (MB)": "0.000",
+          "Min (MB)": "0.000",
+          "Max (MB)": "0.000",
+          "StdDev (MB)": "0.000",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        }
+      ]
+    }
+  },
+  "implementation_sha256": {
+    "examples/forty_five/ppo.rs": "cb4117758d8595280a7b4f2acb28d228fba247f5771d7fbec3cecd10e24f6999",
+    "src/ptx/executor.rs": "7847fc10911d904d85a5d0d11a5719620baa6d3a5af9ca44407f0a65df6857ed",
+    "src/ptx/sources.rs": "e6fbdf64df3ef1e27cfbf999acdbcae54fde5c20a7beeac4eafbecc0df2b9c79",
+    "src/ptx/resident/config.rs": "78626b59a344d2f86ef60f4ea4300b5c26937361e374daf3aae670a43b987ad6",
+    "src/ptx/resident/kernels.rs": "caaef103acea2f3597bf7da9b75bf7dd4ee2ad2f39ec7d66fc1c4ce1b3623455",
+    "src/ptx/resident/mod.rs": "06c4b093efb4b89dd389cc50324d0658448893742ebab34673f83e9821daddd4",
+    "src/ptx/resident/reduction.rs": "43ba05b65ff22f7b5509847363f63715266c8088b5d5f69bd49456d3f343a437"
+  }
+}

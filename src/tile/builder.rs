@@ -406,6 +406,10 @@ impl TileIRBuilder {
     }
 
     #[allow(dead_code)]
+    pub fn sqrt(&mut self, dest: TileVar, src: TileVar) {
+        self.stmts.push(Stmt::Sqrt { dest, src });
+    }
+
     pub fn relu(&mut self, dest: TileVar, src: TileVar) {
         self.stmts.push(Stmt::Relu { dest, src });
     }

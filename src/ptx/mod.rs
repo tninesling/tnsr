@@ -4,6 +4,7 @@ pub mod graph;
 pub mod instructions;
 pub mod plan;
 mod readback;
+pub mod resident;
 mod sources;
 pub mod target;
 pub mod types;

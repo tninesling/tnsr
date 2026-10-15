@@ -1805,6 +1805,8 @@ dependencies = [
  "rayon",
  "reqwest",
  "rstest",
+ "serde",
+ "serde_json",
  "stats_alloc",
  "test-log",
  "tracing",

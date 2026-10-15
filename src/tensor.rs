@@ -178,6 +178,34 @@ impl<D: DType> Parameter<D> {
         &self.shape
     }
 
+    /// Copy parameter values while preserving sharing with graphs and clones.
+    pub fn values(&self) -> anyhow::Result<Vec<D>> {
+        self.data
+            .lock()
+            .map(|data| data.clone())
+            .map_err(|_| anyhow::anyhow!("parameter {} lock is poisoned", self.id))
+    }
+
+    /// Replace values without changing this parameter's identity or shape.
+    pub fn set_values(&self, values: Vec<D>) -> anyhow::Result<()> {
+        let expected = self
+            .shape
+            .iter()
+            .try_fold(1usize, |n, &dim| n.checked_mul(dim))
+            .ok_or_else(|| anyhow::anyhow!("parameter {} shape overflows usize", self.id))?;
+        anyhow::ensure!(
+            values.len() == expected,
+            "parameter {} expects {expected} values, got {}",
+            self.id,
+            values.len()
+        );
+        *self
+            .data
+            .lock()
+            .map_err(|_| anyhow::anyhow!("parameter {} lock is poisoned", self.id))? = values;
+        Ok(())
+    }
+
     pub fn exp(self) -> TensorExpr<D>
     where
         D: 'static,

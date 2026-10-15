@@ -1339,3 +1339,108 @@ fn ptx_cost_aware_fusion_preserves_cheap_neighbors_and_cache_policy() {
     assert_close(&restored, &actual, 1e-6);
     assert_eq!(ptx.compilation_count(), compiled + 2);
 }
+
+#[test]
+fn ptx_batched_matmul_without_epilogue_launches_once() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    ptx.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+    let lhs = TensorExpr::constant(
+        (0..2 * 5 * 3 * 7)
+            .map(|i| ((i % 17) as f32 - 8.) * 0.125)
+            .collect(),
+        vec![2, 5, 3, 7],
+    )
+    .permute(vec![0, 2, 1, 3]);
+    let rhs = TensorExpr::constant(
+        (0..3 * 7 * 4)
+            .map(|i| ((i % 13) as f32 - 6.) * 0.25)
+            .collect(),
+        vec![1, 3, 7, 4],
+    );
+    let graph: TensorGraph<f32> = lhs.matmul(rhs).into();
+    let expected = execute_cpu(&graph);
+    assert_close(
+        &ptx.execute(&graph, HashMap::new()).unwrap(),
+        &expected,
+        1e-5,
+    );
+    assert_eq!(ptx.execution_plan().unwrap().matmul_regions().len(), 1);
+    assert!(
+        ptx.execution_plan().unwrap().matmul_regions()[0]
+            .epilogue_operations
+            .is_empty()
+    );
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+}
+
+#[test]
+fn ptx_batched_backward_and_broadcast_parameter_use_batch_dispatch() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    ptx.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+    let lhs = Parameter::new(
+        (0..2 * 3 * 5 * 7)
+            .map(|i| ((i % 17) as f32 - 8.) * 0.125)
+            .collect(),
+        vec![2, 3, 5, 7],
+    );
+    let rhs = Parameter::new(
+        (0..7 * 4).map(|i| ((i % 13) as f32 - 6.) * 0.25).collect(),
+        vec![7, 4],
+    );
+    let graph: TensorGraph<f32> = TensorExpr::from(lhs.clone())
+        .matmul(TensorExpr::from(rhs.clone()))
+        .mean_all()
+        .into();
+    let output = *graph.toposort().last().unwrap();
+    let graph = graph.with_gradients(output);
+    let mut cpu = SimpleExecutor::new();
+    cpu.execute(&graph, HashMap::new()).unwrap();
+    ptx.execute(&graph, HashMap::new()).unwrap();
+    assert_eq!(ptx.execution_plan().unwrap().matmul_regions().len(), 3);
+    assert_eq!(
+        ptx.execution_metrics().kernel_launches,
+        ptx.compile_metrics().generated_kernels
+    );
+    let expected = cpu.get_gradients(&graph);
+    let actual = ptx.get_gradients(&graph);
+    for parameter in [lhs, rhs] {
+        assert_close(&actual[&parameter.id()], &expected[&parameter.id()], 3e-6);
+    }
+}
+
+#[test]
+fn ptx_contraction_cycle_fallback_keeps_batched_dispatch_and_values() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    ptx.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+    let input = TensorExpr::constant(
+        (0..3 * 2 * 2).map(|i| (i as f32 - 6.) * 0.125).collect(),
+        vec![3, 2, 2],
+    );
+    let weight = || TensorExpr::constant(vec![0.25, -0.5, 0.75, 0.125], vec![2, 2]);
+    let hidden = input.matmul(weight()).exp();
+    let graph: TensorGraph<f32> = (hidden.clone() + hidden.matmul(weight())).into();
+    let expected = execute_cpu(&graph);
+    assert_close(
+        &ptx.execute(&graph, HashMap::new()).unwrap(),
+        &expected,
+        1e-5,
+    );
+    assert_eq!(ptx.execution_plan().unwrap().matmul_regions().len(), 2);
+    assert!(
+        ptx.execution_plan()
+            .unwrap()
+            .matmul_regions()
+            .iter()
+            .all(|region| region.epilogue_operations.is_empty())
+    );
+    assert_eq!(
+        ptx.execution_metrics().kernel_launches,
+        ptx.compile_metrics().generated_kernels
+    );
+}

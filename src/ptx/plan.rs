@@ -131,7 +131,7 @@ impl PtxExecutionPlan {
         let graph_output = order.last().copied();
         let (reduction_regions, mut claimed) =
             form_reduction_regions(graph, &order, reduction_mode)?;
-        let (matmul_regions, matmul_claimed) = form_matmul_regions(graph, &order, &claimed)?;
+        let (matmul_regions, matmul_claimed) = form_matmul_regions(graph, &order, &claimed, true)?;
         claimed.extend(matmul_claimed);
         let regions = form_pointwise_regions(graph, &order, &claimed)?;
         match Self::build_with_regions(
@@ -147,12 +147,17 @@ impl PtxExecutionPlan {
                 if error.downcast_ref::<FusionPlanError>()
                     == Some(&FusionPlanError::ContractionCycle) =>
             {
+                // A region containing only its matmul anchor cannot contract
+                // graph edges into a cycle. Keep batch-aware dispatch when the
+                // broader fusion partition must be abandoned.
+                let (standalone_matmuls, _) =
+                    form_matmul_regions(graph, &order, &HashSet::new(), false)?;
                 Self::build_with_regions(
                     graph,
                     &order,
                     Vec::new(),
                     Vec::new(),
-                    Vec::new(),
+                    standalone_matmuls,
                     graph_output,
                 )
             }
@@ -832,6 +837,7 @@ fn form_matmul_regions<D: crate::tile::TileDType, G>(
     graph: &TensorGraph<D, G>,
     order: &[NodeIndex],
     already_claimed: &HashSet<NodeIndex>,
+    fuse_epilogue: bool,
 ) -> Result<(Vec<MatMulRegion>, HashSet<NodeIndex>)> {
     let positions: HashMap<_, _> = order
         .iter()
@@ -870,10 +876,14 @@ fn form_matmul_regions<D: crate::tile::TileDType, G>(
         }
 
         let mut epilogue_set = HashSet::new();
-        let mut stack: Vec<_> = graph
-            .graph
-            .neighbors_directed(anchor, Direction::Outgoing)
-            .collect();
+        let mut stack: Vec<_> = if fuse_epilogue {
+            graph
+                .graph
+                .neighbors_directed(anchor, Direction::Outgoing)
+                .collect()
+        } else {
+            Vec::new()
+        };
         while let Some(node) = stack.pop() {
             if claimed.contains(&node)
                 || !is_pointwise(&graph[node])
@@ -884,7 +894,8 @@ fn form_matmul_regions<D: crate::tile::TileDType, G>(
             }
             stack.extend(graph.graph.neighbors_directed(node, Direction::Outgoing));
         }
-        if epilogue_set.is_empty() || epilogue_set.len() > MAX_MATMUL_EPILOGUE_OPS {
+        // Batched dispatch is useful even when no pointwise epilogue can fuse.
+        if epilogue_set.len() > MAX_MATMUL_EPILOGUE_OPS {
             continue;
         }
         let mut epilogue_members: Vec<_> = epilogue_set.iter().copied().collect();
@@ -1155,14 +1166,15 @@ mod tests {
     }
 
     #[test]
-    fn standalone_and_zero_k_remain_unfused_batched_epilogue_fuses() {
+    fn standalone_matmul_uses_batch_dispatch_zero_k_keeps_fallback() {
         let standalone: TensorGraph<f32> = TensorExpr::constant(vec![0.25; 2 * 3], vec![2, 3])
             .matmul(TensorExpr::constant(vec![0.5; 3 * 4], vec![3, 4]))
             .into();
+        let standalone_plan = PtxExecutionPlan::build(&standalone).unwrap();
+        assert_eq!(standalone_plan.matmul_regions.len(), 1);
         assert!(
-            PtxExecutionPlan::build(&standalone)
-                .unwrap()
-                .matmul_regions
+            standalone_plan.matmul_regions[0]
+                .epilogue_operations
                 .is_empty()
         );
 
@@ -1187,6 +1199,36 @@ mod tests {
                 .unwrap()
                 .matmul_regions
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn contraction_cycle_fallback_retains_independent_batched_matmuls() {
+        let input = TensorExpr::constant(vec![0.25; 3 * 2 * 2], vec![3, 2, 2]);
+        let weight = || TensorExpr::constant(vec![0.5; 4], vec![2, 2]);
+        let hidden = input.matmul(weight()).exp();
+        let graph: TensorGraph<f32> = (hidden.clone() + hidden.matmul(weight())).into();
+        let order = graph.toposort();
+        let (matmuls, _) = form_matmul_regions(&graph, &order, &HashSet::new(), true).unwrap();
+        let error = PtxExecutionPlan::build_with_regions(
+            &graph,
+            &order,
+            Vec::new(),
+            Vec::new(),
+            matmuls,
+            order.last().copied(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<FusionPlanError>(),
+            Some(&FusionPlanError::ContractionCycle)
+        );
+        let plan = PtxExecutionPlan::build(&graph).unwrap();
+        assert_eq!(plan.matmul_regions().len(), 2);
+        assert!(
+            plan.matmul_regions()
+                .iter()
+                .all(|region| region.members.len() == 1 && region.epilogue_operations.is_empty())
         );
     }
 

@@ -3907,10 +3907,22 @@ mod tests {
             let lhs = TensorExpr::constant(vec![0.25; 32 * 32], vec![32, 32]);
             let rhs = TensorExpr::constant(vec![0.5; 32 * 32], vec![32, 32]);
             let graph: TensorGraph<f32> = lhs.matmul(rhs).into();
-            let plan =
+            let mut plan =
                 PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Strict)
                     .unwrap();
+            plan.schedule_matmuls(
+                target.matmul_capabilities(),
+                crate::tile::MatMulPrecision::AllowTf32,
+                target.matmul_resources,
+                crate::tile::MatMulSharedLayout::Auto,
+                crate::tile::MatMulPipeline::Auto,
+                target.supports_async_copy(),
+            )
+            .unwrap();
             let mut tile_graph = TileGraph::from_with_tf32_support(graph, target.supports_tf32());
+            tile_graph
+                .add_matmul_regions(plan.matmul_regions())
+                .unwrap();
             tile_graph.set_physical_nodes(
                 plan.steps()
                     .iter()

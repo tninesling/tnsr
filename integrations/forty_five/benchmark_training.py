@@ -101,11 +101,18 @@ def run(args):
     native_request = dict(op="train", batch=native, settings=settings)
     (args.output / "requests.jsonl").write_text((json.dumps(native_request)+"\n") * args.native_profile_steps)
     worker = Worker(args.worker, args.archive, "cuda")
-    def native_step():
+    baseline_worker = Worker(args.baseline_worker, args.archive, "cuda") if args.baseline_worker else None
+    def native_step(target=worker):
         if args.anchor_kl_coef:
             native["anchor"] = anchor_outputs(model, native)
-        return worker.request("train", batch=native, settings=settings)
-    cases = {"tnsr_strict_f32": native_step}
+        return target.request("train", batch=native, settings=settings)
+    cases = {}
+    if baseline_worker:
+        cases["tnsr_baseline_strict_f32"] = lambda: native_step(baseline_worker)
+        report["cases"]["tnsr_baseline_strict_f32"] = dict(samples=[])
+        report["baseline_worker_sha256"] = hashlib.sha256(args.baseline_worker.read_bytes()).hexdigest()
+    cases["tnsr_strict_f32"] = native_step
+    report["worker_sha256"] = hashlib.sha256(args.worker.read_bytes()).hexdigest()
     modes = [("pytorch_eager_strict_f32",False,False),("pytorch_eager_bf16",True,False)]
     if args.compile:
         modes.append(("pytorch_compiled_bf16",True,True))
@@ -162,6 +169,8 @@ def run(args):
                     (args.output/f"{label}-operators.txt").write_text(profiler.key_averages().table(sort_by="self_cuda_time_total",row_limit=30))
     finally:
         worker.close()
+        if baseline_worker:
+            baseline_worker.close()
     (args.output/"report.json").write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2))
 
@@ -172,6 +181,7 @@ def main():
     parser.add_argument("--forty-five-root",type=Path,required=True)
     parser.add_argument("--worker",type=Path,default=Path("target/release/examples/forty_five_worker"))
     parser.add_argument("--output",type=Path,required=True)
+    parser.add_argument("--baseline-worker",type=Path,help="optional second native binary for interleaved before/after measurements")
     parser.add_argument("--transitions",type=int,default=64)
     parser.add_argument("--microbatch",type=int,default=8)
     parser.add_argument("--warmups",type=int,default=2)

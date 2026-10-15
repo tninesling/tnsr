@@ -644,6 +644,7 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::NegF32(inst) => write!(f, "{inst}"),
             Inst::Ex2F32(inst) => write!(f, "{inst}"),
             Inst::Lg2F32(inst) => write!(f, "{inst}"),
+            Inst::SqrtF32(inst) => write!(f, "sqrt.rn.f32 {}, {};", inst.dst, inst.src),
             Inst::FmaI32(inst) => write!(f, "{inst}"),
             Inst::ShiftLeftB64(inst) => write!(f, "{inst}"),
             Inst::ShiftLeftU64(inst) => write!(f, "{inst}"),

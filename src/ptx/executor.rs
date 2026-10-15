@@ -50,6 +50,7 @@ pub struct PtxExecutionMetrics {
 /// and executes kernels via cudarc
 pub struct PtxExecutor<D: CudaDType = F32> {
     device: Arc<CudaContext>,
+    bindings: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
     sources: super::sources::SourceCache<D>,
     module: Option<Arc<CudaModule>>,
     values: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
@@ -111,6 +112,13 @@ impl<D: CudaDType> PtxExecutor<D> {
     /// Initialize this storage dtype with an explicit reduction policy.
     pub fn try_new_with_reduction_mode(reduction_mode: PtxReductionMode) -> Result<Self> {
         let device = CudaContext::new(0).context("Failed to initialize CUDA device 0")?;
+        Self::with_context(device, reduction_mode)
+    }
+
+    pub(crate) fn with_context(
+        device: Arc<CudaContext>,
+        reduction_mode: PtxReductionMode,
+    ) -> Result<Self> {
         let target = PtxTarget::from_context(&device)?;
         anyhow::ensure!(
             <D::HostType as crate::tile::TileDType>::TILE_DTYPE != crate::tile::DType::BF16
@@ -119,6 +127,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         );
         Ok(PtxExecutor {
             device,
+            bindings: HashMap::new(),
             sources: super::sources::SourceCache::default(),
             module: None,
             values: HashMap::new(),
@@ -181,15 +190,18 @@ impl<D: CudaDType> PtxExecutor<D> {
 
     fn validate_indices(
         &self,
-        indices: &CudaSlice<D::HostType>,
+        indices: &Arc<CudaSlice<D::HostType>>,
         upper: usize,
         operation: &str,
     ) -> Result<()> {
+        if let Some(result) = self.sources.validate_input(indices, upper, operation) {
+            return result;
+        }
         let mut host_indices = vec![D::HostType::default(); indices.len()];
         if !host_indices.is_empty() {
             self.device
                 .default_stream()
-                .memcpy_dtoh(indices, &mut host_indices)
+                .memcpy_dtoh(indices.as_ref(), &mut host_indices)
                 .with_context(|| format!("Failed to validate PTX {operation} indices"))?;
         }
         for (position, value) in host_indices.iter().enumerate() {
@@ -893,6 +905,15 @@ impl<D: CudaDType> PtxExecutor<D> {
         graph: &TensorGraph<D::HostType, G>,
         inputs: HashMap<String, Vec<D::HostType>>,
     ) -> Result<Vec<D::HostType>> {
+        self.execute_compiled_impl(graph, inputs, true)
+    }
+
+    fn execute_compiled_impl<G>(
+        &mut self,
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+        read_output: bool,
+    ) -> Result<Vec<D::HostType>> {
         self.execution_metrics = PtxExecutionMetrics::default();
         self.kernel_launches.set(0);
         let supplied_signature = graph_compilation_signature(
@@ -1022,10 +1043,16 @@ impl<D: CudaDType> PtxExecutor<D> {
                 }
                 continue;
             }
-            if let Some(binding) = self
-                .sources
-                .get(node, &self.device, |len| self.take_buffer(len))?
-            {
+            let binding = if let Some(value) = self.bindings.get(node_idx) {
+                Some(super::sources::SourceBinding {
+                    value: value.clone(),
+                    uploaded: false,
+                })
+            } else {
+                self.sources
+                    .get(node, &self.device, |len| self.take_buffer(len))?
+            };
+            if let Some(binding) = binding {
                 self.execution_metrics.device_copies += usize::from(binding.uploaded);
                 let bytes = binding.value.len() * std::mem::size_of::<D::HostType>();
                 self.execution_metrics.materialized_values += 1;
@@ -1801,6 +1828,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                 }
             };
             let result = Arc::new(result);
+            if let TensorGraphNode::Input { name, .. } = node
+                && let Some(host) = inputs.get::<str>(name)
+            {
+                self.sources.record_input(&result, host);
+            }
 
             let bytes = result.len() * std::mem::size_of::<D::HostType>();
             self.execution_metrics.materialized_values += 1;
@@ -1828,6 +1860,9 @@ impl<D: CudaDType> PtxExecutor<D> {
         self.stats = self.stats.with_pool_stats(self.pool.get_mut().stats());
         self.execution_metrics.kernel_launches = self.kernel_launches.get();
 
+        if !read_output {
+            return Ok(Vec::new());
+        }
         let last_node_idx = &graph_output;
         let out_device = self
             .values
@@ -1852,6 +1887,80 @@ impl<D: CudaDType> PtxExecutor<D> {
             .and_then(|plan| plan.value_shape(output_view.source))
             .context("Virtual output source is absent from the execution plan")?;
         materialize_host_view(storage_host, output_view, source_shape)
+    }
+
+    pub(crate) fn context(&self) -> Arc<CudaContext> {
+        self.device.clone()
+    }
+
+    pub(crate) fn device_value(
+        &self,
+        node: petgraph::graph::NodeIndex,
+    ) -> Result<super::resident::DeviceValue<D>> {
+        let plan = self.execution_plan.as_ref().context("no compiled plan")?;
+        let view = plan
+            .virtual_value(node)
+            .context("device value has no layout")?
+            .clone();
+        let source_shape = plan
+            .value_shape(view.source)
+            .context("device value has no source shape")?
+            .clone();
+        let storage = self
+            .values
+            .get(&node)
+            .context("device value was not retained")?
+            .clone();
+        Ok(super::resident::DeviceValue {
+            storage,
+            view,
+            source_shape,
+        })
+    }
+
+    pub(crate) fn run_device<G>(
+        &mut self,
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+        bindings: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
+    ) -> Result<()> {
+        for (node, value) in &bindings {
+            let source = graph
+                .graph
+                .node_weight(*node)
+                .context("device binding node is absent")?;
+            anyhow::ensure!(
+                matches!(
+                    source,
+                    TensorGraphNode::Parameter { .. } | TensorGraphNode::Input { .. }
+                ),
+                "device bindings require source nodes"
+            );
+            anyhow::ensure!(
+                Arc::ptr_eq(value.context(), &self.device),
+                "device binding context mismatch"
+            );
+            anyhow::ensure!(
+                value.len() == checked_element_count(source.shape(), "device binding")?,
+                "device binding length mismatch"
+            );
+        }
+        let signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+            self.matmul_shared_layout,
+            self.matmul_pipeline,
+            self.fusion_policy,
+        );
+        if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
+            self.compile(graph)?;
+        }
+        self.bindings = bindings;
+        let result = self.execute_compiled_impl(graph, inputs, false);
+        self.bindings.clear();
+        result.map(|_| ())
     }
 
     /// Compile and execute, reusing the module for the same graph structure.

@@ -1,4 +1,4 @@
-//! F32 PPO objective and host optimizer orchestration matching forty-five.
+//! F32 PPO objective and CPU/resident CUDA optimizer orchestration matching forty-five.
 use super::{Model, Observations, Tensor};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -310,11 +310,15 @@ pub struct Trainer {
     steps: usize,
     compiled: HashMap<(usize, u32), Compiled>,
     profile: bool,
+    #[cfg(feature = "cuda")]
+    resident: Option<tnsr::ptx::resident::ResidentAdam>,
 }
 impl Trainer {
     pub fn new(settings: &Settings, backend: String) -> Result<Self> {
         settings.validate()?;
         Ok(Self {
+            #[cfg(feature = "cuda")]
+            resident: None,
             policy: Adam::new(settings.learning_rate),
             value: Adam::new(settings.value_learning_rate),
             initial: settings.clone(),
@@ -344,6 +348,38 @@ impl Trainer {
                 && settings.min_learning_rate == self.initial.min_learning_rate,
             "optimizer initial rates/schedule cannot change without starting a fresh worker"
         );
+        #[cfg(feature = "cuda")]
+        {
+            let started = Instant::now();
+            if self.backend == "cuda" && self.resident.is_none() {
+                use tnsr::ptx::resident::{AdamGroup, ResidentAdam};
+                let parameters = model
+                    .parameters
+                    .iter()
+                    .map(|(_, entry)| {
+                        (
+                            entry.parameter.clone(),
+                            usize::from(entry.group != "policy"),
+                        )
+                    })
+                    .collect();
+                self.resident = Some(ResidentAdam::new(
+                    parameters,
+                    vec![
+                        AdamGroup::new(settings.learning_rate),
+                        AdamGroup::new(settings.value_learning_rate),
+                    ],
+                )?);
+            }
+            if let Some(resident) = &mut self.resident {
+                resident.begin_step()?;
+            }
+            timing[0] += started.elapsed().as_secs_f64();
+        }
+        #[cfg(feature = "cuda")]
+        let using_resident = self.resident.is_some();
+        #[cfg(not(feature = "cuda"))]
+        let using_resident = false;
         let n = batch.actions.len();
         let mut accumulated: HashMap<usize, Vec<f32>> = HashMap::new();
         let mut metrics = [0f64; 7];
@@ -357,6 +393,15 @@ impl Trainer {
             let started = Instant::now();
             if !self.compiled.contains_key(&key) {
                 let (graph, output) = build(model, size, settings.clip_eps)?;
+                #[cfg(feature = "cuda")]
+                let executor = if let Some(resident) = &self.resident {
+                    let mut executor = resident.executor()?;
+                    executor.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+                    Runtime::Ptx(executor)
+                } else {
+                    crate::runtime(&self.backend)?
+                };
+                #[cfg(not(feature = "cuda"))]
                 let executor = crate::runtime(&self.backend)?;
                 if self.compiled.len() >= 8
                     && let Some(key) = self.compiled.keys().min().copied()
@@ -381,6 +426,15 @@ impl Trainer {
             let feeds = inputs(&micro, model, settings, weight)?;
             timing[1] += started.elapsed().as_secs_f64();
             let started = Instant::now();
+            #[cfg(feature = "cuda")]
+            if let (Some(resident), Runtime::Ptx(executor)) =
+                (&mut self.resident, &mut compiled.executor)
+            {
+                resident.accumulate(executor, &compiled.graph, feeds)?;
+            } else {
+                compiled.executor.execute(&compiled.graph, feeds)?;
+            }
+            #[cfg(not(feature = "cuda"))]
             compiled.executor.execute(&compiled.graph, feeds)?;
             timing[2] += started.elapsed().as_secs_f64();
             #[cfg(feature = "cuda")]
@@ -403,6 +457,10 @@ impl Trainer {
             }
             timing[3] += started.elapsed().as_secs_f64();
             let started = Instant::now();
+            if using_resident {
+                update_graph = Some(key);
+                continue;
+            }
             let gradients = compiled.executor.get_gradients(&compiled.graph);
             timing[4] += started.elapsed().as_secs_f64();
             let started = Instant::now();
@@ -426,6 +484,79 @@ impl Trainer {
             update_graph = Some(key);
         }
         let started = Instant::now();
+        #[cfg(feature = "cuda")]
+        let resident_result = if let Some(resident) = &mut self.resident {
+            let status = resident.step(settings.max_grad_norm)?;
+            kernel_launches.set(status.kernel_launches);
+            let mut named = serde_json::Map::new();
+            if return_gradients {
+                let gradients = resident.gradients()?;
+                for (name, entry) in model.parameters.iter() {
+                    named.insert(
+                        name.into(),
+                        serde_json::json!(
+                            gradients
+                                .get(&entry.parameter.id())
+                                .context("missing resident model gradient")?
+                        ),
+                    );
+                }
+            }
+            Some((status.gradient_norm, status.gradient_scale, named))
+        } else {
+            None
+        };
+        #[cfg(not(feature = "cuda"))]
+        let resident_result: Option<(
+            f64,
+            f32,
+            serde_json::Map<String, serde_json::Value>,
+        )> = None;
+        let (norm, scale, named) = if let Some(result) = resident_result {
+            result
+        } else {
+            self.cpu_update(model, accumulated, update_graph, settings, return_gradients)?
+        };
+        self.steps += 1;
+        timing[6] += started.elapsed().as_secs_f64();
+        let keys = [
+            "loss",
+            "policy_loss",
+            "value_loss",
+            "entropy",
+            "bid_anchor_kl",
+            "approx_kl",
+            "clip_fraction",
+        ];
+        let metrics: serde_json::Map<_, _> = keys
+            .into_iter()
+            .zip(metrics)
+            .map(|(key, value)| (key.into(), serde_json::json!(value)))
+            .collect();
+        let mut result = serde_json::json!({"metrics":metrics,"gradient_norm_before_clip":norm,"gradient_scale":scale,"optimizer_steps":self.steps,"compiled_shapes":self.compiled.len()});
+        if self.profile {
+            result["profile"] = serde_json::json!({
+                "compile_cache_seconds":timing[0], "input_seconds":timing[1],
+                "execute_seconds":timing[2], "metrics_seconds":timing[3],
+                "gradient_extraction_seconds":timing[4], "accumulate_seconds":timing[5],
+                "clip_adam_finite_check_seconds":timing[6],
+                "total_seconds":total_started.elapsed().as_secs_f64(),
+                "kernel_launches":kernel_launches.get(),"graph_nodes":graph_nodes
+            });
+        }
+        if return_gradients {
+            result["gradients"] = serde_json::Value::Object(named);
+        }
+        Ok(result)
+    }
+    fn cpu_update(
+        &mut self,
+        model: &Model,
+        mut accumulated: HashMap<usize, Vec<f32>>,
+        update_graph: Option<(usize, u32)>,
+        settings: &Settings,
+        return_gradients: bool,
+    ) -> Result<(f64, f32, serde_json::Map<String, serde_json::Value>)> {
         let norm = accumulated
             .values()
             .flatten()
@@ -469,7 +600,6 @@ impl Trainer {
             .graph;
         self.policy.step(graph, &policy);
         self.value.step(graph, &value);
-        self.steps += 1;
         ensure!(
             model.parameters.iter().all(|(_, entry)| entry
                 .parameter
@@ -477,37 +607,9 @@ impl Trainer {
                 .is_ok_and(|values| values.iter().all(|x| x.is_finite()))),
             "Adam produced invalid parameters"
         );
-        timing[6] += started.elapsed().as_secs_f64();
-        let keys = [
-            "loss",
-            "policy_loss",
-            "value_loss",
-            "entropy",
-            "bid_anchor_kl",
-            "approx_kl",
-            "clip_fraction",
-        ];
-        let metrics: serde_json::Map<_, _> = keys
-            .into_iter()
-            .zip(metrics)
-            .map(|(key, value)| (key.into(), serde_json::json!(value)))
-            .collect();
-        let mut result = serde_json::json!({"metrics":metrics,"gradient_norm_before_clip":norm,"gradient_scale":scale,"optimizer_steps":self.steps,"compiled_shapes":self.compiled.len()});
-        if self.profile {
-            result["profile"] = serde_json::json!({
-                "compile_cache_seconds":timing[0], "input_seconds":timing[1],
-                "execute_seconds":timing[2], "metrics_seconds":timing[3],
-                "gradient_extraction_seconds":timing[4], "accumulate_seconds":timing[5],
-                "clip_adam_finite_check_seconds":timing[6],
-                "total_seconds":total_started.elapsed().as_secs_f64(),
-                "kernel_launches":kernel_launches.get(),"graph_nodes":graph_nodes
-            });
-        }
-        if return_gradients {
-            result["gradients"] = serde_json::Value::Object(named);
-        }
-        Ok(result)
+        Ok((norm, scale, named))
     }
+
     /// The existing trainer advances its schedule per rollout, not per minibatch.
     pub fn advance_schedule(&mut self, update: usize) -> Result<serde_json::Value> {
         ensure!(
@@ -526,6 +628,11 @@ impl Trainer {
         let value = rate(self.initial.value_learning_rate);
         self.policy.set_learning_rate(policy)?;
         self.value.set_learning_rate(value)?;
+        #[cfg(feature = "cuda")]
+        if let Some(resident) = &mut self.resident {
+            resident.set_learning_rate(0, policy)?;
+            resident.set_learning_rate(1, value)?;
+        }
         Ok(
             serde_json::json!({"policy_learning_rate":policy,"value_learning_rate":value,"schedule_update":update}),
         )

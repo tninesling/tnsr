@@ -180,6 +180,11 @@ impl<D: DType> Parameter<D> {
         &self.shape
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn storage(&self) -> Arc<ParameterStorage<D>> {
+        self.data.clone()
+    }
+
     /// Copy parameter values while preserving sharing with graphs and clones.
     pub fn values(&self) -> anyhow::Result<Vec<D>> {
         self.data

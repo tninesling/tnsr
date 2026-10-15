@@ -526,6 +526,7 @@ pub enum Inst<'a> {
     NegF32(NegInst<'a, F32>),
     Ex2F32(Ex2Inst<'a, F32>),
     Lg2F32(Lg2Inst<'a, F32>),
+    SqrtF32(UnaryInst<'a, F32>),
     FmaI32(FmaInst<'a, I32>),
     ShiftLeftB64(ShiftLeftInst<'a, B64, U64>),
     ShiftLeftU64(ShiftLeftInst<'a, U64, U64>),

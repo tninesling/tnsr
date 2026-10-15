@@ -1,4 +1,5 @@
 //! Explicit forty-five actor/critic model assembled from tnsr primitives.
+pub mod ppo;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -56,7 +57,7 @@ impl Model {
             "this port supports learned-position SwiGLU encoders and legal-information critics"
         );
         ensure!(
-            c.token_dim > 0
+            c.token_dim >= 2
                 && c.token_dim <= 4096
                 && c.token_heads > 0
                 && c.token_dim.is_multiple_of(c.token_heads),

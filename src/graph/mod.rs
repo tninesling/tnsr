@@ -47,7 +47,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ops::Index;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use itertools::Itertools;
 use petgraph::graph::Graph;
@@ -85,7 +84,7 @@ pub enum TensorGraphNode<D> {
     },
     Parameter {
         id: usize,
-        data: Arc<Mutex<Vec<D>>>,
+        data: Arc<crate::tensor::ParameterStorage<D>>,
         shape: crate::tensor::Shape,
     },
     Unary {

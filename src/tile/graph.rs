@@ -1009,7 +1009,7 @@ impl TileGraph {
     fn lower_parameter<D: TileDType>(
         dtype: DType,
         _id: usize,
-        _data: std::sync::Arc<std::sync::Mutex<Vec<D>>>,
+        _data: std::sync::Arc<crate::tensor::ParameterStorage<D>>,
         shape: &[usize],
     ) -> TileIR {
         let mut builder = TileIRBuilder::new();

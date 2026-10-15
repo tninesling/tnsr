@@ -50,6 +50,7 @@ pub struct PtxExecutionMetrics {
 /// and executes kernels via cudarc
 pub struct PtxExecutor<D: CudaDType = F32> {
     device: Arc<CudaContext>,
+    sources: super::sources::SourceCache<D>,
     module: Option<Arc<CudaModule>>,
     values: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
     pool: RefCell<CudaBufferPool<D::HostType>>,
@@ -118,6 +119,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         );
         Ok(PtxExecutor {
             device,
+            sources: super::sources::SourceCache::default(),
             module: None,
             values: HashMap::new(),
             pool: RefCell::new(CudaBufferPool::default()),
@@ -926,6 +928,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             .context("No PTX execution plan available. Call compile_owned() first.")?;
         let plan_steps = execution_plan.steps().to_vec();
         let graph_output = execution_plan.graph_output().context("Graph is empty")?;
+        self.sources.prune();
         let old_values: Vec<_> = self.values.drain().map(|(_, value)| value).collect();
         for value in old_values {
             self.recycle_value(value);
@@ -1011,6 +1014,24 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .context("virtual view input value is unavailable")?,
                 );
                 self.values.insert(*node_idx, result);
+                self.stats.record_live(live_bytes);
+                for &dead in &plan_step.release_after {
+                    if let Some(value) = self.values.remove(&dead) {
+                        live_bytes -= self.recycle_value(value);
+                    }
+                }
+                continue;
+            }
+            if let Some(binding) = self
+                .sources
+                .get(node, &self.device, |len| self.take_buffer(len))?
+            {
+                self.execution_metrics.device_copies += usize::from(binding.uploaded);
+                let bytes = binding.value.len() * std::mem::size_of::<D::HostType>();
+                self.execution_metrics.materialized_values += 1;
+                self.execution_metrics.materialized_bytes += bytes;
+                self.values.insert(*node_idx, binding.value);
+                live_bytes += bytes;
                 self.stats.record_live(live_bytes);
                 for &dead in &plan_step.release_after {
                     if let Some(value) = self.values.remove(&dead) {

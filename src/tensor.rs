@@ -1133,6 +1133,9 @@ impl<D: DType> TensorExpr<D> {
     }
 
     /// Mask operation: returns `self` where `condition != 0`, else 0.
+    ///
+    /// Autograd propagates gradients to selected values, reducing broadcast
+    /// dimensions back to their original shape. The condition is nondifferentiable.
     pub fn mask<R: Into<TensorExpr<D>>>(self, condition: R) -> Self
     where
         D: 'static,

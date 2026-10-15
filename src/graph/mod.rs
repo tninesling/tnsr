@@ -1008,10 +1008,34 @@ where
                         grad_in,
                     );
                 }
-                TensorGraphNode::Gt { .. } | TensorGraphNode::Mask { .. } => {
-                    // Gt and Mask are only used in gradient computation itself
-                    // They don't need gradients (they're non-differentiable operations)
-                    // Skip gradient computation for these nodes
+                TensorGraphNode::Mask { .. } => {
+                    // The condition selects values without itself being differentiated.
+                    // Broadcast inputs are explicit graph nodes, so their backward
+                    // rules reduce this full-shape gradient to the original shape.
+                    assert_eq!(
+                        inputs.len(),
+                        2,
+                        "Mask should have values and condition inputs"
+                    );
+                    let values = inputs[0];
+                    let condition = inputs[1];
+                    let grad_out_expr =
+                        TensorExpr::node_ref(grad_output, self.graph[grad_output].shape().clone());
+                    let condition_expr =
+                        TensorExpr::node_ref(condition, self.graph[condition].shape().clone());
+                    let values_grad = self.lower_gradient_expr(
+                        &grad_out_expr.mask(condition_expr),
+                        &mut gradient_nodes,
+                    );
+                    self.accumulate_gradient(
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        values,
+                        values_grad,
+                    );
+                }
+                TensorGraphNode::Gt { .. } => {
+                    // Comparison conditions are nondifferentiable.
                 }
                 #[cfg(feature = "fusion")]
                 TensorGraphNode::FusedUnary { ops, .. } => {
@@ -1217,6 +1241,9 @@ impl<D: crate::tensor::DType> From<TensorExpr<D>> for TensorGraph<D, NoGrad> {
         graph
     }
 }
+
+#[cfg(test)]
+mod mask_tests;
 
 #[cfg(test)]
 mod tests {

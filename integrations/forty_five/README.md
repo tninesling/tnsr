@@ -86,6 +86,11 @@ Strict-order model reductions remain the default. `--tree-reductions` opts the
 CUDA training/validation/benchmark scripts into fixed parallel f32 trees;
 the JSON equivalent is `settings.tree_reductions=true`. The policy stays fixed
 for the lifetime of a trainer. Matmul remains strict f32. Training is synchronous.
+`--cuda-graphs` (or `settings.cuda_graphs=true`) separately opts into stable-buffer
+model replay. Responses report active shapes, setup and fallback reasons;
+accumulation, clipping/status and Adam remain outside capture. See the
+[replay contract](../../docs/resident-replay.md) and
+[paired measurements](../../docs/training-replay-performance.md).
 Saved archives restore model weights for inference/export or a
 fresh optimizer; exact optimizer/RNG resumption and bf16 autocast are not provided.
 

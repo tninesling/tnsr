@@ -309,7 +309,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             captured.launch()?;
             self.replay_metrics.graph_launches += 1;
             self.execution_metrics = state.metrics.clone();
-            self.execution_metrics.device_copies = copies;
+            self.execution_metrics.device_copies += copies;
             self.execution_metrics.graph_launches = 1;
             self.kernel_launches.set(state.metrics.kernel_launches);
             self.replay = Some(state);

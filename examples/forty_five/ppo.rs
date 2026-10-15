@@ -3,6 +3,7 @@ use super::{Model, Observations, Tensor};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Instant;
 use tnsr::graph::{NodeIndex, TensorGraph, WithGrad};
 use tnsr::nn;
 use tnsr::optimizer::Adam;
@@ -308,6 +309,7 @@ pub struct Trainer {
     backend: String,
     steps: usize,
     compiled: HashMap<(usize, u32), Compiled>,
+    profile: bool,
 }
 impl Trainer {
     pub fn new(settings: &Settings, backend: String) -> Result<Self> {
@@ -319,6 +321,7 @@ impl Trainer {
             backend,
             steps: 0,
             compiled: HashMap::new(),
+            profile: std::env::var("TNSR_PROFILE_PPO").as_deref() == Ok("1"),
         })
     }
     pub fn step(
@@ -328,6 +331,10 @@ impl Trainer {
         settings: &Settings,
         return_gradients: bool,
     ) -> Result<serde_json::Value> {
+        let total_started = Instant::now();
+        let mut timing = [0f64; 7];
+        let kernel_launches = std::cell::Cell::new(0usize);
+        let mut graph_nodes = 0usize;
         settings.validate()?;
         batch.validate(model, settings)?;
         ensure!(
@@ -347,6 +354,7 @@ impl Trainer {
             let size = end - start;
             let weight = size as f32 / n as f32;
             let key = (size, settings.clip_eps.to_bits());
+            let started = Instant::now();
             if !self.compiled.contains_key(&key) {
                 let (graph, output) = build(model, size, settings.clip_eps)?;
                 let executor = crate::runtime(&self.backend)?;
@@ -364,13 +372,24 @@ impl Trainer {
                     },
                 );
             }
+            timing[0] += started.elapsed().as_secs_f64();
             let compiled = self
                 .compiled
                 .get_mut(&key)
                 .context("PPO compilation cache missing")?;
-            compiled
-                .executor
-                .execute(&compiled.graph, inputs(&micro, model, settings, weight)?)?;
+            let started = Instant::now();
+            let feeds = inputs(&micro, model, settings, weight)?;
+            timing[1] += started.elapsed().as_secs_f64();
+            let started = Instant::now();
+            compiled.executor.execute(&compiled.graph, feeds)?;
+            timing[2] += started.elapsed().as_secs_f64();
+            #[cfg(feature = "cuda")]
+            if let Runtime::Ptx(executor) = &compiled.executor {
+                kernel_launches
+                    .set(kernel_launches.get() + executor.execution_metrics().kernel_launches);
+            }
+            graph_nodes = compiled.graph.graph.node_count();
+            let started = Instant::now();
             let values = compiled
                 .executor
                 .get_value(compiled.output)
@@ -382,7 +401,12 @@ impl Trainer {
             for (target, &value) in metrics.iter_mut().zip(&values) {
                 *target += f64::from(value) * f64::from(weight);
             }
-            for (id, gradient) in compiled.executor.get_gradients(&compiled.graph) {
+            timing[3] += started.elapsed().as_secs_f64();
+            let started = Instant::now();
+            let gradients = compiled.executor.get_gradients(&compiled.graph);
+            timing[4] += started.elapsed().as_secs_f64();
+            let started = Instant::now();
+            for (id, gradient) in gradients {
                 ensure!(
                     gradient.iter().all(|x| x.is_finite()),
                     "PPO produced nonfinite gradients"
@@ -398,8 +422,10 @@ impl Trainer {
                     *target += value;
                 }
             }
+            timing[5] += started.elapsed().as_secs_f64();
             update_graph = Some(key);
         }
+        let started = Instant::now();
         let norm = accumulated
             .values()
             .flatten()
@@ -451,6 +477,7 @@ impl Trainer {
                 .is_ok_and(|values| values.iter().all(|x| x.is_finite()))),
             "Adam produced invalid parameters"
         );
+        timing[6] += started.elapsed().as_secs_f64();
         let keys = [
             "loss",
             "policy_loss",
@@ -466,6 +493,16 @@ impl Trainer {
             .map(|(key, value)| (key.into(), serde_json::json!(value)))
             .collect();
         let mut result = serde_json::json!({"metrics":metrics,"gradient_norm_before_clip":norm,"gradient_scale":scale,"optimizer_steps":self.steps,"compiled_shapes":self.compiled.len()});
+        if self.profile {
+            result["profile"] = serde_json::json!({
+                "compile_cache_seconds":timing[0], "input_seconds":timing[1],
+                "execute_seconds":timing[2], "metrics_seconds":timing[3],
+                "gradient_extraction_seconds":timing[4], "accumulate_seconds":timing[5],
+                "clip_adam_finite_check_seconds":timing[6],
+                "total_seconds":total_started.elapsed().as_secs_f64(),
+                "kernel_launches":kernel_launches.get(),"graph_nodes":graph_nodes
+            });
+        }
         if return_gradients {
             result["gradients"] = serde_json::Value::Object(named);
         }

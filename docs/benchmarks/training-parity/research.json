@@ -1,0 +1,945 @@
+{
+  "real64-micro8": {
+    "torch_version": "2.11.0+cu130",
+    "gpu": "NVIDIA GeForce RTX 4080",
+    "batch_sha256": "21da32f0bfd41163a766bc444c6fa4dac7870489263b077a53fb72be1f806821",
+    "transitions": 64,
+    "microbatch": 8,
+    "warmups": 2,
+    "repeats": 3,
+    "anchor_kl_coef": 0.0,
+    "external_workloads": "left running; monitor GPU samples for contention",
+    "cases": {
+      "pytorch_eager_strict_f32": {
+        "median_seconds": 0.21050230500077305,
+        "min_seconds": 0.1898172750006779,
+        "max_seconds": 0.2303911879989755,
+        "transitions_per_second": 304.03467553367153,
+        "samples": [
+          {
+            "seconds": 0.2303911879989755,
+            "gpu_status": "59, 6462, 175.05, 2760"
+          },
+          {
+            "seconds": 0.1898172750006779,
+            "gpu_status": "74, 6463, 180.66, 2760"
+          },
+          {
+            "seconds": 0.21050230500077305,
+            "gpu_status": "77, 6427, 190.02, 2760"
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 0.6823610440005723,
+            "gpu_status": "11, 6225, 135.96, 2775"
+          },
+          {
+            "seconds": 0.22404574999927718,
+            "gpu_status": "15, 6436, 68.88, 2775"
+          }
+        ],
+        "updater_sha256": "1756f1311f5fa076f3671eaa8ee7836ce0a747e80fbdcaf2b89ae30f6c25f085",
+        "fused_adam": null
+      },
+      "pytorch_eager_bf16": {
+        "median_seconds": 0.2432064000004175,
+        "min_seconds": 0.2249863600009121,
+        "max_seconds": 0.2516790689987829,
+        "transitions_per_second": 263.15096971087166,
+        "samples": [
+          {
+            "seconds": 0.2516790689987829,
+            "gpu_status": "59, 6462, 175.05, 2760"
+          },
+          {
+            "seconds": 0.2249863600009121,
+            "gpu_status": "87, 6463, 180.98, 2760"
+          },
+          {
+            "seconds": 0.2432064000004175,
+            "gpu_status": "91, 6462, 197.74, 2760"
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 0.3796231529995566,
+            "gpu_status": "11, 6289, 91.04, 2775"
+          },
+          {
+            "seconds": 0.2607688269999926,
+            "gpu_status": "15, 6440, 68.88, 2775"
+          }
+        ],
+        "updater_sha256": "15f7fd8646c0932757a5dd547abfe39d227ebffd13e19b7dc4fa4e0b69351136",
+        "fused_adam": null
+      },
+      "pytorch_compiled_bf16": {
+        "median_seconds": 0.19165883399909944,
+        "min_seconds": 0.17455847300152527,
+        "max_seconds": 0.2081082120002975,
+        "transitions_per_second": 333.9266897569706,
+        "samples": [
+          {
+            "seconds": 0.2081082120002975,
+            "gpu_status": "77, 6440, 172.98, 2760"
+          },
+          {
+            "seconds": 0.19165883399909944,
+            "gpu_status": "87, 6463, 180.98, 2760"
+          },
+          {
+            "seconds": 0.17455847300152527,
+            "gpu_status": "91, 6462, 197.74, 2760"
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 68.67002421500001,
+            "gpu_status": "100, 6452, 182.24, 2760"
+          },
+          {
+            "seconds": 0.22866859499845305,
+            "gpu_status": "15, 6440, 86.93, 2775"
+          }
+        ],
+        "updater_sha256": "15f7fd8646c0932757a5dd547abfe39d227ebffd13e19b7dc4fa4e0b69351136",
+        "fused_adam": null
+      },
+      "tnsr_strict_f32": {
+        "median_seconds": 6.448344527998415,
+        "min_seconds": 6.1998892379997415,
+        "max_seconds": 6.768376033000095,
+        "transitions_per_second": 9.925028000925655,
+        "samples": [
+          {
+            "seconds": 6.768376033000095,
+            "gpu_status": "59, 6462, 153.46, 2760"
+          },
+          {
+            "seconds": 6.448344527998415,
+            "gpu_status": "74, 6463, 180.66, 2760"
+          },
+          {
+            "seconds": 6.1998892379997415,
+            "gpu_status": "77, 6427, 190.02, 2760"
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 6.6020533249993605,
+            "gpu_status": "72, 6005, 176.32, 2760"
+          },
+          {
+            "seconds": 7.153214022000611,
+            "gpu_status": "27, 6453, 92.98, 2775"
+          }
+        ]
+      }
+    }
+  },
+  "real64-micro64": {
+    "torch_version": "2.11.0+cu130",
+    "gpu": "NVIDIA GeForce RTX 4080",
+    "batch_sha256": "21da32f0bfd41163a766bc444c6fa4dac7870489263b077a53fb72be1f806821",
+    "transitions": 64,
+    "microbatch": 64,
+    "warmups": 2,
+    "repeats": 3,
+    "anchor_kl_coef": 0.0,
+    "external_workloads": "left running; monitor GPU samples for contention",
+    "cases": {
+      "pytorch_eager_strict_f32": {
+        "median_seconds": 0.032394096999269095,
+        "min_seconds": 0.02939340299963078,
+        "max_seconds": 0.034408251000058954,
+        "transitions_per_second": 1975.6685917636175,
+        "samples": [
+          {
+            "seconds": 0.02939340299963078,
+            "gpu_status": "2, 8854, 104.84, 2775"
+          },
+          {
+            "seconds": 0.032394096999269095,
+            "gpu_status": "94, 8855, 199.29, 2760"
+          },
+          {
+            "seconds": 0.034408251000058954,
+            "gpu_status": "100, 8856, 199.78, 2760"
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 0.7554415710001194,
+            "gpu_status": "70, 8652, 158.18, 2760"
+          },
+          {
+            "seconds": 0.02426029100024607,
+            "gpu_status": "47, 8854, 161.31, 2760"
+          }
+        ],
+        "updater_sha256": "1756f1311f5fa076f3671eaa8ee7836ce0a747e80fbdcaf2b89ae30f6c25f085",
+        "fused_adam": null
+      },
+      "pytorch_eager_bf16": {
+        "median_seconds": 0.05045745899951726,
+        "min_seconds": 0.029120025001247996,
+        "max_seconds": 0.057876241000485606,
+        "transitions_per_second": 1268.3952237985727,
+        "samples": [
+          {
+            "seconds": 0.029120025001247996,
+            "gpu_status": "2, 8854, 104.84, 2775"
+          },
+          {
+            "seconds": 0.057876241000485606,
+            "gpu_status": "94, 8856, 199.29, 2760"
+          },
+          {
+            "seconds": 0.05045745899951726,
+            "gpu_status": "54, 8856, 190.15, 2760"
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 0.2832259709994105,
+            "gpu_status": "70, 8734, 158.18, 2760"
+          },
+          {
+            "seconds": 0.03283932900012587,
+            "gpu_status": "47, 8854, 161.31, 2760"
+          }
+        ],
+        "updater_sha256": "15f7fd8646c0932757a5dd547abfe39d227ebffd13e19b7dc4fa4e0b69351136",
+        "fused_adam": null
+      },
+      "pytorch_compiled_bf16": {
+        "median_seconds": 0.03310357999907865,
+        "min_seconds": 0.02817241000047943,
+        "max_seconds": 0.036019832999954815,
+        "transitions_per_second": 1933.3256403621988,
+        "samples": [
+          {
+            "seconds": 0.02817241000047943,
+            "gpu_status": "2, 8854, 99.72, 2760"
+          },
+          {
+            "seconds": 0.03310357999907865,
+            "gpu_status": "94, 8856, 199.29, 2760"
+          },
+          {
+            "seconds": 0.036019832999954815,
+            "gpu_status": "54, 8856, 190.15, 2760"
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 47.35504953700001,
+            "gpu_status": "63, 8850, 189.25, 2760"
+          },
+          {
+            "seconds": 0.0232043510004587,
+            "gpu_status": "47, 8854, 161.31, 2760"
+          }
+        ],
+        "updater_sha256": "15f7fd8646c0932757a5dd547abfe39d227ebffd13e19b7dc4fa4e0b69351136",
+        "fused_adam": null
+      },
+      "tnsr_strict_f32": {
+        "median_seconds": 1.047544511000524,
+        "min_seconds": 0.8778171780013508,
+        "max_seconds": 1.0557497030004015,
+        "transitions_per_second": 61.095255932249344,
+        "samples": [
+          {
+            "seconds": 0.8778171780013508,
+            "gpu_status": "2, 8854, 104.84, 2775"
+          },
+          {
+            "seconds": 1.0557497030004015,
+            "gpu_status": "94, 8853, 199.29, 2760"
+          },
+          {
+            "seconds": 1.047544511000524,
+            "gpu_status": "100, 8856, 199.78, 2760"
+          }
+        ],
+        "warmup_samples": [
+          {
+            "seconds": 45.870240084001125,
+            "gpu_status": "88, 7860, 80.20, 2775"
+          },
+          {
+            "seconds": 0.9835852390006039,
+            "gpu_status": "47, 8852, 161.31, 2760"
+          }
+        ]
+      }
+    }
+  },
+  "readback": {
+    "readbacks": 3384,
+    "per_update_readbacks": 1128.0,
+    "per_update_copy_seconds": 0.135491306,
+    "per_update_view_seconds": 5.272813272333333
+  },
+  "native_stages": {
+    "native-stage-timings.jsonl": [
+      {
+        "accumulate_seconds": 0.043076865,
+        "clip_adam_finite_check_seconds": 0.059775404,
+        "compile_cache_seconds": 0.442742939,
+        "execute_seconds": 1.320804828,
+        "gradient_extraction_seconds": 4.842343855999999,
+        "graph_nodes": 4484,
+        "input_seconds": 0.00018699599999999998,
+        "kernel_launches": 52104,
+        "metrics_seconds": 0.000404477,
+        "total_seconds": 6.709568953
+      },
+      {
+        "accumulate_seconds": 0.047470217,
+        "clip_adam_finite_check_seconds": 0.040190688,
+        "compile_cache_seconds": 4.829e-06,
+        "execute_seconds": 0.632811737,
+        "gradient_extraction_seconds": 4.778186508,
+        "graph_nodes": 4484,
+        "input_seconds": 0.000172726,
+        "kernel_launches": 52104,
+        "metrics_seconds": 0.00030887499999999996,
+        "total_seconds": 5.499352251
+      },
+      {
+        "accumulate_seconds": 0.053942915,
+        "clip_adam_finite_check_seconds": 0.05055564,
+        "compile_cache_seconds": 4.119000000000001e-06,
+        "execute_seconds": 0.686904156,
+        "gradient_extraction_seconds": 4.838794155,
+        "graph_nodes": 4484,
+        "input_seconds": 0.00018330499999999998,
+        "kernel_launches": 52104,
+        "metrics_seconds": 0.00026407,
+        "total_seconds": 5.630870593
+      }
+    ],
+    "real-readback-stages.jsonl": [
+      {
+        "accumulate_seconds": 0.045030583,
+        "clip_adam_finite_check_seconds": 0.059921918,
+        "compile_cache_seconds": 0.39833939499999993,
+        "execute_seconds": 1.343960333,
+        "gradient_extraction_seconds": 5.121499368000001,
+        "graph_nodes": 4484,
+        "input_seconds": 0.00016421,
+        "kernel_launches": 52104,
+        "metrics_seconds": 0.0009517349999999999,
+        "total_seconds": 6.9700881169999995
+      },
+      {
+        "accumulate_seconds": 0.06756258999999999,
+        "clip_adam_finite_check_seconds": 0.056609303,
+        "compile_cache_seconds": 6.1819999999999994e-06,
+        "execute_seconds": 0.7305370680000001,
+        "gradient_extraction_seconds": 5.621230157,
+        "graph_nodes": 4484,
+        "input_seconds": 0.000163389,
+        "kernel_launches": 52104,
+        "metrics_seconds": 0.0010906450000000001,
+        "total_seconds": 6.4773886019999996
+      },
+      {
+        "accumulate_seconds": 0.078030238,
+        "clip_adam_finite_check_seconds": 0.061930733,
+        "compile_cache_seconds": 7.0930000000000005e-06,
+        "execute_seconds": 0.5845154779999999,
+        "gradient_extraction_seconds": 5.684864783,
+        "graph_nodes": 4484,
+        "input_seconds": 0.000197342,
+        "kernel_launches": 52104,
+        "metrics_seconds": 0.0010878110000000002,
+        "total_seconds": 6.410873372
+      }
+    ]
+  },
+  "native_micro8_trace": {
+    "cuda_api_sum": [
+      {
+        "Time (%)": "39.5",
+        "Total Time (ns)": "862067225",
+        "Num Calls": "9600",
+        "Avg (ns)": "89798.7",
+        "Med (ns)": "3857.0",
+        "Min (ns)": "2435",
+        "Max (ns)": "3349134",
+        "StdDev (ns)": "384650.9",
+        "Name": "cuMemcpyHtoDAsync_v2"
+      },
+      {
+        "Time (%)": "27.3",
+        "Total Time (ns)": "596164373",
+        "Num Calls": "156312",
+        "Avg (ns)": "3813.9",
+        "Med (ns)": "3707.0",
+        "Min (ns)": "2545",
+        "Max (ns)": "1532713",
+        "StdDev (ns)": "4616.3",
+        "Name": "cuLaunchKernel"
+      },
+      {
+        "Time (%)": "22.4",
+        "Total Time (ns)": "488240640",
+        "Num Calls": "3648",
+        "Avg (ns)": "133837.9",
+        "Med (ns)": "23344.5",
+        "Min (ns)": "7384",
+        "Max (ns)": "8422414",
+        "StdDev (ns)": "581287.2",
+        "Name": "cuMemcpyDtoHAsync_v2"
+      },
+      {
+        "Time (%)": "8.1",
+        "Total Time (ns)": "176602516",
+        "Num Calls": "1",
+        "Avg (ns)": "176602516.0",
+        "Med (ns)": "176602516.0",
+        "Min (ns)": "176602516",
+        "Max (ns)": "176602516",
+        "StdDev (ns)": "0.0",
+        "Name": "cuModuleLoadData"
+      },
+      {
+        "Time (%)": "0.8",
+        "Total Time (ns)": "16818259",
+        "Num Calls": "14321",
+        "Avg (ns)": "1174.4",
+        "Med (ns)": "862.0",
+        "Min (ns)": "531",
+        "Max (ns)": "20138",
+        "StdDev (ns)": "950.3",
+        "Name": "cuEventRecord"
+      },
+      {
+        "Time (%)": "0.8",
+        "Total Time (ns)": "16643807",
+        "Num Calls": "1",
+        "Avg (ns)": "16643807.0",
+        "Med (ns)": "16643807.0",
+        "Min (ns)": "16643807",
+        "Max (ns)": "16643807",
+        "StdDev (ns)": "0.0",
+        "Name": "cuModuleUnload"
+      },
+      {
+        "Time (%)": "0.5",
+        "Total Time (ns)": "10650261",
+        "Num Calls": "809",
+        "Avg (ns)": "13164.7",
+        "Med (ns)": "1523.0",
+        "Min (ns)": "852",
+        "Max (ns)": "8234639",
+        "StdDev (ns)": "289712.3",
+        "Name": "cuMemAllocAsync"
+      },
+      {
+        "Time (%)": "0.2",
+        "Total Time (ns)": "5320425",
+        "Num Calls": "1618",
+        "Avg (ns)": "3288.3",
+        "Med (ns)": "321.0",
+        "Min (ns)": "180",
+        "Max (ns)": "4691627",
+        "StdDev (ns)": "116634.9",
+        "Name": "cuEventDestroy_v2"
+      },
+      {
+        "Time (%)": "0.2",
+        "Total Time (ns)": "4519490",
+        "Num Calls": "929",
+        "Avg (ns)": "4864.9",
+        "Med (ns)": "3847.0",
+        "Min (ns)": "1903",
+        "Max (ns)": "38624",
+        "StdDev (ns)": "3324.0",
+        "Name": "cuMemsetD8Async"
+      },
+      {
+        "Time (%)": "0.1",
+        "Total Time (ns)": "1143269",
+        "Num Calls": "809",
+        "Avg (ns)": "1413.2",
+        "Med (ns)": "1263.0",
+        "Min (ns)": "682",
+        "Max (ns)": "47239",
+        "StdDev (ns)": "1700.9",
+        "Name": "cuMemFreeAsync"
+      },
+      {
+        "Time (%)": "0.0",
+        "Total Time (ns)": "1023082",
+        "Num Calls": "1618",
+        "Avg (ns)": "632.3",
+        "Med (ns)": "621.0",
+        "Min (ns)": "240",
+        "Max (ns)": "11041",
+        "StdDev (ns)": "381.3",
+        "Name": "cuStreamWaitEvent"
+      },
+      {
+        "Time (%)": "0.0",
+        "Total Time (ns)": "695278",
+        "Num Calls": "1618",
+        "Avg (ns)": "429.7",
+        "Med (ns)": "350.0",
+        "Min (ns)": "181",
+        "Max (ns)": "68980",
+        "StdDev (ns)": "1726.8",
+        "Name": "cuEventCreate"
+      },
+      {
+        "Time (%)": "0.0",
+        "Total Time (ns)": "679893",
+        "Num Calls": "72",
+        "Avg (ns)": "9443.0",
+        "Med (ns)": "8967.0",
+        "Min (ns)": "6151",
+        "Max (ns)": "19527",
+        "StdDev (ns)": "2482.0",
+        "Name": "cuMemcpyDtoDAsync_v2"
+      },
+      {
+        "Time (%)": "0.0",
+        "Total Time (ns)": "1022",
+        "Num Calls": "1",
+        "Avg (ns)": "1022.0",
+        "Med (ns)": "1022.0",
+        "Min (ns)": "1022",
+        "Max (ns)": "1022",
+        "StdDev (ns)": "0.0",
+        "Name": "cuCtxSetCurrent"
+      }
+    ],
+    "cuda_gpu_kern_sum": {
+      "kernels": 156312,
+      "gpu_seconds": 0.680828087,
+      "updates": 3
+    },
+    "cuda_gpu_mem_time_sum": [
+      {
+        "Time (%)": "61.1",
+        "Total Time (ns)": "78568967",
+        "Count": "9600",
+        "Avg (ns)": "8184.3",
+        "Med (ns)": "768.0",
+        "Min (ns)": "255",
+        "Max (ns)": "71905",
+        "StdDev (ns)": "17095.1",
+        "Operation": "[CUDA memcpy Host-to-Device]"
+      },
+      {
+        "Time (%)": "38.1",
+        "Total Time (ns)": "49028089",
+        "Count": "3648",
+        "Avg (ns)": "13439.7",
+        "Med (ns)": "1440.0",
+        "Min (ns)": "736",
+        "Max (ns)": "81057",
+        "StdDev (ns)": "20551.9",
+        "Operation": "[CUDA memcpy Device-to-Host]"
+      },
+      {
+        "Time (%)": "0.7",
+        "Total Time (ns)": "873580",
+        "Count": "929",
+        "Avg (ns)": "940.3",
+        "Med (ns)": "928.0",
+        "Min (ns)": "255",
+        "Max (ns)": "11201",
+        "StdDev (ns)": "462.0",
+        "Operation": "[CUDA memset]"
+      },
+      {
+        "Time (%)": "0.0",
+        "Total Time (ns)": "63485",
+        "Count": "72",
+        "Avg (ns)": "881.7",
+        "Med (ns)": "864.5",
+        "Min (ns)": "863",
+        "Max (ns)": "992",
+        "StdDev (ns)": "26.2",
+        "Operation": "[CUDA memcpy Device-to-Device]"
+      }
+    ],
+    "cuda_gpu_mem_size_sum": [
+      {
+        "Total (MB)": "946.146",
+        "Count": "9600",
+        "Avg (MB)": "0.099",
+        "Med (MB)": "0.000",
+        "Min (MB)": "0.000",
+        "Max (MB)": "0.786",
+        "StdDev (MB)": "0.222",
+        "Operation": "[CUDA memcpy Host-to-Device]"
+      },
+      {
+        "Total (MB)": "578.130",
+        "Count": "3648",
+        "Avg (MB)": "0.158",
+        "Med (MB)": "0.002",
+        "Min (MB)": "0.000",
+        "Max (MB)": "0.786",
+        "StdDev (MB)": "0.273",
+        "Operation": "[CUDA memcpy Device-to-Host]"
+      },
+      {
+        "Total (MB)": "316.707",
+        "Count": "929",
+        "Avg (MB)": "0.341",
+        "Med (MB)": "0.008",
+        "Min (MB)": "0.000",
+        "Max (MB)": "6.291",
+        "StdDev (MB)": "0.528",
+        "Operation": "[CUDA memset]"
+      },
+      {
+        "Total (MB)": "0.590",
+        "Count": "72",
+        "Avg (MB)": "0.008",
+        "Med (MB)": "0.008",
+        "Min (MB)": "0.008",
+        "Max (MB)": "0.008",
+        "StdDev (MB)": "0.000",
+        "Operation": "[CUDA memcpy Device-to-Device]"
+      }
+    ]
+  },
+  "provenance": {
+    "tnsr_base_commit": "72c218308ea80f5c8ef0d8913662b2719164c6fd",
+    "forty_five_commit": "c5f595c4812191aa050458f6efcfcfe2751af846",
+    "native_archive_weights_sha256": "b821a77c01972e1ca2cf15941f63b94f21748a40ce70d10378e1ca9c019882c9",
+    "model_source_sha256": "e78ea90e3d48c6db68aaefdcbb1b40f97891c1e55d22f227ef9a847e086b12cb",
+    "train_source_sha256": "1f2452ed028d54dab9f85fdc7eddb05acac572bac24ecdda77525d59a45ce827",
+    "precision": "Native strict-f32; PyTorch highest/TF32 disabled for f32; optional bf16 autocast; dynamic=True compile default mode",
+    "contention": "Existing forty-five training was left running. Cases were interleaved; samples are a diagnosis, not an exclusive-GPU acceptance benchmark.",
+    "optimizer": "Original Adam default foreach policy, not explicitly fused; two parameter groups; one update per fixed hand minibatch.",
+    "native_anchor": "Disabled in real timing matrix to compare the same forward/backward work; present as fixed runtime inputs in the earlier diagnostic fixture trace."
+  },
+  "native_micro64_trace": {
+    "cuda_api_sum": [
+      {
+        "Time (%)": "39.3",
+        "Total Time (ns)": "421767926",
+        "Num Calls": "1200",
+        "Avg (ns)": "351473.3",
+        "Med (ns)": "4248.0",
+        "Min (ns)": "2785",
+        "Max (ns)": "13483138",
+        "StdDev (ns)": "1373694.7",
+        "Name": "cuMemcpyHtoDAsync_v2"
+      },
+      {
+        "Time (%)": "30.0",
+        "Total Time (ns)": "321508353",
+        "Num Calls": "88083",
+        "Avg (ns)": "3650.1",
+        "Med (ns)": "2955.0",
+        "Min (ns)": "2504",
+        "Max (ns)": "2589003",
+        "StdDev (ns)": "21099.8",
+        "Name": "cuLaunchKernel"
+      },
+      {
+        "Time (%)": "19.9",
+        "Total Time (ns)": "213323835",
+        "Num Calls": "1",
+        "Avg (ns)": "213323835.0",
+        "Med (ns)": "213323835.0",
+        "Min (ns)": "213323835",
+        "Max (ns)": "213323835",
+        "StdDev (ns)": "0.0",
+        "Name": "cuModuleLoadData"
+      },
+      {
+        "Time (%)": "6.9",
+        "Total Time (ns)": "73698897",
+        "Num Calls": "456",
+        "Avg (ns)": "161620.4",
+        "Med (ns)": "31224.5",
+        "Min (ns)": "7535",
+        "Max (ns)": "9120264",
+        "StdDev (ns)": "687173.1",
+        "Name": "cuMemcpyDtoHAsync_v2"
+      },
+      {
+        "Time (%)": "1.5",
+        "Total Time (ns)": "15937708",
+        "Num Calls": "812",
+        "Avg (ns)": "19627.7",
+        "Med (ns)": "1643.0",
+        "Min (ns)": "922",
+        "Max (ns)": "7208694",
+        "StdDev (ns)": "254722.3",
+        "Name": "cuMemAllocAsync"
+      },
+      {
+        "Time (%)": "1.4",
+        "Total Time (ns)": "15073300",
+        "Num Calls": "1",
+        "Avg (ns)": "15073300.0",
+        "Med (ns)": "15073300.0",
+        "Min (ns)": "15073300",
+        "Max (ns)": "15073300",
+        "StdDev (ns)": "0.0",
+        "Name": "cuModuleUnload"
+      },
+      {
+        "Time (%)": "0.4",
+        "Total Time (ns)": "3981256",
+        "Num Calls": "827",
+        "Avg (ns)": "4814.1",
+        "Med (ns)": "3987.0",
+        "Min (ns)": "1914",
+        "Max (ns)": "64231",
+        "StdDev (ns)": "3189.5",
+        "Name": "cuMemsetD8Async"
+      },
+      {
+        "Time (%)": "0.3",
+        "Total Time (ns)": "3149314",
+        "Num Calls": "2501",
+        "Avg (ns)": "1259.2",
+        "Med (ns)": "872.0",
+        "Min (ns)": "541",
+        "Max (ns)": "12694",
+        "StdDev (ns)": "1151.9",
+        "Name": "cuEventRecord"
+      },
+      {
+        "Time (%)": "0.1",
+        "Total Time (ns)": "1193289",
+        "Num Calls": "812",
+        "Avg (ns)": "1469.6",
+        "Med (ns)": "1347.5",
+        "Min (ns)": "692",
+        "Max (ns)": "10771",
+        "StdDev (ns)": "677.4",
+        "Name": "cuMemFreeAsync"
+      },
+      {
+        "Time (%)": "0.1",
+        "Total Time (ns)": "982451",
+        "Num Calls": "1624",
+        "Avg (ns)": "605.0",
+        "Med (ns)": "591.0",
+        "Min (ns)": "240",
+        "Max (ns)": "9799",
+        "StdDev (ns)": "337.6",
+        "Name": "cuStreamWaitEvent"
+      },
+      {
+        "Time (%)": "0.1",
+        "Total Time (ns)": "704649",
+        "Num Calls": "1624",
+        "Avg (ns)": "433.9",
+        "Med (ns)": "331.0",
+        "Min (ns)": "180",
+        "Max (ns)": "71185",
+        "StdDev (ns)": "1768.8",
+        "Name": "cuEventCreate"
+      },
+      {
+        "Time (%)": "0.1",
+        "Total Time (ns)": "564857",
+        "Num Calls": "1624",
+        "Avg (ns)": "347.8",
+        "Med (ns)": "311.0",
+        "Min (ns)": "180",
+        "Max (ns)": "1763",
+        "StdDev (ns)": "147.5",
+        "Name": "cuEventDestroy_v2"
+      },
+      {
+        "Time (%)": "0.0",
+        "Total Time (ns)": "88438",
+        "Num Calls": "9",
+        "Avg (ns)": "9826.4",
+        "Med (ns)": "9237.0",
+        "Min (ns)": "8376",
+        "Max (ns)": "12183",
+        "StdDev (ns)": "1357.5",
+        "Name": "cuMemcpyDtoDAsync_v2"
+      },
+      {
+        "Time (%)": "0.0",
+        "Total Time (ns)": "932",
+        "Num Calls": "1",
+        "Avg (ns)": "932.0",
+        "Med (ns)": "932.0",
+        "Min (ns)": "932",
+        "Max (ns)": "932",
+        "StdDev (ns)": "0.0",
+        "Name": "cuCtxSetCurrent"
+      }
+    ],
+    "cuda_gpu_kern_sum": {
+      "kernels": 88083,
+      "gpu_seconds": 0.565396813,
+      "updates": 3
+    },
+    "cuda_gpu_mem_time_sum": [
+      {
+        "Time (%)": "85.6",
+        "Total Time (ns)": "46040486",
+        "Count": "1200",
+        "Avg (ns)": "38367.1",
+        "Med (ns)": "832.0",
+        "Min (ns)": "255",
+        "Max (ns)": "739816",
+        "StdDev (ns)": "120708.6",
+        "Operation": "[CUDA memcpy Host-to-Device]"
+      },
+      {
+        "Time (%)": "11.2",
+        "Total Time (ns)": "5999838",
+        "Count": "456",
+        "Avg (ns)": "13157.5",
+        "Med (ns)": "1376.0",
+        "Min (ns)": "735",
+        "Max (ns)": "62720",
+        "StdDev (ns)": "20419.0",
+        "Operation": "[CUDA memcpy Device-to-Host]"
+      },
+      {
+        "Time (%)": "3.2",
+        "Total Time (ns)": "1721939",
+        "Count": "827",
+        "Avg (ns)": "2082.2",
+        "Med (ns)": "992.0",
+        "Min (ns)": "255",
+        "Max (ns)": "48097",
+        "StdDev (ns)": "2772.5",
+        "Operation": "[CUDA memset]"
+      },
+      {
+        "Time (%)": "0.0",
+        "Total Time (ns)": "8193",
+        "Count": "9",
+        "Avg (ns)": "910.3",
+        "Med (ns)": "897.0",
+        "Min (ns)": "896",
+        "Max (ns)": "928",
+        "StdDev (ns)": "16.8",
+        "Operation": "[CUDA memcpy Device-to-Device]"
+      }
+    ],
+    "cuda_gpu_mem_size_sum": [
+      {
+        "Total (MB)": "2226.915",
+        "Count": "827",
+        "Avg (MB)": "2.693",
+        "Med (MB)": "0.074",
+        "Min (MB)": "0.000",
+        "Max (MB)": "50.332",
+        "StdDev (MB)": "4.390",
+        "Operation": "[CUDA memset]"
+      },
+      {
+        "Total (MB)": "440.432",
+        "Count": "1200",
+        "Avg (MB)": "0.367",
+        "Med (MB)": "0.000",
+        "Min (MB)": "0.000",
+        "Max (MB)": "6.291",
+        "StdDev (MB)": "1.116",
+        "Operation": "[CUDA memcpy Host-to-Device]"
+      },
+      {
+        "Total (MB)": "72.440",
+        "Count": "456",
+        "Avg (MB)": "0.159",
+        "Med (MB)": "0.002",
+        "Min (MB)": "0.000",
+        "Max (MB)": "0.786",
+        "StdDev (MB)": "0.273",
+        "Operation": "[CUDA memcpy Device-to-Host]"
+      },
+      {
+        "Total (MB)": "0.590",
+        "Count": "9",
+        "Avg (MB)": "0.066",
+        "Med (MB)": "0.066",
+        "Min (MB)": "0.066",
+        "Max (MB)": "0.066",
+        "StdDev (MB)": "0.000",
+        "Operation": "[CUDA memcpy Device-to-Device]"
+      }
+    ]
+  },
+  "native_micro64_stages": [
+    {
+      "accumulate_seconds": 0.0057495,
+      "clip_adam_finite_check_seconds": 0.074327069,
+      "compile_cache_seconds": 0.810372503,
+      "execute_seconds": 1.245101159,
+      "gradient_extraction_seconds": 0.651138496,
+      "graph_nodes": 4484,
+      "input_seconds": 0.000131549,
+      "kernel_launches": 29361,
+      "metrics_seconds": 5.8391e-05,
+      "total_seconds": 2.7869277390000002
+    },
+    {
+      "accumulate_seconds": 0.006894057,
+      "clip_adam_finite_check_seconds": 0.040327122,
+      "compile_cache_seconds": 4e-07,
+      "execute_seconds": 0.267923689,
+      "gradient_extraction_seconds": 0.662771629,
+      "graph_nodes": 4484,
+      "input_seconds": 2.9586e-05,
+      "kernel_launches": 29361,
+      "metrics_seconds": 6.7067e-05,
+      "total_seconds": 0.978081621
+    },
+    {
+      "accumulate_seconds": 0.005235677,
+      "clip_adam_finite_check_seconds": 0.038887054,
+      "compile_cache_seconds": 3.61e-07,
+      "execute_seconds": 0.252148631,
+      "gradient_extraction_seconds": 0.602269556,
+      "graph_nodes": 4484,
+      "input_seconds": 3.2221e-05,
+      "kernel_launches": 29361,
+      "metrics_seconds": 0.000131018,
+      "total_seconds": 0.898781122
+    }
+  ],
+  "pytorch_traces": {
+    "micro8": {
+      "strict_f32": {
+        "kernels": 6928,
+        "kernel_ms": 25.272
+      },
+      "eager_bf16": {
+        "kernels": 9360,
+        "kernel_ms": 24.25
+      },
+      "compiled_bf16": {
+        "kernels": 7256,
+        "kernel_ms": 16.4
+      }
+    },
+    "micro64": {
+      "strict_f32": {
+        "kernels": 835,
+        "kernel_ms": 13.795
+      },
+      "eager_bf16": {
+        "kernels": 1129,
+        "kernel_ms": 6.883
+      },
+      "compiled_bf16": {
+        "kernels": 838,
+        "kernel_ms": 4.991
+      }
+    }
+  }
+}

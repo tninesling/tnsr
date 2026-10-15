@@ -504,6 +504,7 @@ impl<D: CudaDType> PtxExecutor<D> {
     /// Get the value of a specific node from the executor's cache after execution
     pub fn get_value(&self, node_idx: petgraph::graph::NodeIndex) -> Option<Vec<D::HostType>> {
         self.values.get(&node_idx).and_then(|cuda_slice| {
+            let readback_started = Instant::now();
             let mut storage = vec![D::HostType::default(); cuda_slice.len()];
             self.device
                 .default_stream()
@@ -512,7 +513,15 @@ impl<D: CudaDType> PtxExecutor<D> {
             let plan = self.execution_plan.as_ref()?;
             let view = plan.virtual_value(node_idx)?;
             let source_shape = plan.value_shape(view.source)?;
-            materialize_host_view(storage, view, source_shape).ok()
+            let copy_seconds = readback_started.elapsed().as_secs_f64();
+            let materialize_started = Instant::now();
+            let output = materialize_host_view(storage, view, source_shape).ok();
+            if std::env::var("TNSR_PROFILE_READBACK").as_deref() == Ok("1") {
+                eprintln!("{}", serde_json::json!({"node":node_idx.index(),"source_shape":source_shape,
+                    "output_shape":view.shape,"storage_elements":cuda_slice.len(),
+                    "copy_seconds":copy_seconds,"view_seconds":materialize_started.elapsed().as_secs_f64()}));
+            }
+            output
         })
     }
 

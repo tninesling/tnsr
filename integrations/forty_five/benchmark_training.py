@@ -109,6 +109,7 @@ def run(args):
                   native_reduction_mode="deterministic_tree_f32" if args.tree_reductions else "strict_f32",
                   native_graph_replay=args.cuda_graphs,
                   baseline_tree_reductions=args.baseline_tree_reductions,
+                  baseline_graph_replay=args.baseline_cuda_graphs,
                   native_memory_accounting="whole worker process MiB, including modules/workspace/graph; sampled outside timing",
                   external_workloads="left running; monitor GPU samples for contention",
                   cases={})
@@ -118,6 +119,8 @@ def run(args):
     baseline_settings = settings.copy()
     if args.baseline_tree_reductions:
         baseline_settings["tree_reductions"] = True
+    if args.baseline_cuda_graphs:
+        baseline_settings["cuda_graphs"] = True
     if args.tree_reductions:
         settings["tree_reductions"] = True
     if args.cuda_graphs:
@@ -136,6 +139,8 @@ def run(args):
         return target.request("train", batch=native, settings=options)
     cases = {}
     baseline_label = "tnsr_baseline_tree_f32" if args.baseline_tree_reductions else "tnsr_baseline_strict_f32"
+    if args.baseline_cuda_graphs:
+        baseline_label = baseline_label.replace("tnsr_baseline_", "tnsr_baseline_graph_")
     if baseline_worker:
         cases[baseline_label] = lambda: native_step(baseline_worker, baseline_settings)
         report["cases"][baseline_label] = dict(samples=[])
@@ -180,7 +185,9 @@ def run(args):
                 metrics = result.get("metrics", result)
                 if not all(math.isfinite(float(value)) for value in metrics.values()):
                     raise ValueError(f"nonfinite metrics in {label}")
-                if label == native_label and args.cuda_graphs:
+                replay_requested = ((label == native_label and args.cuda_graphs)
+                                    or (label == baseline_label and args.baseline_cuda_graphs))
+                if replay_requested:
                     state = result.get("cuda_graphs", {})
                     if not state.get("active_shapes") or state.get("fallbacks"):
                         raise RuntimeError(f"requested graph benchmark fell back: {state}")
@@ -226,6 +233,7 @@ def main():
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--baseline-worker",type=Path,help="optional second native binary for interleaved before/after measurements")
     parser.add_argument("--baseline-tree-reductions",action="store_true",help="select tree ordering in a compatible baseline worker too")
+    parser.add_argument("--baseline-cuda-graphs",action="store_true",help="enable graph replay in a compatible baseline worker too")
     parser.add_argument("--transitions",type=int,default=64)
     parser.add_argument("--microbatch",type=int,default=8)
     parser.add_argument("--warmups",type=int,default=2)

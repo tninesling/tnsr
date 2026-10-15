@@ -9,6 +9,7 @@ pub mod data;
 pub mod graph;
 pub mod nn;
 pub mod optimizer;
+pub mod parameters;
 #[cfg(feature = "cuda")]
 pub mod ptx;
 pub mod runtime;

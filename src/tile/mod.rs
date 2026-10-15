@@ -44,3 +44,5 @@ mod normalized_schedule;
 
 pub mod indexed_sum;
 pub use indexed_sum::{IndexedOperand, IndexedSource, IndexedSum};
+
+mod segments;

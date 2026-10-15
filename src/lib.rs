@@ -480,6 +480,53 @@ where
                         *node_idx,
                     )?)
                 }
+                TensorGraphNode::Narrow { axis, start, shape } => {
+                    let inputs = graph.inputs(*node_idx);
+                    let input_shape = graph[inputs[0]].shape();
+                    let inner: usize = shape[axis + 1..].iter().product();
+                    let length = shape[*axis] * inner;
+                    let mut out = self.pool.take(shape.iter().product());
+                    if !out.is_empty() {
+                        let input = self
+                            .values
+                            .get(&inputs[0])
+                            .context("narrow input missing")?;
+                        input.with(|data| {
+                            for (outer, target) in out.chunks_exact_mut(length).enumerate() {
+                                let offset = (outer * input_shape[*axis] + start) * inner;
+                                target.copy_from_slice(&data[offset..offset + length]);
+                            }
+                        });
+                    }
+                    Value::Owned(out)
+                }
+                TensorGraphNode::Concat { axis, shape } => {
+                    let inputs = graph.inputs(*node_idx);
+                    let inner: usize = shape[axis + 1..].iter().product();
+                    let mut out = self.pool.take(shape.iter().product());
+                    if !out.is_empty() {
+                        let width = shape[*axis] * inner;
+                        let mut offset = 0;
+                        for input in inputs {
+                            let length = graph[input].shape()[*axis] * inner;
+                            if length > 0 {
+                                self.values
+                                    .get(&input)
+                                    .context("concat input missing")?
+                                    .with(|data| {
+                                        for (outer, source) in data.chunks_exact(length).enumerate()
+                                        {
+                                            out[outer * width + offset
+                                                ..outer * width + offset + length]
+                                                .copy_from_slice(source);
+                                        }
+                                    });
+                            }
+                            offset += length;
+                        }
+                    }
+                    Value::Owned(out)
+                }
                 TensorGraphNode::Reshape { .. } => {
                     let _span = trace_span!("reshape", node = node_idx.index()).entered();
                     let ins = graph.inputs(*node_idx);

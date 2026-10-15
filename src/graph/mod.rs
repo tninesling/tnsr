@@ -140,6 +140,15 @@ pub enum TensorGraphNode<D> {
     Gt {
         shape: crate::tensor::Shape,
     },
+    Narrow {
+        axis: usize,
+        start: usize,
+        shape: crate::tensor::Shape,
+    },
+    Concat {
+        axis: usize,
+        shape: crate::tensor::Shape,
+    },
     /// Mask operation: returns values where condition != 0.0, 0.0 otherwise
     Mask {
         shape: crate::tensor::Shape,
@@ -210,6 +219,8 @@ impl<D> TensorGraphNode<D> {
             },
             TensorGraphNode::Gt { .. } => "Gt",
             TensorGraphNode::Mask { .. } => "Mask",
+            TensorGraphNode::Narrow { .. } => "Narrow",
+            TensorGraphNode::Concat { .. } => "Concat",
             TensorGraphNode::Conv2d { .. } => "Conv2d",
             TensorGraphNode::ConvTranspose2d { .. } => "ConvTranspose2d",
             TensorGraphNode::Conv2dBackwardWeight { .. } => "Conv2dBackwardWeight",
@@ -240,6 +251,7 @@ impl<D> TensorGraphNode<D> {
             TensorGraphNode::ReduceAxis { shape, .. } => shape,
             TensorGraphNode::Gt { shape } => shape,
             TensorGraphNode::Mask { shape } => shape,
+            TensorGraphNode::Narrow { shape, .. } | TensorGraphNode::Concat { shape, .. } => shape,
             TensorGraphNode::Conv2d { shape, .. } => shape,
             TensorGraphNode::ConvTranspose2d { shape, .. } => shape,
             TensorGraphNode::Conv2dBackwardWeight { shape, .. } => shape,
@@ -1007,6 +1019,47 @@ where
                         input_idx,
                         grad_in,
                     );
+                }
+                TensorGraphNode::Narrow { axis, start, .. } => {
+                    let (axis, start) = (*axis, *start);
+                    let input = inputs[0];
+                    let input_shape = self.graph[input].shape().clone();
+                    let grad_shape = self.graph[grad_output].shape().clone();
+                    let mut pieces = Vec::new();
+                    let zero = |length| {
+                        let mut shape = input_shape.clone();
+                        shape[axis] = length;
+                        TensorExpr::constant(vec![D::zero()], vec![]).broadcast(shape)
+                    };
+                    if start > 0 {
+                        pieces.push(zero(start));
+                    }
+                    pieces.push(TensorExpr::node_ref(grad_output, grad_shape.clone()));
+                    let end = start + grad_shape[axis];
+                    if end < input_shape[axis] {
+                        pieces.push(zero(input_shape[axis] - end));
+                    }
+                    let expression = TensorExpr::concat(&pieces, axis);
+                    let grad = self.lower_gradient_expr(&expression, &mut gradient_nodes);
+                    self.accumulate_gradient(&mut node_to_grad, &mut gradient_nodes, input, grad);
+                }
+                TensorGraphNode::Concat { axis, .. } => {
+                    let axis = *axis;
+                    let grad_shape = self.graph[grad_output].shape().clone();
+                    let mut offset = 0;
+                    for input in inputs {
+                        let length = self.graph[input].shape()[axis];
+                        let expression = TensorExpr::node_ref(grad_output, grad_shape.clone())
+                            .narrow(axis, offset, length);
+                        let grad = self.lower_gradient_expr(&expression, &mut gradient_nodes);
+                        self.accumulate_gradient(
+                            &mut node_to_grad,
+                            &mut gradient_nodes,
+                            input,
+                            grad,
+                        );
+                        offset += length;
+                    }
                 }
                 TensorGraphNode::Mask { .. } => {
                     // The condition selects values without itself being differentiated.

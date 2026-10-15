@@ -1183,6 +1183,35 @@ impl<D: CudaDType> PtxExecutor<D> {
 
                     out
                 }
+                TensorGraphNode::Narrow { shape, .. } | TensorGraphNode::Concat { shape, .. } => {
+                    let len = shape.iter().product();
+                    let mut output = self.take_buffer(len)?;
+                    if len > 0 {
+                        let kernel_name = ptx_graph
+                            .kernel_name(*node_idx)
+                            .context("Missing segment kernel")?;
+                        let function = module.load_function(kernel_name)?;
+                        let stream = self.device.default_stream();
+                        let mut launcher = stream.launch_builder(&function);
+                        for input in planned_inputs {
+                            launcher.arg(
+                                self.values
+                                    .get(input)
+                                    .context("Segment input missing")?
+                                    .as_ref(),
+                            );
+                        }
+                        launcher.arg(&mut output);
+                        let extent = u32::try_from(len)
+                            .context("Segment output exceeds CUDA launch range")?;
+                        self.record_kernel_launch();
+                        // SAFETY: generated kernels bound each output and guard input
+                        // loads by segment membership; buffers match the graph shapes.
+                        unsafe { launcher.launch(LaunchConfig::for_num_elems(extent)) }
+                            .context("Segment kernel launch failed")?;
+                    }
+                    output
+                }
                 TensorGraphNode::Mask { .. } => {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
@@ -2028,6 +2057,15 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
                 signature_usize(&mut signature, *axis);
             }
             TensorGraphNode::Gt { .. } => signature.push(16),
+            TensorGraphNode::Narrow { axis, start, .. } => {
+                signature.push(30);
+                signature_usize(&mut signature, *axis);
+                signature_usize(&mut signature, *start);
+            }
+            TensorGraphNode::Concat { axis, .. } => {
+                signature.push(31);
+                signature_usize(&mut signature, *axis);
+            }
             TensorGraphNode::Mask { .. } => signature.push(17),
             TensorGraphNode::Conv2d {
                 stride, padding, ..

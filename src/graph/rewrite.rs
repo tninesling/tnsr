@@ -244,7 +244,9 @@ fn expr_to_recexpr<D: DType>(expr: &TensorExpr<D>) -> RecExpr<TensorOp> {
                 let _ = build_rec(x, rec);
                 rec.add(TensorOp::Sym("Flatten".into()))
             }
-            ExprKind::Embedding { .. }
+            ExprKind::Narrow { .. }
+            | ExprKind::Concat { .. }
+            | ExprKind::Embedding { .. }
             | ExprKind::EmbeddingBackward { .. }
             | ExprKind::IndexedCrossEntropy { .. }
             | ExprKind::IndexedCrossEntropyBackward { .. } => {
@@ -413,7 +415,9 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
     fn contains_indexed_op<D: DType>(expr: &TensorExpr<D>) -> bool {
         matches!(
             expr.kind(),
-            ExprKind::Embedding { .. }
+            ExprKind::Narrow { .. }
+                | ExprKind::Concat { .. }
+                | ExprKind::Embedding { .. }
                 | ExprKind::EmbeddingBackward { .. }
                 | ExprKind::IndexedCrossEntropy { .. }
                 | ExprKind::IndexedCrossEntropyBackward { .. }

@@ -247,6 +247,8 @@ impl<D: DType> TensorExpr<D> {
             ExprKind::Transpose { x } => vec![x],
             ExprKind::Reshape { x } => vec![x],
             ExprKind::Permute { x, .. } => vec![x],
+            ExprKind::Narrow { x, .. } => vec![x],
+            ExprKind::Concat { inputs, .. } => inputs.iter().collect(),
             ExprKind::BroadcastAxis { x, .. } => vec![x],
             ExprKind::ReduceAxis { x, .. } => vec![x],
             ExprKind::Gt { a, b } => vec![a, b],
@@ -384,6 +386,15 @@ pub enum ExprKind<D: DType> {
     Permute {
         x: TensorExpr<D>,
         axes: Vec<usize>,
+    },
+    Narrow {
+        x: TensorExpr<D>,
+        axis: usize,
+        start: usize,
+    },
+    Concat {
+        inputs: Vec<TensorExpr<D>>,
+        axis: usize,
     },
     /// Greater than comparison
     Gt {
@@ -795,6 +806,60 @@ impl<D: DType> TensorExpr<D> {
                 grad_output: grad_output.into(),
                 kernel_size,
                 stride,
+            },
+        }))
+    }
+
+    /// Select a contiguous range along an axis, preserving the rank.
+    pub fn narrow(self, axis: usize, start: usize, length: usize) -> Self {
+        let mut shape = self.shape().clone();
+        assert!(axis < shape.len(), "narrow axis out of bounds");
+        assert!(
+            start <= shape[axis] && length <= shape[axis] - start,
+            "narrow range out of bounds"
+        );
+        if start == 0 && length == shape[axis] {
+            return self;
+        }
+        shape[axis] = length;
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Narrow {
+                x: self,
+                axis,
+                start,
+            },
+        }))
+    }
+
+    /// Concatenate equal-rank tensors, which must agree on every other axis.
+    pub fn concat(inputs: &[Self], axis: usize) -> Self {
+        assert!(!inputs.is_empty(), "concat requires at least one input");
+        let mut shape = inputs[0].shape().clone();
+        assert!(axis < shape.len(), "concat axis out of bounds");
+        shape[axis] = 0;
+        for input in inputs {
+            assert_eq!(input.shape().len(), shape.len(), "concat rank mismatch");
+            for (dimension, (&actual, &expected)) in input.shape().iter().zip(&shape).enumerate() {
+                assert!(
+                    dimension == axis || actual == expected,
+                    "concat shape mismatch"
+                );
+            }
+            assert!(
+                input.shape()[axis] <= usize::MAX - shape[axis],
+                "concat extent overflow"
+            );
+            shape[axis] += input.shape()[axis];
+        }
+        if inputs.len() == 1 {
+            return inputs[0].clone();
+        }
+        Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Concat {
+                inputs: inputs.to_vec(),
+                axis,
             },
         }))
     }
@@ -1386,6 +1451,30 @@ impl<D: DType> TensorExpr<D> {
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
                 }
+                ExprKind::Narrow { x, axis, start } => {
+                    let input = lower_rec(x, g, memo);
+                    let node = g.graph.add_node(TensorGraphNode::Narrow {
+                        axis: *axis,
+                        start: *start,
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(input, node, 0);
+                    node
+                }
+                ExprKind::Concat { inputs, axis } => {
+                    let nodes: Vec<_> = inputs
+                        .iter()
+                        .map(|input| lower_rec(input, g, memo))
+                        .collect();
+                    let node = g.graph.add_node(TensorGraphNode::Concat {
+                        axis: *axis,
+                        shape: expr.shape().clone(),
+                    });
+                    for (position, input) in nodes.into_iter().enumerate() {
+                        g.graph.add_edge(input, node, position);
+                    }
+                    node
+                }
                 ExprKind::Mask { values, condition } => {
                     let values_idx = if values.shape() == expr.shape() {
                         lower_rec(values, g, memo)
@@ -1542,3 +1631,6 @@ impl<D: DType> From<Parameter<D>> for TensorExpr<D> {
         }))
     }
 }
+
+#[cfg(test)]
+mod segments_tests;

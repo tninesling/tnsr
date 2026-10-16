@@ -10,7 +10,9 @@ use super::{
         program::{Kernel, Program, binding},
     },
 };
+mod memory;
 mod planner;
+mod split_k;
 
 use crate::{
     graph::{NodeIndex, TensorGraph, TensorGraphNode, WithGrad, mixed::value_dtypes},
@@ -19,10 +21,15 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use cudarc::{
-    driver::{CudaContext, CudaStream, LaunchConfig, sys},
+    driver::{CudaContext, CudaSlice, CudaStream, DevicePtr, LaunchConfig, sys},
     nvrtc::Ptx,
 };
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{
+    any::Any,
+    cell::RefCell,
+    collections::HashMap,
+    sync::{Arc, Mutex, Weak},
+};
 
 #[derive(Clone)]
 struct Value {
@@ -34,6 +41,12 @@ struct Value {
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct MixedInfo {
+    /// Private temporary allocations replaced by nonoverlapping live ranges.
+    pub reused_allocations: usize,
+    /// Retained tensor payload before resident lifetime reuse (not peak process memory).
+    pub unpooled_bytes: usize,
+    pub exact_index_bytes: usize,
+    pub immutable_source_bytes: usize,
     pub kernels: usize,
     pub f32_bytes: usize,
     pub bf16_bytes: usize,
@@ -44,6 +57,29 @@ pub struct MixedInfo {
 
 /// Owns all typed allocations and compiled functions for a single graph.
 /// Uploads are explicit and excluded from `run` and `time_runs`.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct MixedTransfers {
+    pub f32_uploads: usize,
+    pub f32_bytes: usize,
+    pub index_uploads: usize,
+    pub index_bytes: usize,
+    pub parameter_copies: usize,
+    pub parameter_bytes: usize,
+    pub upload_seconds: f64,
+    pub parameter_refresh_seconds: f64,
+}
+
+struct Readback {
+    buffer: CudaSlice<f32>,
+    kernel: Kernel,
+}
+
+pub(crate) struct ResidentBindings {
+    pub stream: Arc<CudaStream>,
+    pub gate: Arc<Mutex<()>>,
+    pub parameters: HashMap<NodeIndex, Arc<CudaSlice<f32>>>,
+}
+
 pub struct MixedExecutor {
     captured: Option<Captured>,
     stream: Arc<CudaStream>,
@@ -53,7 +89,15 @@ pub struct MixedExecutor {
     values: HashMap<NodeIndex, Value>,
     sources: HashMap<NodeIndex, usize>,
     source_nodes: HashMap<NodeIndex, TensorGraphNode<f32>>,
+    bound_parameters: HashMap<NodeIndex, Weak<CudaSlice<f32>>>,
+    gate: Arc<Mutex<()>>,
+    index_graph: TensorGraph<f32>,
+    index_plan: crate::graph::indices::IndexPlan,
+    index_buffers: HashMap<NodeIndex, CudaSlice<u32>>,
+    readbacks: RefCell<HashMap<NodeIndex, Readback>>,
     uploaded: bool,
+    constants_initialized: bool,
+    transfers: MixedTransfers,
     has_run: bool,
     info: MixedInfo,
 }
@@ -74,7 +118,7 @@ impl MixedExecutor {
             value_dtypes(graph).is_empty(),
             "fused f32 comparator cannot contain casts"
         );
-        Self::prepare(graph, precision, replay, true, false)
+        Self::prepare(graph, precision, replay, true, false, None)
     }
 
     pub fn new<G>(
@@ -82,7 +126,7 @@ impl MixedExecutor {
         precision: MatMulPrecision,
         replay: bool,
     ) -> Result<Self> {
-        Self::prepare(graph, precision, replay, false, true)
+        Self::prepare(graph, precision, replay, false, true, None)
     }
 
     /// Diagnostic comparator retaining one arithmetic operation per program.
@@ -91,7 +135,7 @@ impl MixedExecutor {
         precision: MatMulPrecision,
         replay: bool,
     ) -> Result<Self> {
-        Self::prepare(graph, precision, replay, false, false)
+        Self::prepare(graph, precision, replay, false, false, None)
     }
 
     fn prepare<G>(
@@ -100,10 +144,21 @@ impl MixedExecutor {
         replay: bool,
         fused_f32: bool,
         fuse_f32_regions: bool,
+        resident: Option<ResidentBindings>,
     ) -> Result<Self> {
         ensure!(!graph.is_empty(), "mixed graph is empty");
-        let device = CudaContext::new(0)?;
-        let stream = device.new_stream()?;
+        let reuse_intermediates = resident.is_some();
+        let (stream, gate, bound_parameters) = match resident {
+            Some(bindings) => (bindings.stream, bindings.gate, bindings.parameters),
+            None => (
+                CudaContext::new(0)?.new_stream()?,
+                Arc::new(Mutex::new(())),
+                HashMap::new(),
+            ),
+        };
+        let mut index_graph = TensorGraph::new();
+        index_graph.graph = graph.graph.clone();
+        let index_plan = crate::graph::indices::IndexPlan::new(graph)?;
         let dtypes = value_dtypes(graph);
         let mut result = Self {
             captured: None,
@@ -114,9 +169,21 @@ impl MixedExecutor {
             values: HashMap::new(),
             sources: HashMap::new(),
             source_nodes: HashMap::new(),
+            bound_parameters: bound_parameters.keys().map(|n| (*n, Weak::new())).collect(),
+            gate,
+            index_graph,
+            index_plan,
+            index_buffers: HashMap::new(),
+            readbacks: RefCell::new(HashMap::new()),
             uploaded: false,
+            constants_initialized: false,
+            transfers: MixedTransfers::default(),
             has_run: false,
             info: MixedInfo {
+                reused_allocations: 0,
+                unpooled_bytes: 0,
+                exact_index_bytes: 0,
+                immutable_source_bytes: 0,
                 kernels: 0,
                 f32_bytes: 0,
                 bf16_bytes: 0,
@@ -134,6 +201,31 @@ impl MixedExecutor {
                         | TensorGraphNode::Constant { .. }
                 )
             {
+                continue;
+            }
+            if let TensorGraphNode::IndexSource { .. } = &graph[node] {
+                let shape = graph[node].shape().clone();
+                let len = shape
+                    .iter()
+                    .try_fold(1_usize, |n, d| n.checked_mul(*d))
+                    .context("integer extent overflow")?;
+                let buffer = result.stream.alloc_zeros::<u32>(len)?;
+                let binding = Binding {
+                    pointer: buffer.device_ptr(&result.stream).0,
+                    len,
+                    dtype: DType::U32,
+                };
+                result.values.insert(
+                    node,
+                    Value {
+                        binding,
+                        view: VirtualTensor::identity(node, shape.clone(), DType::U32),
+                        source_shape: shape,
+                        chain: Vec::new(),
+                    },
+                );
+                result.info.exact_index_bytes += len * 4;
+                result.index_buffers.insert(node, buffer);
                 continue;
             }
             let dtype = match dtypes.get(&node).copied().unwrap_or(ValueDType::F32) {
@@ -186,7 +278,9 @@ impl MixedExecutor {
                         .get(&inputs[0])
                         .context("mixed cast source missing")?
                         .clone();
-                    if source.binding.dtype == dtype {
+                    if source.binding.dtype == dtype
+                        || (dtype == DType::F32 && source.binding.dtype == DType::BF16)
+                    {
                         result.values.insert(node, source);
                     } else {
                         let (_, target) = result.alloc(node, shape, dtype)?;
@@ -235,7 +329,7 @@ impl MixedExecutor {
                         .collect::<Result<Vec<_>>>()?;
                     let mut operands = Vec::new();
                     for source in sources {
-                        if source.binding.dtype == dtype {
+                        if source.binding.dtype == dtype || source.binding.dtype == DType::U32 {
                             operands.push(source);
                         } else {
                             let (_, target) =
@@ -302,8 +396,29 @@ impl MixedExecutor {
             }
             result.programs.push(Box::new(program));
         }
+        result.info.immutable_source_bytes = result
+            .source_nodes
+            .values()
+            .filter_map(|n| {
+                if let TensorGraphNode::Constant { data, .. } = n {
+                    Some(data.len() * 4)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        if reuse_intermediates {
+            result.reuse_intermediates(graph)?;
+        } else {
+            result.info.unpooled_bytes = result.info.f32_bytes + result.info.bf16_bytes;
+        }
         result.info.kernels = result.kernels.len();
-        result.upload_impl(HashMap::new(), true)?;
+        result.upload_impl(HashMap::new(), HashMap::new(), true)?;
+        result.refresh_parameters(&bound_parameters)?;
+        let gate = result.gate.clone();
+        let _guard = gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?;
         // Constructors may have required inputs. Zero-initialized sources are
         // safe for warmup; no user-visible output is available until upload/run.
         for k in &result.kernels {
@@ -369,20 +484,32 @@ impl MixedExecutor {
         operands: &[Value],
         precision: MatMulPrecision,
     ) -> Result<Value> {
+        if D::HostType::TILE_DTYPE == DType::BF16
+            && let Some(output) = self.split_bf16_matmul(node, op, operands, precision)?
+        {
+            return Ok(output);
+        }
         let mut graph = TensorGraph::<D::HostType>::new();
         let mut inputs = HashMap::new();
-        const NAMES: [&str; 3] = ["a", "b", "c"];
-        ensure!(
-            operands.len() <= NAMES.len(),
-            "mixed operator has too many operands"
-        );
         let mut ends = Vec::new();
-        for (source, name) in operands.iter().zip(NAMES) {
-            let mut end = graph.graph.add_node(TensorGraphNode::Input {
-                name,
-                shape: source.source_shape.clone(),
-            });
-            inputs.insert(name, source.binding);
+        for source in operands {
+            let n = if source.binding.dtype == DType::U32 {
+                let TensorGraphNode::IndexSource { source: index } =
+                    &self.index_graph[source.view.source]
+                else {
+                    anyhow::bail!("integer binding source missing")
+                };
+                TensorGraphNode::IndexSource {
+                    source: index.clone(),
+                }
+            } else {
+                TensorGraphNode::Input {
+                    name: "boundary",
+                    shape: source.source_shape.clone(),
+                }
+            };
+            let mut end = graph.graph.add_node(n);
+            inputs.insert(end, source.binding);
             for view in &source.chain {
                 let next = graph.graph.add_node(typed_node(view)?);
                 graph.graph.add_edge(end, next, 0);
@@ -390,11 +517,31 @@ impl MixedExecutor {
             }
             ends.push(end);
         }
-        let root = graph.graph.add_node(typed_node(op)?);
-        for (slot, end) in ends.into_iter().enumerate() {
-            graph.graph.add_edge(end, root, slot);
+        let root = if matches!(op, TensorGraphNode::Linear { .. }) {
+            let a = crate::tensor::TensorExpr::node_ref(ends[0], operands[0].view.shape.clone());
+            let b = crate::tensor::TensorExpr::node_ref(ends[1], operands[1].view.shape.clone());
+            let bias = crate::tensor::TensorExpr::node_ref(ends[2], operands[2].view.shape.clone());
+            (a.matmul(b)
+                + bias
+                    .reshape(vec![1, op.shape()[1]])
+                    .broadcast(op.shape().clone()))
+            .lower_to_graph(&mut graph)
+        } else {
+            let root = graph.graph.add_node(typed_node(op)?);
+            for (slot, end) in ends.into_iter().enumerate() {
+                graph.graph.add_edge(end, root, slot);
+            }
+            root
+        };
+        let _ = root;
+        let mut program = Program::<D>::new_bound(&self.stream, graph, inputs, None, precision)?;
+        ensure!(
+            !matches!(op, TensorGraphNode::Linear { .. }) || program.root_fused_matmul,
+            "linear bias must fuse before BF16 output rounding"
+        );
+        for kernel in &mut program.kernels {
+            kernel.label = format!("node={} {} {}", node.index(), op.name(), kernel.label);
         }
-        let program = Program::<D>::new(&self.stream, graph, inputs, None, precision)?;
         self.info.bf16_tensor_core_programs +=
             usize::from(program.ptx.contains("f32.bf16.bf16.f32"));
         match D::HostType::TILE_DTYPE {
@@ -413,17 +560,120 @@ impl MixedExecutor {
         Ok(value)
     }
 
+    pub fn upload_with_indices(
+        &mut self,
+        inputs: HashMap<String, Vec<f32>>,
+        indices: crate::tensor::IndexInputs,
+    ) -> Result<()> {
+        self.upload_impl(inputs, indices, false)
+    }
+
+    pub(crate) fn for_resident<G>(
+        graph: &TensorGraph<f32, G>,
+        precision: MatMulPrecision,
+        replay: bool,
+        bindings: ResidentBindings,
+    ) -> Result<Self> {
+        Self::prepare(graph, precision, replay, false, true, Some(bindings))
+    }
+    pub(crate) fn execution_stream(&self) -> &Arc<CudaStream> {
+        &self.stream
+    }
+    pub(crate) fn device_binding(
+        &self,
+        node: NodeIndex,
+    ) -> Result<(Binding, VirtualTensor, Vec<usize>)> {
+        ensure!(self.has_run, "mixed graph has not run");
+        let value = self
+            .values
+            .get(&node)
+            .context("mixed gradient not retained")?;
+        ensure!(
+            matches!(value.binding.dtype, DType::F32 | DType::BF16)
+                && value.binding.dtype == value.view.dtype,
+            "resident gradient storage/view mismatch"
+        );
+        Ok((
+            value.binding,
+            value.view.clone(),
+            value.source_shape.clone(),
+        ))
+    }
+    pub(crate) fn refresh_parameters(
+        &mut self,
+        parameters: &HashMap<NodeIndex, Arc<CudaSlice<f32>>>,
+    ) -> Result<()> {
+        let began = std::time::Instant::now();
+        ensure!(
+            parameters.len() == self.bound_parameters.len(),
+            "resident parameter set changed"
+        );
+        for (&node, source) in parameters {
+            ensure!(
+                self.bound_parameters.contains_key(&node) && self.sources.contains_key(&node),
+                "unexpected resident parameter"
+            );
+            ensure!(
+                Arc::ptr_eq(source.context(), self.stream.context())
+                    && source.len() == self.values[&node].binding.len,
+                "resident parameter context/extent mismatch"
+            );
+        }
+        let gate = self.gate.clone();
+        let _guard = gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?;
+        for (&node, source) in parameters {
+            let previous = self
+                .bound_parameters
+                .get_mut(&node)
+                .context("resident source missing")?;
+            let identity = Arc::downgrade(source);
+            if !Weak::ptr_eq(previous, &identity) {
+                let Buffer::F32(target) = &mut self.buffers[self.sources[&node]] else {
+                    anyhow::bail!("resident master not f32")
+                };
+                self.stream.memcpy_dtod(source.as_ref(), target)?;
+                self.transfers.parameter_copies += 1;
+                self.transfers.parameter_bytes += source.len() * 4;
+                *previous = identity;
+            }
+        }
+        self.transfers.parameter_refresh_seconds = began.elapsed().as_secs_f64();
+        Ok(())
+    }
+
     /// Validate every input and parameter before replacing any device source.
     pub fn upload(&mut self, inputs: HashMap<String, Vec<f32>>) -> Result<()> {
-        self.upload_impl(inputs, false)
+        self.upload_impl(inputs, HashMap::new(), false)
     }
     fn upload_impl(
         &mut self,
         inputs: HashMap<String, Vec<f32>>,
+        mut indices: crate::tensor::IndexInputs,
         allow_missing_inputs: bool,
     ) -> Result<()> {
+        let began = std::time::Instant::now();
+        if allow_missing_inputs {
+            for n in self.index_graph.graph.node_weights() {
+                if let TensorGraphNode::IndexSource { source } = n
+                    && let crate::tensor::indices::IndexSource::Input(name) = source.source()
+                {
+                    indices.insert((*name).into(), vec![0; source.shape().iter().product()]);
+                }
+            }
+        }
+        let index_values = self.index_plan.prepare(&self.index_graph, indices)?;
         let mut copies = Vec::new();
         for (&node, &index) in &self.sources {
+            if self.constants_initialized
+                && matches!(self.source_nodes[&node], TensorGraphNode::Constant { .. })
+            {
+                continue;
+            }
+            if self.bound_parameters.contains_key(&node) {
+                continue;
+            }
             let data = match &self.source_nodes[&node] {
                 TensorGraphNode::Input { name, .. } => match inputs.get(*name) {
                     Some(data) => data.clone(),
@@ -440,18 +690,41 @@ impl MixedExecutor {
             );
             copies.push((index, data));
         }
+        let gate = self.gate.clone();
+        let _guard = gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?;
         self.synchronize()?;
         self.uploaded = false;
         self.has_run = false;
+        self.transfers = MixedTransfers::default();
         for (index, data) in copies {
             if let Buffer::F32(buffer) = &mut self.buffers[index] {
                 self.stream.memcpy_htod(&data, buffer)?;
+                self.transfers.f32_uploads += 1;
+                self.transfers.f32_bytes += data.len() * 4;
             }
         }
+        for (node, data) in index_values {
+            self.transfers.index_uploads += 1;
+            self.transfers.index_bytes += data.len() * 4;
+            self.stream.memcpy_htod(
+                data.as_slice(),
+                self.index_buffers
+                    .get_mut(&node)
+                    .context("integer allocation missing")?,
+            )?;
+        }
         self.uploaded = true;
+        self.constants_initialized = true;
+        self.transfers.upload_seconds = began.elapsed().as_secs_f64();
         Ok(())
     }
     pub fn run(&mut self) -> Result<()> {
+        let gate = self.gate.clone();
+        let _guard = gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?;
         ensure!(self.uploaded, "mixed inputs have not been uploaded");
         if let Some(captured) = &self.captured {
             captured
@@ -468,22 +741,37 @@ impl MixedExecutor {
         Ok(())
     }
     pub fn read(&self, node: NodeIndex) -> Result<Vec<f32>> {
+        let gate = self.gate.clone();
+        let _guard = gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?;
         ensure!(self.has_run, "mixed graph has not run");
         let value = self
             .values
             .get(&node)
             .with_context(|| format!("mixed read node {} missing", node.index()))?;
-        let output = self
-            .stream
-            .alloc_zeros::<f32>(value.view.shape.iter().product())?;
-        let target = Binding {
-            pointer: cudarc::driver::DevicePtr::device_ptr(&output, &self.stream).0,
-            len: output.len(),
-            dtype: DType::F32,
-        };
-        materialize(&self.stream, value, target)?.run(&self.stream)?;
-        let mut host = vec![0.; output.len()];
-        self.stream.memcpy_dtoh(&output, &mut host)?;
+        let mut readbacks = self.readbacks.borrow_mut();
+        if let std::collections::hash_map::Entry::Vacant(entry) = readbacks.entry(node) {
+            let output = self
+                .stream
+                .alloc_zeros::<f32>(value.view.shape.iter().product())?;
+            let target = Binding {
+                pointer: output.device_ptr(&self.stream).0,
+                len: output.len(),
+                dtype: DType::F32,
+            };
+            let kernel = materialize(&self.stream, value, target)?;
+            entry.insert(Readback {
+                buffer: output,
+                kernel,
+            });
+        }
+        let readback = readbacks
+            .get(&node)
+            .context("mixed readback cache missing")?;
+        readback.kernel.run(&self.stream)?;
+        let mut host = vec![0.; readback.buffer.len()];
+        self.stream.memcpy_dtoh(&readback.buffer, &mut host)?;
         self.synchronize()?;
         Ok(host)
     }
@@ -500,6 +788,17 @@ impl MixedExecutor {
     }
     pub fn synchronize(&self) -> Result<()> {
         self.stream.synchronize().map_err(Into::into)
+    }
+    /// Ordered captured kernel labels for matching a CUDA graph node trace.
+    pub fn kernel_labels(&self) -> Vec<&str> {
+        self.kernels
+            .iter()
+            .map(|kernel| kernel.label.as_str())
+            .collect()
+    }
+
+    pub fn transfers(&self) -> &MixedTransfers {
+        &self.transfers
     }
     pub fn info(&self) -> &MixedInfo {
         &self.info
@@ -532,6 +831,24 @@ fn is_view(n: &TensorGraphNode<f32>) -> bool {
 
 fn typed_node<D>(n: &TensorGraphNode<f32>) -> Result<TensorGraphNode<D>> {
     Ok(match n {
+        TensorGraphNode::Embedding { shape } => TensorGraphNode::Embedding {
+            shape: shape.clone(),
+        },
+        TensorGraphNode::EmbeddingBackward { shape } => TensorGraphNode::EmbeddingBackward {
+            shape: shape.clone(),
+        },
+        TensorGraphNode::IndexedCrossEntropy { shape } => TensorGraphNode::IndexedCrossEntropy {
+            shape: shape.clone(),
+        },
+        TensorGraphNode::IndexedCrossEntropyBackward { shape } => {
+            TensorGraphNode::IndexedCrossEntropyBackward {
+                shape: shape.clone(),
+            }
+        }
+        TensorGraphNode::Concat { axis, shape } => TensorGraphNode::Concat {
+            axis: *axis,
+            shape: shape.clone(),
+        },
         TensorGraphNode::Unary { op, shape } => TensorGraphNode::Unary {
             op: *op,
             shape: shape.clone(),
@@ -597,9 +914,14 @@ fn materialize(stream: &Arc<CudaStream>, source: &Value, target: Binding) -> Res
         .context()
         .load_module(Ptx::from_src(graph.to_ptx()))?;
     Ok(Kernel {
+        label: format!(
+            "materialize {:?} to {:?} shape={:?}",
+            source.binding.dtype, target.dtype, source.view.shape
+        ),
         function: module.load_function(name)?,
         config: LaunchConfig::for_num_elems(u32::try_from(target.len)?),
         pointers: vec![source.binding.pointer, target.pointer],
+        zero_before: None,
     })
 }
 

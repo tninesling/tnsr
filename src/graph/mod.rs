@@ -78,6 +78,10 @@ pub struct WithGrad {
 
 #[derive(Clone)]
 pub enum TensorGraphNode<D> {
+    /// Atomic matmul plus bias, with no intermediate storage rounding.
+    Linear {
+        shape: crate::tensor::Shape,
+    },
     Cast {
         dtype: crate::tensor::ValueDType,
         shape: crate::tensor::Shape,
@@ -197,6 +201,7 @@ impl<D> TensorGraphNode<D> {
     pub fn name(&self) -> &'static str {
         match self {
             TensorGraphNode::Cast { .. } => "Cast",
+            TensorGraphNode::Linear { .. } => "Linear",
             TensorGraphNode::IndexSource { .. } => "IndexSource",
             TensorGraphNode::Constant { .. } => "Constant",
             TensorGraphNode::Input { .. } => "Input",
@@ -245,6 +250,7 @@ impl<D> TensorGraphNode<D> {
     pub fn shape(&self) -> &crate::tensor::Shape {
         match self {
             TensorGraphNode::Cast { shape, .. } => shape,
+            TensorGraphNode::Linear { shape } => shape,
             TensorGraphNode::IndexSource { source } => source.shape(),
             TensorGraphNode::Constant { shape, .. } => shape,
             TensorGraphNode::Input { shape, .. } => shape,
@@ -680,10 +686,11 @@ where
                         }
                     }
                 }
-                TensorGraphNode::MatMul { .. } => {
+                TensorGraphNode::MatMul { .. } | TensorGraphNode::Linear { .. } => {
                     // d(A@B)/dA = dC @ B^T, d(A@B)/dB = A^T @ dC
-                    if inputs.len() != 2 {
-                        panic!("MatMul should have 2 inputs");
+                    let linear = matches!(self.graph[node_idx], TensorGraphNode::Linear { .. });
+                    if inputs.len() != if linear { 3 } else { 2 } {
+                        panic!("contraction has incorrect operand count");
                     }
                     let input_a = inputs[0];
                     let input_b = inputs[1];
@@ -730,6 +737,24 @@ where
                         input_b,
                         grad_b,
                     );
+                    if linear {
+                        let grad = TensorExpr::node_ref(
+                            grad_output,
+                            self.graph[grad_output].shape().clone(),
+                        );
+                        let grad = Self::reduce_gradient_to_shape(
+                            grad,
+                            self.graph[inputs[2]].shape().clone(),
+                        );
+                        let grad = self.lower_gradient_expr(&grad, &mut gradient_nodes);
+                        self.accumulate_gradient(
+                            &primal_dtypes,
+                            &mut node_to_grad,
+                            &mut gradient_nodes,
+                            inputs[2],
+                            grad,
+                        );
+                    }
                 }
                 TensorGraphNode::Embedding { .. } => {
                     if inputs.len() != 2 {

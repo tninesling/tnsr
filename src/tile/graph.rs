@@ -313,7 +313,9 @@ impl TileGraph {
         schedule: Option<MatMulSchedule>,
     ) -> TileIR {
         match node {
-            TensorGraphNode::Cast { .. } => panic!("mixed casts require MixedExecutor"),
+            TensorGraphNode::Linear { .. } | TensorGraphNode::Cast { .. } => {
+                panic!("mixed casts require MixedExecutor")
+            }
             TensorGraphNode::Constant { data, .. } => Self::lower_constant(dtype, data, shape),
             TensorGraphNode::Input { name, .. } => Self::lower_input(dtype, name, shape),
             TensorGraphNode::IndexSource { .. } => Self::lower_view(),

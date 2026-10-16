@@ -267,6 +267,28 @@ pub enum ValueDType {
 }
 
 impl TensorExpr<f32> {
+    /// Rank-two linear with BF16 operands and one final bias/output rounding.
+    /// Weight uses [inputs, outputs]; masters and bias may be f32.
+    pub fn linear_bf16(self, weight: Self, bias: Self) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            self.shape().len() == 2 && weight.shape().len() == 2,
+            "mixed linear requires rank-two operands"
+        );
+        anyhow::ensure!(
+            self.shape()[1] == weight.shape()[0] && bias.shape() == &[weight.shape()[1]],
+            "mixed linear operand shapes disagree"
+        );
+        let shape = vec![self.shape()[0], weight.shape()[1]];
+        Ok(Self(Arc::new(ExprNode {
+            shape,
+            kind: ExprKind::Linear {
+                x: self.cast(ValueDType::BF16),
+                weight: weight.cast(ValueDType::BF16),
+                bias: bias.cast(ValueDType::BF16),
+            },
+        })))
+    }
+
     /// Cast in a mixed graph. BF16 narrows with round-to-nearest-even;
     /// F32 promotes the already rounded value. Neither cast is cancelled.
     pub fn cast(self, dtype: ValueDType) -> Self {
@@ -292,6 +314,7 @@ impl<D: DType> TensorExpr<D> {
             ExprKind::Unary { x, .. } => vec![x],
             ExprKind::Binary { a, b, .. } => vec![a, b],
             ExprKind::MatMul { a, b } => vec![a, b],
+            ExprKind::Linear { x, weight, bias } => vec![x, weight, bias],
             ExprKind::Embedding { weight, indices } => vec![weight, indices],
             ExprKind::EmbeddingBackward {
                 indices,
@@ -380,6 +403,11 @@ struct ExprNode<D: DType> {
 
 #[derive(Clone, Debug)]
 pub enum ExprKind<D: DType> {
+    Linear {
+        x: TensorExpr<D>,
+        weight: TensorExpr<D>,
+        bias: TensorExpr<D>,
+    },
     /// An observable rounding boundary; optimizers must retain its identity.
     Cast {
         x: TensorExpr<D>,
@@ -1433,6 +1461,20 @@ impl<D: DType> TensorExpr<D> {
                     g.graph.add_edge(a_idx, node_idx, 0);
                     g.graph.add_edge(b_idx, node_idx, 1);
                     node_idx
+                }
+                ExprKind::Linear { x, weight, bias } => {
+                    let inputs = [
+                        lower_rec(x, g, memo),
+                        lower_rec(weight, g, memo),
+                        lower_rec(bias, g, memo),
+                    ];
+                    let node = g.graph.add_node(TensorGraphNode::Linear {
+                        shape: expr.shape().clone(),
+                    });
+                    for (slot, input) in inputs.into_iter().enumerate() {
+                        g.graph.add_edge(input, node, slot);
+                    }
+                    node
                 }
                 ExprKind::MatMul { a, b } => {
                     let a_idx = lower_rec(a, g, memo);

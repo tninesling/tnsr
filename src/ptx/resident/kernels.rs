@@ -81,19 +81,26 @@ fn store(b: &mut TileIRBuilder, name: &str, value: TileVar, len: usize) {
 }
 
 pub(super) fn accumulate(value: &DeviceValue, len: usize) -> Result<TileIR> {
+    accumulate_view(&value.view, &value.source_shape, len)
+}
+
+pub(super) fn accumulate_view(
+    view: &crate::tile::VirtualTensor,
+    source_shape: &[usize],
+    len: usize,
+) -> Result<TileIR> {
     let mut b = TileIRBuilder::new();
     b.start_kernel("resident_accumulate");
-    b.add_param("gradient", DType::F32, true);
+    b.add_param("gradient", view.dtype, true);
     b.add_param("accumulated", DType::F32, false);
     b.bounds_check(len);
     let descriptor = RegionInput {
-        node: value.view.source,
+        node: view.source,
         value: RegionValue(0),
-        tensor: value.view.clone(),
-        source_shape: value.source_shape.clone(),
+        tensor: view.clone(),
+        source_shape: source_shape.to_vec(),
     };
-    let index =
-        crate::tile::region::input_element_index(&descriptor, &value.view.shape, &linear())?;
+    let index = crate::tile::region::input_element_index(&descriptor, &view.shape, &linear())?;
     let incoming = reg(&mut b);
     b.load_global_predicated(
         incoming,

@@ -1,6 +1,7 @@
 //! CUDA-resident f32 parameters, accumulated gradients and grouped Adam state.
 mod config;
 mod kernels;
+mod mixed;
 mod reduction;
 use super::types::{CudaDType, F32};
 use super::{PtxExecutor, PtxReductionMode};

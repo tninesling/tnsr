@@ -31,7 +31,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 20;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 21;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -529,12 +529,33 @@ impl<D: CudaDType> PtxExecutor<D> {
         self.compile_impl(graph)
     }
 
+    /// Compile fixed bindings whose already-rounded source storage differs from
+    /// the f32 arithmetic graph. This internal module is never executed through
+    /// the homogeneous executor's upload/readback path.
+    pub(crate) fn compile_bound_storage<G>(
+        &mut self,
+        graph: &TensorGraph<D::HostType, G>,
+        storage: &HashMap<crate::graph::NodeIndex, crate::tile::DType>,
+    ) -> Result<()> {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        self.compile_impl_with_storage(graph, storage)
+    }
+
     fn compile_impl<G>(&mut self, graph: &TensorGraph<D::HostType, G>) -> Result<()> {
+        self.compile_impl_with_storage(graph, &HashMap::new())
+    }
+
+    fn compile_impl_with_storage<G>(
+        &mut self,
+        graph: &TensorGraph<D::HostType, G>,
+        storage: &HashMap<crate::graph::NodeIndex, crate::tile::DType>,
+    ) -> Result<()> {
         anyhow::ensure!(
-            !graph
-                .graph
-                .node_weights()
-                .any(|n| matches!(n, TensorGraphNode::Cast { .. })),
+            !graph.graph.node_weights().any(|n| matches!(
+                n,
+                TensorGraphNode::Cast { .. } | TensorGraphNode::Linear { .. }
+            )),
             "mixed casts require MixedExecutor"
         );
         let index_plan = crate::graph::indices::IndexPlan::new(graph)?;
@@ -542,7 +563,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         self.exact_indices.buffers.clear();
         let started = Instant::now();
         let graph_nodes = graph.graph.node_count();
-        let signature = graph_compilation_signature(
+        let mut signature = graph_compilation_signature(
             graph,
             self.reduction_mode,
             self.target,
@@ -551,6 +572,15 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_pipeline,
             self.fusion_policy,
         );
+        if !storage.is_empty() {
+            signature.extend_from_slice(b"bound-storage");
+            let mut entries: Vec<_> = storage.iter().collect();
+            entries.sort_by_key(|(node, _)| node.index());
+            for (node, dtype) in entries {
+                signature_usize(&mut signature, node.index());
+                signature_usize(&mut signature, *dtype as usize);
+            }
+        }
         let mut execution_plan =
             PtxExecutionPlan::build_with_reduction_mode(graph, self.reduction_mode)?;
         execution_plan.schedule_matmuls(
@@ -637,6 +667,49 @@ impl<D: CudaDType> PtxExecutor<D> {
                 .filter_map(|step| (step.action == PtxPlanAction::Kernel).then_some(step.node))
                 .collect(),
         );
+        if !storage.is_empty() {
+            let mut dtypes = storage.clone();
+            for step in execution_plan.steps() {
+                if step.action == PtxPlanAction::VirtualView {
+                    for (&output, view) in step.outputs.iter().zip(&step.virtual_outputs) {
+                        if let Some(&dtype) = dtypes.get(&view.source) {
+                            dtypes.insert(output, dtype);
+                        }
+                    }
+                    continue;
+                }
+                let ir = match step.action {
+                    PtxPlanAction::Kernel => tile_graph.graph.node_weight_mut(step.node),
+                    PtxPlanAction::PointwiseRegion(id) => tile_graph
+                        .region_kernels
+                        .iter_mut()
+                        .find(|k| k.region_id == id)
+                        .map(|k| &mut k.ir),
+                    PtxPlanAction::ReductionRegion(id) => tile_graph
+                        .reduction_region_kernels
+                        .iter_mut()
+                        .find(|k| k.region_id == id)
+                        .map(|k| &mut k.ir),
+                    PtxPlanAction::MatMulRegion(id) => tile_graph
+                        .matmul_region_kernels
+                        .iter_mut()
+                        .find(|k| k.region_id == id)
+                        .map(|k| &mut k.ir),
+                    _ => None,
+                };
+                if let Some(ir) = ir {
+                    for (param, node) in ir
+                        .params
+                        .iter_mut()
+                        .zip(step.inputs.iter().chain(&step.outputs))
+                    {
+                        if let Some(&dtype) = dtypes.get(node) {
+                            param.dtype = dtype;
+                        }
+                    }
+                }
+            }
+        }
         let index_started = Instant::now();
         tile_graph.optimize_indices()?;
         let index_optimization_time = index_started.elapsed();
@@ -1272,7 +1345,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                 continue;
             }
             let result = match node {
-                TensorGraphNode::Cast { .. } => anyhow::bail!("mixed casts require MixedExecutor"),
+                TensorGraphNode::Linear { .. } | TensorGraphNode::Cast { .. } => {
+                    anyhow::bail!("mixed casts require MixedExecutor")
+                }
                 _ if plan_step.materialized_view.is_some() => {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
@@ -2391,6 +2466,7 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
         signature_usize(&mut signature, node_index.index());
         signature_str(&mut signature, node.name());
         match node {
+            TensorGraphNode::Linear { .. } => signature.push(34),
             TensorGraphNode::Cast { dtype, .. } => {
                 signature.push(33);
                 signature.push(match dtype {

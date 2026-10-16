@@ -80,8 +80,10 @@ pub(super) fn convert(
         .context()
         .load_module(Ptx::from_src(graph.to_ptx()))?;
     Ok(Kernel {
+        label: format!("convert {:?} to {:?} len={len}", source.dtype, target.dtype),
         function: module.load_function(name)?,
         config: LaunchConfig::for_num_elems(u32::try_from(len)?),
         pointers: vec![source.pointer, target.pointer],
+        zero_before: None,
     })
 }

@@ -20,6 +20,8 @@ pub struct PtxGraph {
     matmul_region_functions: Vec<(usize, Function<'static>)>,
     physical_nodes: Option<HashSet<NodeIndex>>,
     target: PtxTarget,
+    // Only entry names differ between these otherwise identical PTX functions.
+    kernel_aliases: HashMap<String, String>,
     #[allow(dead_code)]
     arena: Box<bumpalo::Bump>,
 }
@@ -27,25 +29,66 @@ pub struct PtxGraph {
 impl PtxGraph {
     pub(crate) fn module_source(&self) -> String {
         let mut module = Module::new_with_target(self.target.compute_capability);
-        for node in self.graph.node_indices() {
-            if self
-                .physical_nodes
-                .as_ref()
-                .is_none_or(|physical| physical.contains(&node))
-            {
-                module.add_function(self.graph[node].clone());
+        for function in self.emitted_functions() {
+            if !self.kernel_aliases.contains_key(function.name) {
+                module.add_function(function.clone());
             }
         }
-        for (_, function) in &self.region_functions {
-            module.add_function(function.clone());
-        }
-        for (_, function) in &self.reduction_region_functions {
-            module.add_function(function.clone());
-        }
-        for (_, function) in &self.matmul_region_functions {
-            module.add_function(function.clone());
-        }
         module.to_string()
+    }
+
+    fn emitted_functions(&self) -> impl Iterator<Item = &Function<'static>> {
+        self.graph
+            .node_indices()
+            .filter(|node| {
+                self.physical_nodes
+                    .as_ref()
+                    .is_none_or(|nodes| nodes.contains(node))
+            })
+            .map(|node| &self.graph[node])
+            .chain(self.region_functions.iter().map(|(_, function)| function))
+            .chain(
+                self.reduction_region_functions
+                    .iter()
+                    .map(|(_, function)| function),
+            )
+            .chain(
+                self.matmul_region_functions
+                    .iter()
+                    .map(|(_, function)| function),
+            )
+    }
+
+    fn intern_kernels(&mut self) {
+        let mut bodies: HashMap<String, String> = HashMap::new();
+        let mut aliases = HashMap::new();
+        for function in self.emitted_functions() {
+            // Compare the complete emitted ABI, declarations and instructions.
+            // Only the entry symbol is normalized; no index, precision, layout,
+            // synchronization or launch semantics are assumed equivalent.
+            let body = function.to_string().replacen(
+                &format!(".entry {}", function.name),
+                ".entry __tnsr_kernel",
+                1,
+            );
+            let canonical = bodies
+                .entry(body)
+                .or_insert_with(|| function.name.to_owned());
+            if canonical != function.name {
+                aliases.insert(function.name.to_owned(), canonical.clone());
+            }
+        }
+        self.kernel_aliases = aliases;
+    }
+
+    fn canonical_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.kernel_aliases.get(name).map_or(name, String::as_str)
+    }
+
+    pub(crate) fn unique_kernel_count(&self) -> usize {
+        self.emitted_functions()
+            .filter(|function| !self.kernel_aliases.contains_key(function.name))
+            .count()
     }
 
     /// Render this graph as a complete PTX module.
@@ -54,28 +97,30 @@ impl PtxGraph {
     }
 
     pub(crate) fn kernel_name(&self, node: NodeIndex) -> Option<&str> {
-        self.graph.node_weight(node).map(|function| function.name)
+        self.graph
+            .node_weight(node)
+            .map(|function| self.canonical_name(function.name))
     }
 
     pub(crate) fn region_kernel_name(&self, region_id: usize) -> Option<&str> {
         self.region_functions
             .iter()
             .find(|(id, _)| *id == region_id)
-            .map(|(_, function)| function.name)
+            .map(|(_, function)| self.canonical_name(function.name))
     }
 
     pub(crate) fn reduction_region_kernel_name(&self, region_id: usize) -> Option<&str> {
         self.reduction_region_functions
             .iter()
             .find(|(id, _)| *id == region_id)
-            .map(|(_, function)| function.name)
+            .map(|(_, function)| self.canonical_name(function.name))
     }
 
     pub(crate) fn matmul_region_kernel_name(&self, region_id: usize) -> Option<&str> {
         self.matmul_region_functions
             .iter()
             .find(|(id, _)| *id == region_id)
-            .map(|(_, function)| function.name)
+            .map(|(_, function)| self.canonical_name(function.name))
     }
 
     pub(crate) fn with_target(mut self, target: PtxTarget) -> Self {
@@ -159,15 +204,18 @@ impl From<TileGraph> for PtxGraph {
             })
             .collect();
 
-        Self {
+        let mut result = Self {
             graph,
             region_functions,
             reduction_region_functions,
             matmul_region_functions,
             physical_nodes,
             target: PtxTarget::sm80(),
+            kernel_aliases: HashMap::new(),
             arena,
-        }
+        };
+        result.intern_kernels();
+        result
     }
 }
 
@@ -3847,6 +3895,30 @@ mod tests {
         Block, DType, KernelParam, MatMulPipeline, MatMulPrecision, MatMulSharedLayout,
         MemorySpace, Stmt, TileIR,
     };
+
+    #[test]
+    fn identical_raw_kernels_share_entries_but_operations_stay_distinct() {
+        let expression = TensorExpr::<f32>::input("x", vec![17]).relu().exp().relu();
+        let graph: TensorGraph<f32> = expression.into();
+        let ptx = PtxGraph::from(TileGraph::from_graph(&graph));
+        let relus: Vec<_> = graph
+            .graph
+            .node_indices()
+            .filter(|&node| {
+                matches!(
+                    graph[node],
+                    crate::graph::TensorGraphNode::Unary {
+                        op: crate::tensor::UnaryOp::Relu,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(relus.len(), 2);
+        assert_eq!(ptx.kernel_name(relus[0]), ptx.kernel_name(relus[1]));
+        assert_eq!(ptx.module_source().matches(".entry relu_").count(), 1);
+        assert_eq!(ptx.module_source().matches(".entry exp_").count(), 1);
+    }
 
     struct TestFunction {
         // Drop the arena after the function and its bump-backed collections.

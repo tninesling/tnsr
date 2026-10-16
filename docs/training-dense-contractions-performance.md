@@ -100,6 +100,8 @@ baseline and 16.51 s for the candidate in this run. The measured difference is
 in executor warmup/capture (2.29 -> 15.86 s), while compile-cache time is similar
 (0.60 -> 0.64 s). The cause needs separate profiling; this report makes no claim
 of a startup improvement. Both excluded warmups are preserved.
+The [controlled startup follow-up](training-kernel-reuse-startup.md) separates
+cold and warm cache histories and attributes most of the cold cost to module JIT.
 
 A new diagnostic trace contains five captured model executions and 9605 kernels,
 202 fewer per execution than the previous trace. Matmul instances fall

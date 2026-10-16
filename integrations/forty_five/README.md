@@ -195,5 +195,10 @@ include complete forward/backward, conversion costs, replay, f32 accumulation,
 and original-Torch/optimizer diagnostics. Its GPU timings are explicitly
 contended, and full-model BF16 policy/calibration remains pending.
 
+[Explicit mixed graphs and cast-aware autograd](../../docs/training-mixed-graph.md)
+extend that owner to graph-generated backward with physical BF16 storage and
+f32-region fusion. The measured SiLU subgraphs include conversion costs and
+use a fused split-K f32 comparator; full PPO/Adam integration is still pending.
+
 Set `TNSR_PROFILE_PPO_DUMP` to a fresh directory alongside `TNSR_PROFILE_PPO=1`
 to save each compiled bucket's actual plan/PTX once. Existing files are rejected.

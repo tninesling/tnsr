@@ -183,3 +183,12 @@ This retains the two excluded warmups, every full-request time, executable hashe
 and replay state. Success requires finite metrics and active replay without
 fallbacks when requested. Both workers receive identical settings and start from
 the same archive; no PyTorch build runs during this native comparison.
+
+For physical-BF16 GEMM probes with conversion costs and streaming working sets,
+see [the measured BF16 headroom report](../../docs/training-bf16-headroom.md).
+The separately patched whole-model arithmetic experiment in that report is not
+a production AMP policy. `--bf16-compute-probe` requires its distinct candidate
+precision label and retains ordinary baseline checks.
+
+Set `TNSR_PROFILE_PPO_DUMP` to a fresh directory alongside `TNSR_PROFILE_PPO=1`
+to save each compiled bucket's actual plan/PTX once. Existing files are rejected.

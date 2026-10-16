@@ -1,0 +1,65 @@
+--- a/src/tile/matmul_schedule.rs
++++ b/src/tile/matmul_schedule.rs
+@@ -176,6 +176,9 @@
+     ) -> Self {
+         self.pipeline_stages = 1;
+         self.copy_bytes = 4;
++        if self.plan == MatMulPlan::TensorCoreBF16 && self.storage_dtype == DType::F32 {
++            return self;
++        }
+         let tile = self.block_tile;
+         let pairs_aligned = self.storage_dtype.size_bytes() == 4
+             || (contiguous
+@@ -316,6 +319,10 @@
+         } else {
+             plan
+         };
++        let plan = if plan == MatMulPlan::TensorCoreTf32x3
++            && capabilities.bf16
++            && std::env::var_os("TNSR_BF16_COMPUTE_PROBE").is_some()
++        { MatMulPlan::TensorCoreBF16 } else { plan };
+         let tensor_core = plan != MatMulPlan::ScalarF32;
+         // Keep small and narrow work on the original tile. Larger tiles reuse
+         // operands across two or four computing warps without growing the block.
+@@ -364,7 +371,7 @@
+                 MatMulTile {
+                     m: 16,
+                     n: 16,
+-                    k: if storage_dtype == DType::F32 { 8 } else { 16 },
++                    k: if matches!(plan, MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreTf32x3) { 8 } else { 16 },
+                 }
+             } else {
+                 MatMulTile { m: 1, n: 1, k: 1 }
+@@ -381,7 +388,7 @@
+             ),
+             pipeline_stages: 1,
+             copy_bytes: 4,
+-            operand_dtype: if matches!(
++            operand_dtype: if plan == MatMulPlan::TensorCoreBF16 { DType::BF16 } else if matches!(
+                 plan,
+                 MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreTf32x3
+             ) {
+--- a/src/ptx/executor.rs
++++ b/src/ptx/executor.rs
+@@ -31,7 +31,7 @@
+ // This versions the in-memory compilation-key schema, not the crate release.
+ // Bump it whenever signature encoding or generated-code-affecting inputs change.
+ const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
+-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 19;
++const PTX_GRAPH_SIGNATURE_VERSION: u8 = 20;
+ 
+ /// Measurements from the most recent successful PTX compilation.
+ #[derive(Debug, Clone, Default, PartialEq, Eq)]
+--- a/examples/forty_five/ppo.rs
++++ b/examples/forty_five/ppo.rs
+@@ -638,7 +638,9 @@
+             .map(|(key, value)| (key.into(), serde_json::json!(value)))
+             .collect();
+         let mut result = serde_json::json!({"metrics":metrics,"gradient_norm_before_clip":norm,"gradient_scale":scale,"optimizer_steps":self.steps,"compiled_shapes":self.compiled.len(),"split_k_contractions":self.compiled.values().map(|compiled|compiled.split_k_contractions).sum::<usize>()});
+-        result["matmul_precision"] = serde_json::json!(if settings.tf32x3 {
++        result["matmul_precision"] = serde_json::json!(if std::env::var_os("TNSR_BF16_COMPUTE_PROBE").is_some() {
++            "bf16_compute_probe"
++        } else if settings.tf32x3 {
+             "tf32x3"
+         } else {
+             "strict_f32"

@@ -438,6 +438,10 @@ impl LinearTraining {
     pub fn info(&self) -> &LinearInfo {
         &self.info
     }
+    /// Complete this owner's queued work before timing or using another owner.
+    pub fn synchronize(&self) -> Result<()> {
+        self.stream.synchronize().map_err(Into::into)
+    }
     pub fn module_sources(&self) -> &[String] {
         &self.ptx
     }

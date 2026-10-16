@@ -190,5 +190,10 @@ The separately patched whole-model arithmetic experiment in that report is not
 a production AMP policy. `--bf16-compute-probe` requires its distinct candidate
 precision label and retains ordinary baseline checks.
 
+The subsequent [physical BF16 linear implementation and measurements](../../docs/training-bf16-linear.md)
+include complete forward/backward, conversion costs, replay, f32 accumulation,
+and original-Torch/optimizer diagnostics. Its GPU timings are explicitly
+contended, and full-model BF16 policy/calibration remains pending.
+
 Set `TNSR_PROFILE_PPO_DUMP` to a fresh directory alongside `TNSR_PROFILE_PPO=1`
 to save each compiled bucket's actual plan/PTX once. Existing files are rejected.

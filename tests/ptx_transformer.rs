@@ -1863,3 +1863,48 @@ fn ptx_materialized_composed_views_preserve_permutations_and_broadcasts() {
         }
     }
 }
+
+#[test]
+fn ptx_contiguous_reshape_fallback_retains_device_copy() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    ptx.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+    let input = TensorExpr::input("rows", vec![3, 16, 8])
+        .reshape(vec![48, 8])
+        .reshape(vec![3, 16, 8])
+        .reshape(vec![6, 8, 8])
+        .reshape(vec![48, 8]);
+    let weight = TensorExpr::constant(vec![0.125; 64], vec![8, 8]);
+    let graph: TensorGraph<f32> = input.matmul(weight).into();
+    ptx.compile(&graph).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert!(
+        plan.steps()
+            .iter()
+            .any(|step| step.action == tnsr::ptx::PtxPlanAction::Kernel
+                && matches!(
+                    graph[step.node],
+                    tnsr::graph::TensorGraphNode::Reshape { .. }
+                ))
+    );
+    assert!(
+        plan.steps()
+            .iter()
+            .all(|step| step.materialized_view.is_none())
+    );
+    for shift in [0.0, 0.375] {
+        let feeds = HashMap::from([(
+            "rows".into(),
+            (0..384)
+                .map(|i| (i % 17) as f32 * 0.125 - 0.5 + shift)
+                .collect(),
+        )]);
+        let expected = SimpleExecutor::new()
+            .execute(&graph, feeds.clone())
+            .unwrap();
+        let actual = ptx.execute_compiled(&graph, feeds).unwrap();
+        assert_close(&actual, &expected, 1e-5);
+        assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+    }
+}

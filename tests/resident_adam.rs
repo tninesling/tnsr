@@ -52,6 +52,128 @@ fn close(actual: &[f32], expected: &[f32], tolerance: f32) {
 }
 
 #[test]
+fn mixed_resident_adam_refreshes_published_masters_and_rejects_nonfinite_updates() {
+    use tnsr::{tensor::ValueDType, tile::MatMulPrecision};
+    let w = Parameter::new(vec![0.2, -0.3, 0.4, 0.1, -0.2, 0.5], vec![2, 3]);
+    let b = Parameter::new(vec![0.1, 0.2, -0.1], vec![3]);
+    let cw = Parameter::new(w.values().unwrap(), vec![2, 3]);
+    let cb = Parameter::new(b.values().unwrap(), vec![3]);
+    let groups = vec![AdamGroup::new(0.01), AdamGroup::new(0.02)];
+    let Some(mut owner) =
+        owner_with_replay(vec![(w.clone(), 0), (b.clone(), 1)], groups.clone(), true)
+    else {
+        return;
+    };
+    let make = |w: &Parameter<f32>, b: &Parameter<f32>, n: usize, scale: f32| {
+        let y = TensorExpr::input("x", vec![n, 2])
+            .linear_bf16(w.clone().into(), b.clone().into())
+            .unwrap()
+            .cast(ValueDType::F32);
+        let loss = (y.clone() * y).mean_all() * TensorExpr::from(scale);
+        let mut g = TensorGraph::new();
+        let loss = g.add_expr(&loss, false);
+        g.with_gradients(loss)
+    };
+    let graphs = [make(&w, &b, 1, 1. / 3.), make(&w, &b, 2, 2. / 3.)];
+    let cpu_graphs = [make(&cw, &cb, 1, 1. / 3.), make(&cw, &cb, 2, 2. / 3.)];
+    owner.begin_step().unwrap();
+    let mut executors = graphs
+        .iter()
+        .map(|g| owner.mixed_executor(g, MatMulPrecision::Tf32x3).unwrap())
+        .collect::<Vec<_>>();
+    let mut moments = [vec![0_f32; 6], vec![0_f32; 3]];
+    let mut variances = moments.clone();
+    for step in 1_i32..=3 {
+        if step == 3 {
+            let values: Vec<_> = cw.values().unwrap().iter().map(|v| v + 0.01).collect();
+            cw.set_values(values.clone()).unwrap();
+            w.set_values(values).unwrap();
+        }
+        owner.begin_step().unwrap();
+        let mut gradients = [vec![0_f32; 6], vec![0_f32; 3]];
+        for (i, x) in [vec![0.25, -0.5], vec![0.75, 0.5, -0.25, 0.125]]
+            .into_iter()
+            .enumerate()
+        {
+            let inputs = HashMap::from([("x".into(), x)]);
+            let mut cpu = SimpleExecutor::new();
+            cpu.execute(&cpu_graphs[i], inputs.clone()).unwrap();
+            let g = cpu.get_gradients(&cpu_graphs[i]);
+            for (target, id) in gradients.iter_mut().zip([cw.id(), cb.id()]) {
+                for (a, b) in target.iter_mut().zip(&g[&id]) {
+                    *a += b;
+                }
+            }
+            owner
+                .accumulate_mixed(&mut executors[i], &graphs[i], inputs, HashMap::new())
+                .unwrap();
+        }
+        let norm = gradients
+            .iter()
+            .flatten()
+            .map(|g| f64::from(*g).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let scale = (0.15 / (norm + 1e-6)).min(1.) as f32;
+        let status = owner.step(0.15).unwrap();
+        assert_eq!(status.timestep, step as usize);
+        assert!((status.gradient_norm - norm).abs() < 2e-6);
+        let actual = owner.gradients().unwrap();
+        let state = owner.moments().unwrap();
+        for (group, (cpu, gpu)) in [(cw.clone(), w.clone()), (cb.clone(), b.clone())]
+            .into_iter()
+            .enumerate()
+        {
+            let s = &groups[group];
+            let mut values = cpu.values().unwrap();
+            close(
+                &actual[&gpu.id()],
+                &gradients[group]
+                    .iter()
+                    .map(|g| g * scale)
+                    .collect::<Vec<_>>(),
+                2e-6,
+            );
+            for (j, value) in values.iter_mut().enumerate() {
+                let g = gradients[group][j] * scale;
+                moments[group][j] = s.beta1 * moments[group][j] + (1. - s.beta1) * g;
+                variances[group][j] = s.beta2 * variances[group][j] + (1. - s.beta2) * g * g;
+                *value -= s.learning_rate * (moments[group][j] / (1. - s.beta1.powi(step)))
+                    / ((variances[group][j] / (1. - s.beta2.powi(step))).sqrt() + s.epsilon);
+            }
+            cpu.set_values(values.clone()).unwrap();
+            close(&gpu.values().unwrap(), &values, 2e-6);
+            close(&state[&gpu.id()].first, &moments[group], 2e-6);
+            close(&state[&gpu.id()].second, &variances[group], 2e-6);
+        }
+    }
+    let weights = w.values().unwrap();
+    let before = owner.moments().unwrap();
+    owner.begin_step().unwrap();
+    owner
+        .accumulate_mixed(
+            &mut executors[0],
+            &graphs[0],
+            HashMap::from([("x".into(), vec![f32::NAN, 1.])]),
+            HashMap::new(),
+        )
+        .unwrap();
+    assert!(owner.step(0.15).is_err());
+    assert_eq!(owner.moments().unwrap(), before);
+    assert_eq!(w.values().unwrap(), weights);
+    owner.begin_step().unwrap();
+    owner
+        .accumulate_mixed(
+            &mut executors[0],
+            &graphs[0],
+            HashMap::from([("x".into(), vec![0.25, -0.5])]),
+            HashMap::new(),
+        )
+        .unwrap();
+    assert_eq!(owner.step(0.15).unwrap().timestep, 4);
+}
+
+#[test]
 fn resident_multistep_weighted_microbatches_match_cpu_gradients_moments_and_groups() {
     check_multistep(false, tnsr::ptx::PtxReductionMode::Strict);
 }
@@ -196,14 +318,14 @@ fn check_multistep(replay: bool, mode: tnsr::ptx::PtxReductionMode) {
                 &gradient.iter().map(|g| g * scale).collect::<Vec<_>>(),
                 1e-6,
             );
-            for j in 0..values.len() {
-                let g = gradient[j] * scale + settings.weight_decay * values[j];
+            for (j, value) in values.iter_mut().enumerate() {
+                let g = gradient[j] * scale + settings.weight_decay * *value;
                 moments[group][j] = settings.beta1 * moments[group][j] + (1.0 - settings.beta1) * g;
                 variances[group][j] =
                     settings.beta2 * variances[group][j] + (1.0 - settings.beta2) * g * g;
                 let m = moments[group][j] / (1.0 - settings.beta1.powi(step));
                 let v = variances[group][j] / (1.0 - settings.beta2.powi(step));
-                values[j] -= settings.learning_rate * m / (v.sqrt() + settings.epsilon);
+                *value -= settings.learning_rate * m / (v.sqrt() + settings.epsilon);
             }
             parameter.set_values(values.clone()).unwrap();
             close(&device.values().unwrap(), &values, 2e-6);

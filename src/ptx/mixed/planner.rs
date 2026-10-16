@@ -22,22 +22,27 @@ impl MixedExecutor {
                 let end = if let Some(&end) = mapped.get(&input) {
                     end
                 } else {
-                    let mut source = self
+                    let source = self
                         .values
                         .get(&input)
                         .context("f32 region boundary missing")?
                         .clone();
-                    if source.binding.dtype != DType::F32 {
-                        let (_, target) =
-                            self.alloc(input, source.view.shape.clone(), DType::F32)?;
-                        self.kernels
-                            .push(materialize(&self.stream, &source, target.binding)?);
-                        source = target;
-                    }
-                    let mut end = plain.graph.add_node(TensorGraphNode::Input {
-                        name: "boundary",
-                        shape: source.source_shape.clone(),
-                    });
+                    let n = if source.binding.dtype == DType::U32 {
+                        let TensorGraphNode::IndexSource { source: index } =
+                            &self.index_graph[source.view.source]
+                        else {
+                            anyhow::bail!("region integer source missing")
+                        };
+                        TensorGraphNode::IndexSource {
+                            source: index.clone(),
+                        }
+                    } else {
+                        TensorGraphNode::Input {
+                            name: "boundary",
+                            shape: source.source_shape.clone(),
+                        }
+                    };
+                    let mut end = plain.graph.add_node(n);
                     bindings.insert(end, source.binding);
                     for view in &source.chain {
                         let next = plain.graph.add_node(typed_node(view)?);
@@ -119,7 +124,7 @@ impl MixedExecutor {
                     view: VirtualTensor::identity(
                         original,
                         graph[original].shape().clone(),
-                        DType::F32,
+                        physical.dtype,
                     ),
                     source_shape: graph[original].shape().clone(),
                     chain: Vec::new(),

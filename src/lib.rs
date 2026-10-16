@@ -443,6 +443,18 @@ where
                     a.with_pair(b, |a, b| self.binary(op, a, b, &mut out));
                     Value::Owned(out)
                 }
+                TensorGraphNode::Linear { .. } => {
+                    let mut out = matmul_forward(graph, &self.values, &mut self.pool, *node_idx)?;
+                    let ins = graph.inputs(*node_idx);
+                    let bias = self.values.get(&ins[2]).context("linear bias missing")?;
+                    let width = *node.shape().last().context("linear output rank missing")?;
+                    bias.with(|b| {
+                        for (i, v) in out.iter_mut().enumerate() {
+                            *v = *v + b[i % width];
+                        }
+                    });
+                    Value::Owned(out)
+                }
                 TensorGraphNode::MatMul { .. } => {
                     let _span = trace_span!("matmul", node = node_idx.index()).entered();
                     Value::Owned(matmul_forward(

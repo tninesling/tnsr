@@ -70,6 +70,25 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn fused_linear_adds_bias_before_bf16_output_rounding() {
+        let weight = Parameter::new(vec![1.0078125f32], vec![1, 1]);
+        let bias = Parameter::new(vec![-1.015625f32], vec![1]);
+        let y = TensorExpr::input("x", vec![1, 1])
+            .linear_bf16(weight.clone().into(), bias.clone().into())
+            .unwrap()
+            .cast(ValueDType::F32);
+        let mut graph = TensorGraph::new();
+        let root = graph.add_expr(&y, false);
+        let graph = graph.with_gradients(root);
+        let mut cpu = SimpleExecutor::new();
+        cpu.execute(&graph, HashMap::from([("x".into(), vec![1.0078125])]))
+            .unwrap();
+        assert_eq!(cpu.get_value(root).unwrap(), vec![1. / 16384.]);
+        assert_eq!(cpu.get_gradients(&graph)[&weight.id()], vec![1.0078125]);
+        assert_eq!(cpu.get_gradients(&graph)[&bias.id()], vec![1.]);
+    }
+
+    #[test]
     fn cast_autograd_preserves_shared_and_distinct_rounding_boundaries() {
         for shared in [true, false] {
             let (graph, id) = fanout(shared);

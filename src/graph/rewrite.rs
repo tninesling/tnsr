@@ -128,7 +128,7 @@ impl Default for RewriteConfig {
 fn expr_to_recexpr<D: DType>(expr: &TensorExpr<D>) -> RecExpr<TensorOp> {
     fn build_rec<D: DType>(expr: &TensorExpr<D>, rec: &mut RecExpr<TensorOp>) -> Id {
         match expr.kind() {
-            ExprKind::Cast { .. } | ExprKind::Index { .. } => {
+            ExprKind::Linear { .. } | ExprKind::Cast { .. } | ExprKind::Index { .. } => {
                 unreachable!("index sources bypass expression rewriting")
             }
             ExprKind::Constant { .. }
@@ -418,7 +418,8 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
     fn requires_exact_structure<D: DType>(expr: &TensorExpr<D>) -> bool {
         matches!(
             expr.kind(),
-            ExprKind::Cast { .. }
+            ExprKind::Linear { .. }
+                | ExprKind::Cast { .. }
                 | ExprKind::Index { .. }
                 | ExprKind::Narrow { .. }
                 | ExprKind::Concat { .. }

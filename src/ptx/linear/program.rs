@@ -14,12 +14,30 @@ use std::{
 
 #[derive(Clone)]
 pub(crate) struct Kernel {
+    pub label: String,
     pub function: CudaFunction,
     pub config: LaunchConfig,
     pub pointers: Vec<u64>,
+    pub zero_before: Option<Binding>,
 }
 impl Kernel {
     pub fn run(&self, stream: &Arc<CudaStream>) -> Result<()> {
+        if let Some(target) = self.zero_before {
+            stream.context().bind_to_thread()?;
+            // SAFETY: the program retains the exact validated allocation;
+            // zero and scatter are ordered on the same captured stream.
+            unsafe {
+                cudarc::driver::result::memset_d8_async(
+                    target.pointer,
+                    0,
+                    target
+                        .len
+                        .checked_mul(4)
+                        .context("scatter zero size overflow")?,
+                    stream.cu_stream(),
+                )
+            }?;
+        }
         let mut launch = stream.launch_builder(&self.function);
         for pointer in &self.pointers {
             launch.arg(pointer);
@@ -39,6 +57,7 @@ pub(crate) struct Program<D: CudaDType> {
     pub ptx: String,
     pub values: HashMap<NodeIndex, Binding>,
     pub views: HashMap<NodeIndex, crate::tile::VirtualTensor>,
+    pub root_fused_matmul: bool,
     // Inputs and optional root storage are owned by LinearTraining; other
     // outputs/intermediates must stay alive through all captures here.
     storage: Vec<CudaSlice<D::HostType>>,
@@ -78,8 +97,26 @@ impl<D: CudaDType> Program<D> {
             Arc::new(Mutex::new(())),
         )?;
         executor.set_matmul_precision(precision);
-        executor.compile_owned(graph.clone())?;
-        let plan_text = executor.describe_plan(&graph)?;
+        let physical_storage = inputs
+            .iter()
+            .filter_map(|(&node, binding)| {
+                (binding.dtype == crate::tile::DType::BF16
+                    && D::HostType::TILE_DTYPE == crate::tile::DType::F32)
+                    .then_some((node, binding.dtype))
+            })
+            .collect();
+        executor.compile_bound_storage(&graph, &physical_storage)?;
+        let plan_text = if physical_storage.is_empty() {
+            executor.describe_plan(&graph)?
+        } else {
+            format!(
+                "{:#?}",
+                executor
+                    .execution_plan()
+                    .context("linear plan absent")?
+                    .steps()
+            )
+        };
         let ptx = executor.module_source().context("linear PTX absent")?;
         let plan = executor.execution_plan().context("linear plan absent")?;
         let root_node = plan.graph_output().context("linear root absent")?;
@@ -90,7 +127,8 @@ impl<D: CudaDType> Program<D> {
         for step in plan.steps() {
             if matches!(
                 graph[step.node],
-                TensorGraphNode::Input { .. }
+                TensorGraphNode::IndexSource { .. }
+                    | TensorGraphNode::Input { .. }
                     | TensorGraphNode::Constant { .. }
                     | TensorGraphNode::Parameter { .. }
             ) {
@@ -99,7 +137,15 @@ impl<D: CudaDType> Program<D> {
                     .get(&step.node)
                     .context("program source binding missing")?;
                 ensure!(
-                    value.len == shape.iter().product::<usize>() && value.dtype == dtype,
+                    value.len == shape.iter().product::<usize>()
+                        && value.dtype
+                            == if matches!(graph[step.node], TensorGraphNode::IndexSource { .. }) {
+                                crate::tile::DType::U32
+                            } else if let Some(&physical) = physical_storage.get(&step.node) {
+                                physical
+                            } else {
+                                dtype
+                            },
                     "linear source extent/dtype mismatch"
                 );
                 values.insert(step.node, value);
@@ -135,6 +181,25 @@ impl<D: CudaDType> Program<D> {
                     "linear root extent/dtype mismatch"
                 );
                 values.insert(node, binding);
+            }
+            // The homogeneous executor implements these planned steps with a
+            // DtoD copy: their diagnostic Tile IR is deliberately empty. The
+            // fixed-binding program needs a real copy in its captured kernels.
+            if step.action == PtxPlanAction::Kernel
+                && matches!(
+                    graph[step.node],
+                    TensorGraphNode::Reshape { .. } | TensorGraphNode::Flatten { .. }
+                )
+                && step.materialized_view.is_none()
+            {
+                let source = *values
+                    .get(&step.inputs[0])
+                    .context("contiguous copy source missing")?;
+                let target = *values
+                    .get(&step.node)
+                    .context("contiguous copy output missing")?;
+                kernels.push(super::kernels::convert(stream, source, target, false)?);
+                continue;
             }
             let pointer = |node: &NodeIndex| -> Result<u64> {
                 Ok(values
@@ -195,6 +260,15 @@ impl<D: CudaDType> Program<D> {
                         shared_mem_bytes: 0,
                     }
                 }
+                PtxPlanAction::Kernel
+                    if matches!(graph[step.node], TensorGraphNode::EmbeddingBackward { .. })
+                        && dtype == crate::tile::DType::F32 =>
+                {
+                    let ins = graph.inputs(step.node);
+                    LaunchConfig::for_num_elems(u32::try_from(
+                        graph[ins[1]].shape().iter().product::<usize>(),
+                    )?)
+                }
                 PtxPlanAction::Kernel | PtxPlanAction::PointwiseRegion(_) => {
                     LaunchConfig::for_num_elems(u32::try_from(
                         step.shape.iter().product::<usize>(),
@@ -203,9 +277,30 @@ impl<D: CudaDType> Program<D> {
                 _ => anyhow::bail!("unsupported linear plan action {:?}", step.action),
             };
             kernels.push(Kernel {
+                label: format!(
+                    "{:?} {} {:?} {} inputs={:?} output={:?}",
+                    dtype,
+                    step.operation,
+                    step.action,
+                    graph[step.node].name(),
+                    step.inputs
+                        .iter()
+                        .map(|n| graph[*n].shape())
+                        .collect::<Vec<_>>(),
+                    step.shape
+                ),
                 function: executor.planned_kernel_function(step)?,
                 config,
                 pointers,
+                zero_before: if matches!(
+                    graph[step.node],
+                    TensorGraphNode::EmbeddingBackward { .. }
+                ) && dtype == crate::tile::DType::F32
+                {
+                    Some(*values.get(&step.node).context("scatter output missing")?)
+                } else {
+                    None
+                },
             });
         }
         let output = *values.get(&root_node).context("linear output absent")?;
@@ -217,10 +312,17 @@ impl<D: CudaDType> Program<D> {
                 s.outputs
                     .iter()
                     .copied()
-                    .zip(s.virtual_outputs.iter().cloned())
+                    .zip(s.virtual_outputs.iter().cloned().map(|mut view| {
+                        view.dtype = values[&view.source].dtype;
+                        view
+                    }))
             })
             .collect();
+        let root_fused_matmul = plan.steps().iter().any(|s| {
+            s.outputs.contains(&root_node) && matches!(s.action, PtxPlanAction::MatMulRegion(_))
+        });
         Ok(Self {
+            root_fused_matmul,
             kernels,
             output,
             plan: plan_text,
@@ -250,5 +352,16 @@ pub(crate) fn binding(buffer: &Buffer, stream: &Arc<CudaStream>) -> Binding {
             len: v.len(),
             dtype: crate::tile::DType::BF16,
         },
+    }
+}
+
+impl Program<crate::ptx::F32> {
+    pub(crate) fn drain_storage(&mut self) -> Vec<Buffer> {
+        self.storage.drain(..).map(Buffer::F32).collect()
+    }
+}
+impl Program<crate::ptx::BF16> {
+    pub(crate) fn drain_storage(&mut self) -> Vec<Buffer> {
+        self.storage.drain(..).map(Buffer::BF16).collect()
     }
 }

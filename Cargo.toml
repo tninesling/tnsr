@@ -75,3 +75,7 @@ test = true
 [[example]]
 name = "bf16_gemm_probe"
 required-features = ["cuda"]
+
+[[example]]
+name = "bf16_linear_probe"
+required-features = ["cuda"]

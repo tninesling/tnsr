@@ -120,6 +120,7 @@ fn physical_bf16_linear_rounds_fanout_before_backward_and_accumulates_in_f32() {
             assert!(linear.run().is_err());
             linear.upload(&input).unwrap();
             linear.run().unwrap();
+            linear.synchronize().unwrap();
             let actual = linear.readback().unwrap();
             for (a, b) in [
                 &actual.output,

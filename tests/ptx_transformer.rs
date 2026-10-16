@@ -1805,3 +1805,106 @@ fn ptx_reduction_views_materialize_strided_fibers_and_keep_coalesced_permutation
         assert_eq!(ptx.execution_metrics().kernel_launches, expected_kernels);
     }
 }
+
+/// A complexity/fanout fallback must materialize the entire composed map.
+/// Copying the final reshape's storage drops the earlier head permutation.
+#[test]
+fn ptx_materialized_composed_views_preserve_permutations_and_broadcasts() {
+    for policy in [PtxFusionPolicy::Greedy, PtxFusionPolicy::CostAware] {
+        for source_batches in [1, 3] {
+            let Some(mut ptx) = ptx_executor() else {
+                return;
+            };
+            ptx.set_fusion_policy(policy);
+            ptx.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+            let source = TensorExpr::input("heads", vec![source_batches, 2, 16, 4]);
+            let source = if source_batches == 1 {
+                source.broadcast_axis(0, 3)
+            } else {
+                source
+            };
+            let flattened = source
+                .permute(vec![0, 2, 1, 3])
+                .reshape(vec![3, 16, 8])
+                .reshape(vec![48, 8]);
+            let weight = TensorExpr::constant(
+                (0..64).map(|i| (i % 7) as f32 * 0.0625 - 0.125).collect(),
+                vec![8, 8],
+            );
+            let graph: TensorGraph<f32> = tnsr::nn::linear(
+                flattened,
+                weight,
+                Some(TensorExpr::constant(vec![0.125; 8], vec![8])),
+            )
+            .reshape(vec![3, 16, 8])
+            .into();
+            ptx.compile(&graph).unwrap();
+            if source_batches == 3 {
+                assert!(ptx.execution_plan().unwrap().steps().iter().any(|step| {
+                    step.materialized_view
+                        .as_ref()
+                        .is_some_and(|view| !view.access.is_identity())
+                }));
+            }
+            for shift in [0.0, 0.375] {
+                let feeds = HashMap::from([(
+                    "heads".into(),
+                    (0..source_batches * 2 * 16 * 4)
+                        .map(|i| (i % 17) as f32 * 0.125 - 0.5 + shift)
+                        .collect(),
+                )]);
+                let expected = SimpleExecutor::new()
+                    .execute(&graph, feeds.clone())
+                    .unwrap();
+                let actual = ptx.execute_compiled(&graph, feeds).unwrap();
+                assert_close(&actual, &expected, 1e-5);
+            }
+            assert_eq!(ptx.compilation_count(), 1);
+        }
+    }
+}
+
+#[test]
+fn ptx_contiguous_reshape_fallback_retains_device_copy() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    ptx.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+    let input = TensorExpr::input("rows", vec![3, 16, 8])
+        .reshape(vec![48, 8])
+        .reshape(vec![3, 16, 8])
+        .reshape(vec![6, 8, 8])
+        .reshape(vec![48, 8]);
+    let weight = TensorExpr::constant(vec![0.125; 64], vec![8, 8]);
+    let graph: TensorGraph<f32> = input.matmul(weight).into();
+    ptx.compile(&graph).unwrap();
+    let plan = ptx.execution_plan().unwrap();
+    assert!(
+        plan.steps()
+            .iter()
+            .any(|step| step.action == tnsr::ptx::PtxPlanAction::Kernel
+                && matches!(
+                    graph[step.node],
+                    tnsr::graph::TensorGraphNode::Reshape { .. }
+                ))
+    );
+    assert!(
+        plan.steps()
+            .iter()
+            .all(|step| step.materialized_view.is_none())
+    );
+    for shift in [0.0, 0.375] {
+        let feeds = HashMap::from([(
+            "rows".into(),
+            (0..384)
+                .map(|i| (i % 17) as f32 * 0.125 - 0.5 + shift)
+                .collect(),
+        )]);
+        let expected = SimpleExecutor::new()
+            .execute(&graph, feeds.clone())
+            .unwrap();
+        let actual = ptx.execute_compiled(&graph, feeds).unwrap();
+        assert_close(&actual, &expected, 1e-5);
+        assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+    }
+}

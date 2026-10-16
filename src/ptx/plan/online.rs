@@ -84,6 +84,7 @@ impl PtxExecutionPlan {
                 shape: region.output_shape.clone(),
                 action: PtxPlanAction::OnlineRegion(id),
                 materialize: true,
+                materialized_view: None,
                 release_after: Vec::new(),
                 virtual_outputs: vec![VirtualTensor::identity(
                     output,

@@ -96,6 +96,8 @@ pub struct PtxPlanStep {
     pub materialize: bool,
     pub release_after: Vec<NodeIndex>,
     pub virtual_outputs: Vec<VirtualTensor>,
+    /// Composed access map to apply when a virtual view is materialized.
+    pub materialized_view: Option<VirtualTensor>,
 }
 
 /// Immutable physical plan compiled for the PTX backend.
@@ -341,6 +343,10 @@ impl PtxExecutionPlan {
             &matmul_regions,
         );
         let mut virtual_values: HashMap<NodeIndex, VirtualTensor> = HashMap::new();
+        // Reshapes preserve contiguous storage even when their coordinate map
+        // is not syntactically identity. Keep existing copy/primitive kernels
+        // when the immediate logical input still has that storage order.
+        let mut contiguous_values = HashSet::new();
         let mut steps = Vec::with_capacity(units.len());
         for unit_index in physical_order.into_iter().map(|node| quotient[node]) {
             match units[unit_index] {
@@ -367,6 +373,7 @@ impl PtxExecutionPlan {
                         .collect();
                     for output in &virtual_outputs {
                         virtual_values.insert(output.source, output.clone());
+                        contiguous_values.insert(output.source);
                     }
                     steps.push(PtxPlanStep {
                         node: *outputs.last().context("pointwise region has no outputs")?,
@@ -387,6 +394,7 @@ impl PtxExecutionPlan {
                         action: PtxPlanAction::PointwiseRegion(region_id),
                         materialize: true,
                         release_after: Vec::new(),
+                        materialized_view: None,
                         virtual_outputs,
                     });
                 }
@@ -421,6 +429,7 @@ impl PtxExecutionPlan {
                         .collect();
                     for output in &virtual_outputs {
                         virtual_values.insert(output.source, output.clone());
+                        contiguous_values.insert(output.source);
                     }
                     steps.push(PtxPlanStep {
                         node: *outputs.last().context("reduction region has no outputs")?,
@@ -437,6 +446,7 @@ impl PtxExecutionPlan {
                         action: PtxPlanAction::ReductionRegion(region_id),
                         materialize: true,
                         release_after: Vec::new(),
+                        materialized_view: None,
                         virtual_outputs,
                     });
                 }
@@ -467,6 +477,7 @@ impl PtxExecutionPlan {
                         .collect();
                     for output in &virtual_outputs {
                         virtual_values.insert(output.source, output.clone());
+                        contiguous_values.insert(output.source);
                     }
                     steps.push(PtxPlanStep {
                         node: *outputs.last().context("matmul region has no outputs")?,
@@ -487,6 +498,7 @@ impl PtxExecutionPlan {
                         action: PtxPlanAction::MatMulRegion(region_id),
                         materialize: true,
                         release_after: Vec::new(),
+                        materialized_view: None,
                         virtual_outputs,
                     });
                 }
@@ -494,6 +506,9 @@ impl PtxExecutionPlan {
                     let node = &graph[node_index];
                     let inputs = graph.inputs(node_index);
                     let mut action = node_action(node, node_index, &virtual_view_path);
+                    let input_contiguous = inputs
+                        .first()
+                        .is_some_and(|input| contiguous_values.contains(input));
                     let input_view = || {
                         let input = inputs.first().context("view operation has no input")?;
                         virtual_values
@@ -568,6 +583,26 @@ impl PtxExecutionPlan {
                     {
                         action = PtxPlanAction::Kernel;
                     }
+                    let is_view = matches!(
+                        node,
+                        TensorGraphNode::Reshape { .. }
+                            | TensorGraphNode::Flatten { .. }
+                            | TensorGraphNode::Transpose { .. }
+                            | TensorGraphNode::Permute { .. }
+                            | TensorGraphNode::BroadcastAxis { .. }
+                    );
+                    let view_contiguous = (matches!(
+                        node,
+                        TensorGraphNode::Reshape { .. } | TensorGraphNode::Flatten { .. }
+                    ) && input_contiguous)
+                        || (view_output.shape == *graph[view_output.source].shape()
+                            && view_output.access.is_identity());
+                    let materialized_view =
+                        (is_view && action == PtxPlanAction::Kernel && !input_contiguous)
+                            .then(|| view_output.clone());
+                    let inputs = materialized_view
+                        .as_ref()
+                        .map_or(inputs, |view| vec![view.source]);
                     let virtual_output = if action == PtxPlanAction::VirtualView {
                         view_output
                     } else {
@@ -582,6 +617,9 @@ impl PtxExecutionPlan {
                         )
                     };
                     virtual_values.insert(node_index, virtual_output.clone());
+                    if action != PtxPlanAction::VirtualView || view_contiguous {
+                        contiguous_values.insert(node_index);
+                    }
                     steps.push(PtxPlanStep {
                         node: node_index,
                         members: vec![node_index],
@@ -594,6 +632,7 @@ impl PtxExecutionPlan {
                         materialize: action != PtxPlanAction::VirtualView,
                         release_after: Vec::new(),
                         virtual_outputs: vec![virtual_output],
+                        materialized_view,
                     });
                 }
             }

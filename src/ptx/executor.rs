@@ -31,7 +31,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 17;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 18;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -594,6 +594,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                     region_id: execution_plan.regions().len() + id,
                     ir: region.lower_to_tile_ir(id)?,
                 });
+        }
+        for step in execution_plan.steps() {
+            if let Some(view) = &step.materialized_view {
+                tile_graph.set_materialized_view(step.node, view, graph[view.source].shape())?;
+            }
         }
         tile_graph.set_physical_nodes(
             execution_plan
@@ -1232,6 +1237,33 @@ impl<D: CudaDType> PtxExecutor<D> {
                 continue;
             }
             let result = match node {
+                _ if plan_step.materialized_view.is_some() => {
+                    let kernel_name = ptx_graph
+                        .kernel_name(*node_idx)
+                        .context("Missing materialized view kernel")?;
+                    let input = self
+                        .values
+                        .get(&planned_inputs[0])
+                        .context("Missing source storage for materialized view")?;
+                    let len = checked_element_count(node.shape(), "Materialized view")?;
+                    let mut output = self.take_buffer(len)?;
+                    if len != 0 {
+                        let launch_len = u32::try_from(len)
+                            .context("Materialized view is too large for a CUDA launch")?;
+                        let function = self.kernel_function(module, kernel_name)?;
+                        let stream = self.stream.clone();
+                        let mut launcher = stream.launch_builder(&function);
+                        launcher.arg(input.as_ref());
+                        launcher.arg(&mut output);
+                        self.record_kernel_launch();
+                        // SAFETY: the composed map addresses validated source storage;
+                        // the generated kernel bounds-checks the logical output domain.
+                        unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
+                            .context("CUDA materialized view kernel launch failed")?;
+                    }
+                    output
+                }
+
                 TensorGraphNode::IndexSource { .. } => {
                     let value = self
                         .exact_indices

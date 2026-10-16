@@ -252,6 +252,35 @@ impl TileGraph {
         Ok(())
     }
 
+    /// Materialize the complete composed view, rather than its final operation
+    /// alone: preceding views may still alias non-contiguous source storage.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn set_materialized_view(
+        &mut self,
+        node: NodeIndex,
+        view: &super::VirtualTensor,
+        source_shape: &[usize],
+    ) -> Result<()> {
+        let input = RegionInput {
+            node: view.source,
+            value: super::region::RegionValue(0),
+            tensor: view.clone(),
+            source_shape: source_shape.to_vec(),
+        };
+        let mut builder = TileIRBuilder::new();
+        builder.start_kernel("materialize_view");
+        builder.add_param("input", view.dtype, true);
+        builder.add_param("output", view.dtype, false);
+        builder.bounds_check(view.shape.iter().product());
+        let linear = Self::global_tid();
+        let offset = input_element_index(&input, &view.shape, &linear)?;
+        let value = builder.alloc_register(view.dtype, 1, 1);
+        builder.load_global_to_shared(value, "input", offset, Expr::Const(0));
+        builder.store("output", value, linear, Expr::Const(0));
+        self.graph[node] = builder.finish();
+        Ok(())
+    }
+
     #[cfg(feature = "cuda")]
     pub(crate) fn set_physical_nodes(&mut self, nodes: HashSet<NodeIndex>) {
         self.physical_nodes = Some(nodes);

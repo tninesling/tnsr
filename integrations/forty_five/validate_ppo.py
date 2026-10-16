@@ -56,9 +56,29 @@ def fixture(model, root, tiny=False, repeats=1):
     return original, native
 
 
-def anchor_outputs(model, native):
+def anchor_outputs(model, native, *, mixed_bf16=False, microbatch=None):
     import torch
     from forty_five_ai.train import masked_categorical
+    if mixed_bf16:
+        device = next(model.parameters()).device
+        if device.type != 'cuda' or microbatch is None or microbatch < 1:
+            raise ValueError('mixed anchor requires a CUDA model and positive microbatch')
+        masks = torch.tensor(native['action_masks'], dtype=torch.bool)
+        probs = masks.float() / masks.sum(-1, keepdim=True)
+        logs = torch.where(masks, probs.log(), 0.)
+        observations = native['observations']
+        for start in range(0, len(masks), microbatch):
+            rows = [i for i in range(start,min(start+microbatch,len(masks))) if observations['phase_ids'][i] == 1]
+            if not rows:
+                continue
+            with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
+                logits, _ = model(**{key:torch.tensor([values[i] for i in rows],dtype=torch.long,device=device)
+                                    for key,values in observations.items()})
+                mask = masks[rows].to(device)
+                dist = masked_categorical(logits, mask)
+                probs[rows] = dist.probs.float().cpu()
+                logs[rows] = torch.where(mask, dist.logits, 0.).float().cpu()
+        return dict(probabilities=probs.tolist(), log_probabilities=logs.tolist())
     logits, _ = infer_reference(model, native['observations'])
     mask = torch.tensor(native['action_masks'])
     dist = masked_categorical(logits, mask)

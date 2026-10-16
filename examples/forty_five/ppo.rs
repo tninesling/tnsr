@@ -47,6 +47,8 @@ pub struct Settings {
     pub cuda_graphs: bool,
     /// Opt into corrected TF32 tensor-core matmuls; f32 storage/optimizer.
     pub tf32x3: bool,
+    /// Experimental explicit BF16 model graph with f32 resident optimizer.
+    pub mixed_bf16: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -64,6 +66,7 @@ impl Default for Settings {
             tree_reductions: false,
             cuda_graphs: false,
             tf32x3: false,
+            mixed_bf16: false,
         }
     }
 }
@@ -94,6 +97,10 @@ impl Settings {
         ensure!(
             self.min_learning_rate <= self.learning_rate.min(self.value_learning_rate),
             "minimum learning rate exceeds initial rate"
+        );
+        ensure!(
+            !self.mixed_bf16 || (self.tree_reductions && self.tf32x3),
+            "mixed BF16 requires tree reductions and TF32x3 for f32 contractions"
         );
         Ok(())
     }
@@ -184,6 +191,8 @@ struct Compiled {
     graph: TensorGraph<f32, WithGrad>,
     output: NodeIndex,
     executor: Runtime<f32>,
+    #[cfg(feature = "cuda")]
+    mixed: Option<tnsr::ptx::mixed::MixedExecutor>,
     split_k_contractions: usize,
     #[cfg(feature = "cuda")]
     profile_dumped: bool,
@@ -193,8 +202,13 @@ fn build(
     n: usize,
     clip: f32,
     split_k: bool,
+    mixed_bf16: bool,
 ) -> Result<(TensorGraph<f32, WithGrad>, NodeIndex, usize)> {
-    let (logits, values) = model.forward(n)?;
+    let (logits, values) = if mixed_bf16 {
+        model.forward_mixed(n)?
+    } else {
+        model.forward(n)?
+    };
     let valid = Tensor::input("action_valid", vec![n, 46]);
     let logits = logits + Tensor::input("action_offset", vec![n, 46]);
     let maximum = logits.clone().reduce_max(1);
@@ -266,6 +280,15 @@ fn build(
 }
 fn inputs(batch: &Batch, model: &Model, settings: &Settings, weight: f32) -> Result<super::Inputs> {
     let mut inputs = batch.observations.inputs(&model.config)?;
+    if settings.mixed_bf16
+        && let Some(mask) = inputs.floats.get_mut("key_mask")
+    {
+        for value in mask {
+            if *value == f32::MIN {
+                *value = half::bf16::MIN.to_f32();
+            }
+        }
+    }
     let n = batch.actions.len();
     let mut valid = Vec::with_capacity(n * 46);
     let mut offsets = Vec::with_capacity(n * 46);
@@ -341,10 +364,36 @@ pub struct Trainer {
     resident: Option<tnsr::ptx::resident::ResidentAdam>,
 }
 impl Trainer {
+    /// Opt-in diagnostic download, excluded from update timing.
+    pub fn optimizer_state(&self, model: &Model) -> Result<serde_json::Value> {
+        #[cfg(feature = "cuda")]
+        if let Some(owner) = &self.resident {
+            let moments = owner.moments()?;
+            let named: serde_json::Map<String, serde_json::Value> = model
+                .parameters
+                .iter()
+                .map(|(name, entry)| {
+                    let state = moments
+                        .get(&entry.parameter.id())
+                        .context("missing named Adam state")?;
+                    Ok((
+                        name.into(),
+                        serde_json::json!({"first":state.first,"second":state.second}),
+                    ))
+                })
+                .collect::<Result<_>>()?;
+            return Ok(serde_json::json!({"step":self.steps,"moments":named}));
+        }
+        let _ = model;
+        anyhow::bail!("optimizer diagnostics require resident CUDA Adam")
+    }
     pub fn new(settings: &Settings, backend: String) -> Result<Self> {
         settings.validate()?;
         ensure!(
-            !(settings.tree_reductions || settings.cuda_graphs || settings.tf32x3)
+            !(settings.tree_reductions
+                || settings.cuda_graphs
+                || settings.tf32x3
+                || settings.mixed_bf16)
                 || backend == "cuda",
             "tree reductions, CUDA Graphs and TF32x3 require the CUDA backend"
         );
@@ -383,7 +432,8 @@ impl Trainer {
                 && settings.min_learning_rate == self.initial.min_learning_rate
                 && settings.tree_reductions == self.initial.tree_reductions
                 && settings.cuda_graphs == self.initial.cuda_graphs
-                && settings.tf32x3 == self.initial.tf32x3,
+                && settings.tf32x3 == self.initial.tf32x3
+                && settings.mixed_bf16 == self.initial.mixed_bf16,
             "optimizer initial rates/schedule/execution policy cannot change without starting a fresh worker"
         );
         #[cfg(feature = "cuda")]
@@ -440,9 +490,23 @@ impl Trainer {
                     size,
                     settings.clip_eps,
                     self.backend == "cuda" && settings.tf32x3 && settings.tree_reductions,
+                    settings.mixed_bf16,
                 )?;
                 #[cfg(feature = "cuda")]
-                let executor = if let Some(resident) = &self.resident {
+                let mixed = if settings.mixed_bf16 {
+                    Some(
+                        self.resident
+                            .as_ref()
+                            .context("mixed PPO requires resident Adam")?
+                            .mixed_executor(&graph, tnsr::tile::MatMulPrecision::Tf32x3)?,
+                    )
+                } else {
+                    None
+                };
+                #[cfg(feature = "cuda")]
+                let executor = if settings.mixed_bf16 {
+                    crate::runtime("cpu")?
+                } else if let Some(resident) = &self.resident {
                     let mode = if settings.tree_reductions {
                         tnsr::ptx::PtxReductionMode::DeterministicTree
                     } else {
@@ -474,6 +538,8 @@ impl Trainer {
                         graph,
                         output,
                         executor,
+                        #[cfg(feature = "cuda")]
+                        mixed,
                     },
                 );
             }
@@ -487,7 +553,19 @@ impl Trainer {
             timing[1] += started.elapsed().as_secs_f64();
             let started = Instant::now();
             #[cfg(feature = "cuda")]
-            if let (Some(resident), Runtime::Ptx(executor)) =
+            if let Some(executor) = &mut compiled.mixed {
+                self.resident
+                    .as_mut()
+                    .context("mixed resident owner missing")?
+                    .accumulate_mixed(executor, &compiled.graph, feeds.floats, feeds.indices)?;
+                kernel_launches.set(kernel_launches.get() + executor.info().kernels);
+                graph_launches.set(graph_launches.get() + usize::from(executor.info().replay));
+                materialized_bytes.set(
+                    materialized_bytes.get()
+                        + executor.info().f32_bytes
+                        + executor.info().bf16_bytes,
+                );
+            } else if let (Some(resident), Runtime::Ptx(executor)) =
                 (&mut self.resident, &mut compiled.executor)
             {
                 resident.accumulate_with_indices(
@@ -508,6 +586,23 @@ impl Trainer {
                 .executor
                 .execute_with_indices(&compiled.graph, feeds.floats, feeds.indices)?;
             timing[2] += started.elapsed().as_secs_f64();
+            #[cfg(feature = "cuda")]
+            if self.profile
+                && !compiled.profile_dumped
+                && let Some(mixed) = &compiled.mixed
+                && let Some(directory) = std::env::var_os("TNSR_PROFILE_PPO_DUMP")
+            {
+                use std::io::Write;
+                let directory = std::path::PathBuf::from(directory);
+                std::fs::create_dir_all(&directory)?;
+                let path = directory.join(format!("mixed-micro-{size}.json"));
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?;
+                file.write_all(serde_json::to_string_pretty(&mixed.kernel_labels())?.as_bytes())?;
+                compiled.profile_dumped = true;
+            }
             #[cfg(feature = "cuda")]
             if let Runtime::Ptx(executor) = &compiled.executor {
                 if self.profile
@@ -548,6 +643,16 @@ impl Trainer {
             }
             graph_nodes = compiled.graph.graph.node_count();
             let started = Instant::now();
+            #[cfg(feature = "cuda")]
+            let values = if let Some(executor) = &compiled.mixed {
+                executor.read(compiled.output)?
+            } else {
+                compiled
+                    .executor
+                    .get_value(compiled.output)
+                    .context("PPO metrics output was not retained")?
+            };
+            #[cfg(not(feature = "cuda"))]
             let values = compiled
                 .executor
                 .get_value(compiled.output)
@@ -638,7 +743,9 @@ impl Trainer {
             .map(|(key, value)| (key.into(), serde_json::json!(value)))
             .collect();
         let mut result = serde_json::json!({"metrics":metrics,"gradient_norm_before_clip":norm,"gradient_scale":scale,"optimizer_steps":self.steps,"compiled_shapes":self.compiled.len(),"split_k_contractions":self.compiled.values().map(|compiled|compiled.split_k_contractions).sum::<usize>()});
-        result["matmul_precision"] = serde_json::json!(if settings.tf32x3 {
+        result["matmul_precision"] = serde_json::json!(if settings.mixed_bf16 {
+            "mixed_bf16"
+        } else if settings.tf32x3 {
             "tf32x3"
         } else {
             "strict_f32"
@@ -666,6 +773,28 @@ impl Trainer {
                 "fallback_reasons":states.iter().filter_map(|state| state.last_fallback.as_deref()).collect::<Vec<_>>()
             });
         }
+        #[cfg(feature = "cuda")]
+        if settings.mixed_bf16 {
+            let infos: Vec<_> = self
+                .compiled
+                .values()
+                .filter_map(|c| c.mixed.as_ref().map(|m| m.info()))
+                .collect();
+            result["mixed_graph"] = serde_json::json!(infos);
+            result["mixed_transfers"] = serde_json::json!(
+                self.compiled
+                    .values()
+                    .filter_map(|c| c.mixed.as_ref().map(|m| m.transfers()))
+                    .collect::<Vec<_>>()
+            );
+            if settings.cuda_graphs {
+                result["cuda_graphs"] = serde_json::json!({
+                    "active_shapes":infos.iter().filter(|i| i.replay).count(), "captures":infos.iter().filter(|i| i.replay).count(),
+                    "warmup_executions":infos.len(), "graph_launches":graph_launches.get(), "fallbacks":0,
+                    "stable_binding_bytes":infos.iter().map(|i| i.f32_bytes+i.bf16_bytes).sum::<usize>(), "fallback_reasons":[]
+                });
+            }
+        }
         if self.profile {
             result["profile"] = serde_json::json!({
                 "compile_cache_seconds":timing[0], "input_seconds":timing[1],
@@ -675,8 +804,8 @@ impl Trainer {
                 "total_seconds":total_started.elapsed().as_secs_f64(),
                 "kernel_launches":kernel_launches.get(),"graph_nodes":graph_nodes,
                 "graph_launches":graph_launches.get(),
-                "materialized_bytes":materialized_bytes.get(),
-                "intermediate_materialized_bytes":intermediate_bytes.get()
+                "materialized_bytes":if settings.mixed_bf16 { None } else { Some(materialized_bytes.get()) },
+                "intermediate_materialized_bytes":if settings.mixed_bf16 { None } else { Some(intermediate_bytes.get()) }
             });
         }
         #[cfg(feature = "cuda")]

@@ -202,3 +202,16 @@ use a fused split-K f32 comparator; full PPO/Adam integration is still pending.
 
 Set `TNSR_PROFILE_PPO_DUMP` to a fresh directory alongside `TNSR_PROFILE_PPO=1`
 to save each compiled bucket's actual plan/PTX once. Existing files are rejected.
+
+### Experimental mixed PPO
+
+Add `--mixed-bf16 --backend cuda --tree-reductions --tf32x3` to the native
+training driver, with optional `--cuda-graphs`. F32 remains the default. The
+mixed policy preserves exact u32 indices and f32 master weights, accumulation,
+clipping and Adam. It uses the actual shared or separate forty-five critic.
+
+See [complete PPO measurements and numerical limits](../../docs/training-mixed-ppo.md)
+before using it for performance or learning comparisons. Use
+`validate_mixed_ppo.py` for original CUDA losses, every named clipped gradient,
+moment and saved weight; `benchmark_native_pair.py --mixed-bf16` and
+`benchmark_training.py --mixed-bf16` time complete warm updates.

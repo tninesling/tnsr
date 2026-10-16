@@ -96,6 +96,8 @@ pub struct PtxPlanStep {
     pub materialize: bool,
     pub release_after: Vec<NodeIndex>,
     pub virtual_outputs: Vec<VirtualTensor>,
+    /// Composed access map to apply when a virtual view is materialized.
+    pub materialized_view: Option<VirtualTensor>,
 }
 
 /// Immutable physical plan compiled for the PTX backend.
@@ -387,6 +389,7 @@ impl PtxExecutionPlan {
                         action: PtxPlanAction::PointwiseRegion(region_id),
                         materialize: true,
                         release_after: Vec::new(),
+                        materialized_view: None,
                         virtual_outputs,
                     });
                 }
@@ -437,6 +440,7 @@ impl PtxExecutionPlan {
                         action: PtxPlanAction::ReductionRegion(region_id),
                         materialize: true,
                         release_after: Vec::new(),
+                        materialized_view: None,
                         virtual_outputs,
                     });
                 }
@@ -487,6 +491,7 @@ impl PtxExecutionPlan {
                         action: PtxPlanAction::MatMulRegion(region_id),
                         materialize: true,
                         release_after: Vec::new(),
+                        materialized_view: None,
                         virtual_outputs,
                     });
                 }
@@ -568,6 +573,19 @@ impl PtxExecutionPlan {
                     {
                         action = PtxPlanAction::Kernel;
                     }
+                    let is_view = matches!(
+                        node,
+                        TensorGraphNode::Reshape { .. }
+                            | TensorGraphNode::Flatten { .. }
+                            | TensorGraphNode::Transpose { .. }
+                            | TensorGraphNode::Permute { .. }
+                            | TensorGraphNode::BroadcastAxis { .. }
+                    );
+                    let materialized_view =
+                        (is_view && action == PtxPlanAction::Kernel).then(|| view_output.clone());
+                    let inputs = materialized_view
+                        .as_ref()
+                        .map_or(inputs, |view| vec![view.source]);
                     let virtual_output = if action == PtxPlanAction::VirtualView {
                         view_output
                     } else {
@@ -594,6 +612,7 @@ impl PtxExecutionPlan {
                         materialize: action != PtxPlanAction::VirtualView,
                         release_after: Vec::new(),
                         virtual_outputs: vec![virtual_output],
+                        materialized_view,
                     });
                 }
             }

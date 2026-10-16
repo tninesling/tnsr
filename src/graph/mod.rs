@@ -57,6 +57,7 @@ use crate::tensor::{BinaryOp, DType, ReduceOp, TensorExpr, UnaryOp};
 
 pub mod fusion;
 mod gradient_pruning;
+pub(crate) mod indices;
 pub mod liveness;
 pub mod rewrite;
 
@@ -75,6 +76,9 @@ pub struct WithGrad {
 
 #[derive(Clone)]
 pub enum TensorGraphNode<D> {
+    IndexSource {
+        source: crate::tensor::IndexTensor,
+    },
     Constant {
         data: Arc<Vec<D>>,
         shape: crate::tensor::Shape,
@@ -186,6 +190,7 @@ pub enum TensorGraphNode<D> {
 impl<D> TensorGraphNode<D> {
     pub fn name(&self) -> &'static str {
         match self {
+            TensorGraphNode::IndexSource { .. } => "IndexSource",
             TensorGraphNode::Constant { .. } => "Constant",
             TensorGraphNode::Input { .. } => "Input",
             TensorGraphNode::Parameter { .. } => "Parameter",
@@ -232,6 +237,7 @@ impl<D> TensorGraphNode<D> {
 
     pub fn shape(&self) -> &crate::tensor::Shape {
         match self {
+            TensorGraphNode::IndexSource { source } => source.shape(),
             TensorGraphNode::Constant { shape, .. } => shape,
             TensorGraphNode::Input { shape, .. } => shape,
             TensorGraphNode::Parameter { shape, .. } => shape,
@@ -741,7 +747,9 @@ where
                     // Store the gradient node for this parameter
                     param_to_grad.insert(*id, grad_output);
                 }
-                TensorGraphNode::Constant { .. } | TensorGraphNode::Input { .. } => {
+                TensorGraphNode::Constant { .. }
+                | TensorGraphNode::Input { .. }
+                | TensorGraphNode::IndexSource { .. } => {
                     // Constants and inputs don't need gradients
                 }
                 TensorGraphNode::Transpose { .. } => {

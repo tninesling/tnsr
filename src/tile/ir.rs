@@ -404,6 +404,8 @@ impl MatMulPlan {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
+    /// Exact unsigned storage for lookup/index arguments; never autocast.
+    U32,
     F16,
     BF16,
     /// TensorFloat-32 compute representation stored in 32 bits.
@@ -419,6 +421,7 @@ impl DType {
             DType::BF16 => 2,
             DType::TF32 => 4,
             DType::F32 => 4,
+            DType::U32 => 4,
         }
     }
 }

@@ -65,7 +65,7 @@ impl Worker {
             .predictions
             .get_mut(&n)
             .context("prediction cache entry missing")?;
-        let output = runtime.execute(graph, inputs)?;
+        let output = runtime.execute_with_indices(graph, inputs.floats, inputs.indices)?;
         ensure!(
             output.len() == n * 47 && output.iter().all(|x| x.is_finite()),
             "invalid model output"

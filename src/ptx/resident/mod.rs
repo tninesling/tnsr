@@ -249,6 +249,17 @@ impl ResidentAdam {
         graph: &TensorGraph<f32, WithGrad>,
         inputs: HashMap<String, Vec<f32>>,
     ) -> Result<()> {
+        self.accumulate_with_indices(executor, graph, inputs, HashMap::new())
+    }
+
+    /// Accumulate with exact integer feeds for lookup/indexed-loss operations.
+    pub fn accumulate_with_indices(
+        &mut self,
+        executor: &mut PtxExecutor,
+        graph: &TensorGraph<f32, WithGrad>,
+        inputs: HashMap<String, Vec<f32>>,
+        indices: crate::tensor::IndexInputs,
+    ) -> Result<()> {
         ensure!(self.active, "begin_step must precede accumulation");
         ensure!(
             Arc::ptr_eq(&executor.context(), &self.device),
@@ -273,7 +284,11 @@ impl ResidentAdam {
                 bindings.insert(node, parameter.weight.clone());
             }
         }
-        executor.run_device(graph, inputs, bindings)?;
+        if indices.is_empty() {
+            executor.run_device(graph, inputs, bindings)?;
+        } else {
+            executor.run_device_with_indices(graph, inputs, indices, bindings)?;
+        }
         self.kernel_launches += executor.execution_metrics().kernel_launches;
         let values = self
             .parameters

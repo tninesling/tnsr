@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::ops::{Add, Div, Mul, Sub};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+pub(crate) mod indices;
 mod storage;
+pub use indices::{IndexInputs, IndexTensor, checked_indices};
 pub use storage::{ParameterGuard, ParameterStorage};
 
 static PARAM_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -306,6 +308,7 @@ impl<D: DType> TensorExpr<D> {
             } => vec![input, output, grad_output],
             ExprKind::Flatten { x } => vec![x],
             ExprKind::NodeRef { .. }
+            | ExprKind::Index { .. }
             | ExprKind::Constant { .. }
             | ExprKind::Input { .. }
             | ExprKind::Parameter { .. } => vec![],
@@ -355,6 +358,10 @@ struct ExprNode<D: DType> {
 
 #[derive(Clone, Debug)]
 pub enum ExprKind<D: DType> {
+    /// Exact integer source, only accepted in indexed operator argument slots.
+    Index {
+        source: IndexTensor,
+    },
     Constant {
         data: Arc<Vec<D>>,
     },
@@ -618,6 +625,22 @@ impl<D: DType> TensorExpr<D> {
                 indices,
             },
         }))
+    }
+
+    /// Gather rows with exact integer indices, independent of `D`.
+    pub fn embedding_indices(self, indices: IndexTensor) -> Self
+    where
+        D: 'static,
+    {
+        self.embedding(indices.expression())
+    }
+
+    /// Cross entropy with exact integer targets, independent of `D`.
+    pub fn indexed_cross_entropy_indices(self, targets: IndexTensor) -> Self
+    where
+        D: 'static,
+    {
+        self.indexed_cross_entropy(targets.expression())
     }
 
     /// Scatter-add embedding gradients into `table_shape`.
@@ -1281,6 +1304,18 @@ impl<D: DType> TensorExpr<D> {
             }
 
             let node_idx = match &expr.0.kind {
+                ExprKind::Index { source } => {
+                    if let Some(node) = g.graph.node_indices().find(|&node| {
+                        matches!(&g[node], TensorGraphNode::IndexSource { source: other }
+                            if source.same_source(other))
+                    }) {
+                        node
+                    } else {
+                        g.graph.add_node(TensorGraphNode::IndexSource {
+                            source: source.clone(),
+                        })
+                    }
+                }
                 ExprKind::NodeRef { idx } => {
                     // NodeRef just returns the existing node index
                     // No new node is created - this allows referencing nodes during gradient construction

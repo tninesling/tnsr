@@ -610,6 +610,7 @@ impl<'a> fmt::Display for Inst<'a> {
                     dst.iter().join(", ")
                 ),
             },
+            Inst::LdGlobalU32 { dst, addr } => write!(f, "ld.global.u32 {dst}, [{addr}];"),
             Inst::LdGlobalF16 { dst, addr } => write!(f, "ld.global.b16 {dst}, [{addr}];"),
             Inst::LdGlobalBF16 { dst, addr } => write!(f, "ld.global.b16 {dst}, [{addr}];"),
             Inst::LdParamU64 { dst, addr } => write!(f, "ld.param.u64 {dst}, {addr};"),

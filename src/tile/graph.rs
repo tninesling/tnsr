@@ -168,14 +168,31 @@ impl TileGraph {
                         .get(&idx)
                         .map(|v| v.iter().map(|s| s.as_slice()).collect::<Vec<_>>())
                         .unwrap_or_default();
-                    Self::lower_node(
+                    let mut ir = Self::lower_node(
                         node.clone(),
                         D::TILE_DTYPE,
                         &shape,
                         &input_shapes,
                         supports_tf32,
                         schedules.get(&idx).copied(),
-                    )
+                    );
+                    let inputs = tensor_graph.inputs(idx);
+                    let index_slot = match node {
+                        TensorGraphNode::Embedding { .. }
+                        | TensorGraphNode::IndexedCrossEntropy { .. }
+                        | TensorGraphNode::IndexedCrossEntropyBackward { .. } => Some(1),
+                        TensorGraphNode::EmbeddingBackward { .. } => Some(0),
+                        _ => None,
+                    };
+                    if let Some(slot) = index_slot
+                        && matches!(
+                            tensor_graph[inputs[slot]],
+                            TensorGraphNode::IndexSource { .. }
+                        )
+                    {
+                        ir.params[slot].dtype = DType::U32;
+                    }
+                    ir
                 },
                 |_, e| *e,
             ),
@@ -252,6 +269,7 @@ impl TileGraph {
         match node {
             TensorGraphNode::Constant { data, .. } => Self::lower_constant(dtype, data, shape),
             TensorGraphNode::Input { name, .. } => Self::lower_input(dtype, name, shape),
+            TensorGraphNode::IndexSource { .. } => Self::lower_view(),
             TensorGraphNode::Parameter { id, data, .. } => {
                 Self::lower_parameter(dtype, id, data, shape)
             }
@@ -406,11 +424,7 @@ impl TileGraph {
         builder.add_param("weight", dtype, true);
         builder.add_param("indices", dtype, true);
         builder.add_param("output", dtype, false);
-        builder.bounds_check(if dtype == DType::F32 {
-            index_count * width
-        } else {
-            vocabulary * width
-        });
+        builder.bounds_check(index_count * width);
         builder.embedding(vocabulary, width, index_count);
         builder.finish()
     }

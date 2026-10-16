@@ -222,11 +222,36 @@ where
         match self {
             Runtime::Cpu(executor) => executor.execute(graph, inputs),
             #[cfg(feature = "cuda")]
-            Runtime::Ptx(executor) => execute_native_ptx(executor, graph, inputs),
+            Runtime::Ptx(executor) => execute_native_ptx(executor, graph, inputs, HashMap::new()),
             #[cfg(feature = "cuda")]
-            Runtime::PtxF16(executor) => execute_native_ptx(executor, graph, inputs),
+            Runtime::PtxF16(executor) => {
+                execute_native_ptx(executor, graph, inputs, HashMap::new())
+            }
             #[cfg(feature = "cuda")]
-            Runtime::PtxBF16(executor) => execute_native_ptx(executor, graph, inputs),
+            Runtime::PtxBF16(executor) => {
+                execute_native_ptx(executor, graph, inputs, HashMap::new())
+            }
+        }
+    }
+
+    fn execute_with_indices<G>(
+        &mut self,
+        graph: &TensorGraph<D, G>,
+        inputs: HashMap<String, Vec<D>>,
+        indices: crate::tensor::IndexInputs,
+    ) -> Result<Vec<D>>
+    where
+        TensorGraph<D, G>: Clone,
+        TensorGraph<f32, G>: Clone,
+    {
+        match self {
+            Runtime::Cpu(executor) => executor.execute_with_indices(graph, inputs, indices),
+            #[cfg(feature = "cuda")]
+            Runtime::Ptx(executor) => execute_native_ptx(executor, graph, inputs, indices),
+            #[cfg(feature = "cuda")]
+            Runtime::PtxF16(executor) => execute_native_ptx(executor, graph, inputs, indices),
+            #[cfg(feature = "cuda")]
+            Runtime::PtxBF16(executor) => execute_native_ptx(executor, graph, inputs, indices),
         }
     }
 
@@ -295,6 +320,7 @@ fn execute_native_ptx<M: crate::ptx::types::CudaDType, D: 'static, G>(
     executor: &mut PtxExecutor<M>,
     graph: &TensorGraph<D, G>,
     inputs: HashMap<String, Vec<D>>,
+    indices: crate::tensor::IndexInputs,
 ) -> Result<Vec<D>> {
     anyhow::ensure!(
         std::any::TypeId::of::<D>() == std::any::TypeId::of::<M::HostType>(),
@@ -307,7 +333,7 @@ fn execute_native_ptx<M: crate::ptx::types::CudaDType, D: 'static, G>(
     let inputs = unsafe {
         std::mem::transmute::<HashMap<String, Vec<D>>, HashMap<String, Vec<M::HostType>>>(inputs)
     };
-    let output = executor.compile_and_execute(graph, inputs)?;
+    let output = executor.compile_and_execute_with_indices(graph, inputs, indices)?;
     // SAFETY: The checked scalar types are identical; transfer the allocation.
     Ok(unsafe { std::mem::transmute::<Vec<M::HostType>, Vec<D>>(output) })
 }

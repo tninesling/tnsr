@@ -74,11 +74,14 @@ impl SharedLayout {
     pub const fn wmma_alignment(dtype: DType) -> usize {
         match dtype {
             DType::F16 | DType::F32 => 32,
-            DType::TF32 | DType::BF16 => 16,
+            DType::TF32 | DType::BF16 | DType::U32 => 16,
         }
     }
 
     pub fn supports_wmma(self, dtype: DType) -> bool {
+        if dtype == DType::U32 {
+            return false;
+        }
         let alignment = Self::wmma_alignment(dtype);
         self.xor_mask & 15 == 0
             && self

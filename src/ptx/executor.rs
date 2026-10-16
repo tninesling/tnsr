@@ -355,6 +355,26 @@ impl<D: CudaDType> PtxExecutor<D> {
         self.ptx_graph.as_ref().map(|graph| graph.module_source())
     }
 
+    pub(crate) fn planned_kernel_function(
+        &self,
+        step: &super::PtxPlanStep,
+    ) -> Result<CudaFunction> {
+        let graph = self.ptx_graph.as_ref().context("no compiled PTX graph")?;
+        let name = match step.action {
+            super::PtxPlanAction::Kernel => graph.kernel_name(step.node),
+            super::PtxPlanAction::PointwiseRegion(id) => graph.region_kernel_name(id),
+            super::PtxPlanAction::ReductionRegion(id) => graph.reduction_region_kernel_name(id),
+            super::PtxPlanAction::MatMulRegion(id) => graph.matmul_region_kernel_name(id),
+            _ => None,
+        }
+        .context("unsupported prepared linear kernel")?;
+        Ok(self
+            .module
+            .as_ref()
+            .context("no compiled module")?
+            .load_function(name)?)
+    }
+
     /// Describe the current physical PTX execution plan.
     pub fn describe_plan<G>(&self, graph: &TensorGraph<D::HostType, G>) -> Result<String> {
         let supplied_signature = graph_compilation_signature(

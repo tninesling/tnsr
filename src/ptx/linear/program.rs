@@ -13,7 +13,7 @@ use std::{
 };
 
 #[derive(Clone)]
-pub(super) struct Kernel {
+pub(crate) struct Kernel {
     pub function: CudaFunction,
     pub config: LaunchConfig,
     pub pointers: Vec<u64>,
@@ -32,11 +32,13 @@ impl Kernel {
     }
 }
 
-pub(super) struct Program<D: CudaDType> {
+pub(crate) struct Program<D: CudaDType> {
     pub kernels: Vec<Kernel>,
     pub output: Binding,
     pub plan: String,
     pub ptx: String,
+    pub values: HashMap<NodeIndex, Binding>,
+    pub views: HashMap<NodeIndex, crate::tile::VirtualTensor>,
     // Inputs and optional root storage are owned by LinearTraining; other
     // outputs/intermediates must stay alive through all captures here.
     storage: Vec<CudaSlice<D::HostType>>,
@@ -46,6 +48,27 @@ impl<D: CudaDType> Program<D> {
         stream: &Arc<CudaStream>,
         graph: TensorGraph<D::HostType>,
         inputs: HashMap<&str, Binding>,
+        root: Option<Binding>,
+        precision: MatMulPrecision,
+    ) -> Result<Self> {
+        let bindings = graph
+            .graph
+            .node_indices()
+            .filter_map(|node| {
+                if let TensorGraphNode::Input { name, .. } = &graph[node] {
+                    inputs.get(name).copied().map(|value| (node, value))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Self::new_bound(stream, graph, bindings, root, precision)
+    }
+
+    pub fn new_bound(
+        stream: &Arc<CudaStream>,
+        graph: TensorGraph<D::HostType>,
+        inputs: HashMap<NodeIndex, Binding>,
         root: Option<Binding>,
         precision: MatMulPrecision,
     ) -> Result<Self> {
@@ -65,8 +88,16 @@ impl<D: CudaDType> Program<D> {
         let mut storage = Vec::new();
         let mut kernels = Vec::new();
         for step in plan.steps() {
-            if let TensorGraphNode::Input { name, shape } = &graph[step.node] {
-                let value = *inputs.get(name).context("linear source binding missing")?;
+            if matches!(
+                graph[step.node],
+                TensorGraphNode::Input { .. }
+                    | TensorGraphNode::Constant { .. }
+                    | TensorGraphNode::Parameter { .. }
+            ) {
+                let shape = graph[step.node].shape();
+                let value = *inputs
+                    .get(&step.node)
+                    .context("program source binding missing")?;
                 ensure!(
                     value.len == shape.iter().product::<usize>() && value.dtype == dtype,
                     "linear source extent/dtype mismatch"
@@ -85,10 +116,6 @@ impl<D: CudaDType> Program<D> {
                 values.insert(step.node, value);
                 continue;
             }
-            ensure!(
-                step.materialized_view.is_none(),
-                "unexpected linear physical view copy"
-            );
             for (&node, shape) in step.outputs.iter().zip(&step.output_shapes) {
                 let len = shape.iter().product::<usize>();
                 let binding = if node == root_node && root.is_some() {
@@ -182,11 +209,24 @@ impl<D: CudaDType> Program<D> {
             });
         }
         let output = *values.get(&root_node).context("linear output absent")?;
+        let views = plan
+            .steps()
+            .iter()
+            .filter(|s| s.action == PtxPlanAction::VirtualView)
+            .flat_map(|s| {
+                s.outputs
+                    .iter()
+                    .copied()
+                    .zip(s.virtual_outputs.iter().cloned())
+            })
+            .collect();
         Ok(Self {
             kernels,
             output,
             plan: plan_text,
             ptx,
+            values,
+            views,
             storage,
         })
     }
@@ -198,7 +238,7 @@ impl<D: CudaDType> Program<D> {
     }
 }
 
-pub(super) fn binding(buffer: &Buffer, stream: &Arc<CudaStream>) -> Binding {
+pub(crate) fn binding(buffer: &Buffer, stream: &Arc<CudaStream>) -> Binding {
     match buffer {
         Buffer::F32(v) => Binding {
             pointer: v.device_ptr(stream).0,

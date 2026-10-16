@@ -6,7 +6,7 @@
 //! linear and its analytical backward with BF16 outputs, and promotes results.
 //! Master weights and accumulated parameter gradients stay physically f32.
 mod kernels;
-mod program;
+pub(crate) mod program;
 #[cfg(test)]
 mod tests;
 use crate::{
@@ -84,18 +84,18 @@ pub struct LinearInfo {
     pub plans: Vec<String>,
 }
 #[derive(Clone, Copy)]
-struct Binding {
-    pointer: u64,
-    len: usize,
-    dtype: DType,
+pub(crate) struct Binding {
+    pub(crate) pointer: u64,
+    pub(crate) len: usize,
+    pub(crate) dtype: DType,
 }
-enum Buffer {
+pub(crate) enum Buffer {
     F32(CudaSlice<f32>),
     BF16(CudaSlice<bf16>),
 }
-struct Captured {
-    graph: Option<CudaGraph>,
-    stream: Arc<CudaStream>,
+pub(crate) struct Captured {
+    pub(crate) graph: Option<CudaGraph>,
+    pub(crate) stream: Arc<CudaStream>,
 }
 impl Drop for Captured {
     fn drop(&mut self) {

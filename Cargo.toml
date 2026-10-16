@@ -71,3 +71,7 @@ required-features = ["cuda"]
 [[example]]
 name = "forty_five_worker"
 test = true
+
+[[example]]
+name = "bf16_gemm_probe"
+required-features = ["cuda"]

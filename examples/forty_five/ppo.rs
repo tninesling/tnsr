@@ -185,6 +185,8 @@ struct Compiled {
     output: NodeIndex,
     executor: Runtime<f32>,
     split_k_contractions: usize,
+    #[cfg(feature = "cuda")]
+    profile_dumped: bool,
 }
 fn build(
     model: &Model,
@@ -466,6 +468,8 @@ impl Trainer {
                 self.compiled.insert(
                     key,
                     Compiled {
+                        #[cfg(feature = "cuda")]
+                        profile_dumped: false,
                         split_k_contractions,
                         graph,
                         output,
@@ -506,6 +510,35 @@ impl Trainer {
             timing[2] += started.elapsed().as_secs_f64();
             #[cfg(feature = "cuda")]
             if let Runtime::Ptx(executor) = &compiled.executor {
+                if self.profile
+                    && !compiled.profile_dumped
+                    && let Some(directory) = std::env::var_os("TNSR_PROFILE_PPO_DUMP")
+                {
+                    let directory = std::path::PathBuf::from(directory);
+                    std::fs::create_dir_all(&directory).context("create PPO profile directory")?;
+                    let stem = format!("micro-{size}-clip-{:08x}", settings.clip_eps.to_bits());
+                    let path = directory.join(format!("{stem}.plan"));
+                    let write_new = |path: &std::path::Path, contents: &str| -> Result<()> {
+                        use std::io::Write;
+                        let mut file = std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(path)
+                            .context(
+                                "PPO profile files already exist; use a fresh dump directory",
+                            )?;
+                        file.write_all(contents.as_bytes())
+                            .context("write PPO profile artifact")
+                    };
+                    write_new(&path, &executor.describe_plan(&compiled.graph)?)?;
+                    write_new(
+                        &directory.join(format!("{stem}.ptx")),
+                        &executor
+                            .module_source()
+                            .context("missing profiled PPO module")?,
+                    )?;
+                    compiled.profile_dumped = true;
+                }
                 let execution = executor.execution_metrics();
                 graph_launches.set(graph_launches.get() + execution.graph_launches);
                 kernel_launches.set(kernel_launches.get() + execution.kernel_launches);

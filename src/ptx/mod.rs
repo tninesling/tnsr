@@ -3,6 +3,7 @@ pub mod executor;
 pub mod graph;
 pub mod instructions;
 pub mod linear;
+pub mod mixed;
 pub mod plan;
 mod readback;
 pub mod resident;

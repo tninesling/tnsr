@@ -31,13 +31,16 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 18;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 19;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PtxCompileMetrics {
     pub graph_nodes: usize,
+    /// Kernel-producing plan steps; identical steps may share entry points.
     pub generated_kernels: usize,
+    pub unique_kernels: usize,
+    pub module_load_time: Duration,
     pub ptx_source_bytes: usize,
     pub compile_time: Duration,
     pub index_optimization_time: Duration,
@@ -628,10 +631,13 @@ impl<D: CudaDType> PtxExecutor<D> {
             .count();
         let ptx_source_bytes = ptx_src.len();
 
+        let module_started = Instant::now();
         let cuda_module = self
             .device
             .load_module(Ptx::from_src(&ptx_src))
             .context("Failed to load PTX module with cudarc")?;
+        let module_load_time = module_started.elapsed();
+        let unique_kernels = ptx_graph.unique_kernel_count();
         self.module = Some(cuda_module);
         self.functions.get_mut().clear();
         self.ptx_graph = Some(Box::new(ptx_graph));
@@ -642,6 +648,8 @@ impl<D: CudaDType> PtxExecutor<D> {
         self.compile_metrics = PtxCompileMetrics {
             graph_nodes,
             generated_kernels,
+            unique_kernels,
+            module_load_time,
             ptx_source_bytes,
             compile_time: started.elapsed(),
             index_optimization_time,

@@ -628,6 +628,22 @@ impl Trainer {
                 "intermediate_materialized_bytes":intermediate_bytes.get()
             });
         }
+        #[cfg(feature = "cuda")]
+        if self.profile {
+            let mut modules: Vec<_> = self.compiled.iter().filter_map(|(&(size, _), compiled)| {
+                let Runtime::Ptx(executor) = &compiled.executor else {return None;};
+                let stats = executor.compile_metrics();
+                Some((size, serde_json::json!({
+                    "microbatch":size, "planned_kernels":stats.generated_kernels,
+                    "unique_kernels":stats.unique_kernels, "ptx_bytes":stats.ptx_source_bytes,
+                    "total_seconds":stats.compile_time.as_secs_f64(),
+                    "module_load_seconds":stats.module_load_time.as_secs_f64()
+                })))
+            }).collect();
+            modules.sort_by_key(|(size, _)| *size);
+            result["cuda_compile"] =
+                serde_json::Value::Array(modules.into_iter().map(|(_, stats)| stats).collect());
+        }
         if return_gradients {
             result["gradients"] = serde_json::Value::Object(named);
         }

@@ -1,0 +1,1719 @@
+{
+  "workers": {
+    "baseline": {
+      "path": "/tmp/tnsr-dense-contractions-final-worker",
+      "sha256": "ec3516ea8ec90e8ddf023cced428b276f220fcd32188a3ff5931a697925a5b6e"
+    },
+    "interned": {
+      "path": "/tmp/tnsr-interned-worker",
+      "sha256": "784e28ad7973a0d63547abc86175c45add221563847beb5cc35084489235ceb2"
+    }
+  },
+  "runs": [
+    {
+      "microbatch": 64,
+      "trial": 0,
+      "case": "baseline",
+      "history": "cold",
+      "samples": [
+        {
+          "seconds": 16.484208872992895,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.063749489,
+            "compile_cache_seconds": 0.734315277,
+            "execute_seconds": 15.646051776,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 5.9914e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 5.0977e-05,
+            "total_seconds": 16.444295651
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.0471155400009593,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001076629,
+            "compile_cache_seconds": 1.0368e-05,
+            "execute_seconds": 0.001590983,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.1459e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.042492426,
+            "total_seconds": 0.045260477
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.04493863800598774,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001056481,
+            "compile_cache_seconds": 7.122999999999999e-06,
+            "execute_seconds": 0.001496574,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 2.8374e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.041008847,
+            "total_seconds": 0.043659747
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 0,
+      "case": "baseline",
+      "history": "warm",
+      "samples": [
+        {
+          "seconds": 2.9731509249977535,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.026445629,
+            "compile_cache_seconds": 0.485341718,
+            "execute_seconds": 2.418945013,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.8764e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 0.001739684,
+            "total_seconds": 2.932577724
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.09536887498688884,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.005983842,
+            "compile_cache_seconds": 1.4106999999999999e-05,
+            "execute_seconds": 0.002095028,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 2.9656e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.08475708,
+            "total_seconds": 0.092944485
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.08063663801294751,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001957557,
+            "compile_cache_seconds": 1.7753e-05,
+            "execute_seconds": 0.001845535,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.0117e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.074949578,
+            "total_seconds": 0.078867577
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 0,
+      "case": "interned",
+      "history": "cold",
+      "samples": [
+        {
+          "seconds": 6.204454006991,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.068118633,
+            "compile_cache_seconds": 0.768498036,
+            "execute_seconds": 5.3242397,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 4.1849e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 4.9664e-05,
+            "total_seconds": 6.161020279
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 3.061091702,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 5.132876446,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.046780706994468346,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001315471,
+            "compile_cache_seconds": 1.7703e-05,
+            "execute_seconds": 0.001612974,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.2661e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.04148598,
+            "total_seconds": 0.044541506
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 3.061091702,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 5.132876446,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.046733657000004314,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001181698,
+            "compile_cache_seconds": 3.124e-05,
+            "execute_seconds": 0.001614467,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.4175e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.041230977,
+            "total_seconds": 0.044172988
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 3.061091702,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 5.132876446,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 0,
+      "case": "interned",
+      "history": "warm",
+      "samples": [
+        {
+          "seconds": 2.7541393319988856,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.021291428,
+            "compile_cache_seconds": 0.472261427,
+            "execute_seconds": 2.217331907,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.743e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 0.001763529,
+            "total_seconds": 2.712754674
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 0.008231988,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 2.004187246,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06548114800534677,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001583318,
+            "compile_cache_seconds": 7.294e-06,
+            "execute_seconds": 0.001805048,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.3824e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.059947119,
+            "total_seconds": 0.063442598
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 0.008231988,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 2.004187246,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.0649271900038002,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001375385,
+            "compile_cache_seconds": 8.275e-06,
+            "execute_seconds": 0.001514308,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.203e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.059852099,
+            "total_seconds": 0.062845467
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 0.008231988,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 2.004187246,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 1,
+      "case": "interned",
+      "history": "cold",
+      "samples": [
+        {
+          "seconds": 6.272169550007675,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.07016081,
+            "compile_cache_seconds": 0.693612007,
+            "execute_seconds": 5.46571575,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 4.9062e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 4.8753e-05,
+            "total_seconds": 6.229659481
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 3.202239503,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 5.243361028,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06587348099856172,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001142693,
+            "compile_cache_seconds": 1.3025000000000002e-05,
+            "execute_seconds": 0.001587206,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.2151e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.060895976,
+            "total_seconds": 0.063736354
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 3.202239503,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 5.243361028,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06568048498593271,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.00168448,
+            "compile_cache_seconds": 2.2162e-05,
+            "execute_seconds": 0.001558922,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.3614e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.05993218,
+            "total_seconds": 0.063317291
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 3.202239503,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 5.243361028,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 1,
+      "case": "interned",
+      "history": "warm",
+      "samples": [
+        {
+          "seconds": 2.9402957779966528,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.025715809,
+            "compile_cache_seconds": 0.49840746700000005,
+            "execute_seconds": 2.372950543,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.7481e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 5.3552e-05,
+            "total_seconds": 2.89724797
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 0.008737393,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 2.1615999,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06814646600105334,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001559763,
+            "compile_cache_seconds": 1.2964e-05,
+            "execute_seconds": 0.001932188,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 4.0416e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.062385789,
+            "total_seconds": 0.066001885
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 0.008737393,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 2.1615999,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06336089498654474,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001313847,
+            "compile_cache_seconds": 9.748e-06,
+            "execute_seconds": 0.001519547,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.8844e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.058308639,
+            "total_seconds": 0.061260889
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 0.008737393,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 2.1615999,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 1,
+      "case": "baseline",
+      "history": "cold",
+      "samples": [
+        {
+          "seconds": 16.529604796989588,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.067753703,
+            "compile_cache_seconds": 0.650760097,
+            "execute_seconds": 15.768419544,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 4.0427e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 0.000970567,
+            "total_seconds": 16.488036833
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06795849101035856,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.002537665,
+            "compile_cache_seconds": 1.1342e-05,
+            "execute_seconds": 0.001534395,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.0036e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.061648083,
+            "total_seconds": 0.065839168
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.058321964999777265,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001168552,
+            "compile_cache_seconds": 2.1850999999999998e-05,
+            "execute_seconds": 0.00166358,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.8813e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.052464635,
+            "total_seconds": 0.05545692
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 1,
+      "case": "baseline",
+      "history": "warm",
+      "samples": [
+        {
+          "seconds": 2.923439789999975,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.02161226,
+            "compile_cache_seconds": 0.504429263,
+            "execute_seconds": 2.354192594,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 4.764e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 0.001284592,
+            "total_seconds": 2.881632614
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.08718412200687453,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.005404303,
+            "compile_cache_seconds": 1.075e-05,
+            "execute_seconds": 0.001780912,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 2.9896e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.07744877,
+            "total_seconds": 0.084733201
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.0837930419947952,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.003044675,
+            "compile_cache_seconds": 1.1682000000000001e-05,
+            "execute_seconds": 0.001578999,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.684e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.077008525,
+            "total_seconds": 0.081741838
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 2,
+      "case": "baseline",
+      "history": "cold",
+      "samples": [
+        {
+          "seconds": 16.434960293991026,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.072664873,
+            "compile_cache_seconds": 0.692560666,
+            "execute_seconds": 15.626276984,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 4.0126e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 0.000461984,
+            "total_seconds": 16.392092039
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.09795710000616964,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.005879211,
+            "compile_cache_seconds": 1.8014e-05,
+            "execute_seconds": 0.001678217,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 2.9747e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.087803115,
+            "total_seconds": 0.095478827
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.08901762400637381,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.005737764,
+            "compile_cache_seconds": 3.5027e-05,
+            "execute_seconds": 0.001979588,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 4.8602e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.078253995,
+            "total_seconds": 0.086148592
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 2,
+      "case": "baseline",
+      "history": "warm",
+      "samples": [
+        {
+          "seconds": 3.1309268939949106,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.024222152,
+            "compile_cache_seconds": 0.564657612,
+            "execute_seconds": 2.495187919,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 4.1619e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 0.000106321,
+            "total_seconds": 3.084292027
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06668593100039288,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.004992603,
+            "compile_cache_seconds": 1.2492999999999999e-05,
+            "execute_seconds": 0.002093604,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.3383e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.057129247,
+            "total_seconds": 0.064336734
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06107420699845534,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.003363088,
+            "compile_cache_seconds": 9.478e-06,
+            "execute_seconds": 0.001685932,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.3724e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.0537343,
+            "total_seconds": 0.058900642
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 2,
+      "case": "interned",
+      "history": "cold",
+      "samples": [
+        {
+          "seconds": 6.487714510993101,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.083515026,
+            "compile_cache_seconds": 0.711419068,
+            "execute_seconds": 5.649122557,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 4.0076e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 0.001742178,
+            "total_seconds": 6.44592643
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 3.286635016,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 5.390271492,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06898533500498161,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001557679,
+            "compile_cache_seconds": 2.0007e-05,
+            "execute_seconds": 0.001585922,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.9415e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.063446839,
+            "total_seconds": 0.066722972
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 3.286635016,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 5.390271492,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.09337102700374089,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.005425413,
+            "compile_cache_seconds": 1.592e-05,
+            "execute_seconds": 0.001905057,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 5.0255e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.083919462,
+            "total_seconds": 0.091407048
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 3.286635016,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 5.390271492,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 64,
+      "trial": 2,
+      "case": "interned",
+      "history": "warm",
+      "samples": [
+        {
+          "seconds": 3.0323593490029452,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.025753271,
+            "compile_cache_seconds": 0.583737459,
+            "execute_seconds": 2.379982821,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.693e-05,
+            "intermediate_materialized_bytes": 21719276916,
+            "kernel_launches": 6047,
+            "materialized_bytes": 22159674180,
+            "metrics_seconds": 0.001706631,
+            "total_seconds": 2.991296903
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 0.008157485,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 2.109399243,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.09799414000008255,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.006101583,
+            "compile_cache_seconds": 7.644999999999999e-06,
+            "execute_seconds": 0.001952598,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.2802e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.087701663,
+            "total_seconds": 0.095859498
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 0.008157485,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 2.109399243,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.08627958100987598,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.005765376,
+            "compile_cache_seconds": 8.626e-06,
+            "execute_seconds": 0.001466387,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 1,
+            "graph_nodes": 3851,
+            "input_seconds": 3.3924e-05,
+            "intermediate_materialized_bytes": 7239758972,
+            "kernel_launches": 2205,
+            "materialized_bytes": 7386558060,
+            "metrics_seconds": 0.076809961,
+            "total_seconds": 0.084157252
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 64,
+              "module_load_seconds": 0.008157485,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1373068,
+              "total_seconds": 2.109399243,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 1,
+            "stable_binding_bytes": 24210900,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 8,
+      "trial": 0,
+      "case": "baseline",
+      "history": "cold",
+      "samples": [
+        {
+          "seconds": 16.75621079800476,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.07525638,
+            "compile_cache_seconds": 0.701387935,
+            "execute_seconds": 15.840998208,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.000216499,
+            "intermediate_materialized_bytes": 9269007000,
+            "kernel_launches": 20474,
+            "materialized_bytes": 9663220280,
+            "metrics_seconds": 0.09488172,
+            "total_seconds": 16.713185946
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.12810606499260757,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.003325236,
+            "compile_cache_seconds": 2.9665e-05,
+            "execute_seconds": 0.010477867,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.000361525,
+            "intermediate_materialized_bytes": 7415205600,
+            "kernel_launches": 16632,
+            "materialized_bytes": 7730576224,
+            "metrics_seconds": 0.111524679,
+            "total_seconds": 0.125847208
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.1129827499971725,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001417815,
+            "compile_cache_seconds": 3.5307e-05,
+            "execute_seconds": 0.010397816999999998,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.00039746299999999997,
+            "intermediate_materialized_bytes": 7415205600,
+            "kernel_launches": 16632,
+            "materialized_bytes": 7730576224,
+            "metrics_seconds": 0.09827900299999998,
+            "total_seconds": 0.110653831
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 8,
+      "trial": 0,
+      "case": "baseline",
+      "history": "warm",
+      "samples": [
+        {
+          "seconds": 2.7436331399949268,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.027239375,
+            "compile_cache_seconds": 0.46219522499999993,
+            "execute_seconds": 2.105427627,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.00013957500000000002,
+            "intermediate_materialized_bytes": 9269007000,
+            "kernel_launches": 20474,
+            "materialized_bytes": 9663220280,
+            "metrics_seconds": 0.107284923,
+            "total_seconds": 2.702519245
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.1221363310032757,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.005478974,
+            "compile_cache_seconds": 1.5652000000000005e-05,
+            "execute_seconds": 0.00941769,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.00023221000000000003,
+            "intermediate_materialized_bytes": 7415205600,
+            "kernel_launches": 16632,
+            "materialized_bytes": 7730576224,
+            "metrics_seconds": 0.10476809799999999,
+            "total_seconds": 0.120007671
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.12456382799427956,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.005359057,
+            "compile_cache_seconds": 2.1380000000000002e-05,
+            "execute_seconds": 0.009191903000000001,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.00027340700000000003,
+            "intermediate_materialized_bytes": 7415205600,
+            "kernel_launches": 16632,
+            "materialized_bytes": 7730576224,
+            "metrics_seconds": 0.107555266,
+            "total_seconds": 0.122498848
+          },
+          "cuda_compile": null,
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 8,
+      "trial": 0,
+      "case": "interned",
+      "history": "cold",
+      "samples": [
+        {
+          "seconds": 6.2596237160032615,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.076118242,
+            "compile_cache_seconds": 0.71515595,
+            "execute_seconds": 5.377576844999999,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.0007390290000000001,
+            "intermediate_materialized_bytes": 9269007000,
+            "kernel_launches": 20474,
+            "materialized_bytes": 9663220280,
+            "metrics_seconds": 0.048607183,
+            "total_seconds": 6.218343716
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 8,
+              "module_load_seconds": 3.362527656,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1114023,
+              "total_seconds": 5.229496741,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.06952124100644141,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001030621,
+            "compile_cache_seconds": 1.7234e-05,
+            "execute_seconds": 0.010015173,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.000321059,
+            "intermediate_materialized_bytes": 7415205600,
+            "kernel_launches": 16632,
+            "materialized_bytes": 7730576224,
+            "metrics_seconds": 0.056602622000000005,
+            "total_seconds": 0.068104198
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 8,
+              "module_load_seconds": 3.362527656,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1114023,
+              "total_seconds": 5.229496741,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.0687948859995231,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.001048706,
+            "compile_cache_seconds": 1.4788000000000001e-05,
+            "execute_seconds": 0.008851209,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.00032366400000000004,
+            "intermediate_materialized_bytes": 7415205600,
+            "kernel_launches": 16632,
+            "materialized_bytes": 7730576224,
+            "metrics_seconds": 0.056953254999999994,
+            "total_seconds": 0.067296879
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 8,
+              "module_load_seconds": 3.362527656,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1114023,
+              "total_seconds": 5.229496741,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    },
+    {
+      "microbatch": 8,
+      "trial": 0,
+      "case": "interned",
+      "history": "warm",
+      "samples": [
+        {
+          "seconds": 2.800208387998282,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.026789042,
+            "compile_cache_seconds": 0.591139441,
+            "execute_seconds": 2.055705771,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.000802991,
+            "intermediate_materialized_bytes": 9269007000,
+            "kernel_launches": 20474,
+            "materialized_bytes": 9663220280,
+            "metrics_seconds": 0.082183636,
+            "total_seconds": 2.7567575189999998
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 8,
+              "module_load_seconds": 0.009158972,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1114023,
+              "total_seconds": 1.9605803019999999,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.12331060599535704,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.00192221,
+            "compile_cache_seconds": 3.5997e-05,
+            "execute_seconds": 0.010045450000000001,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.000154894,
+            "intermediate_materialized_bytes": 7415205600,
+            "kernel_launches": 16632,
+            "materialized_bytes": 7730576224,
+            "metrics_seconds": 0.10858012600000003,
+            "total_seconds": 0.120914739
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 8,
+              "module_load_seconds": 0.009158972,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1114023,
+              "total_seconds": 1.9605803019999999,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        },
+        {
+          "seconds": 0.13551404200552497,
+          "profile": {
+            "accumulate_seconds": 0.0,
+            "clip_adam_finite_check_seconds": 0.002587178,
+            "compile_cache_seconds": 2.1980999999999995e-05,
+            "execute_seconds": 0.010278602,
+            "gradient_extraction_seconds": 0.0,
+            "graph_launches": 8,
+            "graph_nodes": 3851,
+            "input_seconds": 0.000152317,
+            "intermediate_materialized_bytes": 7415205600,
+            "kernel_launches": 16632,
+            "materialized_bytes": 7730576224,
+            "metrics_seconds": 0.11978631299999998,
+            "total_seconds": 0.133077047
+          },
+          "cuda_compile": [
+            {
+              "microbatch": 8,
+              "module_load_seconds": 0.009158972,
+              "planned_kernels": 1982,
+              "ptx_bytes": 1114023,
+              "total_seconds": 1.9605803019999999,
+              "unique_kernels": 383
+            }
+          ],
+          "cuda_graphs": {
+            "active_shapes": 1,
+            "captures": 1,
+            "fallback_reasons": [],
+            "fallbacks": 0,
+            "graph_launches": 8,
+            "stable_binding_bytes": 24096436,
+            "warmup_executions": 2
+          }
+        }
+      ],
+      "cache_files": 6
+    }
+  ],
+  "notes": "Private initially empty CUDA cache per case/trial, then warm restart reusing only that cache. Same archive/batch/policy; GPU jobs and global cache untouched. Timers include whole train request and worker-reported total, which excludes model loading before Trainer::step."
+}

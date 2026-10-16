@@ -1908,3 +1908,69 @@ fn ptx_contiguous_reshape_fallback_retains_device_copy() {
         assert_eq!(ptx.execution_metrics().kernel_launches, 1);
     }
 }
+
+#[test]
+fn ptx_shared_kernel_entries_preserve_bindings_and_distinct_contractions() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    ptx.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+    let weight = TensorExpr::constant(
+        (0..17 * 17)
+            .map(|i| (i % 11) as f32 * 0.03125 - 0.125)
+            .collect(),
+        vec![17, 17],
+    );
+    let other = TensorExpr::constant(
+        (0..19 * 17)
+            .map(|i| (i % 7) as f32 * 0.0625 - 0.125)
+            .collect(),
+        vec![19, 17],
+    );
+    let a = TensorExpr::input("a", vec![3, 17])
+        .matmul(weight.clone())
+        .relu();
+    let b = TensorExpr::input("b", vec![3, 17]).matmul(weight).relu();
+    let c = TensorExpr::input("c", vec![3, 19]).matmul(other).relu();
+    let graph: TensorGraph<f32> = TensorExpr::concat(&[a, b, c], 0).into();
+    ptx.compile(&graph).unwrap();
+    let plan = ptx.describe_plan(&graph).unwrap();
+    let names: Vec<_> = plan
+        .lines()
+        .filter(|line| line.contains("MatMulRegion"))
+        .map(|line| {
+            line.split("action=kernel ")
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(names.len(), 3);
+    assert_eq!(names[0], names[1]);
+    assert_ne!(names[1], names[2]);
+    assert!(ptx.compile_metrics().unique_kernels < ptx.compile_metrics().generated_kernels);
+    for shift in [0.0, 0.375] {
+        let feeds = HashMap::from([
+            (
+                "a".into(),
+                (0..51).map(|i| (i % 13) as f32 * 0.0625 + shift).collect(),
+            ),
+            (
+                "b".into(),
+                (0..51).map(|i| -(i % 17) as f32 * 0.125 - shift).collect(),
+            ),
+            (
+                "c".into(),
+                (0..57).map(|i| (i % 19) as f32 * 0.03125 - shift).collect(),
+            ),
+        ]);
+        let expected = SimpleExecutor::new()
+            .execute(&graph, feeds.clone())
+            .unwrap();
+        let actual = ptx.execute_compiled(&graph, feeds).unwrap();
+        assert_close(&actual, &expected, 1e-5);
+    }
+    assert_eq!(ptx.compilation_count(), 1);
+}

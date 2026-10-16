@@ -259,7 +259,28 @@ impl<D: DType, R: Into<TensorExpr<D>>> Div<R> for Parameter<D> {
 #[derive(Clone, Debug)]
 pub struct TensorExpr<D: DType>(Arc<ExprNode<D>>);
 
+/// Logical floating storage of a value in an explicitly mixed f32 graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ValueDType {
+    F32,
+    BF16,
+}
+
+impl TensorExpr<f32> {
+    /// Cast in a mixed graph. BF16 narrows with round-to-nearest-even;
+    /// F32 promotes the already rounded value. Neither cast is cancelled.
+    pub fn cast(self, dtype: ValueDType) -> Self {
+        self.cast_value(dtype)
+    }
+}
+
 impl<D: DType> TensorExpr<D> {
+    pub(crate) fn cast_value(self, dtype: ValueDType) -> Self {
+        Self(Arc::new(ExprNode {
+            shape: self.shape().clone(),
+            kind: ExprKind::Cast { x: self, dtype },
+        }))
+    }
     pub fn kind(&self) -> &ExprKind<D> {
         &self.0.kind
     }
@@ -267,6 +288,7 @@ impl<D: DType> TensorExpr<D> {
     /// Returns references to child expressions for tree traversal.
     pub fn children(&self) -> Vec<&TensorExpr<D>> {
         match &self.0.kind {
+            ExprKind::Cast { x, .. } => vec![x],
             ExprKind::Unary { x, .. } => vec![x],
             ExprKind::Binary { a, b, .. } => vec![a, b],
             ExprKind::MatMul { a, b } => vec![a, b],
@@ -358,6 +380,11 @@ struct ExprNode<D: DType> {
 
 #[derive(Clone, Debug)]
 pub enum ExprKind<D: DType> {
+    /// An observable rounding boundary; optimizers must retain its identity.
+    Cast {
+        x: TensorExpr<D>,
+        dtype: ValueDType,
+    },
     /// Exact integer source, only accepted in indexed operator argument slots.
     Index {
         source: IndexTensor,
@@ -1304,6 +1331,15 @@ impl<D: DType> TensorExpr<D> {
             }
 
             let node_idx = match &expr.0.kind {
+                ExprKind::Cast { x, dtype } => {
+                    let input = lower_rec(x, g, memo);
+                    let node = g.graph.add_node(TensorGraphNode::Cast {
+                        dtype: *dtype,
+                        shape: expr.shape().clone(),
+                    });
+                    g.graph.add_edge(input, node, 0);
+                    node
+                }
                 ExprKind::Index { source } => {
                     if let Some(node) = g.graph.node_indices().find(|&node| {
                         matches!(&g[node], TensorGraphNode::IndexSource { source: other }

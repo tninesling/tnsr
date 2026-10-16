@@ -12,6 +12,7 @@ impl TensorGraph<f32, WithGrad> {
     /// batched matmul followed by an ordinary sum, so all backends retain their
     /// existing allocation, indexing, reduction and replay behavior.
     pub fn split_long_matmul_gradients(&mut self) -> Result<usize> {
+        let dtypes = super::mixed::value_dtypes(self);
         let candidates: Vec<_> = self
             .graph
             .node_indices()
@@ -22,6 +23,11 @@ impl TensorGraph<f32, WithGrad> {
             .collect();
         let mut transformed = 0;
         for node in candidates {
+            // BF16 partials would round before the final sum and change the
+            // operator boundary. Mixed split-K needs explicit f32 partials.
+            if dtypes.get(&node) == Some(&crate::tensor::ValueDType::BF16) {
+                continue;
+            }
             let inputs = self.inputs(node);
             ensure!(inputs.len() == 2, "gradient matmul must have two inputs");
             let a_shape = self.graph[inputs[0]].shape().clone();
@@ -72,6 +78,21 @@ mod tests {
     use crate::tensor::Parameter;
     use crate::{Executor, SimpleExecutor};
     use std::collections::HashMap;
+
+    #[test]
+    fn mixed_bf16_gradients_are_not_split_into_rounded_partials() {
+        use crate::tensor::ValueDType;
+        let weight = Parameter::new(vec![0.125f32; 128 * 128], vec![128, 128]);
+        let y = TensorExpr::input("x", vec![2048, 128])
+            .cast(ValueDType::BF16)
+            .matmul(TensorExpr::from(weight).cast(ValueDType::BF16))
+            .cast(ValueDType::F32)
+            .mean_all();
+        let mut graph = TensorGraph::new();
+        let loss = graph.add_expr(&y, false);
+        let mut graph = graph.with_gradients(loss);
+        assert_eq!(graph.split_long_matmul_gradients().unwrap(), 0);
+    }
 
     #[test]
     fn split_gradient_preserves_roots_forward_nodes_and_changed_feeds() {

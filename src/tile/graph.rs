@@ -261,6 +261,18 @@ impl TileGraph {
         view: &super::VirtualTensor,
         source_shape: &[usize],
     ) -> Result<()> {
+        self.set_materialized_view_dtype(node, view, source_shape, view.dtype)
+    }
+
+    /// Materialize a view and convert its physical storage in one pass.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn set_materialized_view_dtype(
+        &mut self,
+        node: NodeIndex,
+        view: &super::VirtualTensor,
+        source_shape: &[usize],
+        output_dtype: DType,
+    ) -> Result<()> {
         let input = RegionInput {
             node: view.source,
             value: super::region::RegionValue(0),
@@ -270,11 +282,16 @@ impl TileGraph {
         let mut builder = TileIRBuilder::new();
         builder.start_kernel("materialize_view");
         builder.add_param("input", view.dtype, true);
-        builder.add_param("output", view.dtype, false);
+        builder.add_param("output", output_dtype, false);
         builder.bounds_check(view.shape.iter().product());
         let linear = Self::global_tid();
         let offset = input_element_index(&input, &view.shape, &linear)?;
-        let value = builder.alloc_register(view.dtype, 1, 1);
+        let register_dtype = if output_dtype == view.dtype {
+            view.dtype
+        } else {
+            DType::F32
+        };
+        let value = builder.alloc_register(register_dtype, 1, 1);
         builder.load_global_to_shared(value, "input", offset, Expr::Const(0));
         builder.store("output", value, linear, Expr::Const(0));
         self.graph[node] = builder.finish();
@@ -296,6 +313,7 @@ impl TileGraph {
         schedule: Option<MatMulSchedule>,
     ) -> TileIR {
         match node {
+            TensorGraphNode::Cast { .. } => panic!("mixed casts require MixedExecutor"),
             TensorGraphNode::Constant { data, .. } => Self::lower_constant(dtype, data, shape),
             TensorGraphNode::Input { name, .. } => Self::lower_input(dtype, name, shape),
             TensorGraphNode::IndexSource { .. } => Self::lower_view(),

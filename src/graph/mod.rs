@@ -59,6 +59,7 @@ pub mod fusion;
 mod gradient_pruning;
 pub(crate) mod indices;
 pub mod liveness;
+pub mod mixed;
 pub mod rewrite;
 mod split_k;
 
@@ -77,6 +78,10 @@ pub struct WithGrad {
 
 #[derive(Clone)]
 pub enum TensorGraphNode<D> {
+    Cast {
+        dtype: crate::tensor::ValueDType,
+        shape: crate::tensor::Shape,
+    },
     IndexSource {
         source: crate::tensor::IndexTensor,
     },
@@ -191,6 +196,7 @@ pub enum TensorGraphNode<D> {
 impl<D> TensorGraphNode<D> {
     pub fn name(&self) -> &'static str {
         match self {
+            TensorGraphNode::Cast { .. } => "Cast",
             TensorGraphNode::IndexSource { .. } => "IndexSource",
             TensorGraphNode::Constant { .. } => "Constant",
             TensorGraphNode::Input { .. } => "Input",
@@ -238,6 +244,7 @@ impl<D> TensorGraphNode<D> {
 
     pub fn shape(&self) -> &crate::tensor::Shape {
         match self {
+            TensorGraphNode::Cast { shape, .. } => shape,
             TensorGraphNode::IndexSource { source } => source.shape(),
             TensorGraphNode::Constant { shape, .. } => shape,
             TensorGraphNode::Input { shape, .. } => shape,
@@ -383,6 +390,7 @@ where
     /// Create a new graph with gradient computation nodes for automatic differentiation.
     pub fn with_gradients(mut self, loss_node: NodeIndex) -> TensorGraph<D, WithGrad> {
         let forward_nodes = self.graph.node_count();
+        let primal_dtypes = mixed::value_dtypes(&self);
         let mut param_to_grad: HashMap<usize, NodeIndex> = HashMap::new();
         let mut gradient_nodes: HashSet<NodeIndex> = HashSet::new();
         let mut node_to_grad: HashMap<NodeIndex, NodeIndex> = HashMap::new();
@@ -396,7 +404,7 @@ where
         }
 
         // Step 2: Validate loss node
-        let loss_shape = self.graph[loss_node].shape();
+        let loss_shape = self.graph[loss_node].shape().clone();
         assert_eq!(
             loss_shape.iter().product::<usize>(),
             1,
@@ -410,8 +418,16 @@ where
             data: Arc::new(vec![D::one()]),
             shape: loss_shape.clone(),
         });
-        node_to_grad.insert(loss_node, seed_grad_node);
         gradient_nodes.insert(seed_grad_node);
+        let seed_grad_node =
+            if primal_dtypes.get(&loss_node) == Some(&crate::tensor::ValueDType::BF16) {
+                let seed = TensorExpr::node_ref(seed_grad_node, loss_shape.clone())
+                    .cast_value(crate::tensor::ValueDType::BF16);
+                self.lower_gradient_expr(&seed, &mut gradient_nodes)
+            } else {
+                seed_grad_node
+            };
+        node_to_grad.insert(loss_node, seed_grad_node);
 
         // Step 4: Traverse graph in reverse topological order
         // For each node, compute its gradient based on downstream gradients
@@ -430,6 +446,15 @@ where
 
             // Generate gradient nodes based on operation type
             match &self.graph[node_idx] {
+                TensorGraphNode::Cast { .. } => {
+                    self.accumulate_gradient(
+                        &primal_dtypes,
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        inputs[0],
+                        grad_output,
+                    );
+                }
                 TensorGraphNode::Binary { op, .. } => {
                     if inputs.len() != 2 {
                         panic!("Binary op should have 2 inputs");
@@ -442,12 +467,14 @@ where
                             // d(a+b)/da = 1, d(a+b)/db = 1
                             // grad_a = grad_output, grad_b = grad_output
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_a,
                                 grad_output,
                             );
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_b,
@@ -458,6 +485,7 @@ where
                             // d(a-b)/da = 1, d(a-b)/db = -1
                             // grad_a = grad_output, grad_b = -grad_output
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_a,
@@ -473,6 +501,7 @@ where
                                 self.lower_gradient_expr(&neg_grad_expr, &mut gradient_nodes);
 
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_b,
@@ -502,12 +531,14 @@ where
                                 self.lower_gradient_expr(&grad_b_expr, &mut gradient_nodes);
 
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_a,
                                 grad_a,
                             );
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_b,
@@ -537,12 +568,14 @@ where
                                 self.lower_gradient_expr(&grad_b_expr, &mut gradient_nodes);
 
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_a,
                                 grad_a,
                             );
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_b,
@@ -573,6 +606,7 @@ where
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes);
 
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_x,
@@ -594,6 +628,7 @@ where
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes);
 
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_x,
@@ -611,6 +646,7 @@ where
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes);
 
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_x,
@@ -635,6 +671,7 @@ where
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes);
 
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_x,
@@ -680,12 +717,14 @@ where
                     let grad_b = self.lower_gradient_expr(&grad_b_expr, &mut gradient_nodes);
 
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_a,
                         grad_a,
                     );
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_b,
@@ -708,6 +747,7 @@ where
                     let weight_grad =
                         self.lower_gradient_expr(&weight_grad_expr, &mut gradient_nodes);
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         weight,
@@ -734,6 +774,7 @@ where
                     let logits_grad =
                         self.lower_gradient_expr(&logits_grad_expr, &mut gradient_nodes);
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         logits,
@@ -769,6 +810,7 @@ where
                     let grad_a = self.lower_gradient_expr(&grad_a_expr, &mut gradient_nodes);
 
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_a,
@@ -786,6 +828,7 @@ where
                     let grad_in_expr = grad_out_expr.reshape(input_shape);
                     let grad_in = self.lower_gradient_expr(&grad_in_expr, &mut gradient_nodes);
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_idx,
@@ -806,6 +849,7 @@ where
                     let grad_in_expr = grad_out_expr.permute(inverse);
                     let grad_in = self.lower_gradient_expr(&grad_in_expr, &mut gradient_nodes);
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_idx,
@@ -833,6 +877,7 @@ where
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes);
 
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_x,
@@ -869,6 +914,7 @@ where
                                 self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes);
 
                             self.accumulate_gradient(
+                                &primal_dtypes,
                                 &mut node_to_grad,
                                 &mut gradient_nodes,
                                 input_x,
@@ -897,6 +943,7 @@ where
                     let grad_x = self.lower_gradient_expr(&grad_x_expr, &mut gradient_nodes);
 
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_x,
@@ -951,12 +998,14 @@ where
                         self.lower_gradient_expr(&grad_weight_expr, &mut gradient_nodes);
 
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_idx,
                         grad_input,
                     );
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         weight_idx,
@@ -1004,6 +1053,7 @@ where
                         self.lower_gradient_expr(&grad_input_expr, &mut gradient_nodes);
 
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_idx,
@@ -1024,6 +1074,7 @@ where
                     let grad_in_expr = grad_out_expr.reshape(input_shape);
                     let grad_in = self.lower_gradient_expr(&grad_in_expr, &mut gradient_nodes);
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_idx,
@@ -1051,7 +1102,13 @@ where
                     }
                     let expression = TensorExpr::concat(&pieces, axis);
                     let grad = self.lower_gradient_expr(&expression, &mut gradient_nodes);
-                    self.accumulate_gradient(&mut node_to_grad, &mut gradient_nodes, input, grad);
+                    self.accumulate_gradient(
+                        &primal_dtypes,
+                        &mut node_to_grad,
+                        &mut gradient_nodes,
+                        input,
+                        grad,
+                    );
                 }
                 TensorGraphNode::Concat { axis, .. } => {
                     let axis = *axis;
@@ -1063,6 +1120,7 @@ where
                             .narrow(axis, offset, length);
                         let grad = self.lower_gradient_expr(&expression, &mut gradient_nodes);
                         self.accumulate_gradient(
+                            &primal_dtypes,
                             &mut node_to_grad,
                             &mut gradient_nodes,
                             input,
@@ -1091,6 +1149,7 @@ where
                         &mut gradient_nodes,
                     );
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         values,
@@ -1199,6 +1258,7 @@ where
 
                     // Accumulate the final gradient to the original input
                     self.accumulate_gradient(
+                        &primal_dtypes,
                         &mut node_to_grad,
                         &mut gradient_nodes,
                         input_x,
@@ -1244,11 +1304,19 @@ where
     /// Helper to accumulate gradients when a node has multiple consumers.
     fn accumulate_gradient(
         &mut self,
+        primal_dtypes: &HashMap<NodeIndex, crate::tensor::ValueDType>,
         node_to_grad: &mut HashMap<NodeIndex, NodeIndex>,
         gradient_nodes: &mut HashSet<NodeIndex>,
         node: NodeIndex,
         new_grad: NodeIndex,
     ) {
+        // Convert each contribution before joining the other consumers.
+        let new_grad = if let Some(&dtype) = primal_dtypes.get(&node) {
+            let value = TensorExpr::node_ref(new_grad, self.graph[new_grad].shape().clone());
+            self.lower_gradient_expr(&value.cast_value(dtype), gradient_nodes)
+        } else {
+            new_grad
+        };
         if let Some(&existing_grad) = node_to_grad.get(&node) {
             // Node already has a gradient, add them together
             let grad_shape = self.graph[existing_grad].shape().clone();

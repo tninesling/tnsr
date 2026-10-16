@@ -31,7 +31,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 19;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 20;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -530,6 +530,13 @@ impl<D: CudaDType> PtxExecutor<D> {
     }
 
     fn compile_impl<G>(&mut self, graph: &TensorGraph<D::HostType, G>) -> Result<()> {
+        anyhow::ensure!(
+            !graph
+                .graph
+                .node_weights()
+                .any(|n| matches!(n, TensorGraphNode::Cast { .. })),
+            "mixed casts require MixedExecutor"
+        );
         let index_plan = crate::graph::indices::IndexPlan::new(graph)?;
         self.invalidate_replay();
         self.exact_indices.buffers.clear();
@@ -1265,6 +1272,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                 continue;
             }
             let result = match node {
+                TensorGraphNode::Cast { .. } => anyhow::bail!("mixed casts require MixedExecutor"),
                 _ if plan_step.materialized_view.is_some() => {
                     let kernel_name = ptx_graph
                         .kernel_name(*node_idx)
@@ -2383,6 +2391,13 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
         signature_usize(&mut signature, node_index.index());
         signature_str(&mut signature, node.name());
         match node {
+            TensorGraphNode::Cast { dtype, .. } => {
+                signature.push(33);
+                signature.push(match dtype {
+                    crate::tensor::ValueDType::F32 => 0,
+                    crate::tensor::ValueDType::BF16 => 1,
+                });
+            }
             TensorGraphNode::IndexSource { source } => {
                 signature.push(32);
                 match source.source() {

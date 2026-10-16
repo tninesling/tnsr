@@ -352,6 +352,11 @@ where
         indices: tensor::IndexInputs,
     ) -> Result<Vec<D>> {
         let index_values = graph.index_sources(indices)?;
+        let dtypes = graph::mixed::value_dtypes(graph);
+        anyhow::ensure!(
+            dtypes.is_empty() || std::any::TypeId::of::<D>() == std::any::TypeId::of::<f32>(),
+            "explicit mixed graphs require f32 host values"
+        );
         let order = graph.toposort();
         let liveness = liveness::analyze(graph, &order);
 
@@ -370,6 +375,14 @@ where
         for (pos, node_idx) in order.iter().enumerate() {
             let node = &graph[*node_idx];
             let result = match node {
+                TensorGraphNode::Cast { .. } => {
+                    let ins = graph.inputs(*node_idx);
+                    let x = self
+                        .values
+                        .get(&ins[0])
+                        .context("cast source not computed")?;
+                    Value::Owned(x.with(|v| v.to_vec()))
+                }
                 TensorGraphNode::IndexSource { .. } => continue,
                 TensorGraphNode::Constant { data, .. } => {
                     let _span = trace_span!("constant", node = node_idx.index()).entered();
@@ -705,6 +718,24 @@ where
                     x.with(|v| out.copy_from_slice(v));
                     Value::Owned(out)
                 }
+            };
+            let result = if dtypes.get(node_idx) == Some(&tensor::ValueDType::BF16) {
+                let rounded = result.with(|values| {
+                    values
+                        .iter()
+                        .map(|v| {
+                            let value = v.to_f32().context("mixed value cannot convert to f32")?;
+                            D::from(half::bf16::from_f32(value).to_f32())
+                                .context("mixed value cannot convert from f32")
+                        })
+                        .collect::<Result<Vec<D>>>()
+                })?;
+                if let Value::Owned(old) = result {
+                    self.pool.give(old);
+                }
+                Value::Owned(rounded)
+            } else {
+                result
             };
             let bytes = result.len() * std::mem::size_of::<D>();
             self.values.insert(*node_idx, result);

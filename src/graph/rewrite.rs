@@ -128,7 +128,9 @@ impl Default for RewriteConfig {
 fn expr_to_recexpr<D: DType>(expr: &TensorExpr<D>) -> RecExpr<TensorOp> {
     fn build_rec<D: DType>(expr: &TensorExpr<D>, rec: &mut RecExpr<TensorOp>) -> Id {
         match expr.kind() {
-            ExprKind::Index { .. } => unreachable!("index sources bypass expression rewriting"),
+            ExprKind::Cast { .. } | ExprKind::Index { .. } => {
+                unreachable!("index sources bypass expression rewriting")
+            }
             ExprKind::Constant { .. }
             | ExprKind::Parameter { .. }
             | ExprKind::Input { .. }
@@ -413,22 +415,23 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
     expr: &TensorExpr<D>,
     config: RewriteConfig,
 ) -> TensorExpr<D> {
-    fn contains_indexed_op<D: DType>(expr: &TensorExpr<D>) -> bool {
+    fn requires_exact_structure<D: DType>(expr: &TensorExpr<D>) -> bool {
         matches!(
             expr.kind(),
-            ExprKind::Index { .. }
+            ExprKind::Cast { .. }
+                | ExprKind::Index { .. }
                 | ExprKind::Narrow { .. }
                 | ExprKind::Concat { .. }
                 | ExprKind::Embedding { .. }
                 | ExprKind::EmbeddingBackward { .. }
                 | ExprKind::IndexedCrossEntropy { .. }
                 | ExprKind::IndexedCrossEntropyBackward { .. }
-        ) || expr.children().into_iter().any(contains_indexed_op)
+        ) || expr.children().into_iter().any(requires_exact_structure)
     }
 
-    // Indexed operations are not represented in TensorOp. Bypass the entire
-    // rewrite so an indexed subtree cannot be replaced by an opaque symbol.
-    if contains_indexed_op(expr) {
+    // Indexed operations and observable cast identities are not represented
+    // in TensorOp. Preserve the entire expression, including cast sharing.
+    if requires_exact_structure(expr) {
         return expr.clone();
     }
 

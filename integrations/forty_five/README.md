@@ -91,6 +91,8 @@ matmuls, with f32 storage, gradient accumulation and optimizer state. It combine
 three products to retain more operand precision than ordinary TF32, while
 changing accumulation order. Responses and reports identify the arithmetic
 policy. See [measurements and validation](../../docs/training-tf32x3-performance.md).
+The planner also avoids expanded view buffers for standalone pointwise consumers;
+see [the matched follow-up measurements](../../docs/training-virtual-inputs-performance.md).
 Training is synchronous.
 `--cuda-graphs` (or `settings.cuda_graphs=true`) separately opts into stable-buffer
 model replay. Responses report active shapes, setup and fallback reasons;

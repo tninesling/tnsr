@@ -259,6 +259,7 @@ impl PtxExecutionPlan {
         let components: Vec<_> = self
             .regions
             .iter()
+            .filter(|region| region.members.len() > 1)
             .map(|region| region.members.clone())
             .collect();
         for members in components {

@@ -193,6 +193,39 @@ impl PtxExecutionPlan {
         mut matmul_regions: Vec<MatMulRegion>,
         graph_output: Option<NodeIndex>,
     ) -> Result<Self> {
+        // Unfused pointwise kernels require contiguous arguments. Give a lone
+        // consumer of a view the same indexed-input lowering as a fused region,
+        // so broadcasts/permutations need not be materialized merely because
+        // there is no second arithmetic operation to fuse. Singleton regions do
+        // not contract graph edges and remain safe after cycle refinement.
+        let claimed: HashSet<_> = regions
+            .iter()
+            .flat_map(|region| &region.members)
+            .chain(reduction_regions.iter().flat_map(|region| &region.members))
+            .chain(matmul_regions.iter().flat_map(|region| &region.members))
+            .copied()
+            .collect();
+        for &node in order {
+            let inputs = graph.inputs(node);
+            if !claimed.contains(&node)
+                && is_pointwise(&graph[node])
+                && inputs
+                    .iter()
+                    .all(|&input| graph[input].shape() == graph[node].shape())
+                && inputs.iter().any(|&input| {
+                    matches!(
+                        graph[input],
+                        TensorGraphNode::Reshape { .. }
+                            | TensorGraphNode::Flatten { .. }
+                            | TensorGraphNode::Transpose { .. }
+                            | TensorGraphNode::Permute { .. }
+                            | TensorGraphNode::BroadcastAxis { .. }
+                    )
+                })
+            {
+                regions.push(FusionRegion::from_graph(graph, vec![node], vec![node])?);
+            }
+        }
         let mut node_to_region = HashMap::new();
         for (region_id, region) in regions.iter().enumerate() {
             for &member in &region.members {
@@ -1374,13 +1407,12 @@ mod tests {
                 .is_empty()
         );
         assert!(plan.steps.iter().any(|step| {
-            step.operation == "BroadcastAxis" && step.action == PtxPlanAction::Kernel
+            step.operation == "BroadcastAxis" && step.action == PtxPlanAction::VirtualView
         }));
-        assert!(
-            plan.steps
-                .iter()
-                .any(|step| { step.operation == "Div" && step.action == PtxPlanAction::Kernel })
-        );
+        assert!(plan.steps.iter().any(|step| matches!(
+            step.action,
+            PtxPlanAction::PointwiseRegion(_)
+        ) && step.shape == vec![2, 64]));
     }
 
     #[test]

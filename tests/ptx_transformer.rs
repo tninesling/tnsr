@@ -654,6 +654,62 @@ fn ptx_materializes_non_identity_view_for_high_region_fanout() {
 }
 
 #[test]
+fn ptx_single_pointwise_reads_aliased_virtual_views_without_copies() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let source = TensorExpr::input("source", vec![1, 17, 17]);
+    let graph: TensorGraph<f32> =
+        (source.clone().broadcast_axis(0, 3) * source.swap_axes(1, 2).broadcast_axis(0, 3)).into();
+    ptx.compile_owned(graph.clone()).unwrap();
+    assert!(
+        ptx.execution_plan()
+            .unwrap()
+            .steps()
+            .iter()
+            .filter(|step| matches!(step.operation, "BroadcastAxis" | "Permute" | "Transpose"))
+            .all(|step| step.action == tnsr::ptx::PtxPlanAction::VirtualView)
+    );
+    for shift in [0.0, 0.375] {
+        let feeds = HashMap::from([(
+            "source".into(),
+            (0..17 * 17)
+                .map(|i| (i % 29) as f32 * 0.125 - 1.0 + shift)
+                .collect(),
+        )]);
+        let expected = SimpleExecutor::new()
+            .execute(&graph, feeds.clone())
+            .unwrap();
+        let actual = ptx.execute_compiled(&graph, feeds).unwrap();
+        assert_close(&actual, &expected, 0.0);
+        assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+        assert_eq!(ptx.execution_metrics().intermediate_materialized_bytes, 0);
+    }
+    assert_eq!(ptx.compilation_count(), 1);
+}
+
+#[test]
+fn ptx_single_mask_with_virtual_condition_ignores_masked_nonfinite_values() {
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    let conditions: Vec<_> = (0..17)
+        .map(|i| if i % 2 == 0 { 0.0 } else { 1.0 })
+        .collect();
+    let values: Vec<_> = (0..33 * 17)
+        .map(|i| if i % 17 % 2 == 0 { f32::NAN } else { 0.25 })
+        .collect();
+    let graph: TensorGraph<f32> = TensorExpr::constant(values, vec![33, 17])
+        .mask(TensorExpr::constant(conditions, vec![1, 17]).broadcast_axis(0, 33))
+        .into();
+    let expected = execute_cpu(&graph);
+    let actual = ptx.execute(&graph, HashMap::new()).unwrap();
+    assert_close(&actual, &expected, 0.0);
+    assert_eq!(ptx.execution_metrics().kernel_launches, 1);
+    assert_eq!(ptx.execution_metrics().intermediate_materialized_bytes, 0);
+}
+
+#[test]
 fn ptx_reports_virtual_view_baseline() {
     let Some(mut ptx) = ptx_executor() else {
         return;

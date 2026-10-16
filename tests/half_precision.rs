@@ -470,3 +470,21 @@ fn test_half_runtime_ptx_preserves_gradients_and_reuses_compilation() {
         _ => unreachable!(),
     }
 }
+
+#[cfg(feature = "cuda")]
+#[test]
+fn bf16_mma_stages_bits_without_float_roundtrip() {
+    use tnsr::{graph::TensorGraph, ptx::PtxGraph, tensor::TensorExpr, tile::TileGraph};
+    let expression = TensorExpr::<half::bf16>::input("a", vec![32, 32])
+        .matmul(TensorExpr::input("b", vec![32, 32]));
+    let graph: TensorGraph<half::bf16> = expression.into();
+    let source = PtxGraph::from(TileGraph::from_graph(&graph)).to_ptx();
+    let body = source
+        .split(".visible .entry")
+        .find(|body| body.contains("f32.bf16.bf16.f32"))
+        .unwrap();
+    assert!(body.contains("f32.bf16.bf16.f32"));
+    assert!(body.contains("ld.global.b16"));
+    assert!(body.contains("st.shared.b16"));
+    assert!(!body.contains("cvt.f32.bf16"));
+}

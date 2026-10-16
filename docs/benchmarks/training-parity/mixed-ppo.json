@@ -8,7 +8,8 @@
     "Final all-mode timing and final profile observed no external compute processes before/after; earlier training/evaluation contention is kept separate.",
     "Native Adam recurrence is checked against native clipped gradients; full-model BF16/learning parity remains open.",
     "Retained tensor payload excludes allocator/module/optimizer overhead and does not describe startup peak; two mixed workers OOMed alongside the prior 7352 MiB external training process.",
-    "Self-play smoke predates the staging-only change; post-change numerical calibration and focused layout/dtype tests are separate."
+    "Self-play smoke predates the staging-only change; post-change numerical calibration and focused layout/dtype tests are separate.",
+    "Recorded throughput/calibration worker predates the final preparation/destruction gate fix; generated kernels and update arithmetic are unchanged. Final shared-stream capture regressions pass separately."
   ],
   "all_modes": {
     "archive": "/home/taylor/code/tnsr/target/forty_five_validation/final-driver/initial",
@@ -48605,7 +48606,7 @@
   "validation": {
     "cpu_tests": 199,
     "foundation_cuda_required_full_suite": 412,
-    "final_cuda_required_focused_tests": 31,
+    "final_cuda_required_focused_tests": 33,
     "doc_tests": 4,
     "checks": [
       "cargo check",

@@ -144,10 +144,13 @@ The smoke’s 11.95-second PPO wall time includes first-use compilation of unsee
 shapes; it is not a warm throughput sample or learning-quality evidence.
 
 Validation includes 199 CPU tests, the foundation’s 412-test CUDA-required full
-suite, 31 final focused mixed/dtype/layout tests after the staging change, four
+suite, 33 final focused mixed/dtype/layout tests after the staging change, four
 doc tests, both build configurations, all-target/all-feature Clippy, formatting
 and Python compilation. Resident tests cover grouped rates, microbatch
-accumulation, host mutations, nonfinite rejection and recovery.
+accumulation, host mutations, nonfinite rejection and recovery. Preparation and
+destruction serialize allocations, uploads and frees with captures on the shared
+resident stream; concurrent-capture regressions cover both lifecycle boundaries.
+The final lifecycle fix leaves generated update kernels and arithmetic unchanged.
 
 ## Reproduce
 

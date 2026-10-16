@@ -358,3 +358,95 @@ fn mixed_split_k_keeps_f32_partials_and_rounds_once() {
         }
     }
 }
+
+#[test]
+fn mixed_destruction_waits_for_shared_stream_capture() {
+    use std::{sync::mpsc, time::Duration};
+    if !cuda_available() {
+        return;
+    }
+    let graph: TensorGraph<f32> = TensorExpr::input("x", vec![4])
+        .cast(ValueDType::BF16)
+        .into();
+    let executor = MixedExecutor::new(&graph, MatMulPrecision::Tf32x3, true).unwrap();
+    let gate = executor.gate.clone();
+    let stream = executor.stream.clone();
+    let kernel = executor.kernels[0].clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let task = std::thread::spawn(move || {
+        let guard = gate.lock().unwrap();
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)
+            .unwrap();
+        kernel.run(&stream).unwrap();
+        started_tx.send(()).unwrap();
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        let graph = stream
+            .end_capture(
+                sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+            )
+            .unwrap()
+            .unwrap();
+        drop(graph);
+        drop(guard);
+        done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    });
+    started_rx.recv().unwrap();
+    drop(executor);
+    done_tx.send(()).unwrap();
+    task.join().unwrap();
+}
+
+#[test]
+fn mixed_preparation_waits_for_shared_stream_capture() {
+    use std::{sync::mpsc, time::Duration};
+    if !cuda_available() {
+        return;
+    }
+    let graph: TensorGraph<f32> = TensorExpr::input("x", vec![4])
+        .cast(ValueDType::BF16)
+        .into();
+    let executor = MixedExecutor::new(&graph, MatMulPrecision::Tf32x3, true).unwrap();
+    let gate = executor.gate.clone();
+    let stream = executor.stream.clone();
+    let kernel = executor.kernels[0].clone();
+    let bindings = ResidentBindings {
+        stream: stream.clone(),
+        gate: gate.clone(),
+        parameters: HashMap::new(),
+    };
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let task = std::thread::spawn(move || {
+        let guard = gate.lock().unwrap();
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)
+            .unwrap();
+        kernel.run(&stream).unwrap();
+        started_tx.send(()).unwrap();
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(
+            stream
+                .end_capture(
+                    sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+                )
+                .unwrap()
+                .unwrap(),
+        );
+        drop(guard);
+        done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    });
+    started_rx.recv().unwrap();
+    let prepared =
+        MixedExecutor::for_resident(&graph, MatMulPrecision::Tf32x3, true, bindings).unwrap();
+    done_tx.send(()).unwrap();
+    task.join().unwrap();
+    drop(prepared);
+}

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use tnsr::nn;
 use tnsr::parameters::NamedParameters;
-use tnsr::tensor::{Parameter, Shape, TensorExpr};
+use tnsr::tensor::{IndexInputs, IndexTensor, Parameter, Shape, TensorExpr};
 
 type Tensor = TensorExpr<f32>;
 type Specs = BTreeMap<String, (Shape, &'static str)>;
@@ -248,25 +248,27 @@ impl Model {
         let heads = c.token_heads;
         let head = d / heads;
         let hidden = (8 * d).div_ceil(3);
-        let tokens = Tensor::input("tokens", vec![batch, s]);
-        let types = Tensor::input("token_types", vec![batch, s]);
-        let mut positions: Vec<f32> = (0..s).map(|i| i as f32).collect();
+        let tokens = IndexTensor::input("tokens", vec![batch, s]);
+        let types = IndexTensor::input("token_types", vec![batch, s]);
+        let mut positions: Vec<u32> = (0..s)
+            .map(u32::try_from)
+            .collect::<std::result::Result<_, _>>()?;
         if c.use_card_conditioned_actions {
-            positions[10..15].fill(10.0);
+            positions[10..15].fill(10);
         }
-        let positions = Tensor::constant(positions, vec![1, s]);
+        let positions = IndexTensor::constant(positions, vec![1, s])?;
         let mut x = Tensor::from(self.p(
             &format!("{prefix}.token_embedding.weight"),
             &[c.token_vocab_size, d],
         )?)
-        .embedding(tokens)
+        .embedding_indices(tokens)
             + Tensor::from(self.p(
                 &format!("{prefix}.token_type_embedding.weight"),
                 &[c.token_type_vocab_size, d],
             )?)
-            .embedding(types)
+            .embedding_indices(types)
             + Tensor::from(self.p(&format!("{prefix}.position_embedding.weight"), &[s, d])?)
-                .embedding(positions);
+                .embedding_indices(positions);
         x = x.mask(Tensor::input("initial_mask", vec![batch, s, 1]));
         let key_mask = Tensor::input("key_mask", vec![batch, 1, 1, s]);
         for i in 0..c.token_layers {
@@ -330,7 +332,7 @@ impl Model {
         let cls = encoded.clone().narrow(1, 0, 1).reshape(vec![batch, d]);
         let phase_embedding =
             Tensor::from(self.p("phase_embedding.weight", &[c.num_phases, phase])?)
-                .embedding(Tensor::input("phases", vec![batch]));
+                .embedding_indices(IndexTensor::input("phases", vec![batch]));
         let query = Tensor::concat(&[cls.clone(), phase_embedding.clone()], 1);
         let pool = self.pool("policy_pool", encoded.clone(), query, d + phase, batch)?;
         let features = Tensor::concat(&[cls, pool, phase_embedding], 1);
@@ -401,13 +403,13 @@ impl Model {
         let membership: Vec<f32> = (0u8..32)
             .flat_map(|subset| (0..5).map(move |slot| f32::from((subset >> slot) & 1)))
             .collect();
-        let counts: Vec<f32> = (0u8..32).map(|subset| subset.count_ones() as f32).collect();
-        let scales: Vec<f32> = counts.iter().map(|&n| n.max(1.).sqrt()).collect();
+        let counts: Vec<u32> = (0u8..32).map(u8::count_ones).collect();
+        let scales: Vec<f32> = counts.iter().map(|&n| (n.max(1) as f32).sqrt()).collect();
         let subset = Tensor::constant(membership, vec![1, 32, 5]).matmul(cards)
             / Tensor::constant(scales, vec![1, 32, 1]);
         let count_embeddings =
             Tensor::from(self.p("card_action_heads.discard_count_embedding.weight", &[6, d])?)
-                .embedding(Tensor::constant(counts, vec![32]))
+                .embedding_indices(IndexTensor::constant(counts, vec![32])?)
                 .reshape(vec![1, 32, d])
                 .broadcast(vec![batch, 32, d]);
         let query = policy
@@ -431,8 +433,13 @@ pub struct Observations {
     pub token_type_ids: Vec<Vec<u32>>,
     pub phase_ids: Vec<u32>,
 }
+pub struct Inputs {
+    pub floats: std::collections::HashMap<String, Vec<f32>>,
+    pub indices: IndexInputs,
+}
+
 impl Observations {
-    pub fn inputs(&self, c: &Config) -> Result<std::collections::HashMap<String, Vec<f32>>> {
+    pub fn inputs(&self, c: &Config) -> Result<Inputs> {
         let batch = self.token_ids.len();
         let s = c.token_max_tokens;
         ensure!(
@@ -455,8 +462,8 @@ impl Observations {
                     (id as usize) < c.token_vocab_size && (kind as usize) < c.token_type_vocab_size,
                     "token or type ID out of range"
                 );
-                tokens.push(id as f32);
-                types.push(kind as f32);
+                tokens.push(id);
+                types.push(kind);
                 initial.push(if id == 0 { 0. } else { 1. });
                 let safe = id != 0 || (!any && position == 0);
                 key.push(if safe { 0. } else { f32::MIN });
@@ -469,16 +476,17 @@ impl Observations {
                 .all(|&id| (id as usize) < c.num_phases),
             "phase ID out of range"
         );
-        Ok(std::collections::HashMap::from([
-            ("tokens".into(), tokens),
-            ("token_types".into(), types),
-            (
-                "phases".into(),
-                self.phase_ids.iter().map(|&id| id as f32).collect(),
-            ),
-            ("initial_mask".into(), initial),
-            ("key_mask".into(), key),
-            ("pool_mask".into(), pool),
-        ]))
+        Ok(Inputs {
+            floats: std::collections::HashMap::from([
+                ("initial_mask".into(), initial),
+                ("key_mask".into(), key),
+                ("pool_mask".into(), pool),
+            ]),
+            indices: IndexInputs::from([
+                ("tokens".into(), tokens),
+                ("token_types".into(), types),
+                ("phases".into(), self.phase_ids.clone()),
+            ]),
+        })
     }
 }

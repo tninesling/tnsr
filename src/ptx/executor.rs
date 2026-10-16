@@ -1,4 +1,6 @@
+mod indices;
 mod replay;
+use indices::{IndexArgument, IndexBuffers};
 pub use replay::PtxReplayMetrics;
 use replay::{IndexRequirement, ReplayState};
 
@@ -29,7 +31,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 14;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 15;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -73,6 +75,9 @@ pub struct PtxExecutor<D: CudaDType = F32> {
     stream_gate: Arc<Mutex<()>>,
     // Destroy graphs before any referenced bindings, modules or workspace.
     replay: Option<ReplayState<D>>,
+    // These private allocations outlive every captured graph that references them.
+    exact_indices: IndexBuffers,
+    index_plan: crate::graph::indices::IndexPlan,
     replay_enabled: bool,
     replay_blocked: bool,
     replay_metrics: PtxReplayMetrics,
@@ -175,6 +180,8 @@ impl<D: CudaDType> PtxExecutor<D> {
             stream,
             stream_gate,
             replay: None,
+            exact_indices: IndexBuffers::default(),
+            index_plan: crate::graph::indices::IndexPlan::default(),
             replay_enabled: false,
             replay_blocked: false,
             replay_metrics: PtxReplayMetrics::default(),
@@ -462,6 +469,8 @@ impl<D: CudaDType> PtxExecutor<D> {
     pub fn reset_stats(&mut self) {
         self.stats.reset();
         self.pool.get_mut().reset_stats();
+        self.exact_indices.allocated_bytes = 0;
+        self.exact_indices.allocations = 0;
     }
 
     /// Discard cached device buffers to release VRAM held by the executor.
@@ -469,6 +478,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         let gate = self.stream_gate.clone();
         let _guard = lock_stream(&gate);
         self.invalidate_replay();
+        self.exact_indices.buffers.clear();
         self.pool.get_mut().clear();
     }
 
@@ -497,7 +507,9 @@ impl<D: CudaDType> PtxExecutor<D> {
     }
 
     fn compile_impl<G>(&mut self, graph: &TensorGraph<D::HostType, G>) -> Result<()> {
+        let index_plan = crate::graph::indices::IndexPlan::new(graph)?;
         self.invalidate_replay();
+        self.exact_indices.buffers.clear();
         let started = Instant::now();
         let graph_nodes = graph.graph.node_count();
         let signature = graph_compilation_signature(
@@ -620,6 +632,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         self.ptx_graph = Some(Box::new(ptx_graph));
         self.execution_plan = Some(Arc::new(execution_plan));
         self.compilation_signature = Some(signature);
+        self.index_plan = index_plan;
         self.compilation_count += 1;
         self.compile_metrics = PtxCompileMetrics {
             graph_nodes,
@@ -1027,8 +1040,33 @@ impl<D: CudaDType> PtxExecutor<D> {
     ) -> Result<Vec<D::HostType>> {
         let gate = self.stream_gate.clone();
         let _guard = lock_stream(&gate);
+        self.execute_compiled_with_indices_locked(graph, inputs, HashMap::new())
+    }
+
+    /// Run a previously compiled graph with exact integer feeds.
+    pub fn execute_compiled_with_indices<G>(
+        &mut self,
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+        indices: crate::tensor::IndexInputs,
+    ) -> Result<Vec<D::HostType>> {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        self.execute_compiled_with_indices_locked(graph, inputs, indices)
+    }
+
+    fn execute_compiled_with_indices_locked<G>(
+        &mut self,
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+        indices: crate::tensor::IndexInputs,
+    ) -> Result<Vec<D::HostType>> {
         self.invalidate_replay();
-        self.execute_compiled_impl(graph, inputs, true)
+        let sources = self.index_plan.prepare(graph, indices)?;
+        let copies = self.exact_indices.stage(&self.stream, sources)?;
+        let result = self.execute_compiled_impl(graph, inputs, true);
+        self.execution_metrics.device_copies += copies;
+        result
     }
 
     fn execute_compiled_impl<G>(
@@ -1080,7 +1118,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         for value in old_values {
             self.recycle_value(value);
         }
-        let mut live_bytes = 0usize;
+        let mut live_bytes = self.exact_indices.bytes();
 
         for plan_step in plan_steps {
             let node_idx = &plan_step.node;
@@ -1194,6 +1232,17 @@ impl<D: CudaDType> PtxExecutor<D> {
                 continue;
             }
             let result = match node {
+                TensorGraphNode::IndexSource { .. } => {
+                    let value = self
+                        .exact_indices
+                        .buffers
+                        .get(node_idx)
+                        .context("integer source was not staged")?;
+                    let bytes = value.values.len() * std::mem::size_of::<u32>();
+                    self.execution_metrics.materialized_values += 1;
+                    self.execution_metrics.materialized_bytes += bytes;
+                    continue;
+                }
                 TensorGraphNode::Constant { data, .. } => {
                     let stream = self.stream.clone();
                     let mut device_data = self.take_buffer(data.len())?;
@@ -1462,10 +1511,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .values
                         .get(&ins[0])
                         .context("Missing weight for Embedding")?;
-                    let indices = self
-                        .values
-                        .get(&ins[1])
-                        .context("Missing indices for Embedding")?;
+                    let indices = self.index_argument(ins[1])?;
                     let weight_shape = graph.graph[ins[0]].shape();
                     let indices_shape = graph.graph[ins[1]].shape();
                     anyhow::ensure!(
@@ -1482,7 +1528,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         weight.len() == weight_shape.iter().product::<usize>(),
                         "Embedding weight length mismatch"
                     );
-                    self.validate_indices(indices, weight_shape[0], "Embedding")?;
+                    self.validate_index_argument(&indices, weight_shape[0], "Embedding")?;
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
                         let launch_len = u32::try_from(output_len)
@@ -1491,7 +1537,14 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(weight.as_ref());
-                        launcher.arg(indices.as_ref());
+                        match &indices {
+                            IndexArgument::Exact { values, .. } => {
+                                launcher.arg(*values);
+                            }
+                            IndexArgument::Floating(values) => {
+                                launcher.arg(values.as_ref());
+                            }
+                        }
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
@@ -1505,10 +1558,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .context("Missing compiled EmbeddingBackward kernel")?;
                     let ins = planned_inputs;
                     anyhow::ensure!(ins.len() == 2, "EmbeddingBackward requires 2 inputs");
-                    let indices = self
-                        .values
-                        .get(&ins[0])
-                        .context("Missing indices for EmbeddingBackward")?;
+                    let indices = self.index_argument(ins[0])?;
                     let grad_output = self
                         .values
                         .get(&ins[1])
@@ -1528,7 +1578,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         grad_output.len() == grad_output_len,
                         "EmbeddingBackward grad_output length mismatch"
                     );
-                    self.validate_indices(indices, output_shape[0], "EmbeddingBackward")?;
+                    self.validate_index_argument(&indices, output_shape[0], "EmbeddingBackward")?;
                     let output_len: usize = output_shape.iter().product();
                     let stream = self.stream.clone();
                     let mut output = self.take_buffer(output_len)?;
@@ -1550,7 +1600,14 @@ impl<D: CudaDType> PtxExecutor<D> {
                         )?;
                         let function = self.kernel_function(module, kernel_name)?;
                         let mut launcher = stream.launch_builder(&function);
-                        launcher.arg(indices.as_ref());
+                        match &indices {
+                            IndexArgument::Exact { values, .. } => {
+                                launcher.arg(*values);
+                            }
+                            IndexArgument::Floating(values) => {
+                                launcher.arg(values.as_ref());
+                            }
+                        }
                         launcher.arg(grad_output.as_ref());
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
@@ -1569,10 +1626,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .values
                         .get(&ins[0])
                         .context("Missing logits for IndexedCrossEntropy")?;
-                    let targets = self
-                        .values
-                        .get(&ins[1])
-                        .context("Missing targets for IndexedCrossEntropy")?;
+                    let targets = self.index_argument(ins[1])?;
                     let logits_shape = graph.graph[ins[0]].shape();
                     let vocabulary = *logits_shape
                         .last()
@@ -1590,7 +1644,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         logits.len() == row_count * vocabulary,
                         "Cross entropy logits length mismatch"
                     );
-                    self.validate_indices(targets, vocabulary, "IndexedCrossEntropy")?;
+                    self.validate_index_argument(&targets, vocabulary, "IndexedCrossEntropy")?;
                     let mut output = self.take_buffer(row_count)?;
                     if row_count != 0 {
                         let launch_len = u32::try_from(row_count)
@@ -1599,7 +1653,14 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(logits.as_ref());
-                        launcher.arg(targets.as_ref());
+                        match &targets {
+                            IndexArgument::Exact { values, .. } => {
+                                launcher.arg(*values);
+                            }
+                            IndexArgument::Floating(values) => {
+                                launcher.arg(values.as_ref());
+                            }
+                        }
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
                         unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
@@ -1620,10 +1681,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .values
                         .get(&ins[0])
                         .context("Missing logits for IndexedCrossEntropyBackward")?;
-                    let targets = self
-                        .values
-                        .get(&ins[1])
-                        .context("Missing targets for IndexedCrossEntropyBackward")?;
+                    let targets = self.index_argument(ins[1])?;
                     let grad_output = self
                         .values
                         .get(&ins[2])
@@ -1649,7 +1707,11 @@ impl<D: CudaDType> PtxExecutor<D> {
                         grad_output.len() == row_count,
                         "Cross entropy grad_output length mismatch"
                     );
-                    self.validate_indices(targets, vocabulary, "IndexedCrossEntropyBackward")?;
+                    self.validate_index_argument(
+                        &targets,
+                        vocabulary,
+                        "IndexedCrossEntropyBackward",
+                    )?;
                     let output_len = row_count * vocabulary;
                     let mut output = self.take_buffer(output_len)?;
                     if output_len != 0 {
@@ -1660,7 +1722,14 @@ impl<D: CudaDType> PtxExecutor<D> {
                         let stream = self.stream.clone();
                         let mut launcher = stream.launch_builder(&function);
                         launcher.arg(logits.as_ref());
-                        launcher.arg(targets.as_ref());
+                        match &targets {
+                            IndexArgument::Exact { values, .. } => {
+                                launcher.arg(*values);
+                            }
+                            IndexArgument::Floating(values) => {
+                                launcher.arg(values.as_ref());
+                            }
+                        }
                         launcher.arg(grad_output.as_ref());
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
@@ -1984,6 +2053,8 @@ impl<D: CudaDType> PtxExecutor<D> {
         }
 
         self.stats = self.stats.with_pool_stats(self.pool.get_mut().stats());
+        self.stats.bytes_allocated += self.exact_indices.allocated_bytes;
+        self.stats.buffers_allocated += self.exact_indices.allocations;
         self.execution_metrics.kernel_launches = self.kernel_launches.get();
 
         if !read_output {
@@ -2050,6 +2121,16 @@ impl<D: CudaDType> PtxExecutor<D> {
         inputs: HashMap<String, Vec<D::HostType>>,
         bindings: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
     ) -> Result<()> {
+        self.run_device_with_indices(graph, inputs, HashMap::new(), bindings)
+    }
+
+    pub(crate) fn run_device_with_indices<G>(
+        &mut self,
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+        indices: crate::tensor::IndexInputs,
+        bindings: HashMap<petgraph::graph::NodeIndex, Arc<CudaSlice<D::HostType>>>,
+    ) -> Result<()> {
         let gate = self.stream_gate.clone();
         let _guard = lock_stream(&gate);
         self.pending_replay_work = PtxExecutionMetrics::default();
@@ -2086,10 +2167,16 @@ impl<D: CudaDType> PtxExecutor<D> {
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
             self.compile_impl(graph)?;
         }
+        let index_sources = self.index_plan.prepare(graph, indices)?;
+        let index_copies = self.exact_indices.stage(&self.stream, index_sources)?;
         if self.replay_enabled
             && !self.replay_blocked
             && self.run_replay(graph, &inputs, &bindings)?
         {
+            self.execution_metrics.device_copies += index_copies;
+            if self.replay_metrics.active {
+                self.replay_metrics.stable_binding_bytes += self.exact_indices.bytes();
+            }
             return Ok(());
         }
         self.bindings = bindings;
@@ -2099,6 +2186,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             .add_work(&std::mem::take(&mut self.pending_replay_work));
         self.kernel_launches
             .set(self.execution_metrics.kernel_launches);
+        self.execution_metrics.device_copies += index_copies;
         result.map(|_| ())
     }
 
@@ -2107,6 +2195,16 @@ impl<D: CudaDType> PtxExecutor<D> {
         &mut self,
         graph: &TensorGraph<D::HostType, G>,
         inputs: HashMap<String, Vec<D::HostType>>,
+    ) -> Result<Vec<D::HostType>> {
+        self.compile_and_execute_with_indices(graph, inputs, HashMap::new())
+    }
+
+    /// Compile and execute with physically separate u32 index sources.
+    pub fn compile_and_execute_with_indices<G>(
+        &mut self,
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+        indices: crate::tensor::IndexInputs,
     ) -> Result<Vec<D::HostType>> {
         let signature = graph_compilation_signature(
             graph,
@@ -2120,7 +2218,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
             self.compile(graph)?;
         }
-        self.execute_compiled(graph, inputs)
+        self.execute_compiled_with_indices(graph, inputs, indices)
     }
 }
 
@@ -2224,6 +2322,16 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
         signature_usize(&mut signature, node_index.index());
         signature_str(&mut signature, node.name());
         match node {
+            TensorGraphNode::IndexSource { source } => {
+                signature.push(32);
+                match source.source() {
+                    crate::tensor::indices::IndexSource::Input(name) => {
+                        signature.push(0);
+                        signature_str(&mut signature, name);
+                    }
+                    crate::tensor::indices::IndexSource::Constant(_) => signature.push(1),
+                }
+            }
             TensorGraphNode::Constant { .. } => signature.push(0),
             TensorGraphNode::Input { name, .. } => {
                 signature.push(1);
@@ -2438,6 +2546,7 @@ impl<D: CudaDType> Drop for PtxExecutor<D> {
         let gate = self.stream_gate.clone();
         let _guard = lock_stream(&gate);
         self.replay = None;
+        self.exact_indices.buffers.clear();
         self.bindings.clear();
         self.values.clear();
         self.sources.clear();

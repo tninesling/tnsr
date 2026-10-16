@@ -197,8 +197,9 @@ fn separate_critic_gradient_isolation() {
         let output = *graph.toposort().last().unwrap();
         let graph = graph.with_gradients(output);
         let mut executor = SimpleExecutor::new();
+        let feeds = batch.observations.inputs(&model.config).unwrap();
         executor
-            .execute(&graph, batch.observations.inputs(&model.config).unwrap())
+            .execute_with_indices(&graph, feeds.floats, feeds.indices)
             .unwrap();
         let gradients = executor.get_gradients(&graph);
         let mut active = false;

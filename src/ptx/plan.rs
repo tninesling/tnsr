@@ -482,9 +482,15 @@ impl PtxExecutionPlan {
                         TensorGraphNode::BroadcastAxis { axis, shape } => {
                             input_view()?.broadcast_axis(*axis, shape[*axis])?
                         }
-                        _ => {
-                            VirtualTensor::identity(node_index, node.shape().clone(), D::TILE_DTYPE)
-                        }
+                        _ => VirtualTensor::identity(
+                            node_index,
+                            node.shape().clone(),
+                            if matches!(node, TensorGraphNode::IndexSource { .. }) {
+                                crate::tile::DType::U32
+                            } else {
+                                D::TILE_DTYPE
+                            },
+                        ),
                     };
                     let consumer_regions: HashSet<_> = graph
                         .graph
@@ -532,7 +538,15 @@ impl PtxExecutionPlan {
                     let virtual_output = if action == PtxPlanAction::VirtualView {
                         view_output
                     } else {
-                        VirtualTensor::identity(node_index, node.shape().clone(), D::TILE_DTYPE)
+                        VirtualTensor::identity(
+                            node_index,
+                            node.shape().clone(),
+                            if matches!(node, TensorGraphNode::IndexSource { .. }) {
+                                crate::tile::DType::U32
+                            } else {
+                                D::TILE_DTYPE
+                            },
+                        )
                     };
                     virtual_values.insert(node_index, virtual_output.clone());
                     steps.push(PtxPlanStep {
@@ -1097,6 +1111,7 @@ fn node_action<D: crate::tile::TileDType>(
 ) -> PtxPlanAction {
     match node {
         TensorGraphNode::Constant { .. }
+        | TensorGraphNode::IndexSource { .. }
         | TensorGraphNode::Input { .. }
         | TensorGraphNode::Parameter { .. } => PtxPlanAction::Upload,
         TensorGraphNode::Reshape { .. } | TensorGraphNode::Flatten { .. } => {

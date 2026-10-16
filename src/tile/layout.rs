@@ -19,6 +19,19 @@ struct Tile {
 impl TileIR {
     /// Reject incompatible physical layouts instead of inferring conversions in PTX.
     pub fn validate_layouts(&self) -> Result<()> {
+        for param in self.params.iter().filter(|param| param.dtype == DType::U32) {
+            let indexed_slot = self.body.stmts.iter().any(|stmt| match stmt {
+                Stmt::Embedding { .. } | Stmt::EmbeddingBackward { .. } => param.name == "indices",
+                Stmt::IndexedCrossEntropy { .. } | Stmt::IndexedCrossEntropyBackward { .. } => {
+                    param.name == "targets"
+                }
+                _ => false,
+            });
+            anyhow::ensure!(
+                param.is_input && indexed_slot,
+                "integer storage is only supported for indexed arguments"
+            );
+        }
         validate(&self.body, &mut HashMap::new(), &self.params)
             .with_context(|| format!("invalid layouts in {}", self.kernel_name))
     }
@@ -45,6 +58,10 @@ fn validate(
                 rows,
                 cols,
             } => {
+                anyhow::ensure!(
+                    *dtype != DType::U32,
+                    "integer indices cannot be floating computation tiles"
+                );
                 let valid = match (space, layout) {
                     (MemorySpace::Register, TileLayout::ThreadScalar) => true,
                     (MemorySpace::Shared, TileLayout::Shared(layout)) => {
@@ -265,19 +282,34 @@ fn validate(
                     "asynchronous copies require aligned contiguous groups"
                 );
             }
-            Stmt::LoadGlobalToSharedPredicated { dest, .. } => {
+            Stmt::Load { src_param, .. } => {
+                reject_integer_memory(params, src_param)?;
+            }
+            Stmt::LoadGlobalToSharedPredicated {
+                dest, src_param, ..
+            } => {
+                reject_integer_memory(params, src_param)?;
                 anyhow::ensure!(
                     matches!(get(tiles, dest)?.layout, TileLayout::Shared(_)),
                     "staged operand load requires a shared tile"
                 );
             }
-            Stmt::LoadGlobalPredicated { dest, .. } => {
+            Stmt::LoadGlobalPredicated {
+                dest, src_param, ..
+            } => {
+                reject_integer_memory(params, src_param)?;
                 anyhow::ensure!(
                     get(tiles, dest)?.layout == TileLayout::ThreadScalar,
                     "scalar load requires a thread scalar tile"
                 );
             }
-            Stmt::StoreGlobalPredicated { src, .. } | Stmt::Store { src, .. } => {
+            Stmt::StoreGlobalPredicated {
+                src, dest_param, ..
+            }
+            | Stmt::Store {
+                src, dest_param, ..
+            } => {
+                reject_integer_memory(params, dest_param)?;
                 anyhow::ensure!(
                     get(tiles, src)?.layout == TileLayout::ThreadScalar,
                     "global store requires an explicit conversion to thread scalars"
@@ -319,6 +351,16 @@ fn validate(
             _ => {}
         }
     }
+    Ok(())
+}
+
+fn reject_integer_memory(params: &[super::KernelParam], name: &str) -> Result<()> {
+    anyhow::ensure!(
+        params
+            .iter()
+            .all(|param| param.name != name || param.dtype != DType::U32),
+        "integer indices require an indexed load, not floating memory access"
+    );
     Ok(())
 }
 
@@ -419,6 +461,52 @@ fn validate_memory(
 mod tests {
     use super::*;
     use crate::{graph::TensorGraph, tensor::TensorExpr, tile::TileGraph};
+
+    #[test]
+    fn exact_integer_storage_rejects_floating_loads_and_tiles() {
+        let mut ir = TileIR {
+            kernel_name: "embedding".into(),
+            params: vec![super::super::KernelParam {
+                name: "indices".into(),
+                dtype: DType::U32,
+                is_input: true,
+            }],
+            body: Block {
+                stmts: vec![Stmt::Embedding {
+                    vocabulary: 683,
+                    width: 1,
+                    index_count: 1,
+                }],
+            },
+            shared_mem_bytes: 0,
+        };
+        ir.validate_layouts().unwrap();
+        ir.body.stmts.push(Stmt::Load {
+            dest: TileVar(0),
+            src_param: "indices".into(),
+            row_offset: super::super::Expr::Const(0),
+            col_offset: super::super::Expr::Const(0),
+        });
+        assert!(
+            ir.validate_layouts()
+                .unwrap_err()
+                .to_string()
+                .contains("invalid layouts")
+        );
+        ir.body.stmts.pop();
+        ir.body.stmts.push(Stmt::AllocTile {
+            var: TileVar(0),
+            space: MemorySpace::Register,
+            layout: TileLayout::ThreadScalar,
+            dtype: DType::U32,
+            rows: 1,
+            cols: 1,
+        });
+        assert!(ir.validate_layouts().is_err());
+        ir.body.stmts.pop();
+        ir.params[0].is_input = false;
+        assert!(ir.validate_layouts().is_err());
+    }
 
     #[test]
     fn scalar_layout_flows_directly_and_fragment_exchange_is_explicit() {

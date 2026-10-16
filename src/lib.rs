@@ -97,6 +97,24 @@ pub trait Executor<D> {
         TensorGraph<D, G>: Clone,
         TensorGraph<f32, G>: Clone;
 
+    /// Execute with exact integer feeds, separate from floating tensor storage.
+    fn execute_with_indices<G>(
+        &mut self,
+        graph: &TensorGraph<D, G>,
+        inputs: HashMap<String, Vec<D>>,
+        indices: tensor::IndexInputs,
+    ) -> Result<Vec<D>>
+    where
+        TensorGraph<D, G>: Clone,
+        TensorGraph<f32, G>: Clone,
+    {
+        anyhow::ensure!(
+            indices.is_empty(),
+            "executor does not support integer feeds"
+        );
+        self.execute(graph, inputs)
+    }
+
     /// Retrieve computed gradients for parameters.
     ///
     /// Gradient buffers remain available until the next call to
@@ -180,36 +198,6 @@ impl<D> Value<D> {
                 f(&data, &data)
             }
             _ => self.with(|a| other.with(|b| f(a, b))),
-        }
-    }
-
-    /// Run `f` with three values without locking an aliased parameter twice.
-    fn with_triple<R>(
-        &self,
-        second: &Self,
-        third: &Self,
-        f: impl FnOnce(&[D], &[D], &[D]) -> R,
-    ) -> R {
-        match (self, second, third) {
-            (Value::Parameter(a), Value::Parameter(b), Value::Parameter(c))
-                if Arc::ptr_eq(a, b) && Arc::ptr_eq(a, c) =>
-            {
-                let data = a.lock().unwrap();
-                f(&data, &data, &data)
-            }
-            (Value::Parameter(a), Value::Parameter(b), _) if Arc::ptr_eq(a, b) => {
-                let data = a.lock().unwrap();
-                third.with(|c| f(&data, &data, c))
-            }
-            (Value::Parameter(a), _, Value::Parameter(c)) if Arc::ptr_eq(a, c) => {
-                let data = a.lock().unwrap();
-                second.with(|b| f(&data, b, &data))
-            }
-            (_, Value::Parameter(b), Value::Parameter(c)) if Arc::ptr_eq(b, c) => {
-                let data = b.lock().unwrap();
-                self.with(|a| f(a, &data, &data))
-            }
-            _ => self.with(|a| second.with(|b| third.with(|c| f(a, b, c)))),
         }
     }
 }
@@ -348,8 +336,22 @@ where
     fn execute<G>(
         &mut self,
         graph: &TensorGraph<D, G>,
+        inputs: HashMap<String, Vec<D>>,
+    ) -> Result<Vec<D>>
+    where
+        TensorGraph<D, G>: Clone,
+        TensorGraph<f32, G>: Clone,
+    {
+        self.execute_with_indices(graph, inputs, HashMap::new())
+    }
+
+    fn execute_with_indices<G>(
+        &mut self,
+        graph: &TensorGraph<D, G>,
         mut inputs: HashMap<String, Vec<D>>,
+        indices: tensor::IndexInputs,
     ) -> Result<Vec<D>> {
+        let index_values = graph.index_sources(indices)?;
         let order = graph.toposort();
         let liveness = liveness::analyze(graph, &order);
 
@@ -359,11 +361,16 @@ where
                 self.pool.give(buf);
             }
         }
-        let mut live_bytes = 0usize;
+        let mut live_bytes = index_values
+            .values()
+            .map(|data| data.len() * std::mem::size_of::<u32>())
+            .sum::<usize>();
+        self.stats.record_live(live_bytes);
 
         for (pos, node_idx) in order.iter().enumerate() {
             let node = &graph[*node_idx];
             let result = match node {
+                TensorGraphNode::IndexSource { .. } => continue,
                 TensorGraphNode::Constant { data, .. } => {
                     let _span = trace_span!("constant", node = node_idx.index()).entered();
                     Value::Constant(data.clone())
@@ -437,6 +444,7 @@ where
                     Value::Owned(embedding_forward(
                         graph,
                         &self.values,
+                        &index_values,
                         &mut self.pool,
                         *node_idx,
                     )?)
@@ -447,6 +455,7 @@ where
                     Value::Owned(embedding_backward_forward(
                         graph,
                         &self.values,
+                        &index_values,
                         &mut self.pool,
                         *node_idx,
                     )?)
@@ -457,6 +466,7 @@ where
                     Value::Owned(indexed_cross_entropy_forward(
                         graph,
                         &self.values,
+                        &index_values,
                         &mut self.pool,
                         *node_idx,
                     )?)
@@ -468,6 +478,7 @@ where
                     Value::Owned(indexed_cross_entropy_backward_forward(
                         graph,
                         &self.values,
+                        &index_values,
                         &mut self.pool,
                         *node_idx,
                     )?)
@@ -780,9 +791,41 @@ fn checked_index<D: Float>(value: D, upper_bound: usize, operation: &str) -> Res
     Ok(index)
 }
 
+fn resolved_indices<D: Float>(
+    node: petgraph::graph::NodeIndex,
+    values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    exact: &HashMap<petgraph::graph::NodeIndex, Arc<Vec<u32>>>,
+    count: usize,
+    upper: usize,
+    operation: &str,
+) -> Result<Vec<usize>> {
+    if let Some(indices) = exact.get(&node) {
+        anyhow::ensure!(
+            indices.len() == count,
+            "{operation} indices length mismatch"
+        );
+        indices
+            .iter()
+            .map(|&value| tensor::indices::checked_index(value, upper, operation))
+            .collect()
+    } else {
+        let indices = values.get(&node).context("floating indices not computed")?;
+        anyhow::ensure!(
+            indices.len() == count,
+            "{operation} indices length mismatch"
+        );
+        indices.with(|data| {
+            data.iter()
+                .map(|&value| checked_index(value, upper, operation))
+                .collect()
+        })
+    }
+}
+
 fn embedding_forward<D: Float, G>(
     graph: &TensorGraph<D, G>,
     values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    index_values: &HashMap<petgraph::graph::NodeIndex, Arc<Vec<u32>>>,
     pool: &mut BufferPool<D>,
     node_idx: petgraph::graph::NodeIndex,
 ) -> Result<Vec<D>> {
@@ -793,9 +836,7 @@ fn embedding_forward<D: Float, G>(
     let weight = values
         .get(&weight_idx)
         .context("Embedding weight not computed")?;
-    let indices = values
-        .get(&indices_idx)
-        .context("Embedding indices not computed")?;
+
     let weight_shape = graph.graph[weight_idx].shape();
     anyhow::ensure!(weight_shape.len() == 2, "Embedding weight must be [V, C]");
     let vocabulary = weight_shape[0];
@@ -805,14 +846,17 @@ fn embedding_forward<D: Float, G>(
         weight.len() == vocabulary * channels,
         "Embedding weight length mismatch"
     );
-    anyhow::ensure!(
-        indices.len() == index_count,
-        "Embedding indices length mismatch"
-    );
+    let indices = resolved_indices(
+        indices_idx,
+        values,
+        index_values,
+        index_count,
+        vocabulary,
+        "Embedding",
+    )?;
     let mut out = pool.take(index_count * channels);
-    weight.with_pair(indices, |weight, indices| -> Result<()> {
-        for (position, &value) in indices.iter().enumerate() {
-            let index = checked_index(value, vocabulary, "Embedding")?;
+    weight.with(|weight| -> Result<()> {
+        for (position, &index) in indices.iter().enumerate() {
             out[position * channels..(position + 1) * channels]
                 .copy_from_slice(&weight[index * channels..(index + 1) * channels]);
         }
@@ -824,14 +868,13 @@ fn embedding_forward<D: Float, G>(
 fn embedding_backward_forward<D: Float, G>(
     graph: &TensorGraph<D, G>,
     values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    index_values: &HashMap<petgraph::graph::NodeIndex, Arc<Vec<u32>>>,
     pool: &mut BufferPool<D>,
     node_idx: petgraph::graph::NodeIndex,
 ) -> Result<Vec<D>> {
     let inputs = graph.inputs(node_idx);
     anyhow::ensure!(inputs.len() == 2, "EmbeddingBackward requires 2 inputs");
-    let indices = values
-        .get(&inputs[0])
-        .context("EmbeddingBackward indices not computed")?;
+
     let grad_output = values
         .get(&inputs[1])
         .context("EmbeddingBackward grad_output not computed")?;
@@ -843,19 +886,22 @@ fn embedding_backward_forward<D: Float, G>(
     let vocabulary = table_shape[0];
     let channels = table_shape[1];
     let index_count: usize = graph.graph[inputs[0]].shape().iter().product();
-    anyhow::ensure!(
-        indices.len() == index_count,
-        "EmbeddingBackward indices length mismatch"
-    );
+    let indices = resolved_indices(
+        inputs[0],
+        values,
+        index_values,
+        index_count,
+        vocabulary,
+        "EmbeddingBackward",
+    )?;
     anyhow::ensure!(
         grad_output.len() == index_count * channels,
         "EmbeddingBackward grad_output length mismatch"
     );
     let mut out = pool.take(vocabulary * channels);
     out.fill(D::zero());
-    indices.with_pair(grad_output, |indices, grad_output| -> Result<()> {
-        for (position, &value) in indices.iter().enumerate() {
-            let index = checked_index(value, vocabulary, "EmbeddingBackward")?;
+    grad_output.with(|grad_output| -> Result<()> {
+        for (position, &index) in indices.iter().enumerate() {
             for channel in 0..channels {
                 out[index * channels + channel] =
                     out[index * channels + channel] + grad_output[position * channels + channel];
@@ -869,6 +915,7 @@ fn embedding_backward_forward<D: Float, G>(
 fn indexed_cross_entropy_forward<D: Float, G>(
     graph: &TensorGraph<D, G>,
     values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    index_values: &HashMap<petgraph::graph::NodeIndex, Arc<Vec<u32>>>,
     pool: &mut BufferPool<D>,
     node_idx: petgraph::graph::NodeIndex,
 ) -> Result<Vec<D>> {
@@ -877,9 +924,7 @@ fn indexed_cross_entropy_forward<D: Float, G>(
     let logits = values
         .get(&inputs[0])
         .context("Cross entropy logits not computed")?;
-    let targets = values
-        .get(&inputs[1])
-        .context("Cross entropy targets not computed")?;
+
     let logits_shape = graph.graph[inputs[0]].shape();
     let vocabulary = *logits_shape
         .last()
@@ -890,14 +935,18 @@ fn indexed_cross_entropy_forward<D: Float, G>(
         logits.len() == row_count * vocabulary,
         "Cross entropy logits length mismatch"
     );
-    anyhow::ensure!(
-        targets.len() == row_count,
-        "Cross entropy targets length mismatch"
-    );
+    let targets = resolved_indices(
+        inputs[1],
+        values,
+        index_values,
+        row_count,
+        vocabulary,
+        "IndexedCrossEntropy",
+    )?;
     let mut out = pool.take(row_count);
-    logits.with_pair(targets, |logits, targets| -> Result<()> {
+    logits.with(|logits| -> Result<()> {
         for row in 0..row_count {
-            let target = checked_index(targets[row], vocabulary, "IndexedCrossEntropy")?;
+            let target = targets[row];
             let row_logits = &logits[row * vocabulary..(row + 1) * vocabulary];
             let maximum = row_logits.iter().copied().fold(D::neg_infinity(), D::max);
             let exponential_sum = row_logits
@@ -914,6 +963,7 @@ fn indexed_cross_entropy_forward<D: Float, G>(
 fn indexed_cross_entropy_backward_forward<D: Float, G>(
     graph: &TensorGraph<D, G>,
     values: &HashMap<petgraph::graph::NodeIndex, Value<D>>,
+    index_values: &HashMap<petgraph::graph::NodeIndex, Arc<Vec<u32>>>,
     pool: &mut BufferPool<D>,
     node_idx: petgraph::graph::NodeIndex,
 ) -> Result<Vec<D>> {
@@ -925,9 +975,7 @@ fn indexed_cross_entropy_backward_forward<D: Float, G>(
     let logits = values
         .get(&inputs[0])
         .context("Cross entropy logits not computed")?;
-    let targets = values
-        .get(&inputs[1])
-        .context("Cross entropy targets not computed")?;
+
     let grad_output = values
         .get(&inputs[2])
         .context("Cross entropy grad_output not computed")?;
@@ -941,41 +989,40 @@ fn indexed_cross_entropy_backward_forward<D: Float, G>(
         logits.len() == row_count * vocabulary,
         "Cross entropy logits length mismatch"
     );
-    anyhow::ensure!(
-        targets.len() == row_count,
-        "Cross entropy targets length mismatch"
-    );
+    let targets = resolved_indices(
+        inputs[1],
+        values,
+        index_values,
+        row_count,
+        vocabulary,
+        "IndexedCrossEntropy",
+    )?;
     anyhow::ensure!(
         grad_output.len() == row_count,
         "Cross entropy grad_output length mismatch"
     );
     let mut out = pool.take(row_count * vocabulary);
-    logits.with_triple(
-        targets,
-        grad_output,
-        |logits, targets, grad_output| -> Result<()> {
-            for row in 0..row_count {
-                let target =
-                    checked_index(targets[row], vocabulary, "IndexedCrossEntropyBackward")?;
-                let row_logits = &logits[row * vocabulary..(row + 1) * vocabulary];
-                let maximum = row_logits.iter().copied().fold(D::neg_infinity(), D::max);
-                let exponential_sum = row_logits
-                    .iter()
-                    .copied()
-                    .fold(D::zero(), |sum, value| sum + (value - maximum).exp());
-                for column in 0..vocabulary {
-                    let probability = (row_logits[column] - maximum).exp() / exponential_sum;
-                    let indicator = if column == target {
-                        D::one()
-                    } else {
-                        D::zero()
-                    };
-                    out[row * vocabulary + column] = (probability - indicator) * grad_output[row];
-                }
+    logits.with_pair(grad_output, |logits, grad_output| -> Result<()> {
+        for row in 0..row_count {
+            let target = targets[row];
+            let row_logits = &logits[row * vocabulary..(row + 1) * vocabulary];
+            let maximum = row_logits.iter().copied().fold(D::neg_infinity(), D::max);
+            let exponential_sum = row_logits
+                .iter()
+                .copied()
+                .fold(D::zero(), |sum, value| sum + (value - maximum).exp());
+            for column in 0..vocabulary {
+                let probability = (row_logits[column] - maximum).exp() / exponential_sum;
+                let indicator = if column == target {
+                    D::one()
+                } else {
+                    D::zero()
+                };
+                out[row * vocabulary + column] = (probability - indicator) * grad_output[row];
             }
-            Ok(())
-        },
-    )?;
+        }
+        Ok(())
+    })?;
     Ok(out)
 }
 

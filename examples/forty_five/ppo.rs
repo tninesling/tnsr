@@ -7,6 +7,7 @@ use std::time::Instant;
 use tnsr::graph::{NodeIndex, TensorGraph, WithGrad};
 use tnsr::nn;
 use tnsr::optimizer::Adam;
+use tnsr::tensor::IndexTensor;
 use tnsr::{Executor, Runtime};
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -189,8 +190,11 @@ fn build(model: &Model, n: usize, clip: f32) -> Result<(TensorGraph<f32, WithGra
     let shifted = logits.clone() - maximum.clone().broadcast(vec![n, 46]);
     let normalizer = maximum + shifted.exp().reduce_sum(1).log();
     let logs = (logits.clone() - normalizer.broadcast(vec![n, 46])).mask(valid.clone());
+    let selected = (-logits
+        .clone()
+        .indexed_cross_entropy_indices(IndexTensor::input("actions", vec![n])))
+    .reshape(vec![n, 1]);
     let probabilities = nn::softmax(logits, 1);
-    let selected = (logs.clone() * Tensor::input("chosen", vec![n, 46])).reduce_sum(1);
     let entropy = (-(probabilities * logs.clone()).reduce_sum(1)).mean_all();
     let log_ratio = selected - Tensor::input("old_log_probs", vec![n, 1]);
     let ratios = log_ratio.clone().exp();
@@ -243,19 +247,21 @@ fn build(model: &Model, n: usize, clip: f32) -> Result<(TensorGraph<f32, WithGra
         .context("missing weighted PPO objective")?;
     Ok((graph.with_gradients(loss_node), output))
 }
-fn inputs(
-    batch: &Batch,
-    model: &Model,
-    settings: &Settings,
-    weight: f32,
-) -> Result<HashMap<String, Vec<f32>>> {
+fn inputs(batch: &Batch, model: &Model, settings: &Settings, weight: f32) -> Result<super::Inputs> {
     let mut inputs = batch.observations.inputs(&model.config)?;
     let n = batch.actions.len();
     let mut valid = Vec::with_capacity(n * 46);
     let mut offsets = Vec::with_capacity(n * 46);
-    let mut chosen = vec![0.; n * 46];
-    for (row, mask) in batch.action_masks.iter().enumerate() {
-        chosen[row * 46 + batch.actions[row]] = 1.;
+    inputs.indices.insert(
+        "actions".into(),
+        batch
+            .actions
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<_, _>>()?,
+    );
+    for mask in &batch.action_masks {
         for &legal in mask {
             valid.push(if legal { 1. } else { 0. });
             offsets.push(if legal { 0. } else { f32::NEG_INFINITY });
@@ -281,7 +287,6 @@ fn inputs(
     for (name, data) in [
         ("action_valid", valid),
         ("action_offset", offsets),
-        ("chosen", chosen),
         ("old_log_probs", batch.old_log_probs.clone()),
         ("old_values", batch.old_values.clone()),
         ("returns", batch.returns.clone()),
@@ -302,7 +307,7 @@ fn inputs(
         ("anchor_coef", vec![settings.anchor_kl_coef]),
         ("gradient_weight", vec![weight]),
     ] {
-        inputs.insert(name.into(), data);
+        inputs.floats.insert(name.into(), data);
     }
     Ok(inputs)
 }
@@ -454,12 +459,23 @@ impl Trainer {
             if let (Some(resident), Runtime::Ptx(executor)) =
                 (&mut self.resident, &mut compiled.executor)
             {
-                resident.accumulate(executor, &compiled.graph, feeds)?;
+                resident.accumulate_with_indices(
+                    executor,
+                    &compiled.graph,
+                    feeds.floats,
+                    feeds.indices,
+                )?;
             } else {
-                compiled.executor.execute(&compiled.graph, feeds)?;
+                compiled.executor.execute_with_indices(
+                    &compiled.graph,
+                    feeds.floats,
+                    feeds.indices,
+                )?;
             }
             #[cfg(not(feature = "cuda"))]
-            compiled.executor.execute(&compiled.graph, feeds)?;
+            compiled
+                .executor
+                .execute_with_indices(&compiled.graph, feeds.floats, feeds.indices)?;
             timing[2] += started.elapsed().as_secs_f64();
             #[cfg(feature = "cuda")]
             if let Runtime::Ptx(executor) = &compiled.executor {

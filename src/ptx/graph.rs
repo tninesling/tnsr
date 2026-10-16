@@ -277,6 +277,7 @@ fn dtype_to_ptx_type(dtype: crate::tile::DType) -> super::types::Type {
         crate::tile::DType::BF16 => super::types::Type::BF16,
         crate::tile::DType::TF32 => super::types::Type::TF32,
         crate::tile::DType::F32 => super::types::Type::F32,
+        crate::tile::DType::U32 => super::types::Type::U32,
     }
 }
 
@@ -287,6 +288,7 @@ fn load_global_as_f32<'a>(
     addr: Operand<'a, U64>,
 ) {
     match dtype {
+        crate::tile::DType::U32 => unreachable!("integer index storage uses the integer load path"),
         crate::tile::DType::F32 | crate::tile::DType::TF32 => {
             func.add_inst(Inst::load_global_scalar_f32(dst, addr));
         }
@@ -316,6 +318,7 @@ fn store_global_from_f32<'a>(
     src: Operand<'a, F32>,
 ) {
     match dtype {
+        crate::tile::DType::U32 => unreachable!("integer index storage uses the integer load path"),
         crate::tile::DType::F32 | crate::tile::DType::TF32 => {
             func.add_inst(Inst::store_global_scalar_f32(addr, src));
         }
@@ -339,6 +342,7 @@ fn load_shared_as_f32<'a>(
     addr: Operand<'a, U64>,
 ) {
     match dtype {
+        crate::tile::DType::U32 => unreachable!("integer index storage uses the integer load path"),
         crate::tile::DType::F32 | crate::tile::DType::TF32 => {
             func.add_inst(Inst::load_shared_scalar_f32(dst, addr));
         }
@@ -368,6 +372,7 @@ fn store_shared_from_f32<'a>(
     src: Operand<'a, F32>,
 ) {
     match dtype {
+        crate::tile::DType::U32 => unreachable!("integer index storage uses the integer load path"),
         crate::tile::DType::F32 | crate::tile::DType::TF32 => {
             func.add_inst(Inst::StSharedF32 {
                 addr,
@@ -1119,9 +1124,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             let column = func.add_u64_register();
             func.add_inst(Inst::sub_u64(column.clone(), tid, row_start));
 
-            let index_value = load_param_f32_at(func, ctx, "indices", index_position);
-            let index = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_f32(index.clone(), index_value));
+            let index = load_index_at(func, ctx, "indices", index_position);
             let source_row = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 source_row.clone(),
@@ -1159,9 +1162,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             ));
             let column = func.add_u64_register();
             func.add_inst(Inst::sub_u64(column.clone(), tid.clone(), row_start));
-            let index_value = load_param_f32_at(func, ctx, "indices", index_position);
-            let index = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_f32(index.clone(), index_value));
+            let index = load_index_at(func, ctx, "indices", index_position);
             let destination_row = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 destination_row.clone(),
@@ -1206,9 +1207,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             ));
             let (maximum, exponential_sum) =
                 emit_row_softmax_stats(func, ctx, row_start.clone(), *vocabulary);
-            let target_value = load_param_f32_at(func, ctx, "targets", row.clone());
-            let target = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_f32(target.clone(), target_value));
+            let target = load_index_at(func, ctx, "targets", row.clone());
             let target_offset = func.add_u64_register();
             func.add_inst(Inst::add_u64(target_offset.clone(), row_start, target));
             let target_logit = load_param_f32_at(func, ctx, "logits", target_offset);
@@ -1254,9 +1253,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 exponential,
                 exponential_sum,
             ));
-            let target_value = load_param_f32_at(func, ctx, "targets", row.clone());
-            let target = func.add_u64_register();
-            func.add_inst(Inst::convert_u64_f32(target.clone(), target_value));
+            let target = load_index_at(func, ctx, "targets", row.clone());
             let is_target = func.add_predicate_register();
             func.add_inst(Inst::setp_eq_u64(is_target.clone(), column, target));
             let indicator = func.add_f32_register();
@@ -2028,9 +2025,7 @@ fn lower_half_embedding_backward<'a>(
     let sum = func.add_f32_register();
     func.add_inst(Inst::mov_f32(sum.clone(), Operand::imm_f32(0.0)));
     let state = begin_counted_loop(func, ctx, "half_embedding_backward", index_count);
-    let index_value = load_param_f32_at(func, ctx, "indices", state.counter.clone());
-    let index = func.add_u64_register();
-    func.add_inst(Inst::convert_u64_f32(index.clone(), index_value));
+    let index = load_index_at(func, ctx, "indices", state.counter.clone());
     let skip = next_label(ctx, "half_embedding_skip");
     let different = func.add_predicate_register();
     func.add_inst(Inst::setp_ne_u64(different.clone(), index, row));
@@ -3352,6 +3347,35 @@ fn element_address<'a>(
     let address = func.add_u64_register();
     func.add_inst(Inst::add_u64(address.clone(), base, byte_offset));
     address
+}
+
+/// Indexed arguments load and widen integer bits directly. Legacy floating
+/// indices keep their separately validated conversion path.
+fn load_index_at<'a>(
+    func: &mut Function<'a>,
+    ctx: &LoweringContext<'a>,
+    parameter: &str,
+    element_offset: Operand<'a, U64>,
+) -> Operand<'a, U64> {
+    let index = func.add_u64_register();
+    if ctx.param_dtypes[parameter] == DType::U32 {
+        let address = element_address(
+            func,
+            ctx.param_ptrs[parameter].clone(),
+            element_offset,
+            DType::U32,
+        );
+        let value = func.add_u32_register();
+        func.add_inst(Inst::LdGlobalU32 {
+            dst: value.clone(),
+            addr: address,
+        });
+        func.add_inst(Inst::convert_u64_u32(index.clone(), value));
+    } else {
+        let value = load_param_f32_at(func, ctx, parameter, element_offset);
+        func.add_inst(Inst::convert_u64_f32(index.clone(), value));
+    }
+    index
 }
 
 fn load_param_f32_at<'a>(

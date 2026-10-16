@@ -443,6 +443,10 @@ impl<'a, T: PtxType> SelpInst<'a, T> {
 
 #[derive(Clone, Debug)]
 pub enum Inst<'a> {
+    LdGlobalU32 {
+        dst: Operand<'a, U32>,
+        addr: Operand<'a, U64>,
+    },
     ConvertU64U32(ConvertInst<'a, U64, U32>),
     ConvertU64I32(ConvertInst<'a, U64, I32>),
     ConvertU64F32(ConvertInst<'a, U64, F32>),

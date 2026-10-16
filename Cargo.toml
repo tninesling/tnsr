@@ -79,3 +79,7 @@ required-features = ["cuda"]
 [[example]]
 name = "bf16_linear_probe"
 required-features = ["cuda"]
+
+[[example]]
+name = "mixed_graph_probe"
+required-features = ["cuda"]

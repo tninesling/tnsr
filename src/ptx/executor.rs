@@ -31,7 +31,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 15;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 16;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -561,7 +561,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,
             self.target.supports_tf32()
-                && self.matmul_precision == crate::tile::MatMulPrecision::AllowTf32,
+                && self.matmul_precision != crate::tile::MatMulPrecision::StrictF32,
             execution_plan.matmul_schedules(),
         );
         tile_graph.add_fusion_regions(execution_plan.regions())?;
@@ -2289,6 +2289,7 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     signature.push(match matmul_precision {
         crate::tile::MatMulPrecision::StrictF32 => 0,
         crate::tile::MatMulPrecision::AllowTf32 => 1,
+        crate::tile::MatMulPrecision::Tf32x3 => 2,
     });
     signature.push(match matmul_shared_layout {
         MatMulSharedLayout::Auto => 0,
@@ -2514,6 +2515,33 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
             self.compile_owned(graph.clone())?;
         }
         self.execute_compiled(graph, inputs)
+    }
+
+    fn execute_with_indices<G>(
+        &mut self,
+        graph: &TensorGraph<D::HostType, G>,
+        inputs: HashMap<String, Vec<D::HostType>>,
+        indices: crate::tensor::IndexInputs,
+    ) -> Result<Vec<D::HostType>>
+    where
+        TensorGraph<D::HostType, G>: Clone,
+        TensorGraph<f32, G>: Clone,
+    {
+        let signature = graph_compilation_signature(
+            graph,
+            self.reduction_mode,
+            self.target,
+            self.matmul_precision,
+            self.matmul_shared_layout,
+            self.matmul_pipeline,
+            self.fusion_policy,
+        );
+        if self.module.is_none()
+            || self.compilation_signature.as_deref() != Some(signature.as_slice())
+        {
+            self.compile(graph)?;
+        }
+        self.execute_compiled_with_indices(graph, inputs, indices)
     }
 
     fn get_gradients(

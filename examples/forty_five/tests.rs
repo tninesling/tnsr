@@ -120,6 +120,9 @@ fn check_ppo(backend: &str, fixture: &str, tree_reductions: bool, cuda_graphs: b
         changed = settings.clone();
         changed.cuda_graphs = !cuda_graphs;
         assert!(trainer.step(&model, &batch, &changed, false).is_err());
+        changed = settings.clone();
+        changed.tf32x3 = !settings.tf32x3;
+        assert!(trainer.step(&model, &batch, &changed, false).is_err());
         let rates = trainer.advance_schedule(step + 1).unwrap();
         for (index, key) in ["policy_learning_rate", "value_learning_rate"]
             .iter()
@@ -173,6 +176,11 @@ fn cuda_forty_five_tree_ppo_parity() {
 fn cpu_ppo_rejects_tree_policy() {
     let settings = forty_five::ppo::Settings {
         tree_reductions: true,
+        ..Default::default()
+    };
+    assert!(forty_five::ppo::Trainer::new(&settings, "cpu".into()).is_err());
+    let settings = forty_five::ppo::Settings {
+        tf32x3: true,
         ..Default::default()
     };
     assert!(forty_five::ppo::Trainer::new(&settings, "cpu".into()).is_err());

@@ -45,6 +45,8 @@ pub struct Settings {
     /// Opt into fixed parallel reduction trees. Storage and matmul stay f32.
     pub tree_reductions: bool,
     pub cuda_graphs: bool,
+    /// Opt into corrected TF32 tensor-core matmuls; f32 storage/optimizer.
+    pub tf32x3: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -61,6 +63,7 @@ impl Default for Settings {
             min_learning_rate: 1e-6,
             tree_reductions: false,
             cuda_graphs: false,
+            tf32x3: false,
         }
     }
 }
@@ -327,8 +330,9 @@ impl Trainer {
     pub fn new(settings: &Settings, backend: String) -> Result<Self> {
         settings.validate()?;
         ensure!(
-            !(settings.tree_reductions || settings.cuda_graphs) || backend == "cuda",
-            "tree reductions and CUDA Graphs require the CUDA backend"
+            !(settings.tree_reductions || settings.cuda_graphs || settings.tf32x3)
+                || backend == "cuda",
+            "tree reductions, CUDA Graphs and TF32x3 require the CUDA backend"
         );
         Ok(Self {
             #[cfg(feature = "cuda")]
@@ -364,7 +368,8 @@ impl Trainer {
                 && settings.scheduler_updates == self.initial.scheduler_updates
                 && settings.min_learning_rate == self.initial.min_learning_rate
                 && settings.tree_reductions == self.initial.tree_reductions
-                && settings.cuda_graphs == self.initial.cuda_graphs,
+                && settings.cuda_graphs == self.initial.cuda_graphs
+                && settings.tf32x3 == self.initial.tf32x3,
             "optimizer initial rates/schedule/execution policy cannot change without starting a fresh worker"
         );
         #[cfg(feature = "cuda")]
@@ -425,7 +430,11 @@ impl Trainer {
                         tnsr::ptx::PtxReductionMode::Strict
                     };
                     let mut executor = resident.executor_with_reduction_mode(mode)?;
-                    executor.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+                    executor.set_matmul_precision(if settings.tf32x3 {
+                        tnsr::tile::MatMulPrecision::Tf32x3
+                    } else {
+                        tnsr::tile::MatMulPrecision::StrictF32
+                    });
                     Runtime::Ptx(executor)
                 } else {
                     crate::runtime(&self.backend)?
@@ -578,6 +587,11 @@ impl Trainer {
             .map(|(key, value)| (key.into(), serde_json::json!(value)))
             .collect();
         let mut result = serde_json::json!({"metrics":metrics,"gradient_norm_before_clip":norm,"gradient_scale":scale,"optimizer_steps":self.steps,"compiled_shapes":self.compiled.len()});
+        result["matmul_precision"] = serde_json::json!(if settings.tf32x3 {
+            "tf32x3"
+        } else {
+            "strict_f32"
+        });
         #[cfg(feature = "cuda")]
         if settings.cuda_graphs {
             let states: Vec<_> = self

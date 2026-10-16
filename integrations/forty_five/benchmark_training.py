@@ -108,6 +108,7 @@ def run(args):
                   repeats=args.repeats, anchor_kl_coef=args.anchor_kl_coef,
                   native_reduction_mode="deterministic_tree_f32" if args.tree_reductions else "strict_f32",
                   native_graph_replay=args.cuda_graphs,
+                  native_matmul_precision="tf32x3" if args.tf32x3 else "strict_f32",
                   baseline_tree_reductions=args.baseline_tree_reductions,
                   baseline_graph_replay=args.baseline_cuda_graphs,
                   native_memory_accounting="whole worker process MiB, including modules/workspace/graph; sampled outside timing",
@@ -125,6 +126,8 @@ def run(args):
         settings["tree_reductions"] = True
     if args.cuda_graphs:
         settings["cuda_graphs"] = True
+    if args.tf32x3:
+        settings["tf32x3"] = True
     if args.anchor_kl_coef:
         native["anchor"] = anchor_outputs(model, native)
     native_request = dict(op="train", batch=native, settings=settings)
@@ -148,6 +151,8 @@ def run(args):
     native_label = "tnsr_tree_f32" if args.tree_reductions else "tnsr_strict_f32"
     if args.cuda_graphs:
         native_label = native_label.replace("tnsr_", "tnsr_graph_")
+    if args.tf32x3:
+        native_label += "_tf32x3"
     cases[native_label] = native_step
     native_pids = {native_label: worker.process.pid}
     if baseline_worker:
@@ -242,6 +247,7 @@ def main():
     parser.add_argument("--fused-adam",action="store_true",default=None)
     parser.add_argument("--profile-torch",action="store_true")
     parser.add_argument("--compile",action="store_true")
+    parser.add_argument("--tf32x3",action="store_true",help="use corrected TF32 tensor-core matmuls with f32 storage")
     parser.add_argument("--cuda-graphs",action="store_true",help="enable private-stream native model replay")
     parser.add_argument("--tree-reductions",action="store_true",help="opt native training into fixed f32 reduction trees")
     parser.add_argument("--anchor-kl-coef",type=float,default=0.)

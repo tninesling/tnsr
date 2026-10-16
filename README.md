@@ -75,6 +75,10 @@ let mut executor = PtxExecutor::try_new()?;
 executor.set_matmul_precision(MatMulPrecision::StrictF32);
 ```
 
+`MatMulPrecision::Tf32x3` uses three corrected TF32 products with f32 storage and
+accumulation. See [45 training measurements](docs/training-tf32x3-performance.md)
+for the opt-in policy, numerical checks, and complete-update benchmarks.
+
 See [fusion measurements](docs/fusion-baseline.md#stage-6c-target-aware-schedules-and-batched-epilogues)
 for schedule limits, numerical parity, and transformer/GPT benchmarks.
 

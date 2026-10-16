@@ -687,12 +687,14 @@ impl TileGraph {
             1
         };
         let plan = schedule.plan;
-        let operand_dtype =
-            if schedule.plan == MatMulPlan::ScalarF32 || schedule.pipeline_stages == 2 {
-                dtype
-            } else {
-                schedule.operand_dtype
-            };
+        let operand_dtype = if schedule.plan == MatMulPlan::ScalarF32
+            || schedule.pipeline_stages == 2
+            || schedule.plan == MatMulPlan::TensorCoreTf32x3
+        {
+            dtype
+        } else {
+            schedule.operand_dtype
+        };
         let a_batch = region
             .map(|(region, _)| batch_element_offset(&region.batch_shape, &region.lhs_shape))
             .unwrap_or(Expr::Const(0));
@@ -727,15 +729,19 @@ impl TileGraph {
         });
         let c_smem = match plan {
             MatMulPlan::ScalarF32 => None,
-            MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreF16 | MatMulPlan::TensorCoreBF16 => {
-                Some(builder.alloc_shared(DType::F32, tile_m, tile_n))
-            }
+            MatMulPlan::TensorCoreTf32
+            | MatMulPlan::TensorCoreTf32x3
+            | MatMulPlan::TensorCoreF16
+            | MatMulPlan::TensorCoreBF16 => Some(builder.alloc_shared(DType::F32, tile_m, tile_n)),
         };
 
         // Allocate register tiles for computation
         let c_reg = match plan {
             MatMulPlan::ScalarF32 => builder.alloc_register(DType::F32, tile_m, tile_n),
-            MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreF16 | MatMulPlan::TensorCoreBF16 => {
+            MatMulPlan::TensorCoreTf32
+            | MatMulPlan::TensorCoreTf32x3
+            | MatMulPlan::TensorCoreF16
+            | MatMulPlan::TensorCoreBF16 => {
                 builder.alloc_fragment(DType::F32, tile_m, tile_n, schedule)
             }
         };

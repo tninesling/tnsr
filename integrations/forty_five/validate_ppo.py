@@ -72,7 +72,7 @@ def reference_step(model, anchor, batch, optimizer, microbatch, entropy, anchor_
     return metrics, gradients
 
 
-def validate(source, root, executable, output, backends, tiny=False, steps=2, tree_reductions=False, cuda_graphs=False):
+def validate(source, root, executable, output, backends, tiny=False, steps=2, tree_reductions=False, cuda_graphs=False, tf32x3=False):
     import numpy as np
     import torch
     torch.set_num_threads(2)
@@ -95,6 +95,8 @@ def validate(source, root, executable, output, backends, tiny=False, steps=2, tr
             native_settings['tree_reductions'] = True
         if cuda_graphs and backend == 'cuda':
             native_settings['cuda_graphs'] = True
+        if tf32x3 and backend == 'cuda':
+            native_settings['tf32x3'] = True
         oracle = copy.deepcopy(model)
         optimizer = torch.optim.Adam([dict(params=oracle.policy_parameters(),lr=5e-5),
                                       dict(params=oracle.value_parameters(),lr=2e-4)])
@@ -133,7 +135,8 @@ def validate(source, root, executable, output, backends, tiny=False, steps=2, tr
                 print(backend,step+1,json.dumps({k:v for k,v in result.items() if not k.endswith('_errors')}),flush=True)
         report['backends'][backend]=dict(steps=results,elapsed_seconds=time.monotonic()-start,
             reduction_mode='deterministic_tree_f32' if native_settings.get('tree_reductions') else 'strict_f32',
-            graph_replay=native_settings.get('cuda_graphs',False))
+            graph_replay=native_settings.get('cuda_graphs',False),
+            matmul_precision='tf32x3' if native_settings.get('tf32x3') else 'strict_f32')
     (output/'report.json').write_text(json.dumps(report,indent=2))
     return report
 
@@ -147,8 +150,9 @@ def main():
     parser.add_argument('--backends',nargs='+',choices=['cpu','cuda'],default=['cpu','cuda'])
     parser.add_argument('--tiny',action='store_true')
     parser.add_argument('--steps',type=int,default=2)
+    parser.add_argument('--tf32x3',action='store_true',help='validate corrected TF32 matmuls against the unchanged f32 oracle/tolerances')
     parser.add_argument('--cuda-graphs',action='store_true',help='enable private-stream model replay on CUDA')
     parser.add_argument('--tree-reductions',action='store_true',help='use fixed f32 reduction trees on CUDA')
     args=parser.parse_args()
-    validate(args.source,args.forty_five_root,args.worker,args.output,args.backends,args.tiny,args.steps,args.tree_reductions,args.cuda_graphs)
+    validate(args.source,args.forty_five_root,args.worker,args.output,args.backends,args.tiny,args.steps,args.tree_reductions,args.cuda_graphs,args.tf32x3)
 if __name__=='__main__':main()

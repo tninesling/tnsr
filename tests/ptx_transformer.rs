@@ -1320,7 +1320,7 @@ fn ptx_tf32x3_recovers_operand_precision_with_edges_layouts_and_pipelines() {
     let Some(mut ptx) = ptx_executor() else {
         return;
     };
-    for (m, k, n) in [(33, 65, 257), (257, 65, 259), (33, 256, 256)] {
+    for (m, k, n) in [(33, 65, 35), (33, 65, 257), (257, 65, 259), (33, 256, 256)] {
         let values = |length, period| {
             (0..length)
                 .map(|i| (i % period) as f32 / period as f32 - 0.5)
@@ -1973,4 +1973,50 @@ fn ptx_shared_kernel_entries_preserve_bindings_and_distinct_contractions() {
         assert_close(&actual, &expected, 1e-5);
     }
     assert_eq!(ptx.compilation_count(), 1);
+}
+
+#[test]
+fn ptx_split_k_gradients_preserve_odd_dimensions_and_changed_feeds() {
+    use tnsr::tensor::Parameter;
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    ptx.set_matmul_precision(tnsr::tile::MatMulPrecision::Tf32x3);
+    let (rows, m, n) = (2048, 129, 131);
+    let weight = Parameter::new(
+        (0..m * n)
+            .map(|i| (i % 17) as f32 * 0.03125 - 0.25)
+            .collect(),
+        vec![m, n],
+    );
+    let id = weight.id();
+    let projection = TensorExpr::input("x", vec![rows, m]).matmul(TensorExpr::from(weight));
+    let graph: TensorGraph<f32> = (projection.clone() * projection).mean_all().into();
+    let root = *graph.toposort().last().unwrap();
+    let original = graph.with_gradients(root);
+    let mut split = original.clone();
+    assert_eq!(split.split_long_matmul_gradients().unwrap(), 1);
+    assert_eq!(
+        split.gradient_metadata().param_to_grad,
+        original.gradient_metadata().param_to_grad
+    );
+    for policy in [PtxFusionPolicy::CostAware, PtxFusionPolicy::Greedy] {
+        ptx.set_fusion_policy(policy);
+        ptx.compile_owned(split.clone()).unwrap();
+        let mut cpu = SimpleExecutor::new();
+        for shift in [0.0, 0.375] {
+            let feeds = HashMap::from([(
+                "x".into(),
+                (0..rows * m)
+                    .map(|i| ((i % 29) as f32 / 29.0 - 0.5) * 0.125 + shift)
+                    .collect(),
+            )]);
+            cpu.execute(&original, feeds.clone()).unwrap();
+            ptx.execute_compiled(&split, feeds).unwrap();
+            let expected = cpu.get_gradients(&original);
+            let actual = ptx.get_gradients(&split);
+            assert_close(&actual[&id], &expected[&id], 3e-6);
+        }
+    }
+    assert_eq!(ptx.compilation_count(), 2);
 }

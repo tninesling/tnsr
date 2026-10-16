@@ -184,8 +184,14 @@ struct Compiled {
     graph: TensorGraph<f32, WithGrad>,
     output: NodeIndex,
     executor: Runtime<f32>,
+    split_k_contractions: usize,
 }
-fn build(model: &Model, n: usize, clip: f32) -> Result<(TensorGraph<f32, WithGrad>, NodeIndex)> {
+fn build(
+    model: &Model,
+    n: usize,
+    clip: f32,
+    split_k: bool,
+) -> Result<(TensorGraph<f32, WithGrad>, NodeIndex, usize)> {
     let (logits, values) = model.forward(n)?;
     let valid = Tensor::input("action_valid", vec![n, 46]);
     let logits = logits + Tensor::input("action_offset", vec![n, 46]);
@@ -248,7 +254,13 @@ fn build(model: &Model, n: usize, clip: f32) -> Result<(TensorGraph<f32, WithGra
         .inputs(output)
         .get(7)
         .context("missing weighted PPO objective")?;
-    Ok((graph.with_gradients(loss_node), output))
+    let mut graph = graph.with_gradients(loss_node);
+    let split_count = if split_k {
+        graph.split_long_matmul_gradients()?
+    } else {
+        0
+    };
+    Ok((graph, output, split_count))
 }
 fn inputs(batch: &Batch, model: &Model, settings: &Settings, weight: f32) -> Result<super::Inputs> {
     let mut inputs = batch.observations.inputs(&model.config)?;
@@ -421,7 +433,12 @@ impl Trainer {
             let key = (size, settings.clip_eps.to_bits());
             let started = Instant::now();
             if !self.compiled.contains_key(&key) {
-                let (graph, output) = build(model, size, settings.clip_eps)?;
+                let (graph, output, split_k_contractions) = build(
+                    model,
+                    size,
+                    settings.clip_eps,
+                    self.backend == "cuda" && settings.tf32x3 && settings.tree_reductions,
+                )?;
                 #[cfg(feature = "cuda")]
                 let executor = if let Some(resident) = &self.resident {
                     let mode = if settings.tree_reductions {
@@ -449,6 +466,7 @@ impl Trainer {
                 self.compiled.insert(
                     key,
                     Compiled {
+                        split_k_contractions,
                         graph,
                         output,
                         executor,
@@ -586,7 +604,7 @@ impl Trainer {
             .zip(metrics)
             .map(|(key, value)| (key.into(), serde_json::json!(value)))
             .collect();
-        let mut result = serde_json::json!({"metrics":metrics,"gradient_norm_before_clip":norm,"gradient_scale":scale,"optimizer_steps":self.steps,"compiled_shapes":self.compiled.len()});
+        let mut result = serde_json::json!({"metrics":metrics,"gradient_norm_before_clip":norm,"gradient_scale":scale,"optimizer_steps":self.steps,"compiled_shapes":self.compiled.len(),"split_k_contractions":self.compiled.values().map(|compiled|compiled.split_k_contractions).sum::<usize>()});
         result["matmul_precision"] = serde_json::json!(if settings.tf32x3 {
             "tf32x3"
         } else {
@@ -634,7 +652,7 @@ impl Trainer {
                 let Runtime::Ptx(executor) = &compiled.executor else {return None;};
                 let stats = executor.compile_metrics();
                 Some((size, serde_json::json!({
-                    "microbatch":size, "planned_kernels":stats.generated_kernels,
+                    "microbatch":size, "split_k_contractions":compiled.split_k_contractions, "planned_kernels":stats.generated_kernels,
                     "unique_kernels":stats.unique_kernels, "ptx_bytes":stats.ptx_source_bytes,
                     "total_seconds":stats.compile_time.as_secs_f64(),
                     "module_load_seconds":stats.module_load_time.as_secs_f64()

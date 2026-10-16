@@ -11,7 +11,9 @@ from export import export_model, load_archive, load_model
 from validate import observations, infer_reference
 
 
-def fixture(model, root, tiny=False):
+def fixture(model, root, tiny=False, repeats=1):
+    if repeats < 1:
+        raise ValueError("fixture repeats must be positive")
     import torch
     from forty_five_ai.train import masked_categorical, normalize_advantages
     if tiny:
@@ -28,16 +30,21 @@ def fixture(model, root, tiny=False):
         for key in batch:
             batch[key].insert(1, copy.deepcopy(batch[key][0]))
         masks.insert(1, masks[0].copy())
+    if repeats != 1:
+        batch = {key: copy.deepcopy(rows) * repeats for key, rows in batch.items()}
+        masks = copy.deepcopy(masks) * repeats
     logits, values = infer_reference(model, batch)
     masks = torch.tensor(masks, dtype=torch.bool)
     dist = masked_categorical(logits, masks)
     actions = dist.probs.argmax(-1)
     n = len(actions)
     # Deliberately exercise both signs and both sides of PPO/value clipping.
-    ratios = torch.tensor([.6,.9,1.,1.1,1.4,.7,1.3,1.05][:n])
-    raw_advantages = torch.tensor([1.,-2.,3.,-4.,5.,-6.,7.,-8.][:n])
-    old_values = values + torch.tensor([.4,-.3,.1,-.1,.5,-.5,.05,-.05][:n])
-    returns = values + torch.tensor([.8,-.1,-.4,.6,-.7,.3,.2,-.2][:n])
+    def pattern(values):
+        return torch.tensor((values * ((n + len(values) - 1) // len(values)))[:n])
+    ratios = pattern([.6,.9,1.,1.1,1.4,.7,1.3,1.05])
+    raw_advantages = pattern([1.,-2.,3.,-4.,5.,-6.,7.,-8.])
+    old_values = values + pattern([.4,-.3,.1,-.1,.5,-.5,.05,-.05])
+    returns = values + pattern([.8,-.1,-.4,.6,-.7,.3,.2,-.2])
     old_logs = dist.log_prob(actions) - ratios.log()
     original = {k: torch.tensor(v, dtype=torch.long) for k,v in batch.items() if k != 'phase_ids'}
     original.update(phases=torch.tensor(batch['phase_ids']), action_masks=masks, actions=actions,
@@ -72,7 +79,9 @@ def reference_step(model, anchor, batch, optimizer, microbatch, entropy, anchor_
     return metrics, gradients
 
 
-def validate(source, root, executable, output, backends, tiny=False, steps=2, tree_reductions=False, cuda_graphs=False, tf32x3=False):
+def validate(source, root, executable, output, backends, tiny=False, steps=2, tree_reductions=False, cuda_graphs=False, tf32x3=False, microbatch=3, fixture_repeats=1):
+    if microbatch < 1:
+        raise ValueError("microbatch must be positive")
     import numpy as np
     import torch
     torch.set_num_threads(2)
@@ -80,15 +89,16 @@ def validate(source, root, executable, output, backends, tiny=False, steps=2, tr
     output.mkdir(parents=True, exist_ok=False)
     model = load_archive(source,root) if source.is_dir() else load_model(source,root)
     archive = output/'initial'; export_model(model,archive)
-    original, native = fixture(model,root,tiny)
+    original, native = fixture(model,root,tiny,fixture_repeats)
     anchor = copy.deepcopy(model)
     # A different frozen anchor gives a nonzero KL and a nontrivial KL gradient.
     with torch.no_grad(): anchor.bid_head.bias.add_(torch.linspace(-.2,.2,5))
     native['anchor'] = anchor_outputs(anchor,native)
     settings = dict(learning_rate=5e-5,value_learning_rate=2e-4,entropy_coef=.005,
-                    anchor_kl_coef=.03,microbatch=3,scheduler_updates=4)
+                    anchor_kl_coef=.03,microbatch=microbatch,scheduler_updates=4)
     report = dict(source=str(source.resolve()), torch_version=torch.__version__,
-                  separate_critic=model.use_separate_critic, backends={})
+                  separate_critic=model.use_separate_critic, microbatch=microbatch,
+                  fixture_repeats=fixture_repeats, transitions=len(native['actions']), backends={})
     for backend in backends:
         native_settings = settings.copy()
         if tree_reductions and backend == 'cuda':
@@ -104,7 +114,7 @@ def validate(source, root, executable, output, backends, tiny=False, steps=2, tr
         results=[]; start=time.monotonic()
         with Worker(executable,archive,backend) as worker:
             for step in range(steps):
-                metrics, gradients = reference_step(oracle,anchor,original,optimizer,3,.005,.03)
+                metrics, gradients = reference_step(oracle,anchor,original,optimizer,microbatch,.005,.03)
                 actual=worker.request('train',batch=native,settings=native_settings,return_gradients=True)
                 torch.testing.assert_close(torch.tensor(list(actual['metrics'].values())),
                     torch.tensor([metrics[k] for k in actual['metrics']]),atol=3e-5,rtol=5e-4)
@@ -129,6 +139,8 @@ def validate(source, root, executable, output, backends, tiny=False, steps=2, tr
                             weight_max_absolute_error=max(weight_errors.values()),parameter_count=len(errors),
                             gradient_errors=errors,weight_errors=weight_errors,
                             gradient_norm_before_clip=actual['gradient_norm_before_clip'],compiled_shapes=actual['compiled_shapes'])
+                if 'split_k_contractions' in actual:
+                    result['split_k_contractions'] = actual['split_k_contractions']
                 if 'cuda_graphs' in actual:
                     result['cuda_graphs'] = actual['cuda_graphs']
                 results.append(result)
@@ -150,9 +162,11 @@ def main():
     parser.add_argument('--backends',nargs='+',choices=['cpu','cuda'],default=['cpu','cuda'])
     parser.add_argument('--tiny',action='store_true')
     parser.add_argument('--steps',type=int,default=2)
+    parser.add_argument('--microbatch',type=int,default=3,help='transitions per microbatch in both workers')
+    parser.add_argument('--fixture-repeats',type=int,default=1,help='repeat the fixed observations to exercise large contractions')
     parser.add_argument('--tf32x3',action='store_true',help='validate corrected TF32 matmuls against the unchanged f32 oracle/tolerances')
     parser.add_argument('--cuda-graphs',action='store_true',help='enable private-stream model replay on CUDA')
     parser.add_argument('--tree-reductions',action='store_true',help='use fixed f32 reduction trees on CUDA')
     args=parser.parse_args()
-    validate(args.source,args.forty_five_root,args.worker,args.output,args.backends,args.tiny,args.steps,args.tree_reductions,args.cuda_graphs,args.tf32x3)
+    validate(args.source,args.forty_five_root,args.worker,args.output,args.backends,args.tiny,args.steps,args.tree_reductions,args.cuda_graphs,args.tf32x3,args.microbatch,args.fixture_repeats)
 if __name__=='__main__':main()

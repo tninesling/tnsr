@@ -60,6 +60,7 @@ mod gradient_pruning;
 pub(crate) mod indices;
 pub mod liveness;
 pub mod rewrite;
+mod split_k;
 
 /// Typestate marker for graphs without gradients.
 #[derive(Clone)]

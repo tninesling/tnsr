@@ -78,7 +78,15 @@ fn profile<D: CudaDType>() -> Result<()> {
         "invalid stage or zero dimension"
     );
     let trace = args.get(6).is_some_and(|mode| mode == "trace");
-    let input_shape = if flat {
+    let transpose_lhs = std::env::var_os("TNSR_PROFILE_TRANSPOSE_LHS").is_some();
+    let transpose_rhs = std::env::var_os("TNSR_PROFILE_TRANSPOSE_RHS").is_some();
+    let input_shape = if transpose_lhs {
+        if flat {
+            vec![k, batches * m]
+        } else {
+            vec![batches, k, m]
+        }
+    } else if flat {
         vec![batches * m, k]
     } else {
         vec![batches, m, k]
@@ -98,9 +106,23 @@ fn profile<D: CudaDType>() -> Result<()> {
         (0..k * n)
             .map(|index| scalar((index % 31) as f32 / 31.0 - 0.5))
             .collect::<Result<Vec<_>>>()?,
-        vec![k, n],
+        if transpose_rhs {
+            vec![n, k]
+        } else {
+            vec![k, n]
+        },
     );
-    let mut expression = TensorExpr::from(input).matmul(TensorExpr::from(weight));
+    let lhs = if transpose_lhs {
+        TensorExpr::from(input).transpose()
+    } else {
+        TensorExpr::from(input)
+    };
+    let rhs = if transpose_rhs {
+        TensorExpr::from(weight).transpose()
+    } else {
+        TensorExpr::from(weight)
+    };
+    let mut expression = lhs.matmul(rhs);
     if stage >= 1 {
         expression = expression + TensorExpr::from(Parameter::new(vec![scalar(0.1)?; n], vec![n]));
     }
@@ -116,6 +138,9 @@ fn profile<D: CudaDType>() -> Result<()> {
     }
     let graph: TensorGraph<D::HostType> = expression.into();
     let mut executor = PtxExecutor::<D>::try_new_for_dtype()?;
+    if std::env::var_os("TNSR_PROFILE_TF32X3").is_some() {
+        executor.set_matmul_precision(MatMulPrecision::Tf32x3);
+    }
     if std::env::var("TNSR_PROFILE_STRICT").is_ok() {
         executor.set_matmul_precision(MatMulPrecision::StrictF32);
     }
@@ -302,6 +327,7 @@ fn profile<D: CudaDType>() -> Result<()> {
         resident.push(f64::from(start.elapsed_ms(&end)?) * 1000.0 / f64::from(repeats));
     }
     let output = plan.graph_output().context("missing output")?;
+    let chosen_schedule = plan.matmul_regions().first().map(|region| region.schedule);
     let resident_actual =
         stream.memcpy_dtov(storage.get(&output).context("missing output storage")?)?;
     let reference = if trace {
@@ -350,6 +376,7 @@ fn profile<D: CudaDType>() -> Result<()> {
     }
     let compile = executor.compile_metrics();
     let execution = executor.execution_metrics();
+    println!("SCHEDULE,{:?}", chosen_schedule);
     println!(
         "METRICS,{:.3},{:.3},{},{}",
         compile.compile_time.as_secs_f64() * 1e6,

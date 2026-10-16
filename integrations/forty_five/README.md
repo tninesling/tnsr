@@ -80,6 +80,20 @@ shared/separate-critic golden fixtures run in CPU/PTX tests. Regenerate with
 `generate_ppo_fixture.py --forty-five-root ROOT` (and `--separate` into a fresh
 `tiny-separate` directory).
 
+For larger contractions, add `--fixture-repeats 8 --microbatch 64` to the PPO
+validator. The actual-model fixture then contains 64 transitions and uses the
+same CPU oracle and tolerances. The default remains eight transitions in weighted
+3/3/2 microbatches. With both TF32x3 and tree reductions enabled on CUDA, the
+adapter partitions long rank-two gradient GEMMs into four K slices and sums their
+partial outputs deterministically. This reassociates the contraction, so both
+small and large fixtures are numerical gates. The response reports the number of
+`split_k_contractions` in the compiled shape cache.
+
+With `TNSR_PROFILE_PPO=1`, `cuda_compile` reports each cached module's logical
+kernel steps, unique PTX entries, source bytes, PTX compilation time and module
+load time. Module compilation occurs during executor warmup; it is separate from
+the earlier model/autograd `compile_cache_seconds` bucket.
+
 This worker trains in f32 on either backend. CUDA uses resident parameters,
 gradient accumulation, clipping and Adam; the CPU backend uses host Adam.
 Strict-order model reductions remain the default. `--tree-reductions` opts the
@@ -153,3 +167,19 @@ transfers, constants, inference, checkpoint exports and explicit diagnostics.
 Use Nsight traces for actual transfer counts. Stable buffers/replay and mixed
 precision are the next performance work; matching the original PyTorch bf16
 production throughput has not been established.
+
+For a longer native comparison, first generate `batch.json` with
+`benchmark_training.py`, then alternate two worker binaries directly:
+
+```sh
+TNSR_PROFILE_PPO=1 /path/to/forty-five/.venv/bin/python \
+  integrations/forty_five/benchmark_native_pair.py /path/to/archive \
+  --batch /path/to/batch.json --worker /path/to/candidate-worker \
+  --baseline-worker /path/to/baseline-worker --output target/native-pairs \
+  --microbatch 64 --repeats 500 --tf32x3 --tree-reductions --cuda-graphs
+```
+
+This retains the two excluded warmups, every full-request time, executable hashes
+and replay state. Success requires finite metrics and active replay without
+fallbacks when requested. Both workers receive identical settings and start from
+the same archive; no PyTorch build runs during this native comparison.

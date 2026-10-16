@@ -103,6 +103,22 @@ pub struct MixedExecutor {
 }
 impl Drop for MixedExecutor {
     fn drop(&mut self) {
+        let gate = self.gate.clone();
+        let _guard = match gate.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let _ = self.stream.synchronize();
+        // Keep graph destruction, asynchronous frees and module release outside
+        // every other owner's capture on the shared resident stream.
+        self.captured = None;
+        self.readbacks.get_mut().clear();
+        self.programs.clear();
+        self.buffers.clear();
+        self.index_buffers.clear();
+        self.kernels.clear();
+        self.source_nodes.clear();
+        self.index_graph.graph.clear();
         let _ = self.stream.synchronize();
     }
 }
@@ -191,6 +207,12 @@ impl MixedExecutor {
                 bf16_tensor_core_programs: 0,
             },
         };
+        // Declare the guard after the owner so errors unlock before its Drop.
+        // Allocations and uploads also belong outside another owner's capture.
+        let preparation_gate = result.gate.clone();
+        let _preparation_guard = preparation_gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?;
         let mut f32_region = Vec::new();
         for node in graph.toposort() {
             if fused_f32
@@ -414,11 +436,7 @@ impl MixedExecutor {
         }
         result.info.kernels = result.kernels.len();
         result.upload_impl(HashMap::new(), HashMap::new(), true)?;
-        result.refresh_parameters(&bound_parameters)?;
-        let gate = result.gate.clone();
-        let _guard = gate
-            .lock()
-            .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?;
+        result.refresh_parameters_impl(&bound_parameters, true)?;
         // Constructors may have required inputs. Zero-initialized sources are
         // safe for warmup; no user-visible output is available until upload/run.
         for k in &result.kernels {
@@ -603,6 +621,14 @@ impl MixedExecutor {
         &mut self,
         parameters: &HashMap<NodeIndex, Arc<CudaSlice<f32>>>,
     ) -> Result<()> {
+        self.refresh_parameters_impl(parameters, false)
+    }
+    // `preparing` is used only by prepare while holding the stream gate.
+    fn refresh_parameters_impl(
+        &mut self,
+        parameters: &HashMap<NodeIndex, Arc<CudaSlice<f32>>>,
+        preparing: bool,
+    ) -> Result<()> {
         let began = std::time::Instant::now();
         ensure!(
             parameters.len() == self.bound_parameters.len(),
@@ -620,9 +646,14 @@ impl MixedExecutor {
             );
         }
         let gate = self.gate.clone();
-        let _guard = gate
-            .lock()
-            .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?;
+        let _guard = if preparing {
+            None
+        } else {
+            Some(
+                gate.lock()
+                    .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?,
+            )
+        };
         for (&node, source) in parameters {
             let previous = self
                 .bound_parameters
@@ -691,9 +722,15 @@ impl MixedExecutor {
             copies.push((index, data));
         }
         let gate = self.gate.clone();
-        let _guard = gate
-            .lock()
-            .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?;
+        // Missing feeds are permitted only during gated construction warmup.
+        let _guard = if allow_missing_inputs {
+            None
+        } else {
+            Some(
+                gate.lock()
+                    .map_err(|_| anyhow::anyhow!("mixed stream lock poisoned"))?,
+            )
+        };
         self.synchronize()?;
         self.uploaded = false;
         self.has_run = false;

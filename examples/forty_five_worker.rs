@@ -25,6 +25,7 @@ fn runtime(backend: &str) -> Result<Runtime<f32>> {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
+    OptimizerState,
     Infer {
         batch: Observations,
     },
@@ -92,6 +93,11 @@ fn run() -> Result<()> {
     for line in std::io::stdin().lock().lines() {
         let response = (|| -> Result<serde_json::Value> {
             match serde_json::from_str::<Request>(&line?)? {
+                Request::OptimizerState => worker
+                    .trainer
+                    .as_ref()
+                    .context("PPO trainer has not initialized")?
+                    .optimizer_state(&worker.model),
                 Request::Infer { batch } => worker.infer(&batch),
                 Request::Train {
                     batch,

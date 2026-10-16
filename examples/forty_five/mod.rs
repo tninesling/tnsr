@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use tnsr::nn;
 use tnsr::parameters::NamedParameters;
-use tnsr::tensor::{IndexInputs, IndexTensor, Parameter, Shape, TensorExpr};
+use tnsr::tensor::{IndexInputs, IndexTensor, Parameter, Shape, TensorExpr, ValueDType};
 
 type Tensor = TensorExpr<f32>;
 type Specs = BTreeMap<String, (Shape, &'static str)>;
@@ -31,6 +31,7 @@ pub struct Config {
 pub struct Model {
     pub config: Config,
     pub parameters: NamedParameters,
+    mixed_bf16: bool,
 }
 fn linear_specs(specs: &mut Specs, prefix: &str, input: usize, output: usize, group: &'static str) {
     specs.insert(format!("{prefix}.weight"), (vec![output, input], group));
@@ -45,6 +46,7 @@ impl Model {
         let (parameters, config) = NamedParameters::load(directory)?;
         let model = Self {
             parameters,
+            mixed_bf16: false,
             config: serde_json::from_value(config)?,
         };
         model.validate()?;
@@ -244,11 +246,14 @@ impl Model {
         } else {
             x
         };
-        let result = nn::linear(
-            x,
-            Tensor::from(self.p(&format!("{prefix}.weight"), &[output, input])?).transpose(),
-            Some(self.p(&format!("{prefix}.bias"), &[output])?),
-        );
+        let weight =
+            Tensor::from(self.p(&format!("{prefix}.weight"), &[output, input])?).transpose();
+        let bias = self.p(&format!("{prefix}.bias"), &[output])?;
+        let result = if self.mixed_bf16 {
+            x.linear_bf16(weight, bias.into())?
+        } else {
+            nn::linear(x, weight, Some(bias))
+        };
         if flatten {
             *shape
                 .last_mut()
@@ -259,6 +264,11 @@ impl Model {
         }
     }
     fn norm(&self, prefix: &str, x: Tensor, width: usize) -> Result<Tensor> {
+        let x = if self.mixed_bf16 {
+            x.cast(ValueDType::F32)
+        } else {
+            x
+        };
         let axis = x.shape().len() - 1;
         Ok(nn::layer_norm(
             x,
@@ -267,6 +277,36 @@ impl Model {
             self.p(&format!("{prefix}.bias"), &[width])?,
             1e-5,
         ))
+    }
+    fn silu(&self, x: Tensor) -> Tensor {
+        if self.mixed_bf16 {
+            nn::silu(x.cast(ValueDType::F32)).cast(ValueDType::BF16)
+        } else {
+            nn::silu(x)
+        }
+    }
+    fn gelu(&self, x: Tensor) -> Tensor {
+        if self.mixed_bf16 {
+            nn::gelu(x.cast(ValueDType::F32)).cast(ValueDType::BF16)
+        } else {
+            nn::gelu(x)
+        }
+    }
+    fn sum_f32(&self, x: Tensor, axis: usize) -> Tensor {
+        (if self.mixed_bf16 {
+            x.cast(ValueDType::F32)
+        } else {
+            x
+        })
+        .reduce_sum(axis)
+    }
+    pub fn forward_mixed(&self, batch: usize) -> Result<(Tensor, Tensor)> {
+        Self {
+            config: self.config.clone(),
+            parameters: self.parameters.clone(),
+            mixed_bf16: true,
+        }
+        .forward(batch)
     }
     fn encode(&self, prefix: &str, batch: usize) -> Result<Tensor> {
         let c = &self.config;
@@ -309,15 +349,29 @@ impl Model {
                     .permute(vec![0, 2, 1, 3])
             };
             let (query, key, value) = (split(0), split(d), split(2 * d));
-            let scores =
-                query.matmul(key.transpose()) * (head as f32).sqrt().recip() + key_mask.clone();
-            let context = nn::softmax(scores, 3)
+            let qk = query.matmul(key.transpose());
+            let scores = if self.mixed_bf16 {
+                let scaled = (qk.cast(ValueDType::F32) * (head as f32).sqrt().recip())
+                    .cast(ValueDType::BF16);
+                (scaled.cast(ValueDType::F32) + key_mask.clone())
+                    .cast(ValueDType::BF16)
+                    .cast(ValueDType::F32)
+            } else {
+                qk * (head as f32).sqrt().recip() + key_mask.clone()
+            };
+            let weights = nn::softmax(scores, 3);
+            let weights = if self.mixed_bf16 {
+                weights.cast(ValueDType::BF16)
+            } else {
+                weights
+            };
+            let context = weights
                 .matmul(value)
                 .permute(vec![0, 2, 1, 3])
                 .reshape(vec![batch, s, d]);
             x = x + self.linear(&format!("{p}.attention.out_proj"), context, d, d)?;
             let normalized = self.norm(&format!("{p}.ffn_norm"), x.clone(), d)?;
-            let gate = nn::silu(self.linear(
+            let gate = self.silu(self.linear(
                 &format!("{p}.feed_forward.gate_proj"),
                 normalized.clone(),
                 d,
@@ -344,7 +398,7 @@ impl Model {
             .reshape(vec![batch, 1, d]);
         let keys = self.linear(&format!("{prefix}.key_proj"), encoded.clone(), d, d)?;
         let values = self.linear(&format!("{prefix}.value_proj"), encoded, d, d)?;
-        let scores = (query * keys).reduce_sum(2).reshape(vec![batch, s])
+        let scores = self.sum_f32(query * keys, 2).reshape(vec![batch, s])
             * (d as f32).sqrt().recip()
             + Tensor::input("pool_mask", vec![batch, s]);
         let weights = nn::softmax(scores, 1).reshape(vec![batch, s, 1]);
@@ -364,7 +418,7 @@ impl Model {
         let pool = self.pool("policy_pool", encoded.clone(), query, d + phase, batch)?;
         let features = Tensor::concat(&[cls, pool, phase_embedding], 1);
         let features = self.norm("policy_trunk.0", features, 2 * d + phase)?;
-        let features = nn::gelu(self.linear("policy_trunk.1", features, 2 * d + phase, d)?);
+        let features = self.gelu(self.linear("policy_trunk.1", features, 2 * d + phase, d)?);
         let policy = self.norm("policy_trunk.3", features, d)?;
         let logits = if c.use_phase_heads {
             let (discard, play) = if c.use_card_conditioned_actions {
@@ -405,8 +459,13 @@ impl Model {
             Tensor::concat(&[value_cls, pool], 1),
             2 * d,
         )?;
-        let features = nn::gelu(self.linear("value_trunk.1", features, 2 * d, d)?);
-        let features = nn::gelu(self.linear("value_trunk.3", features, d, d / 2)?);
+        let features = self.gelu(self.linear("value_trunk.1", features, 2 * d, d)?);
+        let features = self.gelu(self.linear("value_trunk.3", features, d, d / 2)?);
+        let logits = if self.mixed_bf16 {
+            logits.cast(ValueDType::F32)
+        } else {
+            logits
+        };
         Ok((logits, self.linear("value_trunk.5", features, d / 2, 1)?))
     }
     fn card_heads(
@@ -424,16 +483,26 @@ impl Model {
         let bias = self
             .linear("card_action_heads.play_bias", hand.clone(), d, 1)?
             .reshape(vec![batch, 5]);
-        let play =
-            (query * keys).reduce_sum(2).reshape(vec![batch, 5]) * (d as f32).sqrt().recip() + bias;
+        let play = self.sum_f32(query * keys, 2).reshape(vec![batch, 5])
+            * (d as f32).sqrt().recip()
+            + bias;
         let cards = self.linear("card_action_heads.discard_cards", hand, d, d)?;
         let membership: Vec<f32> = (0u8..32)
             .flat_map(|subset| (0..5).map(move |slot| f32::from((subset >> slot) & 1)))
             .collect();
         let counts: Vec<u32> = (0u8..32).map(u8::count_ones).collect();
         let scales: Vec<f32> = counts.iter().map(|&n| (n.max(1) as f32).sqrt()).collect();
-        let subset = Tensor::constant(membership, vec![1, 32, 5]).matmul(cards)
-            / Tensor::constant(scales, vec![1, 32, 1]);
+        let membership = Tensor::constant(membership, vec![1, 32, 5]);
+        let scales = Tensor::constant(scales, vec![1, 32, 1]);
+        let (membership, scales) = if self.mixed_bf16 {
+            (
+                membership.cast(ValueDType::BF16),
+                scales.cast(ValueDType::BF16),
+            )
+        } else {
+            (membership, scales)
+        };
+        let subset = membership.matmul(cards) / scales;
         let count_embeddings =
             Tensor::from(self.p("card_action_heads.discard_count_embedding.weight", &[6, d])?)
                 .embedding_indices(IndexTensor::constant(counts, vec![32])?)
@@ -445,7 +514,7 @@ impl Model {
         let features = Tensor::concat(&[subset, count_embeddings, query], 2);
         let features = self.norm("card_action_heads.discard_trunk.0", features, 3 * d)?;
         let features =
-            nn::gelu(self.linear("card_action_heads.discard_trunk.1", features, 3 * d, d)?);
+            self.gelu(self.linear("card_action_heads.discard_trunk.1", features, 3 * d, d)?);
         let discard = self
             .linear("card_action_heads.discard_trunk.3", features, d, 1)?
             .reshape(vec![batch, 32]);

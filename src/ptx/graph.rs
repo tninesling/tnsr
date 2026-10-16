@@ -595,8 +595,19 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
         } => {
             let row = lower_expr(func, ctx, row);
             let col = lower_expr(func, ctx, col);
+            // Staging a BF16 operand is a bit copy, not arithmetic. Preserve
+            // its storage directly instead of promoting and narrowing again.
+            let bits = (ctx.param_dtypes[src_param] == DType::BF16
+                && ctx.tile_dtypes[dest] == DType::BF16)
+                .then(|| {
+                    let bits = func.add_bf16_register();
+                    func.add_inst(Inst::convert_bf16_f32(bits.clone(), Operand::imm_f32(0.0)));
+                    bits
+                });
             let value = func.add_f32_register();
-            func.add_inst(Inst::mov_f32(value.clone(), Operand::imm_f32(0.0)));
+            if bits.is_none() {
+                func.add_inst(Inst::mov_f32(value.clone(), Operand::imm_f32(0.0)));
+            }
             let skip_load =
                 bumpalo::format!(in ctx.arena, "matmul_load_skip_{}", ctx.label_counter)
                     .into_bump_str();
@@ -629,11 +640,23 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 .clone();
             let address =
                 element_address(func, source, element_offset, ctx.param_dtypes[src_param]);
-            load_global_as_f32(func, ctx.param_dtypes[src_param], value.clone(), address);
+            if let Some(bits) = &bits {
+                func.add_inst(Inst::LdGlobalBF16 {
+                    dst: bits.clone(),
+                    addr: address,
+                });
+            } else {
+                load_global_as_f32(func, ctx.param_dtypes[src_param], value.clone(), address);
+            }
             func.add_inst(Inst::Label(skip_load));
 
             let shared_address = shared_coordinate_address(func, ctx, *dest, tile_row, tile_col);
-            if ctx.tile_dtypes.get(dest) == Some(&crate::tile::DType::TF32) {
+            if let Some(bits) = bits {
+                func.add_inst(Inst::StSharedBF16 {
+                    addr: shared_address,
+                    src: bits,
+                });
+            } else if ctx.tile_dtypes.get(dest) == Some(&crate::tile::DType::TF32) {
                 let tf32 = func.add_b32_register();
                 func.add_inst(Inst::convert_tf32_f32(tf32.clone(), value));
                 func.add_inst(Inst::StSharedB32 {

@@ -6,7 +6,9 @@ graphs using physical two-byte BF16 allocations alongside f32 sources,
 intermediates and parameter gradients. Its backward comes from ordinary graph
 autograd, extending the earlier [standalone linear owner](training-bf16-linear.md).
 This implements part of [#114](https://github.com/tninesling/tnsr/issues/114).
-The forty-five production PPO executor and precision policy remain unchanged.
+The forty-five adapter now has an experimental opt-in mixed PPO path; see
+[complete PPO integration and measurements](training-mixed-ppo.md). F32 remains
+the default.
 
 ## Semantics
 
@@ -25,7 +27,8 @@ these rules. The gradient seed also has the scalar loss's logical dtype.
 Expression rewriting preserves graphs containing casts, including cast sharing.
 Gradient pruning preserves forward cast identities. The existing split-K pass
 skips BF16 contractions: ordinary BF16 partials would round before the sum.
-Supporting split BF16 contractions requires explicit f32 partial storage.
+Supporting split BF16 contractions requires explicit f32 partial storage; the
+complete-PPO report records the tested split-K experiment separately.
 
 The CPU executor provides a semantic oracle by rounding BF16 logical values
 inside f32 host vectors. The homogeneous CUDA executor rejects mixed casts with
@@ -40,7 +43,8 @@ Each run refreshes casts from current f32 sources. Uploads, readbacks and
 compilation are outside replay and event timing. Identity casts of an already
 matching storage dtype alias their source; narrowing followed by promotion
 retains its rounding. Casts through virtual views materialize directly into
-the destination dtype in one kernel.
+the destination dtype in one kernel. Promotion can instead alias the narrowed
+storage and use typed loads into f32 registers; it introduces no further rounding.
 
 Contiguous f32 regions use the existing fusion planner. Values with consumers
 outside a region become explicit sinks, retaining saved forward intermediates
@@ -50,20 +54,43 @@ cannot erase their rounding. `new_unfused` provides a diagnostic comparator;
 Only materialized nodes and virtual views of retained storage are readable.
 
 Supported arithmetic includes unary/binary operations, matmul, reductions,
-comparison/mask and narrow, plus reshape/flatten/transpose/permute/broadcast
-views. Exact-index lookup/loss, concat and convolution are not yet wired into
-this mixed owner. It also lacks resident optimizer bindings, allocation reuse,
-and shared cast caching across distinct operators.
+comparison/mask, narrow, concat, exact-index embedding/scatter and indexed loss,
+plus reshape/flatten/transpose/permute/broadcast views. Integer bindings remain
+u32 throughout mixed execution. Scatter destinations reset on every run,
+including replay. Feed validation completes before any source changes.
 
-An operator policy still needs explicit boundaries. In particular, casting
-both inputs of `matmul + bias` to BF16 rounds GEMM before bias. Torch linear
-needs bias added to the f32 accumulator before its single BF16 store. The
-standalone linear owner already implements that behavior; a graph operator
-must preserve it before enabling the forty-five linear policy. For SiLU, the
-probe promotes the BF16 primal, performs SiLU in f32, and narrows its result
-once; its derivative likewise rounds at those explicit boundaries.
+`linear_bf16(weight, bias)` retains an atomic graph linear operator. Its input,
+weight and bias narrow to BF16; GEMM accumulates and adds bias in f32, then stores
+BF16 once. This differs from separately rounded BF16 GEMM followed by bias.
+Autograd generates both contraction derivatives and the bias sum, preserving
+the primal cast and accumulation rules. CPU execution rounds only at the final
+linear boundary too.
+
+`ResidentAdam::mixed_executor` and `accumulate_mixed` connect graph gradients to
+the existing f32 master/accumulation/clipping/Adam owner. Master publications
+refresh stable graph bindings on-device. BF16 boundaries promote directly into
+f32 gradient accumulation registers. Immutable constants upload once; metrics
+readbacks cache their generated copy kernels. No weights, gradients or moments
+are downloaded during ordinary updates.
+
+The resident constructor also reuses temporary allocations by their complete
+captured-kernel live ranges, with strict separation by dtype. Every kernel's
+inputs and outputs overlap at that step; reuse starts only after the previous
+last use. Sources and all graph sinks remain pinned. Consequently this private
+training owner retains readable sinks rather than arbitrary dead intermediates.
+Standalone `MixedExecutor::new` retains intermediate readback behavior. Allocation
+reuse currently happens after compilation allocations, so retained payload
+savings do not establish a lower startup peak or a batch-capacity limit.
+
+All programs use generated Tile IR/PTX. A fixed-binding reshape that requires
+materialization must emit a real copy: its homogeneous executor diagnostic kernel
+is intentionally empty because that executor performs a device copy separately.
+The mixed regression test covers the backward shape that exposed this bug.
 
 ## Profile and validation
+
+The following standalone results describe the earlier revision preserved in the
+evidence, before complete PPO integration and typed promotion loads.
 
 The [raw evidence](benchmarks/training-parity/mixed-graph.json) retains all
 240 samples per path, oracle errors, GPU state, worker hashes, and trace
@@ -129,6 +156,7 @@ cargo build --release --features cuda --example mixed_graph_probe
   --output target/forty_five_mixed_graph/reproduce
 ```
 
-Next integration work is graph-native fused linear/bias semantics, exact-index
-operators and resident f32 master/gradient bindings. Those permit the actual
-forty-five mixed policy and complete PPO/Adam parity and throughput comparison.
+The standalone subgraph measurements above predate complete PPO integration.
+They remain subgraph evidence and must not be used as full-update speedup claims.
+See [the complete update report](training-mixed-ppo.md) for actual model losses,
+named gradients, resident optimizer state and end-to-end timing.

@@ -17,6 +17,7 @@ import json
 import math
 from pathlib import Path
 import statistics
+import shutil
 import subprocess
 import sys
 import time
@@ -108,12 +109,13 @@ def run(args):
                   repeats=args.repeats, anchor_kl_coef=args.anchor_kl_coef,
                   native_reduction_mode="deterministic_tree_f32" if args.tree_reductions else "strict_f32",
                   native_graph_replay=args.cuda_graphs,
-                  native_matmul_precision="tf32x3" if args.tf32x3 else "strict_f32",
+                  native_matmul_precision="mixed_bf16" if args.mixed_bf16 else ("tf32x3" if args.tf32x3 else "strict_f32"),
                   baseline_tree_reductions=args.baseline_tree_reductions,
                   baseline_graph_replay=args.baseline_cuda_graphs,
                   baseline_matmul_precision="tf32x3" if args.baseline_tf32x3 else "strict_f32",
                   native_memory_accounting="whole worker process MiB, including modules/workspace/graph; sampled outside timing",
                   external_workloads="left running; monitor GPU samples for contention",
+                  timing_protocol="complete synchronized updates; reverse mode order each iteration; warmups excluded",
                   cases={})
     (args.output / "batch.json").write_text(json.dumps(native))
     settings = dict(microbatch=args.microbatch, anchor_kl_coef=args.anchor_kl_coef,
@@ -131,17 +133,26 @@ def run(args):
         settings["cuda_graphs"] = True
     if args.tf32x3:
         settings["tf32x3"] = True
+    if args.mixed_bf16:
+        if not (args.tf32x3 and args.tree_reductions):
+            raise ValueError("mixed BF16 requires TF32x3 and tree reductions")
+        settings["mixed_bf16"] = True
+    native_anchor = copy.deepcopy(model).cuda().eval() if args.mixed_bf16 and args.anchor_kl_coef else model
     if args.anchor_kl_coef:
-        native["anchor"] = anchor_outputs(model, native)
+        native["anchor"] = anchor_outputs(native_anchor, native, mixed_bf16=args.mixed_bf16, microbatch=args.microbatch)
     native_request = dict(op="train", batch=native, settings=settings)
     (args.output / "requests.jsonl").write_text((json.dumps(native_request)+"\n") * args.native_profile_steps)
     (args.output / "baseline-requests.jsonl").write_text(
         (json.dumps(dict(op="train", batch=native, settings=baseline_settings))+"\n") * args.native_profile_steps)
-    worker = Worker(args.worker, args.archive, "cuda")
+    preserved_worker = args.output / 'worker'
+    shutil.copyfile(args.worker, preserved_worker); preserved_worker.chmod(0o755)
+    worker = Worker(preserved_worker, args.archive, "cuda")
+    report['gpu_processes_before'] = subprocess.check_output(['nvidia-smi','--query-compute-apps=pid,used_gpu_memory','--format=csv,noheader,nounits'],text=True)
+    report['bf16_reduced_precision_reduction'] = torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
     baseline_worker = Worker(args.baseline_worker, args.archive, "cuda") if args.baseline_worker else None
     def native_step(target=worker, options=settings):
         if args.anchor_kl_coef:
-            native["anchor"] = anchor_outputs(model, native)
+            native["anchor"] = anchor_outputs(native_anchor, native, mixed_bf16=args.mixed_bf16, microbatch=args.microbatch)
         return target.request("train", batch=native, settings=options)
     cases = {}
     baseline_label = "tnsr_baseline_tree_f32" if args.baseline_tree_reductions else "tnsr_baseline_strict_f32"
@@ -158,6 +169,8 @@ def run(args):
         native_label = native_label.replace("tnsr_", "tnsr_graph_")
     if args.tf32x3:
         native_label += "_tf32x3"
+    if args.mixed_bf16:
+        native_label = "tnsr_graph_mixed_bf16" if args.cuda_graphs else "tnsr_mixed_bf16"
     cases[native_label] = native_step
     native_pids = {native_label: worker.process.pid}
     if baseline_worker:
@@ -185,7 +198,10 @@ def run(args):
     try:
         # Interleave modes to reduce drift from the pre-existing GPU workload.
         for iteration in range(args.warmups + args.repeats):
-            for label, step in cases.items():
+            order = list(cases.items())
+            if iteration % 2:
+                order.reverse()
+            for label, step in order:
                 synchronize()
                 torch.manual_seed(10000 + iteration)
                 began = time.perf_counter()
@@ -208,12 +224,18 @@ def run(args):
                     sample["graph_replay"] = result["cuda_graphs"]
                 if label.startswith("tnsr") and "profile" in result:
                     sample["profile"] = result["profile"]
+                if label == native_label and args.mixed_bf16:
+                    if result.get("matmul_precision") != "mixed_bf16":
+                        raise RuntimeError("mixed candidate did not execute mixed policy")
+                    sample["mixed_graph"] = result.get("mixed_graph")
+                    sample["mixed_transfers"] = result.get("mixed_transfers")
                 if iteration >= args.warmups:
                     report["cases"][label]["samples"].append(sample)
                 else:
                     report["cases"][label].setdefault("warmup_samples",[]).append(sample)
                 print(iteration,label,round(seconds,6),sample["gpu_status"],flush=True)
                 (args.output/"report.json").write_text(json.dumps(report,indent=2))
+        report["gpu_processes_after"] = subprocess.check_output(["nvidia-smi","--query-compute-apps=pid,used_gpu_memory","--format=csv,noheader,nounits"],text=True)
         for label,result in report["cases"].items():
             samples=[sample["seconds"] for sample in result["samples"]]
             result.update(median_seconds=statistics.median(samples),min_seconds=min(samples),max_seconds=max(samples),
@@ -253,6 +275,7 @@ def main():
     parser.add_argument("--fused-adam",action="store_true",default=None)
     parser.add_argument("--profile-torch",action="store_true")
     parser.add_argument("--compile",action="store_true")
+    parser.add_argument("--mixed-bf16",action="store_true",help="experimental physical mixed graph with resident Adam")
     parser.add_argument("--tf32x3",action="store_true",help="use corrected TF32 tensor-core matmuls with f32 storage")
     parser.add_argument("--cuda-graphs",action="store_true",help="enable private-stream native model replay")
     parser.add_argument("--tree-reductions",action="store_true",help="opt native training into fixed f32 reduction trees")

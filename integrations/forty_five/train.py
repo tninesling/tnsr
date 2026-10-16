@@ -1,6 +1,7 @@
 """Run forty-five's Rust self-play collector with native tnsr inference and PPO."""
 from __future__ import annotations
 import argparse
+import copy
 from dataclasses import asdict
 import hashlib
 import json
@@ -35,7 +36,7 @@ def train_update(worker, batch, settings, *, epochs, hands_per_minibatch, anchor
                        old_log_probs=batch['log_probs'][rows].tolist(),old_values=batch['values'][rows].tolist(),
                        returns=batch['returns'][rows].tolist(),advantages=advantages[rows].tolist())
             if settings['anchor_kl_coef']>0:
-                native['anchor']=anchor_outputs(anchor,native)
+                native['anchor']=anchor_outputs(anchor,native,mixed_bf16=settings.get('mixed_bf16',False),microbatch=settings['microbatch'])
             result=worker.request('train',batch=native,settings=settings)
             result['microbatches']=math.ceil(len(rows)/settings['microbatch'])
             metrics.append(result)
@@ -65,10 +66,10 @@ def run(args):
     runner=FortyFiveSelfPlayRunnerAdapter(num_envs=args.num_envs,seed=args.seed)
     report=dict(source=str(args.source.resolve()),backend=args.backend,seed=args.seed,
                 separate_critic=initial.use_separate_critic,torch_version=torch.__version__,parameter_bytes=parameter_bytes,updates=[],
-                mode='synchronous f32; resident CUDA Adam, host CPU Adam, JSON/host observations',
+                mode='experimental mixed BF16; resident f32 CUDA Adam, JSON/host observations' if args.mixed_bf16 else 'synchronous f32; resident CUDA Adam, host CPU Adam, JSON/host observations',
                 reduction_mode='deterministic_tree_f32' if args.tree_reductions else 'strict_f32',
                 graph_replay=args.cuda_graphs,
-                matmul_precision="tf32x3" if args.tf32x3 else "strict_f32",
+                matmul_precision="mixed_bf16" if args.mixed_bf16 else ("tf32x3" if args.tf32x3 else "strict_f32"),
                 transfer_accounting='training payload lower bounds; excludes observations, inference, archive saves and diagnostics',
                 arguments={key:str(value) if isinstance(value,Path) else value for key,value in vars(args).items()})
     if args.source.is_file(): report['source_sha256']=hashlib.sha256(args.source.read_bytes()).hexdigest()
@@ -81,6 +82,9 @@ def run(args):
         settings['cuda_graphs'] = True
     if args.tf32x3:
         settings['tf32x3'] = True
+    if args.mixed_bf16:
+        settings["mixed_bf16"] = True
+    anchor = copy.deepcopy(initial).cuda().eval() if args.mixed_bf16 and args.anchor_kl_coef > 0 else initial
     with Worker(args.worker,archive,args.backend) as worker:
         policy=Policy(worker)
         for update in range(args.updates):
@@ -115,7 +119,7 @@ def run(args):
             torch.manual_seed(args.seed+10000+update)
             began=time.monotonic()
             metrics=train_update(worker,batch,settings,epochs=args.epochs,
-                                 hands_per_minibatch=args.hands_per_minibatch,anchor=initial)
+                                 hands_per_minibatch=args.hands_per_minibatch,anchor=anchor)
             ppo_seconds=time.monotonic()-began
             rates=worker.request('schedule',update=update+1)
             saved=args.output/f'update-{update+1:04d}';worker.request('save',directory=str(saved))
@@ -172,6 +176,7 @@ def main():
     parser.add_argument('--hands-per-update',type=int,default=2)
     parser.add_argument('--hands-per-minibatch',type=int,default=2)
     parser.add_argument('--microbatch',type=int,default=8)
+    parser.add_argument('--mixed-bf16',action='store_true',help='experimental mixed model graph; requires CUDA, tree reductions and TF32x3')
     parser.add_argument('--tf32x3',action='store_true',help='opt into corrected TF32 matmuls with f32 storage and optimizer')
     parser.add_argument('--cuda-graphs',action='store_true',help='enable private-stream model replay on CUDA')
     parser.add_argument('--tree-reductions',action='store_true',help='opt into fixed f32 reduction trees on CUDA')
@@ -188,6 +193,8 @@ def main():
     parser.add_argument('--compare-rollout',action='store_true')
     parser.add_argument('--export-onnx',action='store_true')
     args=parser.parse_args()
+    if args.mixed_bf16 and not (args.backend == 'cuda' and args.tree_reductions and args.tf32x3):
+        parser.error('mixed BF16 requires --backend cuda --tree-reductions --tf32x3')
     if (args.tree_reductions or args.cuda_graphs or args.tf32x3) and args.backend != 'cuda':
         parser.error('tree reductions, CUDA Graphs and TF32x3 require --backend cuda')
     for field in ['updates','num_envs','hands_per_update','hands_per_minibatch','microbatch','epochs','max_eval_steps']:

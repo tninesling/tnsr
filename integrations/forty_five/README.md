@@ -93,6 +93,8 @@ changing accumulation order. Responses and reports identify the arithmetic
 policy. See [measurements and validation](../../docs/training-tf32x3-performance.md).
 The planner also avoids expanded view buffers for standalone pointwise consumers;
 see [the matched follow-up measurements](../../docs/training-virtual-inputs-performance.md).
+Shared dense projections also flatten leading activation rows to avoid per-example
+weight-gradient matrices; see [validation and measurements](../../docs/training-dense-contractions-performance.md).
 Training is synchronous.
 `--cuda-graphs` (or `settings.cuda_graphs=true`) separately opts into stable-buffer
 model replay. Responses report active shapes, setup and fallback reasons;

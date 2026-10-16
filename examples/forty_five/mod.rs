@@ -1,6 +1,6 @@
 //! Explicit forty-five actor/critic model assembled from tnsr primitives.
 pub mod ppo;
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -225,11 +225,38 @@ impl Model {
         self.parameters.get(name, shape)
     }
     fn linear(&self, prefix: &str, x: Tensor, input: usize, output: usize) -> Result<Tensor> {
-        Ok(nn::linear(
+        let mut shape = x.shape().to_vec();
+        ensure!(
+            shape.last() == Some(&input),
+            "linear input feature width disagrees with its weights"
+        );
+        // A shared dense weight contracts over all leading rows in its gradient.
+        // Flatten before matmul to avoid per-example weight-gradient matrices
+        // followed by a separate batch reduction. Restore the external shape;
+        // gradient summation grouping may differ, so retain the PPO parity gates.
+        let flatten = shape.len() > 2;
+        let x = if flatten {
+            let rows = shape[..shape.len() - 1]
+                .iter()
+                .try_fold(1usize, |rows, extent| rows.checked_mul(*extent))
+                .context("linear row count overflows usize")?;
+            x.reshape(vec![rows, input])
+        } else {
+            x
+        };
+        let result = nn::linear(
             x,
             Tensor::from(self.p(&format!("{prefix}.weight"), &[output, input])?).transpose(),
             Some(self.p(&format!("{prefix}.bias"), &[output])?),
-        ))
+        );
+        if flatten {
+            *shape
+                .last_mut()
+                .context("linear input has no feature dimension")? = output;
+            Ok(result.reshape(shape))
+        } else {
+            Ok(result)
+        }
     }
     fn norm(&self, prefix: &str, x: Tensor, width: usize) -> Result<Tensor> {
         let axis = x.shape().len() - 1;

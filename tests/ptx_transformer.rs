@@ -1167,6 +1167,64 @@ fn ptx_batched_matmul_epilogues_use_one_launch_with_broadcast_and_edges() {
 }
 
 #[test]
+fn ptx_strict_matmul_preserves_rounded_products_and_k_order() {
+    use tnsr::tile::{MatMulPrecision, MatMulSharedLayout};
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    ptx.set_matmul_precision(MatMulPrecision::StrictF32);
+    // Odd extents cross multiple K tiles. Cancellation makes reassociation
+    // observable; near-one factors distinguish rounded mul+add from FMA.
+    let (m, k, n) = (17, 65, 19);
+    let lhs: Vec<f32> = (0..m * k)
+        .map(|index| {
+            if index / k % 2 == 0 {
+                1.0
+            } else if index % k % 2 == 0 {
+                f32::from_bits(1.0_f32.to_bits() + 1)
+            } else {
+                -1.0
+            }
+        })
+        .collect();
+    let rhs: Vec<f32> = (0..k * n)
+        .map(|index| match index % n % 2 {
+            0 => [16_777_216.0, 1.0, -16_777_216.0][index / n % 3],
+            _ => {
+                if index / n % 2 == 0 {
+                    f32::from_bits(1.0_f32.to_bits() - 2)
+                } else {
+                    1.0
+                }
+            }
+        })
+        .collect();
+    for epilogue in [false, true] {
+        let product = TensorExpr::constant(lhs.clone(), vec![m, k])
+            .matmul(TensorExpr::constant(rhs.clone(), vec![k, n]));
+        let graph: TensorGraph<f32> = if epilogue {
+            (product + TensorExpr::constant(vec![0.25; n], vec![n])).into()
+        } else {
+            product.into()
+        };
+        let expected = execute_cpu(&graph);
+        for layout in [
+            MatMulSharedLayout::Contiguous,
+            MatMulSharedLayout::Padded,
+            MatMulSharedLayout::Swizzled,
+        ] {
+            ptx.set_matmul_shared_layout(layout);
+            let actual = ptx.execute(&graph, HashMap::new()).unwrap();
+            assert_eq!(
+                actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                "layout={layout:?}, epilogue={epilogue}"
+            );
+        }
+    }
+}
+
+#[test]
 fn ptx_matmul_precision_change_recompiles_standalone_and_fused_kernels() {
     use tnsr::tile::MatMulPrecision;
     let Some(mut ptx) = ptx_executor() else {
@@ -1191,6 +1249,62 @@ fn ptx_matmul_precision_change_recompiles_standalone_and_fused_kernels() {
         assert!(!ptx.module_source().unwrap().contains("wmma.mma.sync"));
         assert_close(&strict, &execute_cpu(&graph), 1e-6);
         assert_ne!(rounded, strict);
+        ptx.set_matmul_precision(MatMulPrecision::Tf32x3);
+        let corrected = ptx.execute(&graph, HashMap::new()).unwrap();
+        assert_eq!(ptx.compilation_count(), compilations + 2);
+        assert!(ptx.module_source().unwrap().contains("wmma.mma.sync"));
+        assert_close(&corrected, &strict, 1e-6);
+        assert_ne!(rounded, corrected);
+    }
+}
+
+#[test]
+fn ptx_tf32x3_recovers_operand_precision_with_edges_layouts_and_pipelines() {
+    use tnsr::tile::{MatMulPipeline, MatMulPrecision, MatMulSharedLayout};
+    let Some(mut ptx) = ptx_executor() else {
+        return;
+    };
+    for (m, k, n) in [(33, 65, 257), (257, 65, 259), (33, 256, 256)] {
+        let values = |length, period| {
+            (0..length)
+                .map(|i| (i % period) as f32 / period as f32 - 0.5)
+                .collect()
+        };
+        let graph: TensorGraph<f32> = (TensorExpr::constant(values(m * k, 29), vec![m, k])
+            .matmul(TensorExpr::constant(values(k * n, 31), vec![k, n]))
+            + TensorExpr::constant(values(n, 23), vec![n]))
+        .into();
+        let expected = execute_cpu(&graph);
+        ptx.set_matmul_precision(MatMulPrecision::AllowTf32);
+        let rounded = ptx.execute(&graph, HashMap::new()).unwrap();
+        let uses_tensor_cores = ptx.module_source().unwrap().contains("wmma.mma.sync");
+        let rounded_error = rounded
+            .iter()
+            .zip(&expected)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        ptx.set_matmul_precision(MatMulPrecision::Tf32x3);
+        for layout in [
+            MatMulSharedLayout::Contiguous,
+            MatMulSharedLayout::Padded,
+            MatMulSharedLayout::Swizzled,
+        ] {
+            ptx.set_matmul_shared_layout(layout);
+            for pipeline in [MatMulPipeline::Synchronous, MatMulPipeline::DoubleBuffered] {
+                ptx.set_matmul_pipeline(pipeline);
+                let actual = ptx.execute(&graph, HashMap::new()).unwrap();
+                assert_close(&actual, &expected, 2e-5);
+                let error = actual
+                    .iter()
+                    .zip(&expected)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0_f32, f32::max);
+                assert!(
+                    !uses_tensor_cores || error * 20.0 < rounded_error,
+                    "{m}x{k}x{n} {layout:?} {pipeline:?}: corrected={error}, rounded={rounded_error}"
+                );
+            }
+        }
     }
 }
 

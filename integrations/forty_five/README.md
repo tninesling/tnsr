@@ -85,7 +85,13 @@ gradient accumulation, clipping and Adam; the CPU backend uses host Adam.
 Strict-order model reductions remain the default. `--tree-reductions` opts the
 CUDA training/validation/benchmark scripts into fixed parallel f32 trees;
 the JSON equivalent is `settings.tree_reductions=true`. The policy stays fixed
-for the lifetime of a trainer. Matmul remains strict f32. Training is synchronous.
+for the lifetime of a trainer. Matmul defaults to strict f32. `--tf32x3` (or
+`settings.tf32x3=true`) opts CUDA training into corrected TF32 tensor-core
+matmuls, with f32 storage, gradient accumulation and optimizer state. It combines
+three products to retain more operand precision than ordinary TF32, while
+changing accumulation order. Responses and reports identify the arithmetic
+policy. See [measurements and validation](../../docs/training-tf32x3-performance.md).
+Training is synchronous.
 `--cuda-graphs` (or `settings.cuda_graphs=true`) separately opts into stable-buffer
 model replay. Responses report active shapes, setup and fallback reasons;
 accumulation, clipping/status and Adam remain outside capture. See the

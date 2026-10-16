@@ -7,6 +7,11 @@ use super::{DType, MatMulPlan, SharedLayout, TileLayout};
 pub enum MatMulPrecision {
     /// Use increasing-K scalar f32 accumulation for every storage dtype.
     StrictF32,
+    /// F32 storage uses three TF32 products (hi*hi + hi*lo + lo*hi) with f32 accumulation.
+    /// Retains substantially more operand precision than a single TF32 product;
+    /// accumulation order and rounding still differ from StrictF32.
+    /// Half storage uses its native tensor-core format, as with AllowTf32.
+    Tf32x3,
     /// Permit tensor cores: TF32 for f32 storage, native FP16/BF16 for half storage.
     #[default]
     AllowTf32,
@@ -302,9 +307,14 @@ impl MatMulSchedule {
                 m,
                 n,
                 k,
-                capabilities.tf32 && precision == MatMulPrecision::AllowTf32,
+                capabilities.tf32 && precision != MatMulPrecision::StrictF32,
             ),
             _ => MatMulPlan::ScalarF32,
+        };
+        let plan = if plan == MatMulPlan::TensorCoreTf32 && precision == MatMulPrecision::Tf32x3 {
+            MatMulPlan::TensorCoreTf32x3
+        } else {
+            plan
         };
         let tensor_core = plan != MatMulPlan::ScalarF32;
         // Keep small and narrow work on the original tile. Larger tiles reuse
@@ -371,7 +381,10 @@ impl MatMulSchedule {
             ),
             pipeline_stages: 1,
             copy_bytes: 4,
-            operand_dtype: if plan == MatMulPlan::TensorCoreTf32 {
+            operand_dtype: if matches!(
+                plan,
+                MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreTf32x3
+            ) {
                 DType::TF32
             } else {
                 storage_dtype
@@ -393,7 +406,11 @@ mod tests {
     #[test]
     fn capabilities_and_precision_gate_tensor_core_schedule() {
         for tf32 in [false, true] {
-            for precision in [MatMulPrecision::StrictF32, MatMulPrecision::AllowTf32] {
+            for precision in [
+                MatMulPrecision::StrictF32,
+                MatMulPrecision::AllowTf32,
+                MatMulPrecision::Tf32x3,
+            ] {
                 let schedule = MatMulSchedule::select(
                     128,
                     128,
@@ -406,8 +423,12 @@ mod tests {
                     precision,
                 );
                 assert_eq!(
-                    schedule.plan == MatMulPlan::TensorCoreTf32,
-                    tf32 && precision == MatMulPrecision::AllowTf32
+                    schedule.plan != MatMulPlan::ScalarF32,
+                    tf32 && precision != MatMulPrecision::StrictF32
+                );
+                assert_eq!(
+                    schedule.plan == MatMulPlan::TensorCoreTf32x3,
+                    tf32 && precision == MatMulPrecision::Tf32x3
                 );
                 assert_eq!(schedule.block_threads, (16, 16, 1));
                 assert_eq!(schedule.pipeline_stages, 1);

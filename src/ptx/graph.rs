@@ -3139,6 +3139,22 @@ fn lower_tensor_core_matmul<'a>(
             addr: b_address,
             stride: Operand::imm_i32(shared_row_stride(ctx, b_shared) as i32),
         });
+        if schedule.plan == crate::tile::MatMulPlan::TensorCoreTf32x3 {
+            let (a_hi, a_lo) = split_tf32_fragments(func, &a_fragments);
+            let (b_hi, b_lo) = split_tf32_fragments(func, &b_fragments);
+            // Add the small cross products before the dominant product. The
+            // omitted lo*lo term is second order in the TF32 rounding error.
+            for (left, right) in [(a_lo, b_hi.clone()), (a_hi.clone(), b_lo), (a_hi, b_hi)] {
+                func.add_inst(Inst::WmmaMma {
+                    dtype: DType::TF32,
+                    d_frags: accumulators.clone(),
+                    a_frags: left,
+                    b_frags: right,
+                    c_frags: accumulators.clone(),
+                });
+            }
+            continue;
+        }
         if schedule.pipeline_stages == 2 && schedule.operand_dtype == DType::TF32 {
             // Async copies move storage bits. Round only the fragments consumed
             // by MMA, after the completed copy has been loaded from shared memory.
@@ -3158,6 +3174,37 @@ fn lower_tensor_core_matmul<'a>(
         });
     }
     func.add_inst(Inst::Label(done));
+}
+
+/// Split unrounded f32 register bits into two TF32 terms. Both synchronous
+/// staging and async copies preserve the original f32 bits for this policy.
+fn split_tf32_fragments<'a>(
+    func: &mut Function<'a>,
+    fragments: &[Operand<'a, B32>],
+) -> (Vec<Operand<'a, B32>>, Vec<Operand<'a, B32>>) {
+    fragments
+        .iter()
+        .map(|fragment| {
+            let hi = func.add_b32_register();
+            func.add_inst(Inst::ConvertTf32Bits {
+                dst: hi.clone(),
+                src: fragment.clone(),
+            });
+            let original = func.add_f32_register();
+            let rounded = func.add_f32_register();
+            let residual = func.add_f32_register();
+            func.add_inst(Inst::mov_f32_b32(original.clone(), fragment.clone()));
+            func.add_inst(Inst::mov_f32_b32(rounded.clone(), hi.clone()));
+            func.add_inst(Inst::sub_f32(residual.clone(), original, rounded));
+            let lo = func.add_b32_register();
+            func.add_inst(Inst::mov_b32(lo.clone(), residual));
+            func.add_inst(Inst::ConvertTf32Bits {
+                dst: lo.clone(),
+                src: lo.clone(),
+            });
+            (hi, lo)
+        })
+        .unzip()
 }
 
 fn shared_layout(ctx: &LoweringContext<'_>, tile: TileVar) -> SharedLayout {

@@ -158,6 +158,7 @@ fn validate(
                     let tile = get(tiles, var)?;
                     let dtype = if schedule.plan == MatMulPlan::ScalarF32
                         || schedule.pipeline_stages == 2
+                        || schedule.plan == MatMulPlan::TensorCoreTf32x3
                     {
                         schedule.storage_dtype
                     } else {

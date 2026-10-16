@@ -378,6 +378,7 @@ pub enum MemorySpace {
 pub enum MatMulPlan {
     ScalarF32,
     TensorCoreTf32,
+    TensorCoreTf32x3,
     TensorCoreF16,
     TensorCoreBF16,
 }

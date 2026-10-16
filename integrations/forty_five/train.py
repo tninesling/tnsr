@@ -68,6 +68,7 @@ def run(args):
                 mode='synchronous f32; resident CUDA Adam, host CPU Adam, JSON/host observations',
                 reduction_mode='deterministic_tree_f32' if args.tree_reductions else 'strict_f32',
                 graph_replay=args.cuda_graphs,
+                matmul_precision="tf32x3" if args.tf32x3 else "strict_f32",
                 transfer_accounting='training payload lower bounds; excludes observations, inference, archive saves and diagnostics',
                 arguments={key:str(value) if isinstance(value,Path) else value for key,value in vars(args).items()})
     if args.source.is_file(): report['source_sha256']=hashlib.sha256(args.source.read_bytes()).hexdigest()
@@ -78,6 +79,8 @@ def run(args):
         settings['tree_reductions'] = True
     if args.cuda_graphs:
         settings['cuda_graphs'] = True
+    if args.tf32x3:
+        settings['tf32x3'] = True
     with Worker(args.worker,archive,args.backend) as worker:
         policy=Policy(worker)
         for update in range(args.updates):
@@ -169,6 +172,7 @@ def main():
     parser.add_argument('--hands-per-update',type=int,default=2)
     parser.add_argument('--hands-per-minibatch',type=int,default=2)
     parser.add_argument('--microbatch',type=int,default=8)
+    parser.add_argument('--tf32x3',action='store_true',help='opt into corrected TF32 matmuls with f32 storage and optimizer')
     parser.add_argument('--cuda-graphs',action='store_true',help='enable private-stream model replay on CUDA')
     parser.add_argument('--tree-reductions',action='store_true',help='opt into fixed f32 reduction trees on CUDA')
     parser.add_argument('--epochs',type=int,default=1)
@@ -184,8 +188,8 @@ def main():
     parser.add_argument('--compare-rollout',action='store_true')
     parser.add_argument('--export-onnx',action='store_true')
     args=parser.parse_args()
-    if (args.tree_reductions or args.cuda_graphs) and args.backend != 'cuda':
-        parser.error('tree reductions and CUDA Graphs require --backend cuda')
+    if (args.tree_reductions or args.cuda_graphs or args.tf32x3) and args.backend != 'cuda':
+        parser.error('tree reductions, CUDA Graphs and TF32x3 require --backend cuda')
     for field in ['updates','num_envs','hands_per_update','hands_per_minibatch','microbatch','epochs','max_eval_steps']:
         if getattr(args,field)<1:parser.error(f'{field} must be positive')
     for field in ['entropy_coef','final_entropy_coef','anchor_kl_coef','learning_rate','value_learning_rate']:

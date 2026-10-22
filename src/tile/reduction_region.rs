@@ -27,6 +27,18 @@ pub enum ReductionSchedule {
     Block { threads: u32 },
 }
 
+#[cfg(feature = "cuda")]
+impl ReductionSchedule {
+    /// Pack independent fibers without changing each fiber's arithmetic tree.
+    pub(crate) fn fibers_per_block(self) -> u32 {
+        match self {
+            Self::Serial => 1,
+            Self::Subgroup { .. } => 8,
+            Self::Block { .. } => 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReductionInput {
     pub node: NodeIndex,

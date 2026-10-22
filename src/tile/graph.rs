@@ -730,11 +730,6 @@ impl TileGraph {
             schedule.block_tile.k,
         );
         let threads = schedule.thread_count();
-        let copy_group = if schedule.pipeline_stages == 2 {
-            schedule.copy_bytes / schedule.storage_dtype.size_bytes()
-        } else {
-            1
-        };
         let plan = schedule.plan;
         let operand_dtype = if schedule.plan == MatMulPlan::ScalarF32
             || schedule.pipeline_stages == 2
@@ -801,69 +796,107 @@ impl TileGraph {
         // Calculate number of K tiles needed
         let k_tiles = k.div_ceil(tile_k);
 
-        let load =
-            |builder: &mut TileIRBuilder, dest, src: &str, index, bounds, coordinates, layout| {
-                if schedule.pipeline_stages == 2 {
-                    builder.copy_global_to_shared_indexed(
-                        dest,
-                        src,
-                        index,
-                        bounds,
-                        coordinates,
-                        layout,
-                        schedule.copy_bytes,
-                    );
-                } else {
-                    builder.load_global_to_shared_indexed(
-                        dest,
-                        src,
-                        index,
-                        bounds,
-                        coordinates,
-                        layout,
-                    );
-                }
-            };
-        let stage = |builder: &mut TileIRBuilder, buffers: (TileVar, TileVar), k_index: Expr| {
-            for round in 0..(tile_m * tile_k).div_ceil(threads * copy_group) {
-                let ((a_row, a_col), _) = matmul_operand_coordinates(schedule, staging, round);
-                let (a_row, a_col) = (with_k_tile(&a_row, &k_index), with_k_tile(&a_col, &k_index));
-                load(
-                    builder,
-                    buffers.0,
-                    &a_param,
-                    operand_indices
-                        .as_ref()
-                        .map(|indices| with_k_tile(&indices[round].0, &k_index))
-                        .unwrap_or_else(|| a_batch.clone() + a_row.clone() * k + a_col.clone()),
-                    (a_row, a_col),
-                    operand_staging_coordinates(schedule, true, staging.0, round),
-                    MatrixLayout {
-                        rows: m,
-                        cols: k,
-                        row_stride: k,
-                    },
+        let load = |builder: &mut TileIRBuilder,
+                    dest,
+                    src: &str,
+                    index,
+                    bounds,
+                    coordinates,
+                    layout,
+                    asynchronous| {
+            if schedule.pipeline_stages == 2 && asynchronous {
+                builder.copy_global_to_shared_indexed(
+                    dest,
+                    src,
+                    index,
+                    bounds,
+                    coordinates,
+                    layout,
+                    schedule.copy_bytes,
+                );
+            } else {
+                builder.load_global_to_shared_indexed(
+                    dest,
+                    src,
+                    index,
+                    bounds,
+                    coordinates,
+                    layout,
                 );
             }
-            for round in 0..(tile_k * tile_n).div_ceil(threads * copy_group) {
-                let (_, (b_row, b_col)) = matmul_operand_coordinates(schedule, staging, round);
-                let (b_row, b_col) = (with_k_tile(&b_row, &k_index), with_k_tile(&b_col, &k_index));
-                load(
-                    builder,
-                    buffers.1,
-                    &b_param,
-                    operand_indices
+        };
+        let stage = |builder: &mut TileIRBuilder, buffers: (TileVar, TileVar), k_index: Expr| {
+            // Issue asynchronous movement before the scalar operand's loads.
+            let order = if schedule.async_operands == (false, true) {
+                [false, true]
+            } else {
+                [true, false]
+            };
+            for lhs in order {
+                let (rows, cols, dest, param, batch, layout, asynchronous) = if lhs {
+                    (
+                        tile_m,
+                        tile_k,
+                        buffers.0,
+                        &a_param,
+                        &a_batch,
+                        MatrixLayout {
+                            rows: m,
+                            cols: k,
+                            row_stride: k,
+                        },
+                        schedule.async_operands.0,
+                    )
+                } else {
+                    (
+                        tile_k,
+                        tile_n,
+                        buffers.1,
+                        &b_param,
+                        &b_batch,
+                        MatrixLayout {
+                            rows: k,
+                            cols: n,
+                            row_stride: n,
+                        },
+                        schedule.async_operands.1,
+                    )
+                };
+                for round in 0..(rows * cols).div_ceil(threads * schedule.copy_group(lhs)) {
+                    let (a, b) = matmul_operand_coordinates(schedule, staging, round);
+                    let (row, col) = if lhs { a } else { b };
+                    let (row, col) = (with_k_tile(&row, &k_index), with_k_tile(&col, &k_index));
+                    let index = operand_indices
                         .as_ref()
-                        .map(|indices| with_k_tile(&indices[round].1, &k_index))
-                        .unwrap_or_else(|| b_batch.clone() + b_row.clone() * n + b_col.clone()),
-                    (b_row, b_col),
-                    operand_staging_coordinates(schedule, false, staging.1, round),
-                    MatrixLayout {
-                        rows: k,
-                        cols: n,
-                        row_stride: n,
-                    },
-                );
+                        .map(|indices| {
+                            with_k_tile(
+                                if lhs {
+                                    &indices[round].0
+                                } else {
+                                    &indices[round].1
+                                },
+                                &k_index,
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            batch.clone() + row.clone() * layout.row_stride + col.clone()
+                        });
+                    load(
+                        builder,
+                        dest,
+                        param,
+                        index,
+                        (row, col),
+                        operand_staging_coordinates(
+                            schedule,
+                            lhs,
+                            if lhs { staging.0 } else { staging.1 },
+                            round,
+                        ),
+                        layout,
+                        asynchronous,
+                    );
+                }
             }
         };
         if let Some(next) = next_buffers {
@@ -1406,15 +1439,27 @@ fn operand_staging_coordinates(
     } else {
         (schedule.block_tile.k, schedule.block_tile.n)
     };
-    if schedule.pipeline_stages == 2 && schedule.copy_bytes > schedule.storage_dtype.size_bytes() {
-        let group = schedule.copy_bytes / schedule.storage_dtype.size_bytes();
+    let group = schedule.copy_group(lhs);
+    if group > 1 {
         let index = Expr::Const((round * schedule.thread_count()) as i64)
             + Expr::ThreadIdx(Dim::Y) * schedule.block_threads.0 as usize
             + Expr::ThreadIdx(Dim::X);
-        return (
-            Expr::FloorDiv(Box::new(index.clone()), cols / group),
-            Expr::Mod(Box::new(index), cols / group) * group,
-        );
+        let physical = if lhs {
+            schedule.operand_layouts.0
+        } else {
+            schedule.operand_layouts.1
+        };
+        return if physical.column_major {
+            (
+                Expr::Mod(Box::new(index.clone()), rows / group) * group,
+                Expr::FloorDiv(Box::new(index), rows / group),
+            )
+        } else {
+            (
+                Expr::FloorDiv(Box::new(index.clone()), cols / group),
+                Expr::Mod(Box::new(index), cols / group) * group,
+            )
+        };
     }
     tile_thread_coordinates(schedule, rows, cols, transposed, round)
 }

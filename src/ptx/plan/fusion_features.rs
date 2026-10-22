@@ -92,7 +92,13 @@ impl PtxExecutionPlan {
                             ReductionSchedule::Subgroup { width } => width as usize,
                             ReductionSchedule::Block { threads } => threads as usize,
                         };
-                        features.threads_per_block = if threads == 1 { 256 } else { threads };
+                        features.threads_per_block = match region.schedule {
+                            ReductionSchedule::Serial => 256,
+                            ReductionSchedule::Subgroup { width } => {
+                                width as usize * region.schedule.fibers_per_block() as usize
+                            }
+                            ReductionSchedule::Block { threads } => threads as usize,
+                        };
                         features.active_threads = reduced.saturating_mul(threads);
                         if threads == 1 {
                             let row_elements = region.input_shape[region.axis]
@@ -200,13 +206,12 @@ fn matmul_features(
         schedule
             .operand_layouts
             .0
-            .allocation_bytes(tile.m, schedule.operand_dtype)
-            .saturating_add(
-                schedule
-                    .operand_layouts
-                    .1
-                    .allocation_bytes(tile.k, schedule.operand_dtype),
-            ),
+            .allocation_bytes(tile.m, tile.k, schedule.operand_dtype)
+            .saturating_add(schedule.operand_layouts.1.allocation_bytes(
+                tile.k,
+                tile.n,
+                schedule.operand_dtype,
+            )),
     );
     if schedule.plan != MatMulPlan::ScalarF32 {
         features.shared_bytes_per_block = features

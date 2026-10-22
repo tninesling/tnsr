@@ -3,7 +3,7 @@ use super::{Binding, Buffer};
 use crate::{
     graph::{NodeIndex, TensorGraph, TensorGraphNode},
     ptx::{CudaDType, PtxExecutor, PtxPlanAction, PtxReductionMode},
-    tile::{MatMulPrecision, ReductionSchedule, TileDType},
+    tile::{MatMulPrecision, TileDType},
 };
 use anyhow::{Context, Result, ensure};
 use cudarc::driver::{CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchConfig, PushKernelArg};
@@ -213,6 +213,7 @@ impl<D: CudaDType> Program<D> {
                 .chain(&step.outputs)
                 .map(pointer)
                 .collect::<Result<Vec<_>>>()?;
+            let function = executor.planned_kernel_function(step)?;
             let config = match step.action {
                 PtxPlanAction::MatMulRegion(id) => {
                     let r = &plan.matmul_regions()[id];
@@ -228,19 +229,8 @@ impl<D: CudaDType> Program<D> {
                 }
                 PtxPlanAction::ReductionRegion(id) => {
                     let len = u32::try_from(step.shape.iter().product::<usize>())?;
-                    match plan.reduction_regions()[id].schedule {
-                        ReductionSchedule::Serial => LaunchConfig::for_num_elems(len),
-                        ReductionSchedule::Subgroup { width } => LaunchConfig {
-                            grid_dim: (len, 1, 1),
-                            block_dim: (width, 1, 1),
-                            shared_mem_bytes: 0,
-                        },
-                        ReductionSchedule::Block { threads } => LaunchConfig {
-                            grid_dim: (len, 1, 1),
-                            block_dim: (threads, 1, 1),
-                            shared_mem_bytes: 0,
-                        },
-                    }
+                    let schedule = plan.reduction_regions()[id].schedule;
+                    crate::ptx::target::reduction_launch_config(schedule, len, &function)?
                 }
                 PtxPlanAction::Kernel
                     if matches!(graph[step.node], TensorGraphNode::MatMul { .. }) =>
@@ -270,7 +260,7 @@ impl<D: CudaDType> Program<D> {
                     )?)
                 }
                 PtxPlanAction::Kernel | PtxPlanAction::PointwiseRegion(_) => {
-                    LaunchConfig::for_num_elems(u32::try_from(
+                    crate::ptx::target::pointwise_launch_config(u32::try_from(
                         step.shape.iter().product::<usize>(),
                     )?)
                 }
@@ -289,7 +279,7 @@ impl<D: CudaDType> Program<D> {
                         .collect::<Vec<_>>(),
                     step.shape
                 ),
-                function: executor.planned_kernel_function(step)?,
+                function,
                 config,
                 pointers,
                 zero_before: if matches!(

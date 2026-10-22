@@ -90,11 +90,15 @@ pub struct MatMulSchedule {
     pub block_threads: (u32, u32, u32),
     /// Warps that compute output fragments; remaining block warps stage operands.
     pub warp_topology: (usize, usize),
+    /// Number of 16x16 accumulator fragments owned by each computing warp.
+    pub warp_fragments: (usize, usize),
     pub operand_layouts: (SharedLayout, SharedLayout),
     /// One synchronous stage or two asynchronously copied stages.
     pub pipeline_stages: usize,
     /// Raw bytes moved per asynchronous copy group.
     pub copy_bytes: usize,
+    /// Operands copied asynchronously; others use predicated scalar staging.
+    pub async_operands: (bool, bool),
     pub operand_dtype: DType,
     /// Storage format at global-memory graph boundaries.
     pub storage_dtype: DType,
@@ -103,8 +107,17 @@ pub struct MatMulSchedule {
 
 impl MatMulSchedule {
     pub fn with_shared_layout(
+        self,
+        policy: MatMulSharedLayout,
+        resources: MatMulResources,
+    ) -> Result<Self> {
+        self.with_operand_orientations(policy, (false, false), resources)
+    }
+
+    pub(crate) fn with_operand_orientations(
         mut self,
         policy: MatMulSharedLayout,
+        column_major: (bool, bool),
         resources: MatMulResources,
     ) -> Result<Self> {
         let tensor_core = self.plan != MatMulPlan::ScalarF32;
@@ -138,7 +151,18 @@ impl MatMulSchedule {
             self.block_tile.m > 0 && self.block_tile.n > 0 && self.block_tile.k > 0,
             "matmul block tile dimensions must be positive"
         );
-        let (a, b) = (layout(self.block_tile.k)?, layout(self.block_tile.n)?);
+        let mut a = layout(if column_major.0 {
+            self.block_tile.m
+        } else {
+            self.block_tile.k
+        })?;
+        let mut b = layout(if column_major.1 {
+            self.block_tile.k
+        } else {
+            self.block_tile.n
+        })?;
+        a.column_major = column_major.0;
+        b.column_major = column_major.1;
         a.validate(self.block_tile.m, self.block_tile.k, self.operand_dtype)?;
         b.validate(self.block_tile.k, self.block_tile.n, self.operand_dtype)?;
         let c = SharedLayout::row_major(self.block_tile.n);
@@ -148,13 +172,17 @@ impl MatMulSchedule {
             SharedLayout::row_major(self.block_tile.n),
         );
         let accumulator_bytes = if tensor_core {
-            c.allocation_bytes(self.block_tile.m, DType::F32)
+            c.allocation_bytes(self.block_tile.m, self.block_tile.n, DType::F32)
         } else {
             0
         };
         let shared_bytes = a
-            .allocation_bytes(self.block_tile.m, self.operand_dtype)
-            .checked_add(b.allocation_bytes(self.block_tile.k, self.operand_dtype))
+            .allocation_bytes(self.block_tile.m, self.block_tile.k, self.operand_dtype)
+            .checked_add(b.allocation_bytes(
+                self.block_tile.k,
+                self.block_tile.n,
+                self.operand_dtype,
+            ))
             .and_then(|bytes| bytes.checked_add(accumulator_bytes))
             .ok_or_else(|| anyhow!("matmul shared allocation size overflows usize"))?;
         if shared_bytes <= resources.shared_bytes_per_block
@@ -166,39 +194,72 @@ impl MatMulSchedule {
     }
 
     /// Select after operand layouts. `contiguous` proves aligned source groups
-    /// can follow the logical matrix columns without crossing a physical row.
+    /// along each layout's physical minor axis without crossing a physical row.
     pub fn with_pipeline(
-        mut self,
+        self,
         policy: MatMulPipeline,
         supports_async: bool,
         contiguous: bool,
         resources: MatMulResources,
     ) -> Self {
+        self.with_operand_pipeline(policy, supports_async, contiguous, (true, true), resources)
+    }
+
+    pub(crate) fn with_operand_pipeline(
+        mut self,
+        policy: MatMulPipeline,
+        supports_async: bool,
+        contiguous: bool,
+        async_operands: (bool, bool),
+        resources: MatMulResources,
+    ) -> Self {
         self.pipeline_stages = 1;
         self.copy_bytes = 4;
+        self.async_operands = (false, false);
         let tile = self.block_tile;
-        let pairs_aligned = self.storage_dtype.size_bytes() == 4
-            || (contiguous
-                && self.logical_shape.k.is_multiple_of(2)
-                && self.logical_shape.n.is_multiple_of(2)
-                && [self.operand_layouts.0, self.operand_layouts.1]
-                    .iter()
-                    .all(|layout| layout.row_stride.is_multiple_of(2) && layout.xor_mask & 1 == 0));
+        let copy_extents = [
+            if self.operand_layouts.0.column_major {
+                self.logical_shape.m
+            } else {
+                self.logical_shape.k
+            },
+            if self.operand_layouts.1.column_major {
+                self.logical_shape.k
+            } else {
+                self.logical_shape.n
+            },
+        ];
+        let active = [async_operands.0, async_operands.1];
+        let layouts = [self.operand_layouts.0, self.operand_layouts.1];
+        let aligned = |group: usize| {
+            copy_extents
+                .iter()
+                .zip(layouts)
+                .zip(active)
+                .all(|((&extent, layout), enabled)| {
+                    !enabled
+                        || (extent.is_multiple_of(group)
+                            && layout.row_stride.is_multiple_of(group)
+                            && layout.xor_mask & (group - 1) == 0)
+                })
+        };
+        let pairs_aligned = self.storage_dtype.size_bytes() == 4 || (contiguous && aligned(2));
         let operands = self
             .operand_layouts
             .0
-            .allocation_bytes(tile.m, self.storage_dtype)
+            .allocation_bytes(tile.m, tile.k, self.storage_dtype)
             + self
                 .operand_layouts
                 .1
-                .allocation_bytes(tile.k, self.storage_dtype);
+                .allocation_bytes(tile.k, tile.n, self.storage_dtype);
         let accumulator = if self.plan == MatMulPlan::ScalarF32 {
             0
         } else {
-            SharedLayout::row_major(tile.n).allocation_bytes(tile.m, DType::F32)
+            SharedLayout::row_major(tile.n).allocation_bytes(tile.m, tile.n, DType::F32)
         };
         let bytes = 2 * operands + accumulator;
         if supports_async
+            && active.iter().any(|enabled| *enabled)
             && pairs_aligned
             && policy != MatMulPipeline::Synchronous
             && self.logical_shape.k > tile.k
@@ -207,17 +268,9 @@ impl MatMulSchedule {
             && resources.shared_bytes_per_sm / bytes >= 2
         {
             self.pipeline_stages = 2;
+            self.async_operands = async_operands;
             let group = 16 / self.storage_dtype.size_bytes();
-            if contiguous
-                && self.logical_shape.k.is_multiple_of(group)
-                && self.logical_shape.n.is_multiple_of(group)
-                && [self.operand_layouts.0, self.operand_layouts.1]
-                    .iter()
-                    .all(|layout| {
-                        layout.row_stride.is_multiple_of(group)
-                            && layout.xor_mask & (group - 1) == 0
-                    })
-            {
+            if contiguous && aligned(group) {
                 self.copy_bytes = 16;
             }
             // Auto amortizes pipeline startup only on vectorized copies with
@@ -229,9 +282,23 @@ impl MatMulSchedule {
             {
                 self.pipeline_stages = 1;
                 self.copy_bytes = 4;
+                self.async_operands = (false, false);
             }
         }
         self
+    }
+
+    pub(crate) fn copy_group(&self, lhs: bool) -> usize {
+        let enabled = if lhs {
+            self.async_operands.0
+        } else {
+            self.async_operands.1
+        };
+        if self.pipeline_stages == 2 && enabled {
+            self.copy_bytes / self.storage_dtype.size_bytes()
+        } else {
+            1
+        }
     }
 
     pub fn thread_count(&self) -> usize {
@@ -248,6 +315,7 @@ impl MatMulSchedule {
                 operand_dtype: self.operand_dtype,
                 block_width: self.block_threads.0,
                 warp_topology: self.warp_topology,
+                warp_fragments: self.warp_fragments,
             },
         }
     }
@@ -319,7 +387,13 @@ impl MatMulSchedule {
         let tensor_core = plan != MatMulPlan::ScalarF32;
         // Keep small and narrow work on the original tile. Larger tiles reuse
         // operands across two or four computing warps without growing the block.
-        let block_tile = if tensor_core && m >= 256 && n >= 256 && k >= 64 {
+        let block_tile = if plan == MatMulPlan::TensorCoreBF16 && m >= 2048 && n >= 256 && k >= 64 {
+            MatMulTile {
+                m: 64,
+                n: 64,
+                k: 32,
+            }
+        } else if tensor_core && m >= 256 && n >= 256 && k >= 64 {
             MatMulTile {
                 m: 32,
                 n: 32,
@@ -355,6 +429,7 @@ impl MatMulSchedule {
             }
         };
         let expanded = block_tile.n != 16;
+        let multi_fragment = block_tile.m == 64 && block_tile.n == 64;
 
         Self {
             plan,
@@ -370,17 +445,21 @@ impl MatMulSchedule {
                 MatMulTile { m: 1, n: 1, k: 1 }
             },
             block_threads: if expanded { (32, 8, 1) } else { (16, 16, 1) },
-            warp_topology: if tensor_core {
+            warp_topology: if multi_fragment {
+                (2, 2)
+            } else if tensor_core {
                 (block_tile.m / 16, block_tile.n / 16)
             } else {
                 (8, 1)
             },
+            warp_fragments: if multi_fragment { (2, 2) } else { (1, 1) },
             operand_layouts: (
                 SharedLayout::row_major(block_tile.k),
                 SharedLayout::row_major(block_tile.n),
             ),
             pipeline_stages: 1,
             copy_bytes: 4,
+            async_operands: (false, false),
             operand_dtype: if matches!(
                 plan,
                 MatMulPlan::TensorCoreTf32 | MatMulPlan::TensorCoreTf32x3
@@ -402,6 +481,63 @@ impl MatMulSchedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_bf16_register_tiles_respect_resources_and_keep_f32_schedule() {
+        let capabilities = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        let select = |dtype, resources| {
+            MatMulSchedule::select_with_resources(
+                4096,
+                768,
+                256,
+                dtype,
+                capabilities,
+                MatMulPrecision::AllowTf32,
+                resources,
+            )
+        };
+        let bf16 = select(DType::BF16, MatMulResources::default());
+        assert_eq!(
+            bf16.block_tile,
+            MatMulTile {
+                m: 64,
+                n: 64,
+                k: 32
+            }
+        );
+        assert_eq!(bf16.warp_topology, (2, 2));
+        assert_eq!(bf16.warp_fragments, (2, 2));
+        let f32 = select(DType::F32, MatMulResources::default());
+        assert_eq!(
+            f32.block_tile,
+            MatMulTile {
+                m: 32,
+                n: 32,
+                k: 32
+            }
+        );
+        assert_eq!(f32.warp_fragments, (1, 1));
+        let constrained = select(
+            DType::BF16,
+            MatMulResources {
+                registers_per_sm: 32 * 1024,
+                ..MatMulResources::default()
+            },
+        );
+        assert_eq!(
+            constrained.block_tile,
+            MatMulTile {
+                m: 16,
+                n: 16,
+                k: 16
+            }
+        );
+        assert_eq!(constrained.warp_fragments, (1, 1));
+    }
 
     #[test]
     fn capabilities_and_precision_gate_tensor_core_schedule() {
@@ -710,6 +846,52 @@ mod tests {
                     )
                     .unwrap();
                 assert_eq!(constrained.operand_layouts, base.operand_layouts);
+            }
+        }
+    }
+    #[test]
+    fn hybrid_pipeline_only_requires_alignment_of_async_operand() {
+        let resources = MatMulResources::default();
+        let caps = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        for (m, k, n, column_major, mask) in [
+            (264, 136, 283, (true, false), (true, false)),
+            (267, 136, 280, (true, false), (false, true)),
+            (264, 137, 280, (false, false), (false, true)),
+        ] {
+            let base = MatMulSchedule::select_for_dtype(
+                m,
+                n,
+                k,
+                DType::BF16,
+                caps,
+                MatMulPrecision::AllowTf32,
+            )
+            .with_operand_orientations(MatMulSharedLayout::Padded, column_major, resources)
+            .unwrap();
+            let selected =
+                base.with_operand_pipeline(MatMulPipeline::Auto, true, true, mask, resources);
+            assert_eq!(selected.pipeline_stages, 2);
+            assert_eq!(selected.async_operands, mask);
+            assert_eq!(selected.copy_group(true), if mask.0 { 8 } else { 1 });
+            assert_eq!(selected.copy_group(false), if mask.1 { 8 } else { 1 });
+            for (supported, budget) in [
+                (false, resources),
+                (
+                    true,
+                    MatMulResources {
+                        shared_bytes_per_sm: 1,
+                        ..resources
+                    },
+                ),
+            ] {
+                let fallback =
+                    base.with_operand_pipeline(MatMulPipeline::Auto, supported, true, mask, budget);
+                assert_eq!(fallback.pipeline_stages, 1);
+                assert_eq!(fallback.async_operands, (false, false));
             }
         }
     }

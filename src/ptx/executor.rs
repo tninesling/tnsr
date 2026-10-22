@@ -31,7 +31,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 22;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 34;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1016,7 +1016,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                     shared_mem_bytes: 0,
                 }
             } else {
-                LaunchConfig::for_num_elems(u32::try_from(len).context("Scalar output too large")?)
+                crate::ptx::target::pointwise_launch_config(
+                    u32::try_from(len).context("Scalar output too large")?,
+                )
             };
             let function = self.kernel_function(module, kernel_name)?;
             let stream = self.stream.clone();
@@ -1121,19 +1123,8 @@ impl<D: CudaDType> PtxExecutor<D> {
                 launcher.arg(output);
             }
             self.record_kernel_launch();
-            let config = match region.schedule {
-                crate::tile::ReductionSchedule::Serial => LaunchConfig::for_num_elems(launch_len),
-                crate::tile::ReductionSchedule::Subgroup { width } => LaunchConfig {
-                    grid_dim: (launch_len, 1, 1),
-                    block_dim: (width, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-                crate::tile::ReductionSchedule::Block { threads } => LaunchConfig {
-                    grid_dim: (launch_len, 1, 1),
-                    block_dim: (threads, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-            };
+            let config =
+                super::target::reduction_launch_config(region.schedule, launch_len, &function)?;
             unsafe { launcher.launch(config) }
                 .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
         }

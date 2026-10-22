@@ -1,10 +1,21 @@
 # Actual forty-five mixed PPO updates
 
+Latest: [BF16 PPO within 20% of PyTorch](training-bf16-within20.md) records fresh
+five-mode comparisons after pointwise launch and aligned split-K operand tuning.
+
+Earlier [packed warp reductions](training-bf16-packed-reductions.md) measured
+34.77 → 34.51 ms against the accepted hybrid GEMM worker, a 1.0087×
+median paired throughput ratio with 42/64 wins. Earlier [hybrid operand
+staging](training-bf16-hybrid-staging.md), [transposed staging](training-bf16-transposed-staging.md)
+and [register tiling](training-bf16-gemm-tuning.md) retain their separate
+experiments and numerical/learning limits. The original five-mode matrix below
+is historical; the latest comparisons appear in the follow-up above.
+
 The experimental `--mixed-bf16` path now executes the actual forty-five shared
 and separate critics through graph autograd, exact indices and resident Adam.
-F32 remains the default. Mixed execution is still slower end to end on the
-measured workload; this integration does not establish training or learning
-parity. It advances [#114](https://github.com/tninesling/tnsr/issues/114),
+F32 remains the default. The original pre-tuning measurements below were slower
+end to end; later tuning results appear in the follow-ups above. This integration
+does not establish training or learning parity. It advances [#114](https://github.com/tninesling/tnsr/issues/114),
 [#115](https://github.com/tninesling/tnsr/issues/115) and
 [#94](https://github.com/tninesling/tnsr/issues/94).
 

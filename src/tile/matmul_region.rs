@@ -30,6 +30,84 @@ pub struct MatMulRegion {
 }
 
 impl MatMulRegion {
+    /// Prove async groups independently; an unaligned operand can use scalar
+    /// staging in the other stage while aligned copies overlap its loads.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn configure_pipeline(
+        &mut self,
+        shared: super::MatMulSharedLayout,
+        pipeline: super::MatMulPipeline,
+        supports_async: bool,
+        resources: super::MatMulResources,
+    ) -> Result<()> {
+        let operands = [self.lhs_value, self.rhs_value].map(|value| {
+            self.inputs
+                .iter()
+                .find(|input| input.value == value)
+                .context("matrix operand missing from region inputs")
+        });
+        let [lhs, rhs] = operands;
+        let (lhs, rhs) = (lhs?, rhs?);
+        let contiguous = lhs.tensor.access.is_identity() && rhs.tensor.access.is_identity();
+        let base = self.schedule;
+        self.schedule = base.with_shared_layout(shared, resources)?.with_pipeline(
+            pipeline,
+            supports_async,
+            contiguous,
+            resources,
+        );
+        if base.plan != super::MatMulPlan::TensorCoreBF16
+            || !supports_async
+            || pipeline == super::MatMulPipeline::Synchronous
+        {
+            return Ok(());
+        }
+        let groups = (
+            super::matmul_copy::copy_orientation(lhs, 8)?,
+            super::matmul_copy::copy_orientation(rhs, 8)?,
+        );
+        let async_operands = (groups.0.is_some(), groups.1.is_some());
+        if !async_operands.0 && !async_operands.1 {
+            return Ok(());
+        }
+        // A short register-tiled projection does not amortize staging its
+        // wide scalar RHS. Keep its existing synchronous schedule in Auto.
+        if pipeline == super::MatMulPipeline::Auto
+            && async_operands == (true, false)
+            && base.warp_fragments != (1, 1)
+            && self.k < 512
+        {
+            return Ok(());
+        }
+        let a = match groups.0 {
+            Some(a) => a,
+            None => super::matmul_copy::copy_orientation(lhs, 1)?.unwrap_or(false),
+        };
+        let b = match groups.1 {
+            Some(b) => b,
+            None => super::matmul_copy::copy_orientation(rhs, 1)?.unwrap_or(false),
+        };
+        let candidate = base.with_operand_orientations(shared, (a, b), resources)?;
+        if (
+            candidate.operand_layouts.0.column_major,
+            candidate.operand_layouts.1.column_major,
+        ) != (a, b)
+        {
+            return Ok(());
+        }
+        let candidate = candidate.with_operand_pipeline(
+            pipeline,
+            supports_async,
+            true,
+            async_operands,
+            resources,
+        );
+        if candidate.pipeline_stages == 2 {
+            self.schedule = candidate;
+        }
+        Ok(())
+    }
+
     pub fn from_graph<D: crate::tile::TileDType, G>(
         graph: &TensorGraph<D, G>,
         anchor: NodeIndex,
@@ -396,5 +474,63 @@ mod tests {
         let region = MatMulRegion::from_graph(&graph, matmul, vec![], vec![matmul]).unwrap();
         assert_eq!(region.batch_shape, vec![2]);
         assert_eq!((region.m, region.n, region.k), (3, 5, 4));
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod hybrid_tests {
+    use super::*;
+    use crate::tile::{
+        DType, MatMulCapabilities, MatMulPipeline, MatMulPrecision, MatMulResources,
+        MatMulSchedule, MatMulSharedLayout,
+    };
+    #[test]
+    fn short_register_tiled_scalar_rhs_keeps_auto_fallback() -> Result<()> {
+        let resources = MatMulResources {
+            shared_bytes_per_sm: 100 * 1024,
+            ..MatMulResources::default()
+        };
+        for k in [256, 512] {
+            let mut graph = TensorGraph::<half::bf16>::new();
+            let a = graph.graph.add_node(TensorGraphNode::Input {
+                name: "a",
+                shape: vec![4096, k],
+            });
+            let b = graph.graph.add_node(TensorGraphNode::Input {
+                name: "b",
+                shape: vec![k, 683],
+            });
+            let root = graph.graph.add_node(TensorGraphNode::MatMul {
+                shape: vec![4096, 683],
+            });
+            graph.graph.add_edge(a, root, 0);
+            graph.graph.add_edge(b, root, 1);
+            let mut region = MatMulRegion::from_graph(&graph, root, vec![], vec![root])?;
+            region.schedule = MatMulSchedule::select_with_resources(
+                4096,
+                683,
+                k,
+                DType::BF16,
+                MatMulCapabilities {
+                    tf32: true,
+                    f16: true,
+                    bf16: true,
+                },
+                MatMulPrecision::AllowTf32,
+                resources,
+            );
+            assert_eq!(region.schedule.warp_fragments, (2, 2));
+            region.configure_pipeline(
+                MatMulSharedLayout::Padded,
+                MatMulPipeline::Auto,
+                true,
+                resources,
+            )?;
+            assert_eq!(
+                region.schedule.pipeline_stages,
+                if k == 256 { 1 } else { 2 }
+            );
+        }
+        Ok(())
     }
 }

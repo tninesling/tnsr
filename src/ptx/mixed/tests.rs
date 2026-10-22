@@ -319,6 +319,48 @@ fn mixed_linear_bias_reduction_matches_cpu() {
 }
 
 #[test]
+fn mixed_register_tiled_bf16_matmul_handles_edges_and_replay() {
+    if !cuda_available() {
+        return;
+    }
+    let (m, k, n) = (2048, 65, 257);
+    let a = TensorExpr::input("a", vec![m, k]).cast(ValueDType::BF16);
+    let b = TensorExpr::input("b", vec![k, n]).cast(ValueDType::BF16);
+    let mut graph = TensorGraph::new();
+    let out = graph.add_expr(&a.matmul(b), false);
+    let a: Vec<f32> = (0..m * k)
+        .map(|i| half::bf16::from_f32((i % 23) as f32 / 37. - 0.2).to_f32())
+        .collect();
+    let b: Vec<f32> = (0..k * n)
+        .map(|i| half::bf16::from_f32((i % 17) as f32 / 29. - 0.3).to_f32())
+        .collect();
+    for replay in [false, true] {
+        let mut gpu = MixedExecutor::new(&graph, MatMulPrecision::Tf32x3, replay).unwrap();
+        gpu.upload(HashMap::from([
+            ("a".into(), a.clone()),
+            ("b".into(), b.clone()),
+        ]))
+        .unwrap();
+        for _ in 0..2 {
+            gpu.run().unwrap();
+            let actual = gpu.read(out).unwrap();
+            for row in [0, 63, 64, 2047] {
+                for col in [0, 63, 64, 255, 256] {
+                    let expected: f64 = (0..k)
+                        .map(|inner| f64::from(a[row * k + inner]) * f64::from(b[inner * n + col]))
+                        .sum();
+                    let expected = half::bf16::from_f32(expected as f32).to_f32();
+                    assert!(
+                        (actual[row * n + col] - expected).abs() <= 0.0078125,
+                        "row {row} col {col}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn mixed_split_k_keeps_f32_partials_and_rounds_once() {
     if !cuda_available() {
         return;
@@ -449,4 +491,117 @@ fn mixed_preparation_waits_for_shared_stream_capture() {
     done_tx.send(()).unwrap();
     task.join().unwrap();
     drop(prepared);
+}
+
+#[test]
+fn mixed_transposed_bf16_async_replay_handles_changed_feeds() {
+    if !cuda_available() {
+        return;
+    }
+    for (m, k, n, ta, tb) in [
+        (264, 136, 280, true, true),
+        (267, 136, 280, true, true),
+        (264, 136, 283, true, false),
+        (264, 137, 280, false, false),
+    ] {
+        let a =
+            TensorExpr::input("a", if ta { vec![k, m] } else { vec![m, k] }).cast(ValueDType::BF16);
+        let b =
+            TensorExpr::input("b", if tb { vec![n, k] } else { vec![k, n] }).cast(ValueDType::BF16);
+        let a = if ta { a.transpose() } else { a };
+        let b = if tb { b.transpose() } else { b };
+        let mut graph = TensorGraph::new();
+        let out = graph.add_expr(&a.matmul(b), false);
+        for replay in [false, true] {
+            let mut gpu = MixedExecutor::new(&graph, MatMulPrecision::Tf32x3, replay).unwrap();
+            for revision in 0..3 {
+                let values = |count, period| {
+                    (0..count)
+                        .map(|i| {
+                            half::bf16::from_f32(((i + revision) % period) as f32 / 32. - 0.125)
+                                .to_f32()
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let av = values(k * m, 7);
+                let bv = values(n * k, 5);
+                gpu.upload(HashMap::from([
+                    ("a".into(), av.clone()),
+                    ("b".into(), bv.clone()),
+                ]))
+                .unwrap();
+                gpu.run().unwrap();
+                let actual = gpu.read(out).unwrap();
+                for row in [0, 31, 32, 255, m - 1] {
+                    for col in [0, 31, 32, 255, n - 1] {
+                        let expected: f64 = (0..k)
+                            .map(|inner| {
+                                f64::from(av[if ta { inner * m + row } else { row * k + inner }])
+                                    * f64::from(
+                                        bv[if tb { col * k + inner } else { inner * n + col }],
+                                    )
+                            })
+                            .sum();
+                        assert!(
+                            (actual[row * n + col] - half::bf16::from_f64(expected).to_f32()).abs()
+                                <= f32::EPSILON,
+                            "replay={replay} revision={revision} row={row} col={col}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mixed_hybrid_split_k_preserves_ragged_edges_and_replay() {
+    if !cuda_available() {
+        return;
+    }
+    let k = 4096;
+    for (m, n) in [(267, 280), (264, 283)] {
+        let a = TensorExpr::input("a", vec![k, m])
+            .cast(ValueDType::BF16)
+            .transpose();
+        let b = TensorExpr::input("b", vec![k, n]).cast(ValueDType::BF16);
+        let mut graph = TensorGraph::new();
+        let out = graph.add_expr(&a.matmul(b), false);
+        for replay in [false, true] {
+            let mut gpu = MixedExecutor::new(&graph, MatMulPrecision::Tf32x3, replay).unwrap();
+            for revision in 0..2 {
+                let values = |count, period| {
+                    (0..count)
+                        .map(|i| {
+                            half::bf16::from_f32(((i + revision) % period) as f32 / 32. - 0.125)
+                                .to_f32()
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let av = values(k * m, 7);
+                let bv = values(k * n, 5);
+                gpu.upload(HashMap::from([
+                    ("a".into(), av.clone()),
+                    ("b".into(), bv.clone()),
+                ]))
+                .unwrap();
+                gpu.run().unwrap();
+                let actual = gpu.read(out).unwrap();
+                for row in [0, 31, 32, 63, 64, m - 1] {
+                    for col in [0, 31, 32, 63, 64, n - 1] {
+                        let expected: f64 = (0..k)
+                            .map(|inner| {
+                                f64::from(av[inner * m + row]) * f64::from(bv[inner * n + col])
+                            })
+                            .sum();
+                        assert!(
+                            (actual[row * n + col] - half::bf16::from_f64(expected).to_f32()).abs()
+                                <= f32::EPSILON,
+                            "m={m} n={n} replay={replay} revision={revision} row={row} col={col}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

@@ -109,6 +109,137 @@ fn ptx_cooperative_reductions_cover_schedule_boundaries_and_middle_axes() {
     }
 }
 
+fn check_packed_reductions(full_epilogue: bool) {
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    ptx.set_fusion_policy(PtxFusionPolicy::Greedy);
+    let widths: &[usize] = if full_epilogue {
+        &[1, 33, 64, 127, 255, 256, 683]
+    } else {
+        &[32, 33, 64, 127, 255]
+    };
+    for &width in widths {
+        for (shape, axis) in [(vec![23, width], 1), (vec![3, width, 7], 1)] {
+            let data: Vec<f32> = (0..shape.iter().product())
+                .map(|i| ((i % 29) as f32 - 14.0) * 0.0625)
+                .collect();
+            let input = TensorExpr::input("packed", shape.clone());
+            let producer = input.exp();
+            for reduction in [
+                producer.clone().reduce_sum(axis),
+                producer.clone().reduce_mean(axis),
+                producer.clone().reduce_max(axis),
+            ] {
+                let graph: TensorGraph<f32> = if full_epilogue {
+                    (producer.clone() / reduction.broadcast_axis(axis, width)).into()
+                } else {
+                    reduction.log().into()
+                };
+                ptx.compile_owned(graph.clone()).unwrap();
+                let region = &ptx.execution_plan().unwrap().reduction_regions()[0];
+                assert_eq!(
+                    region.schedule,
+                    if full_epilogue {
+                        tnsr::tile::ReductionSchedule::Block { threads: 128 }
+                    } else {
+                        tnsr::tile::ReductionSchedule::Subgroup { width: 32 }
+                    }
+                );
+                assert_eq!(region.full_epilogue_operations.is_empty(), !full_epilogue);
+                let source = ptx.module_source().unwrap();
+                if full_epilogue {
+                    assert!(source.contains("reduction_partials[512]"));
+                } else {
+                    assert!(source.contains("shfl.sync.idx.b32"));
+                    assert!(!source.contains("reduction_partials"));
+                }
+                for changed in [false, true] {
+                    let feed: Vec<f32> = data
+                        .iter()
+                        .map(|x| if changed { -*x * 0.5 } else { *x })
+                        .collect();
+                    let feeds = || HashMap::from([("packed".to_owned(), feed.clone())]);
+                    let expected = SimpleExecutor::new().execute(&graph, feeds()).unwrap();
+                    let actual = ptx.execute_compiled(&graph, feeds()).unwrap();
+                    assert_close(&actual, &expected, 2e-5);
+                    let again = ptx.execute_compiled(&graph, feeds()).unwrap();
+                    assert_eq!(actual, again);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ptx_packed_subgroups_cover_partial_blocks_and_changed_feeds() {
+    check_packed_reductions(false);
+}
+
+#[test]
+fn ptx_block_reductions_cover_full_epilogues_and_changed_feeds() {
+    check_packed_reductions(true);
+}
+
+#[test]
+fn ptx_full_epilogue_preserves_block_sum_tree() {
+    let Some(mut ptx) = cooperative_ptx_executor() else {
+        return;
+    };
+    ptx.set_fusion_policy(PtxFusionPolicy::Greedy);
+    for width in [7, 33, 64, 127, 129, 255] {
+        let shape = vec![23, width];
+        let input = TensorExpr::input("tree", shape.clone());
+        let producer = if width <= 128 {
+            input.clone() * 1.3
+        } else {
+            -input.clone()
+        };
+        let graph: TensorGraph<f32> =
+            (input - producer.reduce_sum(1).broadcast_axis(1, width)).into();
+        for changed in [0u32, 1] {
+            let data: Vec<f32> = (0..23 * width)
+                .map(|i| {
+                    let bits = (i as u32)
+                        .wrapping_add(changed * 7919)
+                        .wrapping_mul(1_664_525)
+                        .wrapping_add(1_013_904_223);
+                    f32::from_bits((bits & 0x807f_ffff) | ((117 + ((bits >> 24) % 20)) << 23))
+                })
+                .collect();
+            let mut expected = Vec::new();
+            for row in data.chunks_exact(width) {
+                // Independent reference for the previous 128-thread block:
+                // each logical lane accumulates in order, then descending hops.
+                let mut partials = [0.0f32; 128];
+                for (lane, partial) in partials.iter_mut().enumerate() {
+                    for index in (lane..width).step_by(128) {
+                        *partial += if width <= 128 {
+                            row[index] * 1.3
+                        } else {
+                            -row[index]
+                        };
+                    }
+                }
+                for hop in [64, 32, 16, 8, 4, 2, 1] {
+                    for lane in 0..hop {
+                        partials[lane] += partials[lane + hop];
+                    }
+                }
+                expected.extend(row.iter().map(|x| *x - partials[0]));
+            }
+            let actual = ptx
+                .execute(&graph, HashMap::from([("tree".to_owned(), data)]))
+                .unwrap();
+            assert_eq!(
+                actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                "width={width}, changed={changed}"
+            );
+        }
+    }
+}
+
 #[test]
 fn ptx_cooperative_block_fuses_large_softmax_epilogue() {
     let Some(mut ptx) = cooperative_ptx_executor() else {

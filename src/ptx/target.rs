@@ -1,7 +1,60 @@
 use anyhow::{Context, Result};
-use cudarc::driver::{CudaContext, sys::CUdevice_attribute};
+use cudarc::driver::{CudaContext, CudaFunction, LaunchConfig, sys::CUdevice_attribute};
 
-use crate::tile::MatMulResources;
+use crate::tile::{MatMulResources, ReductionSchedule};
+
+/// Independent elementwise lanes do not need a full 1,024-thread block.
+/// Smaller blocks leave room for more resident blocks when register use rises.
+pub(crate) fn pointwise_launch_config(elements: u32) -> LaunchConfig {
+    const THREADS: u32 = 256;
+    LaunchConfig {
+        grid_dim: (elements.div_ceil(THREADS), 1, 1),
+        block_dim: (THREADS, 1, 1),
+        shared_mem_bytes: 0,
+    }
+}
+
+/// Compiled resource usage can require fewer independent warps per block.
+/// Reducing the number of whole warps preserves each fiber's arithmetic and mapping.
+pub(crate) fn reduction_launch_config(
+    schedule: ReductionSchedule,
+    rows: u32,
+    function: &CudaFunction,
+) -> Result<LaunchConfig> {
+    let threads = match schedule {
+        ReductionSchedule::Serial => return Ok(LaunchConfig::for_num_elems(rows)),
+        ReductionSchedule::Subgroup { width } => width,
+        ReductionSchedule::Block { threads } => {
+            return Ok(LaunchConfig {
+                grid_dim: (rows, 1, 1),
+                block_dim: (threads, 1, 1),
+                shared_mem_bytes: 0,
+            });
+        }
+    };
+    let limit = u32::try_from(function.max_threads_per_block()?)
+        .context("Reduction function thread limit is negative")?;
+    let mut fibers = schedule.fibers_per_block();
+    loop {
+        let block_threads = threads
+            .checked_mul(fibers)
+            .context("Reduction block thread count overflow")?;
+        if block_threads <= limit
+            && function.occupancy_max_active_blocks_per_multiprocessor(block_threads, 0, None)? > 0
+        {
+            return Ok(LaunchConfig {
+                grid_dim: (rows.div_ceil(fibers), 1, 1),
+                block_dim: (block_threads, 1, 1),
+                shared_mem_bytes: 0,
+            });
+        }
+        anyhow::ensure!(
+            fibers > 1,
+            "Reduction fiber does not fit compiled CUDA resources"
+        );
+        fibers /= 2;
+    }
+}
 
 /// CUDA target properties that affect generated PTX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -183,6 +236,49 @@ mod half_tests {
                     MatMulPlan::ScalarF32
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod reduction_launch_tests {
+    use super::*;
+    use cudarc::nvrtc::Ptx;
+
+    #[test]
+    fn packed_reduction_launch_respects_compiled_function_limit() {
+        let device = match CudaContext::new(0) {
+            Ok(device) => device,
+            Err(error) if std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1") => {
+                eprintln!("skipping CUDA test: {error:#}");
+                return;
+            }
+            Err(error) => panic!("CUDA initialization: {error:#}"),
+        };
+        let (major, minor) = device.compute_capability().unwrap();
+        let source = format!(
+            ".version 8.6\n.target sm_{major}{minor}\n.address_size 64\n.visible .entry bounded() .maxntid 128, 1, 1 {{ ret; }}"
+        );
+        let module = device.load_module(Ptx::from_src(source)).unwrap();
+        let function = module.load_function("bounded").unwrap();
+        for schedule in [
+            ReductionSchedule::Subgroup { width: 32 },
+            ReductionSchedule::Block { threads: 128 },
+        ] {
+            let config = reduction_launch_config(schedule, 9, &function).unwrap();
+            assert_eq!(config.block_dim, (128, 1, 1));
+            assert_eq!(
+                config.grid_dim,
+                (
+                    if matches!(schedule, ReductionSchedule::Block { .. }) {
+                        9
+                    } else {
+                        3
+                    },
+                    1,
+                    1
+                )
+            );
         }
     }
 }

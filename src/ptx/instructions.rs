@@ -549,6 +549,11 @@ pub enum Inst<'a> {
     SetpF32(SetpInst<'a, F32>),
     SelpF32(SelpInst<'a, F32>),
     SelpU64(SelpInst<'a, U64>),
+    ShflSyncIdxB32 {
+        dst: Operand<'a, B32>,
+        src: Operand<'a, B32>,
+        lane: u32,
+    },
     ShflSyncDownB32 {
         dst: Operand<'a, B32>,
         predicate: Operand<'a, Pred>,
@@ -624,18 +629,21 @@ pub enum Inst<'a> {
     AsyncWait,
 
     WmmaLoadA {
+        column_major: bool,
         dtype: crate::tile::DType,
         frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     },
     WmmaLoadB {
+        column_major: bool,
         dtype: crate::tile::DType,
         frags: Vec<Operand<'a, B32>>,
         addr: Operand<'a, U64>,
         stride: Operand<'a, I32>,
     },
     WmmaMma {
+        column_major: (bool, bool),
         dtype: crate::tile::DType,
         d_frags: Vec<Operand<'a, F32>>,
         a_frags: Vec<Operand<'a, B32>>,
@@ -922,6 +930,7 @@ impl<'a> Inst<'a> {
         stride: Operand<'a, I32>,
     ) -> Self {
         Inst::WmmaLoadA {
+            column_major: false,
             dtype: crate::tile::DType::TF32,
             frags,
             addr,
@@ -935,6 +944,7 @@ impl<'a> Inst<'a> {
         stride: Operand<'a, I32>,
     ) -> Self {
         Inst::WmmaLoadB {
+            column_major: false,
             dtype: crate::tile::DType::TF32,
             frags,
             addr,
@@ -949,6 +959,7 @@ impl<'a> Inst<'a> {
         c_frags: Vec<Operand<'a, F32>>,
     ) -> Self {
         Inst::WmmaMma {
+            column_major: (false, false),
             dtype: crate::tile::DType::TF32,
             d_frags,
             a_frags,

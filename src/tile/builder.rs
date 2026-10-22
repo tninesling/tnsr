@@ -59,7 +59,7 @@ impl TileIRBuilder {
         });
 
         // Track shared memory usage
-        self.shared_mem_bytes += layout.allocation_bytes(rows, dtype);
+        self.shared_mem_bytes += layout.allocation_bytes(rows, cols, dtype);
 
         var
     }

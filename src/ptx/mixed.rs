@@ -956,7 +956,7 @@ fn materialize(stream: &Arc<CudaStream>, source: &Value, target: Binding) -> Res
             source.binding.dtype, target.dtype, source.view.shape
         ),
         function: module.load_function(name)?,
-        config: LaunchConfig::for_num_elems(u32::try_from(target.len)?),
+        config: crate::ptx::target::pointwise_launch_config(u32::try_from(target.len)?),
         pointers: vec![source.binding.pointer, target.pointer],
         zero_before: None,
     })

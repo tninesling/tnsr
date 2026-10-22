@@ -6,7 +6,10 @@ use super::DType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedLayout {
+    /// Leading stride in the physical row-major matrix, after optional transpose.
     pub row_stride: usize,
+    /// Store logical columns as physical rows, preserving contiguous logical rows.
+    pub column_major: bool,
     /// XOR these row bits into the column. Zero preserves row-major storage.
     pub xor_mask: usize,
 }
@@ -15,6 +18,7 @@ impl SharedLayout {
     pub const fn row_major(cols: usize) -> Self {
         Self {
             row_stride: cols,
+            column_major: false,
             xor_mask: 0,
         }
     }
@@ -25,6 +29,7 @@ impl SharedLayout {
             .ok_or_else(|| anyhow!("shared row stride overflows usize"))?;
         Ok(Self {
             row_stride,
+            column_major: false,
             xor_mask: 0,
         })
     }
@@ -38,11 +43,17 @@ impl SharedLayout {
         );
         Ok(Self {
             row_stride: cols,
+            column_major: false,
             xor_mask: cols - group_width,
         })
     }
 
     pub fn validate(self, rows: usize, cols: usize, dtype: DType) -> Result<()> {
+        let (rows, cols) = if self.column_major {
+            (cols, rows)
+        } else {
+            (rows, cols)
+        };
         ensure!(
             self.row_stride >= cols,
             "shared row stride is smaller than the tile"
@@ -62,11 +73,17 @@ impl SharedLayout {
     }
 
     pub fn offset(self, row: usize, col: usize) -> usize {
+        let (row, col) = if self.column_major {
+            (col, row)
+        } else {
+            (row, col)
+        };
         row * self.row_stride + (col ^ (row & self.xor_mask))
     }
 
     /// Every allocation starts at a 32-byte boundary, including padded tiles.
-    pub fn allocation_bytes(self, rows: usize, dtype: DType) -> usize {
+    pub fn allocation_bytes(self, rows: usize, cols: usize, dtype: DType) -> usize {
+        let rows = if self.column_major { cols } else { rows };
         (rows * self.row_stride * dtype.size_bytes()).next_multiple_of(32)
     }
 
@@ -115,13 +132,17 @@ mod tests {
                                 let offset = layout.offset(row, col);
                                 assert!(
                                     (offset + 1) * dtype.size_bytes()
-                                        <= layout.allocation_bytes(rows, dtype)
+                                        <= layout.allocation_bytes(rows, cols, dtype)
                                 );
                                 assert!(addresses.insert(offset));
                             }
                         }
                         assert_eq!(addresses.len(), rows * cols);
-                        assert!(layout.allocation_bytes(rows, dtype).is_multiple_of(32));
+                        assert!(
+                            layout
+                                .allocation_bytes(rows, cols, dtype)
+                                .is_multiple_of(32)
+                        );
                     }
                 }
             }
@@ -217,6 +238,7 @@ mod tests {
         assert!(
             SharedLayout {
                 row_stride: 32,
+                column_major: false,
                 xor_mask: 32
             }
             .validate(16, 32, DType::F32)
@@ -227,5 +249,31 @@ mod tests {
                 .validate(2, 16, DType::F32)
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod transpose_tests {
+    use super::*;
+    #[test]
+    fn column_major_maps_size_and_align_rectangular_tiles() {
+        for (rows, cols) in [(32, 64), (64, 32), (17, 33)] {
+            let mut layout = SharedLayout::padded(rows, 8).unwrap();
+            layout.column_major = true;
+            layout.validate(rows, cols, DType::BF16).unwrap();
+            let offsets: std::collections::BTreeSet<_> = (0..rows)
+                .flat_map(|r| (0..cols).map(move |c| layout.offset(r, c)))
+                .collect();
+            assert_eq!(offsets.len(), rows * cols);
+            assert!(
+                (offsets.last().unwrap() + 1) * 2
+                    <= layout.allocation_bytes(rows, cols, DType::BF16)
+            );
+            for r in 0..rows {
+                for c in 0..cols {
+                    assert_eq!(layout.offset(r, c), c * (rows + 8) + r);
+                }
+            }
+        }
     }
 }

@@ -714,14 +714,6 @@ impl PtxExecutionPlan {
             .with_pipeline(pipeline, supports_async, true, resources);
         }
         for region in &mut self.matmul_regions {
-            // Half copies require adjacent, aligned pairs. Identity access maps
-            // prove this for contiguous matrices, including implicit batch broadcasts.
-            let contiguous = [region.lhs_value, region.rhs_value].iter().all(|value| {
-                region
-                    .inputs
-                    .iter()
-                    .any(|input| input.value == *value && input.tensor.access.is_identity())
-            });
             region.schedule = MatMulSchedule::select_with_resources(
                 region.m,
                 region.n,
@@ -730,9 +722,8 @@ impl PtxExecutionPlan {
                 capabilities,
                 precision,
                 resources,
-            )
-            .with_shared_layout(shared_layout, resources)?
-            .with_pipeline(pipeline, supports_async, contiguous, resources);
+            );
+            region.configure_pipeline(shared_layout, pipeline, supports_async, resources)?;
         }
         Ok(())
     }

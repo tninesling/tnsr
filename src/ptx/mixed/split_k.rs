@@ -32,6 +32,7 @@ impl MixedExecutor {
             operands[1].view.shape[0] == k,
             "split matmul inner dimension mismatch"
         );
+        let mut operands = operands.to_vec();
         let mut graph = TensorGraph::<half::bf16>::new();
         let lhs_shape = vec![4, m, k / 4];
         let rhs_shape = vec![4, k / 4, n];
@@ -58,6 +59,13 @@ impl MixedExecutor {
             precision,
             target.matmul_resources,
         );
+        if region.schedule.block_tile.m == 32 && region.schedule.block_tile.n == 32 {
+            region.schedule.block_tile.k = 64;
+            region.schedule = region.schedule.with_shared_layout(
+                crate::tile::MatMulSharedLayout::Padded,
+                target.matmul_resources,
+            )?;
+        }
         region.inputs[0].tensor = operands[0]
             .view
             .reshape(vec![m, 4, k / 4])?
@@ -65,6 +73,106 @@ impl MixedExecutor {
         region.inputs[0].source_shape = operands[0].source_shape.clone();
         region.inputs[1].tensor = operands[1].view.reshape(vec![4, k / 4, n])?;
         region.inputs[1].source_shape = operands[1].source_shape.clone();
+        region.configure_pipeline(
+            crate::tile::MatMulSharedLayout::Padded,
+            crate::tile::MatMulPipeline::Auto,
+            target.supports_async_copy(),
+            target.matmul_resources,
+        )?;
+        // A long contraction reuses each operand in many output tiles. Repack
+        // an unaligned operand once so every tile can use aligned async copies.
+        // The physical K dimension is contiguous in both packed buffers; the
+        // RHS retains its logical [K, N] view through a transpose.
+        let mut repacked = false;
+        if region.schedule.pipeline_stages == 2 {
+            for (index, aligned) in [
+                region.schedule.async_operands.0,
+                region.schedule.async_operands.1,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if aligned {
+                    continue;
+                }
+                let mut source = operands[index].clone();
+                if index == 1 {
+                    source.view = source.view.permute(&[1, 0])?;
+                }
+                let (_, mut packed) = self.alloc(node, source.view.shape.clone(), DType::BF16)?;
+                self.kernels
+                    .push(materialize(&self.stream, &source, packed.binding)?);
+                if index == 1 {
+                    packed.view = packed.view.permute(&[1, 0])?;
+                }
+                operands[index] = packed;
+                repacked = true;
+            }
+        }
+        if repacked {
+            region.inputs[0].tensor = operands[0]
+                .view
+                .reshape(vec![m, 4, k / 4])?
+                .permute(&[1, 0, 2])?;
+            region.inputs[0].source_shape = operands[0].source_shape.clone();
+            region.inputs[1].tensor = operands[1].view.reshape(vec![4, k / 4, n])?;
+            region.inputs[1].source_shape = operands[1].source_shape.clone();
+            let mut wider = region.clone();
+            wider.schedule.block_tile = crate::tile::MatMulTile {
+                m: 64,
+                n: 64,
+                k: 32,
+            };
+            wider.schedule.warp_topology = (2, 2);
+            wider.schedule.warp_fragments = (2, 2);
+            wider.configure_pipeline(
+                crate::tile::MatMulSharedLayout::Padded,
+                crate::tile::MatMulPipeline::Auto,
+                target.supports_async_copy(),
+                target.matmul_resources,
+            )?;
+            if wider.schedule.pipeline_stages == 2 {
+                region = wider;
+            } else {
+                region.configure_pipeline(
+                    crate::tile::MatMulSharedLayout::Padded,
+                    crate::tile::MatMulPipeline::Auto,
+                    target.supports_async_copy(),
+                    target.matmul_resources,
+                )?;
+            }
+        }
+        // Expand perpendicular to the scalar operand so each block reuses
+        // those expensive loads for twice as many outputs. Use all eight warps
+        // with one fragment each; retain the smaller tile if two stages do not fit.
+        if region.schedule.pipeline_stages == 2
+            && region.schedule.block_tile.m == 32
+            && region.schedule.block_tile.n == 32
+            && matches!(
+                region.schedule.async_operands,
+                (true, false) | (false, true)
+            )
+        {
+            let mut wider = region.clone();
+            if region.schedule.async_operands.0 {
+                wider.schedule.block_tile.m = 64;
+                wider.schedule.warp_topology = (4, 2);
+            } else {
+                wider.schedule.block_tile.n = 64;
+                wider.schedule.warp_topology = (2, 4);
+            }
+            wider.configure_pipeline(
+                crate::tile::MatMulSharedLayout::Padded,
+                crate::tile::MatMulPipeline::Auto,
+                target.supports_async_copy(),
+                target.matmul_resources,
+            )?;
+            if wider.schedule.pipeline_stages == 2
+                && wider.schedule.async_operands == region.schedule.async_operands
+            {
+                region = wider;
+            }
+        }
         let mut tiles = TileGraph::from_graph(&TensorGraph::<f32>::new());
         tiles.add_matmul_regions(&[region.clone()])?;
         // The MMA accumulator and epilogue registers are already f32. Only the

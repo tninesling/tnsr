@@ -660,6 +660,10 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::SetpF32(inst) => write!(f, "{inst}"),
             Inst::SelpF32(inst) => write!(f, "{inst}"),
             Inst::SelpU64(inst) => write!(f, "{inst}"),
+            Inst::ShflSyncIdxB32 { dst, src, lane } => write!(
+                f,
+                "shfl.sync.idx.b32 {dst}, {src}, {lane}, 0x1f, 0xffffffff;"
+            ),
             Inst::ShflSyncDownB32 {
                 dst,
                 predicate,
@@ -723,6 +727,7 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::AsyncCommit => write!(f, "cp.async.commit_group;"),
             Inst::AsyncWait => write!(f, "cp.async.wait_group 0;"),
             Inst::WmmaLoadA {
+                column_major,
                 dtype,
                 frags,
                 addr,
@@ -730,12 +735,13 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.load.a.sync.aligned.m16n16k{}.row.shared.{} {{{}}}, [{}], {};",
+                    "wmma.load.a.sync.aligned.m16n16k{}.{}.shared.{} {{{}}}, [{}], {};",
                     if *dtype == crate::tile::DType::TF32 {
                         8
                     } else {
                         16
                     },
+                    if *column_major { "col" } else { "row" },
                     wmma_dtype(*dtype),
                     frags.iter().join(", "),
                     addr,
@@ -743,6 +749,7 @@ impl<'a> fmt::Display for Inst<'a> {
                 )
             }
             Inst::WmmaLoadB {
+                column_major,
                 dtype,
                 frags,
                 addr,
@@ -750,12 +757,13 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.load.b.sync.aligned.m16n16k{}.row.shared.{} {{{}}}, [{}], {};",
+                    "wmma.load.b.sync.aligned.m16n16k{}.{}.shared.{} {{{}}}, [{}], {};",
                     if *dtype == crate::tile::DType::TF32 {
                         8
                     } else {
                         16
                     },
+                    if *column_major { "col" } else { "row" },
                     wmma_dtype(*dtype),
                     frags.iter().join(", "),
                     addr,
@@ -763,6 +771,7 @@ impl<'a> fmt::Display for Inst<'a> {
                 )
             }
             Inst::WmmaMma {
+                column_major,
                 dtype,
                 d_frags,
                 a_frags,
@@ -771,12 +780,14 @@ impl<'a> fmt::Display for Inst<'a> {
             } => {
                 write!(
                     f,
-                    "wmma.mma.sync.aligned.m16n16k{}.row.row.{} {{{}}}, {{{}}}, {{{}}}, {{{}}};",
+                    "wmma.mma.sync.aligned.m16n16k{}.{}.{}.{} {{{}}}, {{{}}}, {{{}}}, {{{}}};",
                     if *dtype == crate::tile::DType::TF32 {
                         8
                     } else {
                         16
                     },
+                    if column_major.0 { "col" } else { "row" },
+                    if column_major.1 { "col" } else { "row" },
                     match dtype {
                         crate::tile::DType::F16 => "f32.f32",
                         crate::tile::DType::BF16 => "f32.bf16.bf16.f32",

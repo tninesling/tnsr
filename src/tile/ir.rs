@@ -329,6 +329,7 @@ pub enum TileLayout {
         operand_dtype: DType,
         block_width: u32,
         warp_topology: (usize, usize),
+        warp_fragments: (usize, usize),
     },
 }
 

@@ -107,24 +107,26 @@ fn normalize(block: &mut Block, cache: &mut HashMap<Expr, Expr>) -> Result<()> {
 #[derive(Default)]
 struct Usage {
     scopes: Vec<Scope>,
+    locations: Vec<Scope>,
 }
 
 fn census(
     expr: &Expr,
     scope: &Scope,
+    position: usize,
     usage: &mut BTreeMap<Expr, Usage>,
     names: &mut BTreeSet<String>,
 ) {
     if let Expr::Var(name) = expr {
         names.insert(name.clone());
     }
-    usage
-        .entry(expr.clone())
-        .or_default()
-        .scopes
-        .push(scope.clone());
+    let entry = usage.entry(expr.clone()).or_default();
+    entry.scopes.push(scope.clone());
+    let mut location = scope.clone();
+    location.push(position);
+    entry.locations.push(location);
     for child in children(expr) {
-        census(child, scope, usage, names);
+        census(child, scope, position, usage, names);
     }
 }
 
@@ -137,7 +139,7 @@ fn collect(
 ) {
     for (index, stmt) in block.stmts.iter_mut().enumerate() {
         for root in roots(stmt) {
-            census(root, scope, usage, names);
+            census(root, scope, index, usage, names);
         }
         if let Stmt::LetIndex { name, .. } = stmt {
             names.insert(name.clone());
@@ -184,6 +186,7 @@ fn height(expr: &Expr) -> usize {
 struct Binding {
     name: String,
     scope: Scope,
+    position: usize,
 }
 
 fn substitute(expr: &mut Expr, bindings: &BTreeMap<Expr, Binding>) {
@@ -212,17 +215,28 @@ fn place(block: &mut Block, scope: &Scope, bindings: &BTreeMap<Expr, Binding>) {
         .filter(|(_, binding)| binding.scope == *scope)
         .collect();
     // Same-scope children are defined first; parent-scope bindings already dominate.
-    definitions.sort_by_key(|(expr, _)| (height(expr), *expr));
+    definitions.sort_by_key(|(expr, binding)| (binding.position, height(expr), *expr));
+    let mut definitions = definitions.into_iter().peekable();
     let mut result = Vec::new();
-    for (expr, binding) in definitions {
-        let mut value = expr.clone();
-        substitute_children(&mut value, bindings);
-        result.push(Stmt::LetIndex {
-            name: binding.name.clone(),
-            value,
-        });
-    }
     for (index, mut stmt) in std::mem::take(&mut block.stmts).into_iter().enumerate() {
+        // Define shared expressions immediately before their first consumer,
+        // rather than making epilogue and later staging addresses live across
+        // the entire kernel. Dependencies' original uses include their parents,
+        // so height order also dominates same-position dependent bindings.
+        while definitions
+            .peek()
+            .is_some_and(|(_, binding)| binding.position == index)
+        {
+            let Some((expr, binding)) = definitions.next() else {
+                break;
+            };
+            let mut value = expr.clone();
+            substitute_children(&mut value, bindings);
+            result.push(Stmt::LetIndex {
+                name: binding.name.clone(),
+                value,
+            });
+        }
         for root in roots(&mut stmt) {
             substitute(root, bindings);
         }
@@ -237,10 +251,34 @@ fn place(block: &mut Block, scope: &Scope, bindings: &BTreeMap<Expr, Binding>) {
 }
 
 impl TileIR {
+    pub(crate) fn normalize_indices(&mut self) -> Result<()> {
+        normalize(&mut self.body, &mut HashMap::new())
+    }
+
     /// Normalize and share integer index expressions before backend lowering.
     pub fn optimize_indices(&mut self) -> Result<()> {
-        let mut cache = HashMap::new();
-        normalize(&mut self.body, &mut cache)?;
+        // Explicitly hoisting every staging address increases register pressure
+        // in large synchronous BF16 register tiles. Keep normalized expressions
+        // local there, allowing the backend to rematerialize cheap arithmetic.
+        fn rematerialize(block: &Block) -> bool {
+            block.stmts.iter().any(|stmt| match stmt {
+                Stmt::MatMul { schedule, .. } => {
+                    schedule.storage_dtype == super::DType::BF16
+                        && schedule.warp_fragments != (1, 1)
+                        && schedule.pipeline_stages == 1
+                }
+                Stmt::ForLoop { body, .. } | Stmt::If { body, .. } => rematerialize(body),
+                _ => false,
+            })
+        }
+        self.optimize_indices_with_sharing(!rematerialize(&self.body))
+    }
+
+    pub(crate) fn optimize_indices_with_sharing(&mut self, share: bool) -> Result<()> {
+        self.normalize_indices()?;
+        if !share {
+            return Ok(());
+        }
         let (mut usage, mut variables, mut names) =
             (BTreeMap::new(), HashMap::new(), BTreeSet::new());
         collect(
@@ -291,7 +329,20 @@ impl TileIR {
                     break name;
                 }
             };
-            bindings.insert(expr, Binding { name, scope });
+            let position = usage
+                .locations
+                .iter()
+                .map(|location| location[scope.len()])
+                .min()
+                .ok_or_else(|| anyhow::anyhow!("index binding has no consumer"))?;
+            bindings.insert(
+                expr,
+                Binding {
+                    name,
+                    scope,
+                    position,
+                },
+            );
         }
         place(&mut self.body, &Vec::new(), &bindings);
         Ok(())
@@ -409,6 +460,29 @@ mod tests {
             .collect();
         assert_eq!(offsets, expected);
     }
+    #[test]
+    fn epilogue_indices_are_defined_after_the_contraction_loop() {
+        let address = Expr::BlockIdx(Dim::X) * 7_usize + Expr::ThreadIdx(Dim::X);
+        let mut ir = ir(vec![
+            Stmt::ForLoop {
+                loop_var: "k".into(),
+                start: Expr::Const(0),
+                end: Expr::Const(2),
+                carries: Vec::new(),
+                body: Block {
+                    stmts: vec![load(Expr::Const(0))],
+                },
+            },
+            load(address.clone()),
+            load(address),
+        ]);
+        ir.optimize_indices().unwrap();
+        assert!(matches!(ir.body.stmts[0], Stmt::ForLoop { .. }));
+        let mut actual = Vec::new();
+        execute(&ir.body, &mut HashMap::new(), &mut actual);
+        assert_eq!(actual, [0, 0, 50, 50]);
+    }
+
     #[test]
     fn shares_commuted_addresses_without_capturing_unknown_variables() {
         let a = Expr::BlockIdx(Dim::X);

@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod bf16_tuning;
+mod matmul;
 mod scalar;
 use std::collections::{HashMap, HashSet};
 
@@ -491,12 +494,18 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                     ctx.get_or_alloc_reg(func, *var);
                 }
                 MemorySpace::Fragment => {
-                    let registers = (0..8).map(|_| func.add_f32_register()).collect();
+                    let count = if let TileLayout::WarpAccumulator { warp_fragments, .. } = layout {
+                        8 * warp_fragments.0 * warp_fragments.1
+                    } else {
+                        unreachable!("validated fragment allocation requires a warp layout")
+                    };
+                    let registers = (0..count).map(|_| func.add_f32_register()).collect();
                     ctx.fragment_regs.insert(*var, registers);
                 }
                 MemorySpace::Shared => {
                     // Calculate size in bytes for this tile
-                    let tile_size_bytes = shared_layout(ctx, *var).allocation_bytes(*rows, *dtype);
+                    let tile_size_bytes =
+                        shared_layout(ctx, *var).allocation_bytes(*rows, *cols, *dtype);
 
                     // Get base address of shared memory array
                     let base_ptr = func.add_u64_register();
@@ -1135,6 +1144,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                     operand_dtype,
                     block_width,
                     warp_topology,
+                    warp_fragments,
                 },
                 TileLayout::Shared(layout),
             ) => {
@@ -1144,17 +1154,20 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 ctx.label_counter += 1;
                 skip_noncomputing_warps(func, block_width, warp_topology.0 * warp_topology.1, done);
                 let (row, col) = warp_coordinates(block_width, warp_topology);
-                let address = if warp_topology == (1, 1) && layout.xor_mask == 0 {
-                    ctx.shared_mem_ptrs[dest].clone()
-                } else {
-                    shared_coordinate_address(func, ctx, *dest, &row, &col)
-                };
-                func.add_inst(Inst::WmmaStore {
-                    dtype: operand_dtype,
-                    addr: address,
-                    frags: ctx.fragment_regs[src].clone(),
-                    stride: Operand::imm_i32(layout.row_stride as i32),
-                });
+                for fm in 0..warp_fragments.0 {
+                    for fn_ in 0..warp_fragments.1 {
+                        let row = row.clone() * warp_fragments.0 + Expr::Const((fm * 16) as i64);
+                        let col = col.clone() * warp_fragments.1 + Expr::Const((fn_ * 16) as i64);
+                        let address = shared_coordinate_address(func, ctx, *dest, &row, &col);
+                        let offset = 8 * (fm * warp_fragments.1 + fn_);
+                        func.add_inst(Inst::WmmaStore {
+                            dtype: operand_dtype,
+                            addr: address,
+                            frags: ctx.fragment_regs[src][offset..offset + 8].to_vec(),
+                            stride: Operand::imm_i32(layout.row_stride as i32),
+                        });
+                    }
+                }
                 func.add_inst(Inst::Label(done));
             }
             (TileLayout::Shared(_), TileLayout::ThreadScalar) => {
@@ -2497,19 +2510,18 @@ fn lower_cooperative_reduction_region<'a>(
     func.add_inst(Inst::BraUni { target: loop_start });
     func.add_inst(Inst::Label(loop_end));
 
-    let shared_name = ctx.arena.alloc_str("reduction_partials");
-    let shared_value_count = if tree_reduce { thread_count } else { 1 };
-    func.add_shared_memory(
-        shared_name,
-        shared_value_count as usize * std::mem::size_of::<f32>(),
-    );
-    let shared_base = func.add_u64_register();
-    func.add_inst(Inst::mov_u64(
-        shared_base.clone(),
-        Operand::symbol(shared_name),
-    ));
-
+    let reduced_accumulator = func.add_f32_register();
     if tree_reduce {
+        let shared_name = ctx.arena.alloc_str("reduction_partials");
+        func.add_shared_memory(
+            shared_name,
+            thread_count as usize * std::mem::size_of::<f32>(),
+        );
+        let shared_base = func.add_u64_register();
+        func.add_inst(Inst::mov_u64(
+            shared_base.clone(),
+            Operand::symbol(shared_name),
+        ));
         let shared_address = shared_address_for_lane(func, shared_base.clone(), lane.clone());
         func.add_inst(Inst::StSharedF32 {
             addr: shared_address,
@@ -2575,6 +2587,11 @@ fn lower_cooperative_reduction_region<'a>(
             func.add_inst(Inst::BarSync { barrier_id: 0 });
             stride /= 2;
         }
+        func.add_inst(Inst::LdSharedF32 {
+            dst: vec![reduced_accumulator.clone()],
+            addr: shared_base,
+            vec: super::instructions::VecWidth::Scalar,
+        });
     } else {
         assert_eq!(
             thread_count, 32,
@@ -2612,32 +2629,18 @@ fn lower_cooperative_reduction_region<'a>(
             }
         }
 
-        let shuffle_done = next_label(ctx, "subgroup_reduction_shuffle_done");
-        let not_leader = func.add_predicate_register();
-        func.add_inst(Inst::setp_ne_u64(
-            not_leader.clone(),
-            lane.clone(),
-            Operand::imm_u64(0),
-        ));
-        func.add_inst(Inst::Bra {
-            condition: not_leader,
-            target: shuffle_done,
+        // Every surviving warp owns a complete fiber. Broadcast its leader's
+        // value in registers so neighboring warps never share state or barriers.
+        let leader_bits = func.add_b32_register();
+        func.add_inst(Inst::mov_b32(leader_bits.clone(), accumulator));
+        let reduced_bits = func.add_b32_register();
+        func.add_inst(Inst::ShflSyncIdxB32 {
+            dst: reduced_bits.clone(),
+            src: leader_bits,
+            lane: 0,
         });
-        func.add_inst(Inst::StSharedF32 {
-            addr: shared_base.clone(),
-            src: vec![accumulator.clone()],
-            vec: super::instructions::VecWidth::Scalar,
-        });
-        func.add_inst(Inst::Label(shuffle_done));
-        func.add_inst(Inst::BarSync { barrier_id: 0 });
+        func.add_inst(Inst::mov_f32_b32(reduced_accumulator.clone(), reduced_bits));
     }
-
-    let reduced_accumulator = func.add_f32_register();
-    func.add_inst(Inst::LdSharedF32 {
-        dst: vec![reduced_accumulator.clone()],
-        addr: shared_base,
-        vec: super::instructions::VecWidth::Scalar,
-    });
 
     let reduced =
         if region.op == crate::tensor::ReduceOp::Mean && region.input_shape[region.axis] != 0 {
@@ -3125,6 +3128,10 @@ fn lower_tensor_core_matmul<'a>(
     b: TileVar,
     schedule: &crate::tile::MatMulSchedule,
 ) {
+    if schedule.warp_fragments != (1, 1) {
+        matmul::lower_tiled_tensor_core_matmul(func, ctx, dest, a, b, schedule);
+        return;
+    }
     let accumulators = ctx
         .fragment_regs
         .get(&dest)
@@ -3147,6 +3154,8 @@ fn lower_tensor_core_matmul<'a>(
 
     for k_offset in (0..schedule.block_tile.k).step_by(schedule.instruction_tile.k) {
         let (a_address, b_address) = if schedule.warp_topology == (1, 1)
+            && !shared_layout(ctx, a_shared).column_major
+            && !shared_layout(ctx, b_shared).column_major
             && shared_layout(ctx, a_shared).xor_mask == 0
             && shared_layout(ctx, b_shared).xor_mask == 0
         {
@@ -3199,12 +3208,14 @@ fn lower_tensor_core_matmul<'a>(
                 .map(|_| func.add_b32_register())
                 .collect();
         func.add_inst(Inst::WmmaLoadA {
+            column_major: shared_layout(ctx, a_shared).column_major,
             dtype: schedule.operand_dtype,
             frags: a_fragments.clone(),
             addr: a_address,
             stride: Operand::imm_i32(shared_row_stride(ctx, a_shared) as i32),
         });
         func.add_inst(Inst::WmmaLoadB {
+            column_major: shared_layout(ctx, b_shared).column_major,
             dtype: schedule.operand_dtype,
             frags: b_fragments.clone(),
             addr: b_address,
@@ -3217,6 +3228,10 @@ fn lower_tensor_core_matmul<'a>(
             // omitted lo*lo term is second order in the TF32 rounding error.
             for (left, right) in [(a_lo, b_hi.clone()), (a_hi.clone(), b_lo), (a_hi, b_hi)] {
                 func.add_inst(Inst::WmmaMma {
+                    column_major: (
+                        schedule.operand_layouts.0.column_major,
+                        schedule.operand_layouts.1.column_major,
+                    ),
                     dtype: DType::TF32,
                     d_frags: accumulators.clone(),
                     a_frags: left,
@@ -3237,6 +3252,10 @@ fn lower_tensor_core_matmul<'a>(
             }
         }
         func.add_inst(Inst::WmmaMma {
+            column_major: (
+                schedule.operand_layouts.0.column_major,
+                schedule.operand_layouts.1.column_major,
+            ),
             dtype: schedule.operand_dtype,
             d_frags: accumulators.clone(),
             a_frags: a_fragments,
@@ -3408,6 +3427,11 @@ fn shared_address<'a>(
     column: Operand<'a, U64>,
 ) -> Operand<'a, U64> {
     let layout = shared_layout(ctx, tile);
+    let (row, column) = if layout.column_major {
+        (column, row)
+    } else {
+        (row, column)
+    };
     let column = if layout.xor_mask == 0 {
         column
     } else {
@@ -4227,8 +4251,9 @@ mod tests {
                 "missing shuffle stage for offset {offset}"
             );
         }
-        assert!(source.contains(".shared .align 32 .b8 reduction_partials[4];"));
-        assert_eq!(source.matches("bar.sync 0;").count(), 1);
+        assert!(source.contains("shfl.sync.idx.b32"));
+        assert!(!source.contains("reduction_partials"));
+        assert!(!source.contains("bar.sync"));
     }
 
     #[test]

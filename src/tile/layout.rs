@@ -74,13 +74,16 @@ fn validate(
                             operand_dtype,
                             block_width,
                             warp_topology,
+                            warp_fragments,
                         },
                     ) => {
                         matches!(warp_topology.0, 1 | 2 | 4 | 8)
                             && matches!(warp_topology.1, 1 | 2 | 4 | 8)
                             && warp_topology.0 * warp_topology.1 <= 8
-                            && *rows == 16 * warp_topology.0
-                            && *cols == 16 * warp_topology.1
+                            && matches!(warp_fragments.0, 1 | 2 | 4)
+                            && matches!(warp_fragments.1, 1 | 2 | 4)
+                            && *rows == 16 * warp_topology.0 * warp_fragments.0
+                            && *cols == 16 * warp_topology.1 * warp_fragments.1
                             && *dtype == DType::F32
                             && matches!(operand_dtype, DType::TF32 | DType::F16 | DType::BF16)
                             && *block_width > 0
@@ -138,6 +141,11 @@ fn validate(
                     "matmul pipeline must have one or two stages"
                 );
                 anyhow::ensure!(
+                    (schedule.pipeline_stages == 2)
+                        == (schedule.async_operands.0 || schedule.async_operands.1),
+                    "matmul async operands must match its pipeline stages"
+                );
+                anyhow::ensure!(
                     matches!(layout, MatMulLayout::NN),
                     "matmul transposes must be expressed by logical access maps"
                 );
@@ -174,6 +182,11 @@ fn validate(
                     );
                 }
                 if schedule.plan != MatMulPlan::ScalarF32 {
+                    anyhow::ensure!(
+                        schedule.warp_topology.0 * schedule.warp_topology.1
+                            <= schedule.thread_count() / 32,
+                        "matmul computing warps exceed the block thread count"
+                    );
                     anyhow::ensure!(
                         schedule
                             .operand_layouts
@@ -279,7 +292,12 @@ fn validate(
                 anyhow::ensure!(
                     physical.row_stride.is_multiple_of(group)
                         && physical.xor_mask & (group - 1) == 0
-                        && layout.cols.is_multiple_of(group),
+                        && (if physical.column_major {
+                            layout.rows
+                        } else {
+                            layout.cols
+                        })
+                        .is_multiple_of(group),
                     "asynchronous copies require aligned contiguous groups"
                 );
             }

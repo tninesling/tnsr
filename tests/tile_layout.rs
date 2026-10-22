@@ -252,3 +252,74 @@ fn f16_pipeline_tails_and_broadcast_epilogue() {
 fn bf16_pipeline_tails_and_broadcast_epilogue() {
     check_pipeline::<BF16>(0.008);
 }
+
+#[test]
+fn bf16_transposed_async_stages_edges_broadcasts_and_changed_feeds() {
+    let Ok(mut executor) = PtxExecutor::<BF16>::try_new_for_dtype() else {
+        return;
+    };
+    for (m, k, n, ta, tb, asynchronous) in [
+        (264, 136, 280, true, false, true),
+        (264, 136, 280, false, true, true),
+        (264, 136, 280, true, true, true),
+        (264, 136, 283, true, false, true),
+        (267, 136, 280, true, false, true),
+        (264, 137, 280, false, false, true),
+        (267, 136, 280, true, true, true),
+        (267, 136, 283, true, false, false),
+    ] {
+        let a_shape = if ta { vec![2, k, m] } else { vec![2, m, k] };
+        let b_shape = if tb { vec![1, n, k] } else { vec![1, k, n] };
+        let a = TensorExpr::<half::bf16>::input("a", a_shape.clone());
+        let b = TensorExpr::<half::bf16>::input("b", b_shape.clone());
+        let a = if ta { a.swap_axes(1, 2) } else { a };
+        let b = if tb { b.swap_axes(1, 2) } else { b };
+        let graph: TensorGraph<half::bf16> = a.matmul(b).relu().into();
+        executor.set_matmul_pipeline(MatMulPipeline::Auto);
+        executor.compile_owned(graph.clone()).unwrap();
+        let source = executor.module_source().unwrap();
+        assert_eq!(source.contains("cp.async.ca.shared.global"), asynchronous);
+        if asynchronous && (ta || tb) {
+            assert!(source.contains(".col.shared.bf16"));
+        }
+        for revision in 0..2 {
+            let data = |shape: &[usize], period: usize| {
+                (0..shape.iter().product())
+                    .map(|i| half::bf16::from_f32(((i + revision) % period) as f32 / 32. - 0.125))
+                    .collect::<Vec<_>>()
+            };
+            let av = data(&a_shape, 7);
+            let bv = data(&b_shape, 5);
+            let actual = executor
+                .execute_compiled(
+                    &graph,
+                    HashMap::from([("a".into(), av.clone()), ("b".into(), bv.clone())]),
+                )
+                .unwrap();
+            for batch in 0..2 {
+                for row in [0, 31, 32, 255, m - 1] {
+                    for col in [0, 31, 32, 255, n - 1] {
+                        let expected: f64 = (0..k)
+                            .map(|inner| {
+                                let ai = if ta {
+                                    batch * k * m + inner * m + row
+                                } else {
+                                    batch * m * k + row * k + inner
+                                };
+                                let bi = if tb { col * k + inner } else { inner * n + col };
+                                <f64 as From<f32>>::from(av[ai].to_f32())
+                                    * <f64 as From<f32>>::from(bv[bi].to_f32())
+                            })
+                            .sum();
+                        let expected = half::bf16::from_f64(expected.max(0.)).to_f32();
+                        assert!(
+                            (actual[(batch * m + row) * n + col].to_f32() - expected).abs()
+                                <= f32::EPSILON,
+                            "ta={ta} tb={tb} row={row} col={col}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

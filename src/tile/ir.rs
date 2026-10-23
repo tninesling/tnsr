@@ -29,6 +29,13 @@ pub enum Stmt {
         value: Expr,
     },
 
+    /// Load an integer index into a lexical index binding.
+    LoadIndex {
+        name: String,
+        source: String,
+        index: Expr,
+    },
+
     /// Allocate a tile variable
     AllocTile {
         var: TileVar,

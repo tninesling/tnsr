@@ -97,11 +97,86 @@ fn merge(
     alpha
 }
 
+/// A normalized scan supplies scalar scores and a homogeneous weighted sum.
+/// Dynamic bounds remain ordinary index expressions in the generated loop.
+pub(crate) trait NormalizedScan {
+    fn keys(&self, builder: &mut ScalarBuilder, fiber: &Expr) -> Result<Expr>;
+    fn score(&self, builder: &mut ScalarBuilder, fiber: Expr, key: Expr) -> Result<TileVar>;
+    fn accumulate(
+        &self,
+        builder: &mut ScalarBuilder,
+        output: Expr,
+        key: Expr,
+        probability: TileVar,
+        numerator: TileVar,
+    ) -> Result<()>;
+}
+
+impl NormalizedScan for OnlineRegion {
+    fn keys(&self, _: &mut ScalarBuilder, _: &Expr) -> Result<Expr> {
+        constant(*self.score_shape.last().context("scan axis missing")?)
+    }
+    fn score(&self, builder: &mut ScalarBuilder, fiber: Expr, key: Expr) -> Result<TileVar> {
+        score(
+            builder,
+            self,
+            &self.score,
+            fiber * self.score_shape[self.score_shape.len() - 1] + key,
+        )
+    }
+    fn accumulate(
+        &self,
+        builder: &mut ScalarBuilder,
+        output: Expr,
+        key: Expr,
+        probability: TileVar,
+        numerator: TileVar,
+    ) -> Result<()> {
+        if let OnlineConsumer::Sum(sum) = &self.consumer {
+            let mut point = coordinates(&self.output_shape, &output);
+            point.push(key);
+            sum.accumulate(
+                builder,
+                &self.inputs,
+                &SumAccumulator(numerator),
+                &point,
+                Some(probability),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScanOutput {
+    Normalized,
+    Normalizer,
+    Partial,
+}
+
 pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usize)> {
-    let rank = region.score_shape.len();
-    let keys = region.score_shape[rank - 1];
-    let columns = region.output_shape[rank - 1];
-    let cooperative = region.block_threads().is_some();
+    lower_scan(
+        region,
+        extent,
+        *region
+            .output_shape
+            .last()
+            .context("scan output axis missing")?,
+        if matches!(region.consumer, OnlineConsumer::Normalizer) {
+            ScanOutput::Normalizer
+        } else {
+            ScanOutput::Normalized
+        },
+    )
+}
+
+pub(crate) fn lower_scan(
+    scan: &impl NormalizedScan,
+    extent: usize,
+    columns: usize,
+    mode: ScanOutput,
+) -> Result<(Block, usize)> {
+    let cooperative = columns <= 128;
     let lane = Expr::ThreadIdx(Dim::X);
     let tid = Expr::Mul(
         Box::new(Expr::BlockIdx(Dim::X)),
@@ -120,8 +195,8 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
             tid,
         )
     };
-    let score_base = fiber.clone() * keys;
     let mut builder = ScalarBuilder::default();
+    let keys = scan.keys(&mut builder, &fiber)?;
     if !cooperative {
         builder.stmts.push(Stmt::BoundsCheck { extent });
     }
@@ -146,7 +221,7 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
     let name = builder.loop_name("scan");
     builder.fold(
         name,
-        constant(keys.div_ceil(tile_size))?,
+        Expr::FloorDiv(Box::new(keys.clone() + constant(tile_size - 1)?), tile_size),
         vec![
             LoopCarry {
                 var: maximum,
@@ -164,12 +239,17 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
                 builder.when(less(lane.clone(), 32)?, |builder| {
                     let key = base.clone() + lane.clone();
                     let value = builder.value(ScalarExpr::Constant(f32::NEG_INFINITY));
-                    builder.when(less(key.clone(), keys)?, |builder| {
-                        let computed =
-                            score(builder, region, &region.score, score_base.clone() + key)?;
-                        builder.set(value, computed);
-                        Ok(())
-                    })?;
+                    builder.when(
+                        ScalarPredicate::IndexLt {
+                            lhs: key.clone(),
+                            rhs: keys.clone(),
+                        },
+                        |builder| {
+                            let computed = scan.score(builder, fiber.clone(), key)?;
+                            builder.set(value, computed);
+                            Ok(())
+                        },
+                    )?;
                     builder.store(ScalarMemory::Shared(shared), lane.clone(), value);
                     let reference = builder.warp_reduce(value, ReduceOp::Max);
                     builder.when(less(lane.clone(), 1)?, |builder| {
@@ -186,45 +266,36 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
             let name = builder.loop_name("consume");
             builder.fold(name, constant(tile_size)?, Vec::new(), |builder, local| {
                 let key = base.clone() + local.clone();
-                builder.when(less(key.clone(), keys)?, |builder| {
-                    let value = if let Some(shared) = shared {
-                        builder.load(ScalarMemory::Shared(shared), local)
-                    } else {
-                        score(
-                            builder,
-                            region,
-                            &region.score,
-                            score_base.clone() + key.clone(),
-                        )?
-                    };
-                    if !cooperative {
-                        let alpha = merge(builder, maximum, denominator, value);
-                        numerator.rescale(builder, alpha);
-                    }
-                    let probability = builder.value(ScalarExpr::select(
-                        equal(value, f32::NEG_INFINITY),
-                        ScalarExpr::Constant(0.0),
-                        exp_difference(value, maximum),
-                    ));
-                    builder.set(
-                        denominator,
-                        arithmetic(BinaryOp::Add, denominator, probability),
-                    );
-                    if let OnlineConsumer::Sum(sum) = &region.consumer {
+                builder.when(
+                    ScalarPredicate::IndexLt {
+                        lhs: key.clone(),
+                        rhs: keys.clone(),
+                    },
+                    |builder| {
+                        let value = if let Some(shared) = shared {
+                            builder.load(ScalarMemory::Shared(shared), local)
+                        } else {
+                            scan.score(builder, fiber.clone(), key.clone())?
+                        };
+                        if !cooperative {
+                            let alpha = merge(builder, maximum, denominator, value);
+                            numerator.rescale(builder, alpha);
+                        }
+                        let probability = builder.value(ScalarExpr::select(
+                            equal(value, f32::NEG_INFINITY),
+                            ScalarExpr::Constant(0.0),
+                            exp_difference(value, maximum),
+                        ));
+                        builder.set(
+                            denominator,
+                            arithmetic(BinaryOp::Add, denominator, probability),
+                        );
                         builder.when(less(column.clone(), columns)?, |builder| {
-                            let mut point = coordinates(&region.output_shape, &output);
-                            point.push(key);
-                            sum.accumulate(
-                                builder,
-                                &region.inputs,
-                                &numerator,
-                                &point,
-                                Some(probability),
-                            )
+                            scan.accumulate(builder, output.clone(), key, probability, numerator.0)
                         })?;
-                    }
-                    Ok(())
-                })?;
+                        Ok(())
+                    },
+                )?;
                 Ok(())
             })?;
             if cooperative {
@@ -233,16 +304,44 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
             Ok(())
         },
     )?;
-    builder.when(less(column, columns)?, |builder| {
-        let result = builder.value(match region.consumer {
-            OnlineConsumer::Normalizer => ScalarExpr::select(
+    builder.when(less(column.clone(), columns)?, |builder| {
+        let result = builder.value(if mode == ScanOutput::Normalizer {
+            ScalarExpr::select(
                 equal(maximum, f32::NEG_INFINITY),
                 ScalarExpr::Constant(f32::NAN),
                 denominator,
-            ),
-            OnlineConsumer::Sum(_) => arithmetic(BinaryOp::Div, numerator.0, denominator),
+            )
+        } else if mode == ScanOutput::Partial {
+            ScalarExpr::select(
+                equal(denominator, 0.),
+                // Empty scans have a zero numerator. Retain nonfinite sums
+                // from nonempty zero-weight scans (for example 0 * infinity).
+                ScalarExpr::Var(numerator.0),
+                arithmetic(BinaryOp::Div, numerator.0, denominator),
+            )
+        } else {
+            arithmetic(BinaryOp::Div, numerator.0, denominator)
         });
         builder.store(ScalarMemory::Global("output_0".into()), output, result);
+        if mode == ScanOutput::Partial {
+            builder.when(less(column.clone(), 1)?, |builder| {
+                let normalizer = builder.value(ScalarExpr::select(
+                    equal(denominator, 0.),
+                    ScalarExpr::Constant(f32::NEG_INFINITY),
+                    arithmetic(
+                        BinaryOp::Add,
+                        maximum,
+                        ScalarExpr::unary(UnaryOp::Log, denominator),
+                    ),
+                ));
+                builder.store(
+                    ScalarMemory::Global("log_normalizer".into()),
+                    fiber,
+                    normalizer,
+                );
+                Ok(())
+            })?;
+        }
         Ok(())
     })?;
     Ok((

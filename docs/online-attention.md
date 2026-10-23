@@ -46,3 +46,12 @@ The schedule is fixed scalar-f32 code, without general loop/tiling search or
 attention tensor-core scheduling. Causal masks remain dense inputs. Standalone
 materialized softmax outputs retain the existing path; standalone exponential
 normalizers and normalized weighted sums can fuse without attention.
+
+Incremental GPT decoding also uses the same generic normalized-scan scheduler.
+Its scalar score/weight loaders address cached and current K/V directly, while
+an ordinary `LoadIndex` statement supplies the live u32 loop bound. The bound
+includes each query's causal offset, so this inference path needs neither a
+dense causal mask nor concatenated K/V. Longer contexts produce fixed-size
+normalized partials and log-sum-exp statistics, then merge them with another
+normalized scan. Surrounding model stages still compile
+from ordinary tensor graphs. See [KV-cache execution and measurements](kv-cache.md).

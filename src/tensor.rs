@@ -174,6 +174,10 @@ impl<D: DType> Parameter<D> {
         }
     }
 
+    pub(crate) fn revision(&self) -> anyhow::Result<u64> {
+        self.data.revision()
+    }
+
     pub fn id(&self) -> usize {
         self.id
     }

@@ -106,7 +106,7 @@ fn main() -> Result<()> {
     }
 
     let prompt = [encoded[0]];
-    let generated = gpt.generate(&mut runtime, &prompt, args.generate_tokens)?;
+    let generated = gpt.generate_cached(runtime.backend(), &prompt, args.generate_tokens)?;
     let generated: String = generated
         .into_iter()
         .map(|token| vocabulary[token])

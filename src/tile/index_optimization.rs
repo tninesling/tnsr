@@ -13,6 +13,7 @@ type Scope = Vec<usize>;
 fn roots(stmt: &mut Stmt) -> Vec<&mut Expr> {
     match stmt {
         Stmt::LetIndex { value, .. } => vec![value],
+        Stmt::LoadIndex { index, .. } => vec![index],
         Stmt::Load {
             row_offset,
             col_offset,
@@ -141,7 +142,9 @@ fn collect(
         for root in roots(stmt) {
             census(root, scope, index, usage, names);
         }
-        if let Stmt::LetIndex { name, .. } = stmt {
+        // Loaded indices reserve their names but remain opaque to hoisting;
+        // dependent expressions stay after the load in their original scope.
+        if let Stmt::LetIndex { name, .. } | Stmt::LoadIndex { name, .. } = stmt {
             names.insert(name.clone());
         }
         if let Stmt::ForLoop { loop_var, body, .. } = stmt {

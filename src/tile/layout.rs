@@ -25,6 +25,7 @@ impl TileIR {
                 Stmt::IndexedCrossEntropy { .. } | Stmt::IndexedCrossEntropyBackward { .. } => {
                     param.name == "targets"
                 }
+                Stmt::LoadIndex { source, .. } => source == &param.name,
                 _ => false,
             });
             anyhow::ensure!(
@@ -332,6 +333,14 @@ fn validate(
                 anyhow::ensure!(
                     get(tiles, src)?.layout == TileLayout::ThreadScalar,
                     "global store requires an explicit conversion to thread scalars"
+                );
+            }
+            Stmt::LoadIndex { source, .. } => {
+                anyhow::ensure!(
+                    params
+                        .iter()
+                        .any(|p| p.name == *source && p.is_input && p.dtype == DType::U32),
+                    "index load requires a u32 input"
                 );
             }
             Stmt::SetScalar { dest, value } => {

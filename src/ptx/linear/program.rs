@@ -42,9 +42,9 @@ impl Kernel {
         for pointer in &self.pointers {
             launch.arg(pointer);
         }
-        // SAFETY: constructors validate the compiled ABI's dtype/extents. Only
-        // the island constructs kernels; it retains all buffers/modules, uses
-        // one private ordered stream and synchronizes before destruction.
+        // SAFETY: constructors validate the compiled ABI's dtype/extents. Private
+        // execution owners construct kernels. Each retains all buffers/modules,
+        // uses one private ordered stream and synchronizes before destruction.
         unsafe { launch.launch(self.config) }.context("linear island kernel")?;
         Ok(())
     }

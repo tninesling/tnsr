@@ -462,6 +462,15 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             let value = lower_expr(func, ctx, value);
             ctx.index_vars.insert(name.clone(), value);
         }
+        Stmt::LoadIndex {
+            name,
+            source,
+            index,
+        } => {
+            let offset = lower_expr(func, ctx, index);
+            let value = load_index_at(func, ctx, source, offset);
+            ctx.index_vars.insert(name.clone(), value);
+        }
         Stmt::BoundsCheck { extent } => {
             let tid = global_linear_tid(func);
             let outside = func.add_predicate_register();

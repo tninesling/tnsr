@@ -58,6 +58,26 @@ Enable CUDA to use an available NVIDIA GPU automatically:
 cargo run --release --features cuda --example gpt
 ```
 
+The example uses cached greedy decoding. For incremental inference, create a
+session with a fixed batch size and append a prompt or one or more new tokens:
+
+```rust,ignore
+let mut decoder = gpt.decoder(tnsr::Backend::Cpu, 1)?;
+let prompt_logits = decoder.decode(&[12, 34, 56])?;
+let next_logits = decoder.decode(&[78])?;
+decoder.reset()?; // Reuse the session for another prompt.
+```
+
+`decode` accepts row-major `[batch, new_tokens]` IDs and returns logits for the
+new positions. With CUDA enabled, `Backend::Ptx` keeps projected keys, values and
+weights on the GPU. Generated CUDA attention scans only the live prefix without
+materializing scores, probabilities or concatenated K/V. `decoder_with_capacity`
+limits context storage. Reset after
+changing model weights; appending beyond capacity returns an error.
+`generate_cached` preserves `generate`'s sliding-window behavior by rebuilding
+the retained context when learned positions restart. See
+[KV cache measurements and API](docs/kv-cache.md).
+
 ## Tile representation
 
 For GPU hardware targets, we take advantage of tiling to improve memory access patterns. Tiling breaks down large tensor operations into smaller blocks (tiles) that fit into the faster shared memory of the GPU. This allows threads within a block to cooperate and share data, reducing the number of global memory accesses. It also allows coalesced memory accesses, which improves bandwidth utilization. The smallest primitive is a register tile, which corresponds to the size of a warp. The 16x16 register tile comes directly from the [ThunderKittens] project, which provides high-performance C++ templates for CUDA kernels.

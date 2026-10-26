@@ -375,6 +375,28 @@ impl<D: CudaDType> PtxExecutor<D> {
             .load_function(name)?)
     }
 
+    pub(crate) fn conv_weight_tree_launch_config(
+        &self,
+        node: petgraph::graph::NodeIndex,
+        len: usize,
+    ) -> Result<Option<LaunchConfig>> {
+        let threads = self
+            .ptx_graph
+            .as_ref()
+            .context("missing compiled PTX graph")?
+            .conv_weight_threads(node);
+        if threads == 1 {
+            return Ok(None);
+        }
+        let len = u32::try_from(len)
+            .context("Conv2dBackwardWeight output is too large for a CUDA launch")?;
+        Ok(Some(LaunchConfig {
+            grid_dim: (len, 1, 1),
+            block_dim: (threads, 1, 1),
+            shared_mem_bytes: 0,
+        }))
+    }
+
     /// Describe the current physical PTX execution plan.
     pub fn describe_plan<G>(&self, graph: &TensorGraph<D::HostType, G>) -> Result<String> {
         let supplied_signature = graph_compilation_signature(
@@ -413,12 +435,22 @@ impl<D: CudaDType> PtxExecutor<D> {
                 PtxPlanAction::Upload => "upload".to_string(),
                 PtxPlanAction::DeviceCopy => "device-copy".to_string(),
                 PtxPlanAction::VirtualView => "virtual-view".to_string(),
-                PtxPlanAction::Kernel => format!(
-                    "kernel {}",
-                    ptx_graph
+                PtxPlanAction::Kernel => {
+                    let name = ptx_graph
                         .kernel_name(node_index)
-                        .context("Missing compiled kernel in unfused plan")?
-                ),
+                        .context("Missing compiled kernel in unfused plan")?;
+                    if matches!(
+                        graph[node_index],
+                        TensorGraphNode::Conv2dBackwardWeight { .. }
+                    ) {
+                        format!(
+                            "kernel {name} conv_weight_threads={}",
+                            ptx_graph.conv_weight_threads(node_index)
+                        )
+                    } else {
+                        format!("kernel {name}")
+                    }
+                }
                 PtxPlanAction::PointwiseRegion(region_id) => format!(
                     "kernel {}",
                     ptx_graph
@@ -709,6 +741,9 @@ impl<D: CudaDType> PtxExecutor<D> {
                     }
                 }
             }
+        }
+        if self.reduction_mode != PtxReductionMode::Strict {
+            tile_graph.schedule_conv_weight_reductions();
         }
         let index_started = Instant::now();
         tile_graph.optimize_indices()?;
@@ -2078,11 +2113,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                             .arg(&mut output);
                         self.record_kernel_launch();
                         unsafe {
-                            launcher.launch(LaunchConfig::for_num_elems(
-                                u32::try_from(output_len).context(
-                                    "Conv2dBackwardWeight output is too large for a CUDA launch",
-                                )?,
-                            ))
+                            launcher.launch(self.conv_weight_tree_launch_config(*node_idx, output_len)?.unwrap_or(LaunchConfig::for_num_elems(u32::try_from(output_len).context("Conv2dBackwardWeight output is too large for a CUDA launch")?)))
                         }
                         .context("PTX Conv2dBackwardWeight kernel launch failed")?;
                     }

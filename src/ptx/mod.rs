@@ -1,4 +1,5 @@
 pub mod codegen;
+pub(crate) mod convolution;
 pub mod executor;
 pub mod graph;
 pub mod instructions;

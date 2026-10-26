@@ -194,6 +194,11 @@ pub enum Stmt {
     Conv2dBackwardWeight {
         geometry: Conv2dGeometry,
     },
+    /// One block per weight, with strided lane sums and a fixed shared tree.
+    Conv2dBackwardWeightTree {
+        geometry: Conv2dGeometry,
+        threads: u32,
+    },
     MaxPool2d {
         geometry: MaxPool2dGeometry,
     },

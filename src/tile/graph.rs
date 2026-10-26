@@ -208,6 +208,34 @@ impl TileGraph {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn schedule_conv_weight_reductions(&mut self) {
+        for ir in self.graph.node_weights_mut() {
+            if ir.params.iter().any(|param| param.dtype != DType::F32) {
+                continue;
+            }
+            let geometry = ir.body.stmts.iter().find_map(|stmt| match stmt {
+                super::Stmt::Conv2dBackwardWeight { geometry } => Some(*geometry),
+                _ => None,
+            });
+            let Some(geometry) = geometry else { continue };
+            let threads = crate::ptx::convolution::weight_gradient_threads(geometry);
+            if threads == 1 {
+                continue;
+            }
+            // Every block owns a valid weight. Removing the per-thread logical
+            // output guard keeps every lane alive through the block barriers.
+            ir.body
+                .stmts
+                .retain(|stmt| !matches!(stmt, super::Stmt::BoundsCheck { .. }));
+            for stmt in &mut ir.body.stmts {
+                if matches!(stmt, super::Stmt::Conv2dBackwardWeight { .. }) {
+                    *stmt = super::Stmt::Conv2dBackwardWeightTree { geometry, threads };
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
     pub(crate) fn add_fusion_regions(&mut self, regions: &[FusionRegion]) -> Result<()> {
         self.region_kernels = regions
             .iter()

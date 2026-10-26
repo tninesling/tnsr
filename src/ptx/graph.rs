@@ -23,6 +23,7 @@ pub struct PtxGraph {
     matmul_region_functions: Vec<(usize, Function<'static>)>,
     physical_nodes: Option<HashSet<NodeIndex>>,
     target: PtxTarget,
+    conv_weight_threads: HashMap<NodeIndex, u32>,
     // Only entry names differ between these otherwise identical PTX functions.
     kernel_aliases: HashMap<String, String>,
     #[allow(dead_code)]
@@ -105,6 +106,10 @@ impl PtxGraph {
             .map(|function| self.canonical_name(function.name))
     }
 
+    pub(crate) fn conv_weight_threads(&self, node: NodeIndex) -> u32 {
+        self.conv_weight_threads.get(&node).copied().unwrap_or(1)
+    }
+
     pub(crate) fn region_kernel_name(&self, region_id: usize) -> Option<&str> {
         self.region_functions
             .iter()
@@ -147,6 +152,19 @@ impl From<TileGraph> for PtxGraph {
             matmul_region_kernels,
             physical_nodes,
         } = tile_graph;
+        let conv_weight_threads = tile_nodes
+            .node_indices()
+            .filter_map(|node| {
+                tile_nodes[node]
+                    .body
+                    .stmts
+                    .iter()
+                    .find_map(|stmt| match stmt {
+                        Stmt::Conv2dBackwardWeightTree { threads, .. } => Some((node, *threads)),
+                        _ => None,
+                    })
+            })
+            .collect();
         let graph = tile_nodes.map_owned(
             |node_idx, tile_ir| {
                 // SAFETY: `arena` is boxed at a stable address and is owned by the
@@ -214,6 +232,7 @@ impl From<TileGraph> for PtxGraph {
             matmul_region_functions,
             physical_nodes,
             target: PtxTarget::sm80(),
+            conv_weight_threads,
             kernel_aliases: HashMap::new(),
             arena,
         };
@@ -1412,7 +1431,10 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
         Stmt::Conv2d { geometry } => lower_conv2d(func, ctx, *geometry),
         Stmt::ConvTranspose2d { geometry } => lower_conv_transpose2d(func, ctx, *geometry),
         Stmt::Conv2dBackwardWeight { geometry } => {
-            lower_conv2d_backward_weight(func, ctx, *geometry)
+            lower_conv2d_backward_weight(func, ctx, *geometry, 1)
+        }
+        Stmt::Conv2dBackwardWeightTree { geometry, threads } => {
+            lower_conv2d_backward_weight(func, ctx, *geometry, *threads)
         }
         Stmt::MaxPool2d { geometry } => lower_max_pool2d(func, ctx, *geometry),
         Stmt::MaxPool2dBackward { geometry } => lower_max_pool2d_backward(func, ctx, *geometry),
@@ -1904,8 +1926,23 @@ fn lower_conv2d_backward_weight<'a>(
     func: &mut Function<'a>,
     ctx: &mut LoweringContext<'a>,
     geometry: crate::tile::Conv2dGeometry,
+    threads: u32,
 ) {
-    let tid = global_linear_tid(func);
+    let global_tid = global_linear_tid(func);
+    let tid = func.add_u64_register();
+    let lane = func.add_u64_register();
+    func.add_inst(Inst::div_u64(
+        tid.clone(),
+        global_tid.clone(),
+        Operand::imm_u64(u64::from(threads)),
+    ));
+    let base = func.add_u64_register();
+    func.add_inst(Inst::mul_u64(
+        base.clone(),
+        tid.clone(),
+        Operand::imm_u64(u64::from(threads)),
+    ));
+    func.add_inst(Inst::sub_u64(lane.clone(), global_tid, base));
     let (output_channel, input_channel, kernel_row, kernel_col) = decode_nchw(
         func,
         tid.clone(),
@@ -1916,7 +1953,14 @@ fn lower_conv2d_backward_weight<'a>(
     let accumulator = func.add_f32_register();
     func.add_inst(Inst::mov_f32(accumulator.clone(), Operand::imm_f32(0.0)));
     let reduction_size = geometry.batch * geometry.output_height * geometry.output_width;
-    let reduction = begin_counted_loop(func, ctx, "conv_weight", reduction_size);
+    let reduction = begin_strided_counted_loop(
+        func,
+        ctx,
+        "conv_weight",
+        reduction_size,
+        lane.clone(),
+        u64::from(threads),
+    );
     let batch = decode_coordinate(
         func,
         reduction.counter.clone(),
@@ -1974,7 +2018,29 @@ fn lower_conv2d_backward_weight<'a>(
     accumulate_product(func, accumulator.clone(), input, grad);
     func.add_inst(Inst::Label(continue_label));
     end_counted_loop(func, reduction);
-    store_param_f32_at(func, ctx, "output", tid, accumulator);
+    if threads > 1 {
+        let reduced = block_reduce_f32(
+            func,
+            ctx,
+            accumulator,
+            lane.clone(),
+            u64::from(threads),
+            crate::tensor::ReduceOp::Sum,
+        );
+        let not_leader = func.add_predicate_register();
+        func.add_inst(Inst::setp_ne_u64(
+            not_leader.clone(),
+            lane,
+            Operand::imm_u64(0),
+        ));
+        func.add_inst(Inst::Bra {
+            condition: not_leader,
+            target: ctx.return_label,
+        });
+        store_param_f32_at(func, ctx, "output", tid, reduced);
+    } else {
+        store_param_f32_at(func, ctx, "output", tid, accumulator);
+    }
 }
 
 fn lower_max_pool2d<'a>(
@@ -2228,6 +2294,7 @@ struct CountedLoop<'a> {
     counter: Operand<'a, U64>,
     start: &'a str,
     end: &'a str,
+    step: u64,
 }
 
 fn begin_counted_loop<'a>(
@@ -2236,8 +2303,19 @@ fn begin_counted_loop<'a>(
     prefix: &str,
     limit: usize,
 ) -> CountedLoop<'a> {
+    begin_strided_counted_loop(func, ctx, prefix, limit, Operand::imm_u64(0), 1)
+}
+
+fn begin_strided_counted_loop<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    prefix: &str,
+    limit: usize,
+    initial: Operand<'a, U64>,
+    step: u64,
+) -> CountedLoop<'a> {
     let counter = func.add_u64_register();
-    func.add_inst(Inst::mov_u64(counter.clone(), Operand::imm_u64(0)));
+    func.add_inst(Inst::mov_u64(counter.clone(), initial));
     let start = next_label(ctx, &format!("{prefix}_loop"));
     let end = next_label(ctx, &format!("{prefix}_end"));
     func.add_inst(Inst::Label(start));
@@ -2255,6 +2333,7 @@ fn begin_counted_loop<'a>(
         counter,
         start,
         end,
+        step,
     }
 }
 
@@ -2262,7 +2341,7 @@ fn end_counted_loop<'a>(func: &mut Function<'a>, state: CountedLoop<'a>) {
     func.add_inst(Inst::add_u64(
         state.counter.clone(),
         state.counter,
-        Operand::imm_u64(1),
+        Operand::imm_u64(state.step),
     ));
     func.add_inst(Inst::BraUni {
         target: state.start,
@@ -2534,6 +2613,99 @@ fn lower_serial_reduction_region<'a>(
     }
 }
 
+fn block_reduce_f32<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    accumulator: Operand<'a, F32>,
+    lane: Operand<'a, U64>,
+    thread_count: u64,
+    op: crate::tensor::ReduceOp,
+) -> Operand<'a, F32> {
+    assert!(thread_count.is_power_of_two() && thread_count <= 1024);
+    let shared_name = ctx.arena.alloc_str("reduction_partials");
+    func.add_shared_memory(
+        shared_name,
+        thread_count as usize * std::mem::size_of::<f32>(),
+    );
+    let shared_base = func.add_u64_register();
+    func.add_inst(Inst::mov_u64(
+        shared_base.clone(),
+        Operand::symbol(shared_name),
+    ));
+    let shared_address = shared_address_for_lane(func, shared_base.clone(), lane.clone());
+    func.add_inst(Inst::StSharedF32 {
+        addr: shared_address,
+        src: vec![accumulator.clone()],
+        vec: super::instructions::VecWidth::Scalar,
+    });
+    func.add_inst(Inst::BarSync { barrier_id: 0 });
+
+    let mut stride = thread_count / 2;
+    while stride != 0 {
+        let skip = next_label(ctx, "block_reduction_skip");
+        let inactive = func.add_predicate_register();
+        func.add_inst(Inst::setp_ge_u64(
+            inactive.clone(),
+            lane.clone(),
+            Operand::imm_u64(stride),
+        ));
+        func.add_inst(Inst::Bra {
+            condition: inactive,
+            target: skip,
+        });
+        let peer_lane = func.add_u64_register();
+        func.add_inst(Inst::add_u64(
+            peer_lane.clone(),
+            lane.clone(),
+            Operand::imm_u64(stride),
+        ));
+        let peer_byte_offset = func.add_u64_register();
+        func.add_inst(Inst::mul_u64(
+            peer_byte_offset.clone(),
+            peer_lane,
+            Operand::imm_u64(std::mem::size_of::<f32>() as u64),
+        ));
+        let peer_address = func.add_u64_register();
+        func.add_inst(Inst::add_u64(
+            peer_address.clone(),
+            shared_base.clone(),
+            peer_byte_offset,
+        ));
+        let peer = func.add_f32_register();
+        func.add_inst(Inst::LdSharedF32 {
+            dst: vec![peer.clone()],
+            addr: peer_address,
+            vec: super::instructions::VecWidth::Scalar,
+        });
+        match op {
+            crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
+                Inst::add_f32(accumulator.clone(), accumulator.clone(), peer),
+            ),
+            crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
+                accumulator.clone(),
+                accumulator.clone(),
+                peer,
+            )),
+        }
+        let lane_address = shared_address_for_lane(func, shared_base.clone(), lane.clone());
+        func.add_inst(Inst::StSharedF32 {
+            addr: lane_address,
+            src: vec![accumulator.clone()],
+            vec: super::instructions::VecWidth::Scalar,
+        });
+        func.add_inst(Inst::Label(skip));
+        func.add_inst(Inst::BarSync { barrier_id: 0 });
+        stride /= 2;
+    }
+    let reduced_accumulator = func.add_f32_register();
+    func.add_inst(Inst::LdSharedF32 {
+        dst: vec![reduced_accumulator.clone()],
+        addr: shared_base,
+        vec: super::instructions::VecWidth::Scalar,
+    });
+    reduced_accumulator
+}
+
 fn lower_cooperative_reduction_region<'a>(
     func: &mut Function<'a>,
     ctx: &mut LoweringContext<'a>,
@@ -2687,86 +2859,15 @@ fn lower_cooperative_reduction_region<'a>(
 
     let reduced_accumulator = func.add_f32_register();
     if tree_reduce {
-        let shared_name = ctx.arena.alloc_str("reduction_partials");
-        func.add_shared_memory(
-            shared_name,
-            thread_count as usize * std::mem::size_of::<f32>(),
+        let reduced = block_reduce_f32(
+            func,
+            ctx,
+            accumulator.clone(),
+            lane.clone(),
+            thread_count,
+            region.op,
         );
-        let shared_base = func.add_u64_register();
-        func.add_inst(Inst::mov_u64(
-            shared_base.clone(),
-            Operand::symbol(shared_name),
-        ));
-        let shared_address = shared_address_for_lane(func, shared_base.clone(), lane.clone());
-        func.add_inst(Inst::StSharedF32 {
-            addr: shared_address,
-            src: vec![accumulator.clone()],
-            vec: super::instructions::VecWidth::Scalar,
-        });
-        func.add_inst(Inst::BarSync { barrier_id: 0 });
-
-        let mut stride = thread_count / 2;
-        while stride != 0 {
-            let skip = next_label(ctx, "block_reduction_skip");
-            let inactive = func.add_predicate_register();
-            func.add_inst(Inst::setp_ge_u64(
-                inactive.clone(),
-                lane.clone(),
-                Operand::imm_u64(stride),
-            ));
-            func.add_inst(Inst::Bra {
-                condition: inactive,
-                target: skip,
-            });
-            let peer_lane = func.add_u64_register();
-            func.add_inst(Inst::add_u64(
-                peer_lane.clone(),
-                lane.clone(),
-                Operand::imm_u64(stride),
-            ));
-            let peer_byte_offset = func.add_u64_register();
-            func.add_inst(Inst::mul_u64(
-                peer_byte_offset.clone(),
-                peer_lane,
-                Operand::imm_u64(std::mem::size_of::<f32>() as u64),
-            ));
-            let peer_address = func.add_u64_register();
-            func.add_inst(Inst::add_u64(
-                peer_address.clone(),
-                shared_base.clone(),
-                peer_byte_offset,
-            ));
-            let peer = func.add_f32_register();
-            func.add_inst(Inst::LdSharedF32 {
-                dst: vec![peer.clone()],
-                addr: peer_address,
-                vec: super::instructions::VecWidth::Scalar,
-            });
-            match region.op {
-                crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean => func.add_inst(
-                    Inst::add_f32(accumulator.clone(), accumulator.clone(), peer),
-                ),
-                crate::tensor::ReduceOp::Max => func.add_inst(Inst::max_f32(
-                    accumulator.clone(),
-                    accumulator.clone(),
-                    peer,
-                )),
-            }
-            let lane_address = shared_address_for_lane(func, shared_base.clone(), lane.clone());
-            func.add_inst(Inst::StSharedF32 {
-                addr: lane_address,
-                src: vec![accumulator.clone()],
-                vec: super::instructions::VecWidth::Scalar,
-            });
-            func.add_inst(Inst::Label(skip));
-            func.add_inst(Inst::BarSync { barrier_id: 0 });
-            stride /= 2;
-        }
-        func.add_inst(Inst::LdSharedF32 {
-            dst: vec![reduced_accumulator.clone()],
-            addr: shared_base,
-            vec: super::instructions::VecWidth::Scalar,
-        });
+        func.add_inst(Inst::mov_f32(reduced_accumulator.clone(), reduced));
     } else {
         assert_eq!(
             thread_count, 32,

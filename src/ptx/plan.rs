@@ -61,7 +61,8 @@ pub enum PtxReductionMode {
     /// Preserve the existing increasing-index accumulation order.
     #[default]
     Strict,
-    /// Permit a fixed warp/block reduction tree for eligible regions.
+    /// Permit fixed warp/block trees for eligible reductions, including
+    /// small F32 convolution weight gradients with long reduction axes.
     DeterministicTree,
     /// Allow online normalization rewrites as well as deterministic trees.
     /// Results are numerically equivalent, rather than bitwise identical.

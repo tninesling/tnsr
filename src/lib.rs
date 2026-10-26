@@ -1561,7 +1561,7 @@ where
                             for owi in 0..w_out {
                                 let o_val = output[((on * c + oc) * h_out + ohi) * w_out + owi];
                                 let g = grad[((on * c + oc) * h_out + ohi) * w_out + owi];
-                                for khi in 0..kernel_size {
+                                'window: for khi in 0..kernel_size {
                                     let ih = ohi * stride + khi;
                                     if ih < h {
                                         for kwi in 0..kernel_size {
@@ -1572,6 +1572,7 @@ where
                                                 if in_val == o_val {
                                                     out[((on * c + oc) * h + ih) * w + iw] =
                                                         out[((on * c + oc) * h + ih) * w + iw] + g;
+                                                    break 'window;
                                                 }
                                             }
                                         }

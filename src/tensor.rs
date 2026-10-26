@@ -881,6 +881,9 @@ impl<D: DType> TensorExpr<D> {
     }
 
     /// 2D max pooling. Input [N, C, H, W]. Output [N, C, H_out, W_out].
+    ///
+    /// Gradients select the first row-major maximum in each window and sum
+    /// contributions from overlapping windows.
     pub fn max_pool2d(self, kernel_size: usize, stride: usize) -> Self
     where
         D: 'static,
@@ -890,6 +893,14 @@ impl<D: DType> TensorExpr<D> {
             in_shape.len(),
             4,
             "MaxPool2d input must be 4D [N, C, H, W], got {in_shape:?}"
+        );
+        assert!(
+            kernel_size > 0 && stride > 0,
+            "MaxPool2d kernel_size and stride must be positive"
+        );
+        assert!(
+            kernel_size <= in_shape[2] && kernel_size <= in_shape[3],
+            "MaxPool2d kernel must fit input spatial extents"
         );
         let h_out = (in_shape[2] - kernel_size) / stride + 1;
         let w_out = (in_shape[3] - kernel_size) / stride + 1;

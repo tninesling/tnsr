@@ -7,7 +7,15 @@ use tnsr::{Executor, Runtime, SimpleExecutor, nn};
 const EPSILON: f32 = 1e-4;
 
 fn create_runtime() -> Runtime {
-    Runtime::<f32>::new()
+    let runtime = Runtime::<f32>::new();
+    #[cfg(feature = "cuda")]
+    if std::env::var("TNSR_REQUIRE_CUDA").as_deref() == Ok("1") {
+        assert!(
+            matches!(&runtime, Runtime::Ptx(_)),
+            "CUDA test fell back to CPU"
+        );
+    }
+    runtime
 }
 
 /// Naive reference conv2d on the host, used to cross-check the backend.
@@ -291,7 +299,7 @@ fn max_pool2d_gradient() {
 }
 
 #[test]
-fn max_pool2d_backward_accumulates_overlapping_tied_windows() {
+fn max_pool2d_backward_routes_ties_to_first_position() {
     let mut runtime = create_runtime();
     let x = Parameter::new(vec![1.0; 9], vec![1, 1, 3, 3]);
     let x_id = x.id();
@@ -304,8 +312,95 @@ fn max_pool2d_backward_accumulates_overlapping_tied_windows() {
     runtime.execute(&grad_graph, HashMap::new()).unwrap();
     assert_close(
         &runtime.get_gradients(&grad_graph)[&x_id],
-        &[1.0, 2.0, 1.0, 2.0, 4.0, 2.0, 1.0, 2.0, 1.0],
+        &[1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
     );
+}
+
+#[test]
+fn max_pool2d_backward_matches_first_max_reference_across_window_boundaries() {
+    let cases: [([usize; 4], usize, usize); 5] = [
+        ([2, 3, 3, 5], 2, 1),
+        ([1, 1, 5, 7], 3, 2),
+        ([1, 1, 7, 6], 2, 3),
+        ([2, 2, 6, 8], 4, 1),
+        ([1, 2, 4, 4], 4, 4),
+    ];
+    for (shape, kernel, stride) in cases {
+        let [batch, channels, height, width] = shape;
+        let rows = (height - kernel) / stride + 1;
+        let columns = (width - kernel) / stride + 1;
+        let values: Vec<f32> = (0..shape.iter().product::<usize>())
+            .map(|i| f32::from(u8::try_from((i * 7 + i / 13) % 11).unwrap()) - 5.0)
+            .collect();
+        let upstream: Vec<f32> = (0..batch * channels * rows * columns)
+            .map(|i| [1.0, -0.5, 2.0, 0.25][i % 4])
+            .collect();
+        let mut expected = vec![0.0; values.len()];
+        for n in 0..batch {
+            for c in 0..channels {
+                for y in 0..rows {
+                    for x in 0..columns {
+                        let mut winner = None;
+                        let mut maximum = f32::NEG_INFINITY;
+                        for ky in 0..kernel {
+                            for kx in 0..kernel {
+                                let index = ((n * channels + c) * height + y * stride + ky) * width
+                                    + x * stride
+                                    + kx;
+                                if winner.is_none() || values[index] > maximum {
+                                    maximum = values[index];
+                                    winner = Some(index);
+                                }
+                            }
+                        }
+                        expected[winner.unwrap()] +=
+                            upstream[((n * channels + c) * rows + y) * columns + x];
+                    }
+                }
+            }
+        }
+        let parameter = Parameter::new(values, shape.to_vec());
+        let id = parameter.id();
+        let pooled = TensorExpr::from(parameter).max_pool2d(kernel, stride);
+        let loss = (pooled
+            * TensorExpr::constant(upstream.clone(), vec![batch, channels, rows, columns]))
+        .flatten()
+        .reduce_sum(1)
+        .reduce_sum(0);
+        let graph: TensorGraph<f32> = loss.into();
+        let root = *graph.toposort().last().unwrap();
+        let graph = graph.with_gradients(root);
+        let mut runtime = create_runtime();
+        runtime.execute(&graph, HashMap::new()).unwrap();
+        let gradients = runtime.get_gradients(&graph);
+        let actual = &gradients[&id];
+        assert_close(actual, &expected);
+        assert!((actual.iter().sum::<f32>() - upstream.iter().sum::<f32>()).abs() <= EPSILON);
+    }
+}
+
+#[test]
+fn max_pool2d_backward_zero_ties_choose_one_position() {
+    let parameter = Parameter::new(vec![-0.0, 0.0, 0.0, -0.0], vec![1, 1, 2, 2]);
+    let id = parameter.id();
+    let graph: TensorGraph<f32> = TensorExpr::from(parameter).max_pool2d(2, 2).into();
+    let root = *graph.toposort().last().unwrap();
+    let graph = graph.with_gradients(root);
+    let mut runtime = create_runtime();
+    runtime.execute(&graph, HashMap::new()).unwrap();
+    assert_close(&runtime.get_gradients(&graph)[&id], &[1.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+#[should_panic(expected = "kernel_size and stride must be positive")]
+fn max_pool2d_rejects_zero_kernel() {
+    let _ = TensorExpr::constant(vec![0.0f32; 4], vec![1, 1, 2, 2]).max_pool2d(0, 1);
+}
+
+#[test]
+#[should_panic(expected = "kernel_size and stride must be positive")]
+fn max_pool2d_rejects_zero_stride() {
+    let _ = TensorExpr::constant(vec![0.0f32; 4], vec![1, 1, 2, 2]).max_pool2d(1, 0);
 }
 
 #[test]

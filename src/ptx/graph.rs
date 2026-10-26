@@ -1996,20 +1996,70 @@ fn lower_max_pool2d_backward<'a>(
     let input_value = load_param_f32_at(func, ctx, "input", tid.clone());
     let accumulator = func.add_f32_register();
     func.add_inst(Inst::mov_f32(accumulator.clone(), Operand::imm_f32(0.0)));
-    let reduction = begin_counted_loop(
+
+    // Each input belongs to at most ceil(kernel / stride) windows per axis.
+    // Visit those windows in row-major order, retaining deterministic overlap sums.
+    let overlap_rows = geometry
+        .kernel_size
+        .div_ceil(geometry.stride)
+        .min(geometry.output_height);
+    let overlap_cols = geometry
+        .kernel_size
+        .div_ceil(geometry.stride)
+        .min(geometry.output_width);
+    let base_row = clamped_pool_base(
         func,
         ctx,
-        "max_pool_backward",
-        geometry.output_height * geometry.output_width,
-    );
-    let output_row = decode_coordinate(
-        func,
-        reduction.counter.clone(),
-        geometry.output_width,
+        input_row.clone(),
+        geometry.stride,
         geometry.output_height,
     );
-    let output_col = decode_coordinate(func, reduction.counter.clone(), 1, geometry.output_width);
+    let base_col = clamped_pool_base(
+        func,
+        ctx,
+        input_col.clone(),
+        geometry.stride,
+        geometry.output_width,
+    );
+    let windows = begin_counted_loop(func, ctx, "max_pool_backward", overlap_rows * overlap_cols);
+    let row_delta = quotient_u64(func, windows.counter.clone(), overlap_cols);
+    let col_delta = decode_coordinate(func, windows.counter.clone(), 1, overlap_cols);
+    let row_offset = func.add_u64_register();
+    let col_offset = func.add_u64_register();
+    func.add_inst(Inst::sub_u64(
+        row_offset.clone(),
+        Operand::imm_u64((overlap_rows - 1) as u64),
+        row_delta,
+    ));
+    func.add_inst(Inst::sub_u64(
+        col_offset.clone(),
+        Operand::imm_u64((overlap_cols - 1) as u64),
+        col_delta,
+    ));
     let continue_label = next_label(ctx, "max_pool_backward_continue");
+    let underflow = func.add_predicate_register();
+    func.add_inst(Inst::setp_lt_u64(
+        underflow.clone(),
+        base_row.clone(),
+        row_offset.clone(),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: underflow.clone(),
+        target: continue_label,
+    });
+    func.add_inst(Inst::setp_lt_u64(
+        underflow.clone(),
+        base_col.clone(),
+        col_offset.clone(),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: underflow,
+        target: continue_label,
+    });
+    let output_row = func.add_u64_register();
+    let output_col = func.add_u64_register();
+    func.add_inst(Inst::sub_u64(output_row.clone(), base_row, row_offset));
+    func.add_inst(Inst::sub_u64(output_col.clone(), base_col, col_offset));
     branch_unless_window_contains(
         func,
         input_row,
@@ -2028,10 +2078,10 @@ fn lower_max_pool2d_backward<'a>(
     );
     let output_offset = flatten_nchw(
         func,
-        batch,
-        channel,
-        output_row,
-        output_col,
+        batch.clone(),
+        channel.clone(),
+        output_row.clone(),
+        output_col.clone(),
         geometry.channels,
         geometry.output_height,
         geometry.output_width,
@@ -2047,6 +2097,49 @@ fn lower_max_pool2d_backward<'a>(
         condition: not_maximum,
         target: continue_label,
     });
+
+    // A window contributes to its first row-major maximum only. Testing the
+    // preceding positions also handles signed-zero and infinite ties without
+    // duplicating the upstream gradient across equal maxima.
+    let prior = begin_counted_loop(
+        func,
+        ctx,
+        "max_pool_prior_tie",
+        geometry.kernel_size * geometry.kernel_size,
+    );
+    let ky = quotient_u64(func, prior.counter.clone(), geometry.kernel_size);
+    let kx = decode_coordinate(func, prior.counter.clone(), 1, geometry.kernel_size);
+    let candidate_row = scaled_coordinate(func, output_row, geometry.stride, ky);
+    let candidate_col = scaled_coordinate(func, output_col, geometry.stride, kx);
+    let candidate = flatten_nchw(
+        func,
+        batch,
+        channel,
+        candidate_row,
+        candidate_col,
+        geometry.channels,
+        geometry.input_height,
+        geometry.input_width,
+    );
+    let at_or_after = func.add_predicate_register();
+    func.add_inst(Inst::setp_ge_u64(
+        at_or_after.clone(),
+        candidate.clone(),
+        tid.clone(),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: at_or_after,
+        target: prior.end,
+    });
+    let earlier_value = load_param_f32_at(func, ctx, "input", candidate);
+    let tied = func.add_predicate_register();
+    func.add_inst(Inst::setp_eq_f32(tied.clone(), earlier_value, input_value));
+    func.add_inst(Inst::Bra {
+        condition: tied,
+        target: continue_label,
+    });
+    end_counted_loop(func, prior);
+
     let grad = load_param_f32_at(func, ctx, "grad_output", output_offset);
     func.add_inst(Inst::add_f32(
         accumulator.clone(),
@@ -2054,8 +2147,35 @@ fn lower_max_pool2d_backward<'a>(
         grad,
     ));
     func.add_inst(Inst::Label(continue_label));
-    end_counted_loop(func, reduction);
+    end_counted_loop(func, windows);
     store_param_f32_at(func, ctx, "output", tid, accumulator);
+}
+
+fn clamped_pool_base<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    input: Operand<'a, U64>,
+    stride: usize,
+    outputs: usize,
+) -> Operand<'a, U64> {
+    let base = quotient_u64(func, input, stride);
+    let ready = next_label(ctx, "max_pool_base_ready");
+    let in_bounds = func.add_predicate_register();
+    func.add_inst(Inst::setp_lt_u64(
+        in_bounds.clone(),
+        base.clone(),
+        Operand::imm_u64(outputs as u64),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: in_bounds,
+        target: ready,
+    });
+    func.add_inst(Inst::mov_u64(
+        base.clone(),
+        Operand::imm_u64((outputs - 1) as u64),
+    ));
+    func.add_inst(Inst::Label(ready));
+    base
 }
 
 struct CountedLoop<'a> {

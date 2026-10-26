@@ -60,7 +60,7 @@ mask. The loop bound is the live prefix length plus the query's causal offset;
 unused cache slots are never read. A u32 length/bounds feed changes that bound
 without recompiling the model for each position.
 
-Below 128 total tokens, one scan handles each query/head. At 128 or more,
+In the default f32 scan, below 128 total tokens one scan handles each query/head. At 128 or more,
 the live context is divided into 16 contiguous parts. Blocks produce normalized
 partial vectors and log-sum-exp normalizers, then a second scan merges them.
 Empty parts contribute zero; nonfinite weighted sums still propagate. These
@@ -75,9 +75,9 @@ The scan reuses the compiler's generic normalized-reduction scheduler and lowers
 to ordinary scalar loads, arithmetic, shared memory, guards and loops in Tile IR.
 `LoadIndex` loads the runtime u32 index; PTX has no attention-specific instruction.
 Heads up to width 128 use a cooperative block with 32-score tiles and 132 bytes
-of shared memory. Wider heads use the existing scalar schedule. This is a scalar
-f32 implementation; tensor-core attention and dedicated prefill tiling remain
-future work.
+of shared memory. Wider heads use the existing scalar schedule. This generic path is scalar f32. The optional BF16 decoder precision uses a
+separate tiled prefill schedule built from ordinary Tile IR matmuls and typed
+shared storage.
 
 The CUDA owner keeps a private ordered stream, resident model weights and K/V,
 and fixed-binding programs for the surrounding model stages. Contiguous stage
@@ -90,9 +90,10 @@ Reset clears K/V; changed parameters refresh existing device allocations.
 Model projections use strict f32 matmuls, and surrounding reductions use
 deterministic f32 trees. Attention uses online maximum/denominator/numerator
 rescaling, so equality with the materialized reference uses floating-point
-tolerances. This cache targets the existing f32 GPT API; it does not add mixed
-dtype, training-time caching, ragged batch lengths or serialized decoder state.
-Cache storage alone is `2 * layers * batch * capacity * width * sizeof(f32)`
+tolerances. The model and API boundaries remain f32, with optional BF16 attention storage.
+Training-time caching, ragged batch lengths and serialized decoder state remain
+outside this API.
+Default f32 cache storage alone is `2 * layers * batch * capacity * width * sizeof(f32)`
 bytes; compiled programs, model weights and workspaces are additional. The
 measured configuration uses 256 KiB of K/V storage.
 
@@ -182,3 +183,20 @@ capacity 70 versus 700 has identical compiled workspace for the same chunk and
 that reset and changed live lengths retain one compiled program. Existing
 online-normalization tests also cover masking, nonfinite values, escaping
 intermediates and training gradients.
+
+## Optional BF16 attention
+
+`Gpt::decoder_with_options` accepts `GptDecoderOptions` with
+`attention_precision: GptAttentionPrecision::Bf16` and
+`prefill: GptPrefillMode::Auto`. Existing constructors retain f32 defaults.
+CUDA keeps K/V physically in BF16, rounds Q/K/V and attention output to BF16,
+and retains f32 softmax statistics and accumulation. Model weights, projections,
+residual/feed-forward computation and returned logits remain f32. CPU models
+BF16-rounded values in f32 buffers and does not reduce physical cache storage.
+
+Automatic BF16 prefill uses Tile IR tensor-core schedules for supported chunks
+and heads; other shapes use the scalar scan. CUDA BF16 requires SM80 or newer.
+The cache retains fixed capacity, chunk reuse, reset and model-revision checks.
+KV storage has two bytes per element; workspaces, model weights, compiled
+programs and host placeholders are additional, so total process memory is not
+halved. See the Rust API documentation for scheduling and numerical limits.

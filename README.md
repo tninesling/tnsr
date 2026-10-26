@@ -25,7 +25,13 @@ In `tnsr`, the gradient computations are appended to the computation graph as ad
 
 ## Graph rewrites
 
-The first step to optimizing a computation graph is to apply graph rewrites. These are transformations that replace subgraphs with more efficient equivalents. For example, you could rewrite the pattern `A + 0` to just `A`, since adding zero does not change the value.
+Graph rewrites replace supported subgraphs while respecting the selected
+numerical policy. Expression optimization defaults to structural round trips
+such as double transpose and double negation. Arithmetic reassociation and
+exp/log cancellation require explicit
+`graph::rewrite::RewriteNumerics::RealAlgebra` through
+`optimize_expr_with_numerics`; those identities can change rounding, signed zero,
+NaNs and infinities. Unsupported expression encodings retain their structure.
 
 ## Operator fusion
 
@@ -170,3 +176,18 @@ probability matrices, including attention inside the existing transformer API.
 The same normalization rule also works without attention or matmuls.
 See [online attention](docs/online-attention.md) for activation, legality checks,
 benchmarks and current schedule limits.
+
+## Explicit derivative and attention precision options
+
+`TensorGraph::with_gradients_with_options` accepts
+`graph::GradientOptions { compact_softmax: true }` for an opt-in homogeneous-f32
+softmax derivative. It changes floating-point operation order; default
+`with_gradients` retains primitive differentiation. Casts, unsupported shapes
+and escaping normalization intermediates retain the primitive path.
+Probabilities still materialize, so this does not provide memory-linear
+attention backward.
+
+`nn::GptDecoderOptions` can select `nn::GptAttentionPrecision::Bf16` and
+`nn::GptPrefillMode::Auto`. This changes attention/cache precision while model
+weights, projections, feed-forward computation and returned logits remain f32.
+See [KV cache options](docs/kv-cache.md) and the Rust API documentation.

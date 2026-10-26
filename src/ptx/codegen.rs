@@ -664,6 +664,10 @@ impl<'a> fmt::Display for Inst<'a> {
                 f,
                 "shfl.sync.idx.b32 {dst}, {src}, {lane}, 0x1f, 0xffffffff;"
             ),
+            Inst::ShflSyncBflyB32 { dst, src, mask } => write!(
+                f,
+                "shfl.sync.bfly.b32 {dst}, {src}, {mask}, 0x1f, 0xffffffff;"
+            ),
             Inst::ShflSyncDownB32 {
                 dst,
                 predicate,
@@ -829,6 +833,23 @@ impl<'a> fmt::Display for Inst<'a> {
                     c_frags.iter().join(", ")
                 )
             }
+            Inst::WmmaLoadC {
+                dtype,
+                addr,
+                frags,
+                stride,
+            } => write!(
+                f,
+                "wmma.load.c.sync.aligned.m16n16k{}.row.shared.f32 {{{}}}, [{}], {};",
+                if *dtype == crate::tile::DType::TF32 {
+                    8
+                } else {
+                    16
+                },
+                frags.iter().join(", "),
+                addr,
+                stride
+            ),
             Inst::WmmaStore {
                 dtype,
                 addr,

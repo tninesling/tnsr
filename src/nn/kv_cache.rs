@@ -13,7 +13,32 @@ mod attention;
 #[cfg(feature = "cuda")]
 mod cuda;
 #[cfg(feature = "cuda")]
+mod prefill;
+#[cfg(feature = "cuda")]
 mod stages;
+
+/// Storage at the attention boundary; projections and the rest of GPT remain f32.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GptAttentionPrecision {
+    #[default]
+    F32,
+    Bf16,
+}
+
+/// CUDA prefill schedule. Scalar is useful as a precision-matched reference.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GptPrefillMode {
+    #[default]
+    Auto,
+    Scalar,
+}
+
+/// Immutable inference precision and scheduling policy.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GptDecoderOptions {
+    pub attention_precision: GptAttentionPrecision,
+    pub prefill: GptPrefillMode,
+}
 
 struct DecodeGraph {
     graph: TensorGraph<f32>,
@@ -56,6 +81,7 @@ pub struct GptDecoder {
     capacity: usize,
     length: usize,
     failed: bool,
+    options: GptDecoderOptions,
 }
 
 impl Gpt {
@@ -71,7 +97,21 @@ impl Gpt {
         batch_size: usize,
         capacity: usize,
     ) -> Result<GptDecoder> {
-        GptDecoder::new(self.clone(), backend, batch_size, capacity)
+        self.decoder_with_options(backend, batch_size, capacity, GptDecoderOptions::default())
+    }
+
+    /// Create a session with explicit attention storage and prefill scheduling.
+    /// BF16 rounds Q/K/V and attention outputs; softmax statistics accumulate in f32.
+    /// CPU uses rounded f32 values as a reference; CUDA stores K/V physically in BF16.
+    /// BF16 CUDA attention requires compute capability 8.0 or newer.
+    pub fn decoder_with_options(
+        &self,
+        backend: Backend,
+        batch_size: usize,
+        capacity: usize,
+        options: GptDecoderOptions,
+    ) -> Result<GptDecoder> {
+        GptDecoder::new(self.clone(), backend, batch_size, capacity, options)
     }
 
     /// Greedy cached generation with the same sliding-window behavior as `generate`.
@@ -118,7 +158,13 @@ impl Gpt {
 }
 
 impl GptDecoder {
-    fn new(model: Gpt, backend: Backend, batch: usize, capacity: usize) -> Result<Self> {
+    fn new(
+        model: Gpt,
+        backend: Backend,
+        batch: usize,
+        capacity: usize,
+        options: GptDecoderOptions,
+    ) -> Result<Self> {
         ensure!(batch > 0, "decoder batch size must be non-zero");
         ensure!(
             capacity > 0 && capacity <= model.config.max_sequence_length,
@@ -152,13 +198,14 @@ impl GptDecoder {
             .iter()
             .map(Parameter::revision)
             .collect::<Result<_>>()?;
-        let backend = match backend {
-            Backend::Cpu => DecoderBackend::Cpu(SimpleExecutor::new()),
-            #[cfg(feature = "cuda")]
-            Backend::Cuda | Backend::Ptx => {
-                DecoderBackend::Cuda(Box::new(cuda::CudaDecoder::new(&cache, &parameters)?))
-            }
-        };
+        let backend =
+            match backend {
+                Backend::Cpu => DecoderBackend::Cpu(SimpleExecutor::new()),
+                #[cfg(feature = "cuda")]
+                Backend::Cuda | Backend::Ptx => DecoderBackend::Cuda(Box::new(
+                    cuda::CudaDecoder::new(&cache, &parameters, options)?,
+                )),
+            };
         Ok(Self {
             model,
             backend,
@@ -170,6 +217,7 @@ impl GptDecoder {
             capacity,
             length: 0,
             failed: false,
+            options,
         })
     }
 
@@ -252,7 +300,14 @@ impl GptDecoder {
             }
             self.graphs.insert(
                 shape,
-                build_graph(&self.model, &self.cache, self.batch, past, chunk),
+                build_graph(
+                    &self.model,
+                    &self.cache,
+                    self.batch,
+                    past,
+                    chunk,
+                    self.options.attention_precision,
+                ),
             );
         }
         let graph = &self.graphs[&shape];
@@ -290,7 +345,12 @@ impl GptDecoder {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let width = self.model.config.embed_dim;
-                for (cache, values) in self.cache.iter().zip(projected) {
+                for (cache, mut values) in self.cache.iter().zip(projected) {
+                    if self.options.attention_precision == GptAttentionPrecision::Bf16 {
+                        for value in &mut values {
+                            *value = half::bf16::from_f32(*value).to_f32();
+                        }
+                    }
                     let mut old = cache.values()?;
                     for b in 0..self.batch {
                         let start = (b * self.capacity + self.length) * width;

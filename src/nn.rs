@@ -1,7 +1,7 @@
 mod activations;
 mod kv_cache;
 pub use activations::{clamp, gelu, maximum, minimum, sigmoid, silu};
-pub use kv_cache::GptDecoder;
+pub use kv_cache::{GptAttentionPrecision, GptDecoder, GptDecoderOptions, GptPrefillMode};
 
 use std::collections::HashMap;
 

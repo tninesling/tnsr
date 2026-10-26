@@ -104,6 +104,33 @@ fn validate(
                     },
                 );
             }
+            Stmt::AliasShared {
+                dest,
+                src,
+                layout,
+                rows,
+                cols,
+            } => {
+                let source = get(tiles, src)?;
+                let TileLayout::Shared(source_layout) = source.layout else {
+                    anyhow::bail!("shared alias source must be shared memory");
+                };
+                layout.validate(*rows, *cols, source.dtype)?;
+                anyhow::ensure!(
+                    layout.allocation_bytes(*rows, *cols, source.dtype)
+                        <= source_layout.allocation_bytes(source.rows, source.cols, source.dtype),
+                    "shared alias exceeds its source allocation"
+                );
+                tiles.insert(
+                    *dest,
+                    Tile {
+                        layout: TileLayout::Shared(*layout),
+                        dtype: source.dtype,
+                        rows: *rows,
+                        cols: *cols,
+                    },
+                );
+            }
             Stmt::SelectSharedStage {
                 dest,
                 first,
@@ -227,6 +254,15 @@ fn validate(
                             && coordinates.is_none()
                             && src.rows == dest.rows
                             && src.cols == dest.cols
+                            && dest.dtype == DType::F32
+                    }
+                    (TileLayout::Shared(layout), TileLayout::WarpAccumulator { .. }) => {
+                        !layout.column_major
+                            && layout.supports_wmma(DType::F32)
+                            && coordinates.is_none()
+                            && src.rows == dest.rows
+                            && src.cols == dest.cols
+                            && src.dtype == DType::F32
                             && dest.dtype == DType::F32
                     }
                     (TileLayout::Shared(_), TileLayout::ThreadScalar) => {
@@ -477,8 +513,9 @@ fn validate_memory(
                 .get(var)
                 .context("scalar shared allocation is missing")?;
             anyhow::ensure!(
-                matches!(tile.layout, TileLayout::Shared(_)) && tile.dtype == DType::F32,
-                "scalar shared memory must have f32 storage"
+                matches!(tile.layout, TileLayout::Shared(_))
+                    && matches!(tile.dtype, DType::F32 | DType::F16 | DType::BF16),
+                "scalar shared memory must have floating-point storage"
             );
         }
     }
@@ -624,5 +661,56 @@ mod tests {
                 .to_string()
                 .contains("unsupported tile layout conversion")
         );
+    }
+    #[test]
+    fn shared_alias_checks_physical_extent_including_padding() {
+        use crate::tile::SharedLayout;
+        let mut ir = TileIR {
+            kernel_name: "shared_alias".into(),
+            params: vec![],
+            shared_mem_bytes: 4096,
+            body: Block {
+                stmts: vec![
+                    Stmt::AllocTile {
+                        var: TileVar(0),
+                        space: MemorySpace::Shared,
+                        layout: TileLayout::Shared(SharedLayout {
+                            row_stride: 64,
+                            column_major: true,
+                            xor_mask: 0,
+                        }),
+                        dtype: DType::BF16,
+                        rows: 64,
+                        cols: 32,
+                    },
+                    Stmt::AliasShared {
+                        dest: TileVar(1),
+                        src: TileVar(0),
+                        layout: SharedLayout::row_major(64),
+                        rows: 32,
+                        cols: 64,
+                    },
+                ],
+            },
+        };
+        ir.validate_layouts().unwrap();
+        if let Stmt::AliasShared { rows, .. } = &mut ir.body.stmts[1] {
+            *rows = 33;
+        }
+        assert!(ir.validate_layouts().is_err());
+        if let Stmt::AliasShared { rows, layout, .. } = &mut ir.body.stmts[1] {
+            *rows = 32;
+            *layout = SharedLayout::row_major(72);
+        }
+        assert!(ir.validate_layouts().is_err());
+        ir.body.stmts[0] = Stmt::AllocTile {
+            var: TileVar(0),
+            space: MemorySpace::Register,
+            layout: TileLayout::ThreadScalar,
+            dtype: DType::F32,
+            rows: 1,
+            cols: 1,
+        };
+        assert!(ir.validate_layouts().is_err());
     }
 }

@@ -199,7 +199,23 @@ impl ScalarBuilder {
     }
     pub fn warp_reduce(&mut self, src: TileVar, op: ReduceOp) -> TileVar {
         let dest = self.var();
-        self.stmts.push(super::Stmt::WarpReduce { dest, src, op });
+        self.stmts.push(super::Stmt::WarpReduce {
+            dest,
+            src,
+            op,
+            broadcast: false,
+        });
+        dest
+    }
+    /// All 32 lanes must participate; the result is available in every lane.
+    pub fn warp_all_reduce(&mut self, src: TileVar, op: ReduceOp) -> TileVar {
+        let dest = self.var();
+        self.stmts.push(super::Stmt::WarpReduce {
+            dest,
+            src,
+            op,
+            broadcast: true,
+        });
         dest
     }
     pub fn barrier(&mut self) {

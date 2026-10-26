@@ -1,8 +1,9 @@
 #[cfg(feature = "cuda")]
 use super::DecodeAttention;
-use super::DecodeGraph;
+use super::{DecodeGraph, GptAttentionPrecision};
 use crate::graph::{TensorGraph, TensorGraphNode};
 use crate::nn::{Gpt, embedding, layer_norm, linear, softmax};
+use crate::tensor::ValueDType;
 use crate::tensor::{Parameter, TensorExpr};
 
 fn stash(graph: &mut TensorGraph<f32>, expr: TensorExpr<f32>) -> TensorExpr<f32> {
@@ -17,6 +18,7 @@ pub(super) fn build_graph(
     batch: usize,
     past: usize,
     chunk: usize,
+    precision: GptAttentionPrecision,
 ) -> DecodeGraph {
     let mut graph = TensorGraph::new();
     let width = model.config.embed_dim;
@@ -90,12 +92,19 @@ pub(super) fn build_graph(
                 )
             }
         };
-        let keys = joined(&cache[2 * i], k.clone());
-        let values = joined(&cache[2 * i + 1], v.clone());
-        let scores = split(q.clone(), chunk).matmul(keys.swap_axes(2, 3))
+        let round = |x: TensorExpr<f32>| {
+            if precision == GptAttentionPrecision::Bf16 {
+                x.cast(ValueDType::BF16).cast(ValueDType::F32)
+            } else {
+                x
+            }
+        };
+        let keys = joined(&cache[2 * i], round(k.clone()));
+        let values = joined(&cache[2 * i + 1], round(v.clone()));
+        let scores = split(round(q.clone()), chunk).matmul(keys.swap_axes(2, 3))
             * (width as f32 / heads as f32).sqrt().recip()
             + TensorExpr::input("mask", vec![chunk, past + chunk]);
-        let attended = stash(&mut graph, softmax(scores, 3).matmul(values));
+        let attended = stash(&mut graph, round(softmax(scores, 3).matmul(values)));
         #[cfg(feature = "cuda")]
         attention.push(DecodeAttention {
             hidden: graph.add_expr(&hidden, false),

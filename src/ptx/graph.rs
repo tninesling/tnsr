@@ -484,6 +484,19 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 target: ctx.return_label,
             });
         }
+        Stmt::AliasShared {
+            dest,
+            src,
+            layout,
+            rows,
+            cols,
+        } => {
+            ctx.tile_layouts.insert(*dest, TileLayout::Shared(*layout));
+            ctx.tile_dims.insert(*dest, (*rows, *cols));
+            ctx.tile_dtypes.insert(*dest, ctx.tile_dtypes[src]);
+            ctx.shared_mem_ptrs
+                .insert(*dest, ctx.shared_mem_ptrs[src].clone());
+        }
         Stmt::AllocTile {
             var,
             space,
@@ -944,6 +957,9 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             ctx.reg_to_shared.insert(*dest, *src);
 
             ctx.tile_layouts.insert(*dest, ctx.tile_layouts[src]);
+            ctx.tile_dtypes.insert(*dest, ctx.tile_dtypes[src]);
+            ctx.shared_mem_ptrs
+                .insert(*dest, ctx.shared_mem_ptrs[src].clone());
             // Also copy the tile dimensions
             if let Some(&dims) = ctx.tile_dims.get(src) {
                 ctx.tile_dims.insert(*dest, dims);
@@ -1173,6 +1189,36 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                             dtype: operand_dtype,
                             addr: address,
                             frags: ctx.fragment_regs[src][offset..offset + 8].to_vec(),
+                            stride: Operand::imm_i32(layout.row_stride as i32),
+                        });
+                    }
+                }
+                func.add_inst(Inst::Label(done));
+            }
+            (
+                TileLayout::Shared(layout),
+                TileLayout::WarpAccumulator {
+                    operand_dtype,
+                    block_width,
+                    warp_topology,
+                    warp_fragments,
+                },
+            ) => {
+                let done = bumpalo::format!(in ctx.arena,"fragment_load_done_{}",ctx.label_counter)
+                    .into_bump_str();
+                ctx.label_counter += 1;
+                skip_noncomputing_warps(func, block_width, warp_topology.0 * warp_topology.1, done);
+                let (row, col) = warp_coordinates(block_width, warp_topology);
+                for fm in 0..warp_fragments.0 {
+                    for fn_ in 0..warp_fragments.1 {
+                        let row = row.clone() * warp_fragments.0 + Expr::Const((fm * 16) as i64);
+                        let col = col.clone() * warp_fragments.1 + Expr::Const((fn_ * 16) as i64);
+                        let address = shared_coordinate_address(func, ctx, *src, &row, &col);
+                        let offset = 8 * (fm * warp_fragments.1 + fn_);
+                        func.add_inst(Inst::WmmaLoadC {
+                            dtype: operand_dtype,
+                            addr: address,
+                            frags: ctx.fragment_regs[dest][offset..offset + 8].to_vec(),
                             stride: Operand::imm_i32(layout.row_stride as i32),
                         });
                     }

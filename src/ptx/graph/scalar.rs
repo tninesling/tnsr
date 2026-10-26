@@ -29,14 +29,15 @@ pub(super) fn lower_scalar_stmt<'a>(
                     func.add_inst(Inst::mov_f32(dest, value));
                 }
                 ScalarMemory::Shared(tile) => {
-                    let bytes = multiply_u64(func, offset, 4);
+                    let dtype = ctx.tile_dtypes[tile];
+                    let bytes = multiply_u64(func, offset, dtype.size_bytes());
                     let addr = func.add_u64_register();
                     func.add_inst(Inst::add_u64(
                         addr.clone(),
                         ctx.shared_mem_ptrs[tile].clone(),
                         bytes,
                     ));
-                    load_shared_as_f32(func, DType::F32, dest, addr);
+                    load_shared_as_f32(func, dtype, dest, addr);
                 }
             }
         }
@@ -50,14 +51,15 @@ pub(super) fn lower_scalar_stmt<'a>(
             match target {
                 ScalarMemory::Global(param) => store_param_f32_at(func, ctx, param, offset, value),
                 ScalarMemory::Shared(tile) => {
-                    let bytes = multiply_u64(func, offset, 4);
+                    let dtype = ctx.tile_dtypes[tile];
+                    let bytes = multiply_u64(func, offset, dtype.size_bytes());
                     let addr = func.add_u64_register();
                     func.add_inst(Inst::add_u64(
                         addr.clone(),
                         ctx.shared_mem_ptrs[tile].clone(),
                         bytes,
                     ));
-                    store_shared_from_f32(func, DType::F32, addr, value);
+                    store_shared_from_f32(func, dtype, addr, value);
                 }
             }
         }
@@ -114,7 +116,12 @@ pub(super) fn lower_scalar_stmt<'a>(
                 ctx.index_vars.remove(loop_var);
             }
         }
-        Stmt::WarpReduce { dest, src, op } => {
+        Stmt::WarpReduce {
+            dest,
+            src,
+            op,
+            broadcast,
+        } => {
             let src = ctx.get_or_alloc_reg(func, *src);
             let dest = ctx.get_or_alloc_reg(func, *dest);
             func.add_inst(Inst::mov_f32(dest.clone(), src));
@@ -127,21 +134,32 @@ pub(super) fn lower_scalar_stmt<'a>(
                 let bits = func.add_b32_register();
                 func.add_inst(Inst::mov_b32(bits.clone(), dest.clone()));
                 let shuffled = func.add_b32_register();
-                let valid = func.add_predicate_register();
-                func.add_inst(Inst::shfl_sync_down_b32(
-                    shuffled.clone(),
-                    valid.clone(),
-                    bits,
-                    distance,
-                ));
                 let peer = func.add_f32_register();
-                func.add_inst(Inst::mov_f32_b32(peer.clone(), shuffled));
-                func.add_inst(Inst::selp_f32(
-                    peer.clone(),
-                    peer.clone(),
-                    Operand::imm_f32(identity),
-                    valid,
-                ));
+                if *broadcast {
+                    // A full-warp butterfly visits every lane without edge
+                    // predicates and leaves the result in all lanes.
+                    func.add_inst(Inst::ShflSyncBflyB32 {
+                        dst: shuffled.clone(),
+                        src: bits,
+                        mask: distance,
+                    });
+                    func.add_inst(Inst::mov_f32_b32(peer.clone(), shuffled));
+                } else {
+                    let valid = func.add_predicate_register();
+                    func.add_inst(Inst::shfl_sync_down_b32(
+                        shuffled.clone(),
+                        valid.clone(),
+                        bits,
+                        distance,
+                    ));
+                    func.add_inst(Inst::mov_f32_b32(peer.clone(), shuffled));
+                    func.add_inst(Inst::selp_f32(
+                        peer.clone(),
+                        peer.clone(),
+                        Operand::imm_f32(identity),
+                        valid,
+                    ));
+                }
                 if *op == ReduceOp::Max {
                     func.add_inst(Inst::max_f32(dest.clone(), dest.clone(), peer));
                 } else {
@@ -149,7 +167,11 @@ pub(super) fn lower_scalar_stmt<'a>(
                 }
             }
             if *op == ReduceOp::Mean {
-                func.add_inst(Inst::div_f32(dest.clone(), dest, Operand::imm_f32(32.0)));
+                func.add_inst(Inst::div_f32(
+                    dest.clone(),
+                    dest.clone(),
+                    Operand::imm_f32(32.0),
+                ));
             }
         }
         _ => unreachable!("scalar dispatch only accepts scalar statements"),

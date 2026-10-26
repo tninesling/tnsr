@@ -46,6 +46,16 @@ pub enum Stmt {
         cols: usize,
     },
 
+    /// View an existing shared allocation with another physical layout.
+    /// The caller orders overlapping lifetimes and supplies synchronization.
+    AliasShared {
+        dest: TileVar,
+        src: TileVar,
+        layout: SharedLayout,
+        rows: usize,
+        cols: usize,
+    },
+
     /// Load from global memory to shared/register
     Load {
         dest: TileVar,
@@ -279,11 +289,12 @@ pub enum Stmt {
         index: Expr,
         value: TileVar,
     },
-    /// The reduction result is complete in lane zero of each full active warp.
+    /// Reduce each full active warp, optionally returning the result in every lane.
     WarpReduce {
         dest: TileVar,
         src: TileVar,
         op: crate::tensor::ReduceOp,
+        broadcast: bool,
     },
     If {
         condition: super::ScalarPredicate,

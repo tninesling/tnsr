@@ -554,6 +554,11 @@ pub enum Inst<'a> {
         src: Operand<'a, B32>,
         lane: u32,
     },
+    ShflSyncBflyB32 {
+        dst: Operand<'a, B32>,
+        src: Operand<'a, B32>,
+        mask: u32,
+    },
     ShflSyncDownB32 {
         dst: Operand<'a, B32>,
         predicate: Operand<'a, Pred>,
@@ -661,6 +666,12 @@ pub enum Inst<'a> {
         a_frags: Vec<Operand<'a, B32>>,
         b_frags: Vec<Operand<'a, B32>>,
         c_frags: Vec<Operand<'a, F32>>,
+    },
+    WmmaLoadC {
+        dtype: crate::tile::DType,
+        addr: Operand<'a, U64>,
+        frags: Vec<Operand<'a, F32>>,
+        stride: Operand<'a, I32>,
     },
     WmmaStore {
         dtype: crate::tile::DType,

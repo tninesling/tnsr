@@ -193,3 +193,87 @@ fn counted_loops_keep_wide_indices_and_shadowed_bounds_in_the_parent_scope() {
     );
     assert_eq!(run(&device, builder, 1), vec![18., 27.]);
 }
+
+#[test]
+fn warp_all_reduce_broadcasts_sum_mean_and_max_to_every_lane() {
+    let Some(device) = device() else {
+        return;
+    };
+    let mut builder = ScalarBuilder::default();
+    let index = Expr::BlockIdx(Dim::X) * 128usize
+        + Expr::ThreadIdx(Dim::Y) * 32usize
+        + Expr::ThreadIdx(Dim::X);
+    let value = builder.load(ScalarMemory::Global("input".into()), index.clone());
+    for (column, op) in [
+        tnsr::tensor::ReduceOp::Sum,
+        tnsr::tensor::ReduceOp::Mean,
+        tnsr::tensor::ReduceOp::Max,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let reduced = builder.warp_all_reduce(value, op);
+        builder.store(
+            ScalarMemory::Global("output".into()),
+            index.clone() * 3usize + Expr::Const(column as i64),
+            reduced,
+        );
+    }
+    let mut ir = TileIR {
+        kernel_name: "all_reduce".into(),
+        params: vec![
+            KernelParam {
+                name: "input".into(),
+                dtype: DType::F32,
+                is_input: true,
+            },
+            KernelParam {
+                name: "output".into(),
+                dtype: DType::F32,
+                is_input: false,
+            },
+        ],
+        body: Block {
+            stmts: builder.stmts,
+        },
+        shared_mem_bytes: 0,
+    };
+    ir.validate_layouts().unwrap();
+    ir.optimize_indices().unwrap();
+    ir.validate_layouts().unwrap();
+    let mut tiles = TileGraph::from(TensorGraph::<f32>::new());
+    tiles.graph.add_node(ir);
+    let module = device
+        .load_module(Ptx::from_src(PtxGraph::from(tiles).to_ptx()))
+        .unwrap();
+    let function = module.load_function("all_reduce_0").unwrap();
+    let stream = device.default_stream();
+    let host: Vec<f32> = (0..256).map(|i| i as f32 / 2. - 64.).collect();
+    let input = stream.memcpy_stod(&host).unwrap();
+    let mut output = stream.alloc_zeros::<f32>(256 * 3).unwrap();
+    // SAFETY: Eight full, active warps read disjoint 32-element inputs and
+    // write three disjoint results per lane. Buffers outlive synchronized readback.
+    unsafe {
+        stream
+            .launch_builder(&function)
+            .arg(&input)
+            .arg(&mut output)
+            .launch(LaunchConfig {
+                grid_dim: (2, 1, 1),
+                block_dim: (32, 4, 1),
+                shared_mem_bytes: 0,
+            })
+    }
+    .unwrap();
+    let actual = stream.memcpy_dtov(&output).unwrap();
+    for (warp, values) in host.chunks_exact(32).enumerate() {
+        let sum: f32 = values.iter().sum();
+        let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        for lane in 0..32 {
+            assert_eq!(
+                &actual[(warp * 32 + lane) * 3..(warp * 32 + lane + 1) * 3],
+                &[sum, sum / 32., max]
+            );
+        }
+    }
+}

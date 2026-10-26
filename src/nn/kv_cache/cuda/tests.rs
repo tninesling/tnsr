@@ -14,7 +14,7 @@ fn scan_runtime_bounds_ignore_poisoned_slots_and_match_wide_head_reference() -> 
         }
         Err(error) => return Err(error),
     }
-    let owner = CudaDecoder::new(&[], &[])?;
+    let owner = CudaDecoder::new(&[], &[], GptDecoderOptions::default())?;
     for columns in [4, 33, 128, 129] {
         for chunk in [1, 3] {
             let scan = AttentionScan {
@@ -24,6 +24,7 @@ fn scan_runtime_bounds_ignore_poisoned_slots_and_match_wide_head_reference() -> 
                 capacity: 70,
                 chunk,
                 partitions: 1,
+                dtype: DType::F32,
             };
             let count = scan.batch * chunk * scan.width;
             let samples = |n: usize, salt: usize| -> Vec<f32> {
@@ -83,6 +84,8 @@ fn scan_runtime_bounds_ignore_poisoned_slots_and_match_wide_head_reference() -> 
                     rows: scan.batch * scan.heads * chunk,
                     columns,
                     partitions: PARTITIONS,
+                    dtype: DType::F32,
+                    raw_partials: false,
                 }
                 .ir()?,
                 vec![
@@ -105,7 +108,7 @@ fn scan_runtime_bounds_ignore_poisoned_slots_and_match_wide_head_reference() -> 
                 owner.stream.memcpy_htod(&poisoned_v, &mut cached_value)?;
                 owner
                     .stream
-                    .memcpy_htod(&scan_lengths(prefix, chunk)?, &mut length)?;
+                    .memcpy_htod(&scan_lengths(prefix, chunk, PARTITIONS)?, &mut length)?;
                 for scheduled in [&[&kernel][..], &[&partial, &merge][..]] {
                     for kernel in scheduled {
                         kernel.run(&owner.stream)?;
@@ -213,7 +216,14 @@ fn compiled_decode_reuses_length_and_bounds_workspace_independently_of_capacity(
         );
         assert!(!compiled.feeds.contains_key("mask"));
         let bytes = compiled._programs.iter().map(Program::bytes).sum::<usize>()
-            + compiled._storage.iter().map(|b| b.len() * 4).sum::<usize>()
+            + compiled
+                ._storage
+                .iter()
+                .map(|b| {
+                    let binding = crate::ptx::linear::program::binding(b, &backend.stream);
+                    binding.len * binding.dtype.size_bytes()
+                })
+                .sum::<usize>()
             + compiled
                 ._constants
                 .iter()
@@ -237,6 +247,7 @@ fn nonfinite_partials(owner: &CudaDecoder) -> Result<()> {
         chunk: 1,
         capacity: 2,
         partitions: 1,
+        dtype: DType::F32,
     };
     let query = owner.stream.memcpy_stod(&[1e30f32, 0., 0., 0.])?;
     let key = owner.stream.memcpy_stod(&[1e-30f32, 0., 0., 0.])?;
@@ -252,7 +263,7 @@ fn nonfinite_partials(owner: &CudaDecoder) -> Result<()> {
         f32::NAN,
     ])?;
     let mut cached_value = owner.stream.alloc_zeros::<f32>(8)?;
-    let length = owner.stream.memcpy_stod(&scan_lengths(1, 1)?)?;
+    let length = owner.stream.memcpy_stod(&scan_lengths(1, 1, PARTITIONS)?)?;
     let output = owner.stream.alloc_zeros::<f32>(4)?;
     let partials = owner.stream.alloc_zeros::<f32>(4 * PARTITIONS)?;
     let normalizers = owner.stream.alloc_zeros::<f32>(PARTITIONS)?;
@@ -283,6 +294,8 @@ fn nonfinite_partials(owner: &CudaDecoder) -> Result<()> {
             rows: 1,
             columns: 4,
             partitions: PARTITIONS,
+            dtype: DType::F32,
+            raw_partials: false,
         }
         .ir()?,
         vec![

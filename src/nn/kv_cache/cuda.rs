@@ -1,14 +1,15 @@
 //! Private ordered CUDA storage for incremental inference. No K/V readbacks.
 use super::{
-    DecodeGraph,
+    DecodeGraph, GptAttentionPrecision, GptDecoderOptions, GptPrefillMode,
     attention::{AttentionScan, MergeScan},
-    stages,
+    prefill, stages,
 };
 use crate::graph::{NodeIndex, TensorGraph, TensorGraphNode};
 use crate::ptx::{
     F32, PtxGraph, PtxTarget,
     linear::{
-        Binding,
+        Binding, Buffer,
+        kernels::convert,
         program::{Kernel, Program},
     },
 };
@@ -34,7 +35,7 @@ struct Compiled {
     _programs: Vec<Program<F32>>,
     kernels: Vec<Kernel>,
     split: HashMap<usize, (Kernel, Kernel)>,
-    _storage: Vec<CudaSlice<f32>>,
+    _storage: Vec<Buffer>,
     length: CudaSlice<u32>,
     updates: Vec<Kernel>,
     read: Kernel,
@@ -46,6 +47,8 @@ struct Compiled {
 pub(super) struct CudaDecoder {
     stream: Arc<CudaStream>,
     weights: HashMap<usize, CudaSlice<f32>>,
+    cache: HashMap<usize, Buffer>,
+    options: GptDecoderOptions,
     revisions: HashMap<usize, u64>,
     compiled: BTreeMap<usize, Compiled>,
 }
@@ -67,22 +70,56 @@ fn binding(buffer: &CudaSlice<f32>, stream: &Arc<CudaStream>) -> Binding {
 }
 
 impl CudaDecoder {
-    pub(super) fn new(cache: &[Parameter<f32>], parameters: &[Parameter<f32>]) -> Result<Self> {
+    pub(super) fn new(
+        cache: &[Parameter<f32>],
+        parameters: &[Parameter<f32>],
+        options: GptDecoderOptions,
+    ) -> Result<Self> {
         let context = CudaContext::new(0).context("initialize CUDA decoder")?;
+        ensure!(
+            options.attention_precision != GptAttentionPrecision::Bf16
+                || PtxTarget::from_context(&context)?
+                    .matmul_capabilities()
+                    .bf16,
+            "BF16 decoder attention requires CUDA compute capability 8.0 or newer"
+        );
         let mut owner = Self {
             stream: context.new_stream()?,
             weights: HashMap::new(),
+            cache: HashMap::new(),
+            options,
             revisions: HashMap::new(),
             compiled: BTreeMap::new(),
         };
         for p in cache {
-            owner.weights.insert(
-                p.id(),
-                owner.stream.alloc_zeros(p.shape().iter().product())?,
-            );
+            owner
+                .cache
+                .insert(p.id(), owner.allocate(p.shape().iter().product())?);
         }
         owner.refresh(parameters)?;
         Ok(owner)
+    }
+
+    fn dtype(&self) -> DType {
+        match self.options.attention_precision {
+            GptAttentionPrecision::F32 => DType::F32,
+            GptAttentionPrecision::Bf16 => DType::BF16,
+        }
+    }
+
+    fn scan_partitions(&self, chunk: usize) -> usize {
+        if self.dtype() == DType::BF16 && chunk <= 4 {
+            32
+        } else {
+            PARTITIONS
+        }
+    }
+
+    fn allocate(&self, len: usize) -> Result<Buffer> {
+        Ok(match self.dtype() {
+            DType::BF16 => Buffer::BF16(self.stream.alloc_zeros(len)?),
+            _ => Buffer::F32(self.stream.alloc_zeros(len)?),
+        })
     }
 
     fn refresh(&mut self, parameters: &[Parameter<f32>]) -> Result<()> {
@@ -105,11 +142,14 @@ impl CudaDecoder {
 
     pub(super) fn reset(&mut self, cache: &[Parameter<f32>]) -> Result<()> {
         for p in cache {
-            self.stream.memset_zeros(
-                self.weights
-                    .get_mut(&p.id())
-                    .context("decoder K/V allocation missing")?,
-            )?;
+            match self
+                .cache
+                .get_mut(&p.id())
+                .context("decoder K/V allocation missing")?
+            {
+                Buffer::F32(buffer) => self.stream.memset_zeros(buffer)?,
+                Buffer::BF16(buffer) => self.stream.memset_zeros(buffer)?,
+            }
         }
         self.stream.synchronize()?;
         Ok(())
@@ -137,6 +177,8 @@ impl CudaDecoder {
             let compiled = self.compile(graph, cache, chunk, batch, capacity, width)?;
             self.compiled.insert(chunk, compiled);
         }
+        let element_bytes = self.dtype().size_bytes();
+        let partitions = self.scan_partitions(chunk);
         let compiled = self
             .compiled
             .get_mut(&chunk)
@@ -146,7 +188,7 @@ impl CudaDecoder {
                 .memcpy_htod(feeds.get(*name).context("decoder feed missing")?, buffer)?;
         }
         let split_context = position + chunk >= SPLIT_MIN_KEYS;
-        let lengths = scan_lengths(position, chunk)?;
+        let lengths = scan_lengths(position, chunk, partitions)?;
         self.stream.memcpy_htod(&lengths, &mut compiled.length)?;
         for (id, kernel) in compiled.kernels.iter().enumerate() {
             if let Some((partial, merge)) = compiled.split.get(&id).filter(|_| split_context) {
@@ -159,7 +201,7 @@ impl CudaDecoder {
         let offset = u64::try_from(
             position
                 .checked_mul(width)
-                .and_then(|n| n.checked_mul(4))
+                .and_then(|n| n.checked_mul(element_bytes))
                 .context("decoder cache byte offset overflow")?,
         )?;
         for kernel in &compiled.updates {
@@ -188,21 +230,30 @@ impl CudaDecoder {
         let mut feeds = HashMap::new();
         let mut constants = Vec::new();
         for node in graph.graph.graph.node_indices() {
-            let buffer = match &graph.graph[node] {
-                TensorGraphNode::Parameter { id, .. } => self
-                    .weights
-                    .get(id)
-                    .context("decoder parameter binding missing")?,
+            let value = match &graph.graph[node] {
+                TensorGraphNode::Parameter { id, .. } => {
+                    if let Some(buffer) = self.cache.get(id) {
+                        crate::ptx::linear::program::binding(buffer, &self.stream)
+                    } else {
+                        binding(
+                            self.weights
+                                .get(id)
+                                .context("decoder parameter binding missing")?,
+                            &self.stream,
+                        )
+                    }
+                }
                 TensorGraphNode::Input { name: "mask", .. } => continue,
                 TensorGraphNode::Input { name, shape } => {
                     feeds.insert(*name, self.stream.alloc_zeros(shape.iter().product())?);
-                    &feeds[name]
+                    binding(&feeds[name], &self.stream)
                 }
                 _ => continue,
             };
-            inputs.insert(node, binding(buffer, &self.stream));
+            inputs.insert(node, value);
         }
-        let length = self.stream.alloc_zeros::<u32>(2 + chunk * PARTITIONS)?;
+        let partitions = self.scan_partitions(chunk);
+        let length = self.stream.alloc_zeros::<u32>(2 + chunk * partitions)?;
         let mut available = inputs;
         let mut programs = Vec::new();
         let mut kernels = Vec::new();
@@ -235,7 +286,7 @@ impl CudaDecoder {
                     let buffer = self.stream.alloc_zeros(batch * chunk * width)?;
                     let target = binding(&buffer, &self.stream);
                     kernels.push(self.copy(&program, &stage.graph, output, target, None)?);
-                    storage.push(buffer);
+                    storage.push(Buffer::F32(buffer));
                     target
                 };
                 available.insert(original, target);
@@ -245,12 +296,24 @@ impl CudaDecoder {
                     &program,
                     &stage.graph,
                     output,
-                    binding(&self.weights[&cache[2 * layer + slot].id()], &self.stream),
+                    crate::ptx::linear::program::binding(
+                        &self.cache[&cache[2 * layer + slot].id()],
+                        &self.stream,
+                    ),
                     Some((chunk * width, capacity * width)),
                 )?);
             }
-            let buffer = self.stream.alloc_zeros(batch * chunk * width)?;
-            let target = binding(&buffer, &self.stream);
+            for node in [attention.query, attention.key, attention.value] {
+                if self.dtype() == DType::BF16 {
+                    let buffer = self.allocate(batch * chunk * width)?;
+                    let target = crate::ptx::linear::program::binding(&buffer, &self.stream);
+                    kernels.push(convert(&self.stream, available[&node], target, false)?);
+                    available.insert(node, target);
+                    storage.push(buffer);
+                }
+            }
+            let buffer = self.allocate(batch * chunk * width)?;
+            let target = crate::ptx::linear::program::binding(&buffer, &self.stream);
             let scan = AttentionScan {
                 batch,
                 chunk,
@@ -258,6 +321,7 @@ impl CudaDecoder {
                 capacity,
                 heads: graph.graph[attention.output].shape()[1],
                 partitions: 1,
+                dtype: self.dtype(),
             };
             let columns = width / scan.heads;
             let rows = batch * scan.heads * chunk;
@@ -265,52 +329,111 @@ impl CudaDecoder {
                 available[&attention.query].pointer,
                 available[&attention.key].pointer,
                 available[&attention.value].pointer,
-                binding(&self.weights[&cache[2 * layer].id()], &self.stream).pointer,
-                binding(&self.weights[&cache[2 * layer + 1].id()], &self.stream).pointer,
+                crate::ptx::linear::program::binding(
+                    &self.cache[&cache[2 * layer].id()],
+                    &self.stream,
+                )
+                .pointer,
+                crate::ptx::linear::program::binding(
+                    &self.cache[&cache[2 * layer + 1].id()],
+                    &self.stream,
+                )
+                .pointer,
                 length.device_ptr(&self.stream).0,
                 target.pointer,
             ];
-            let scan_id = kernels.len();
-            kernels.push(self.generated(
-                scan.ir()?,
-                pointers.clone(),
-                scan_launch(rows, columns)?,
-            )?);
-            let partial_count = (batch * chunk * width)
-                .checked_mul(PARTITIONS)
-                .context("decoder partial workspace overflow")?;
-            let partials = self.stream.alloc_zeros::<f32>(partial_count)?;
-            let normalizers = self.stream.alloc_zeros::<f32>(rows * PARTITIONS)?;
-            let mut partial_pointers = pointers;
-            partial_pointers[6] = partials.device_ptr(&self.stream).0;
-            partial_pointers.push(normalizers.device_ptr(&self.stream).0);
-            let partial = self.generated(
-                AttentionScan {
-                    partitions: PARTITIONS,
-                    ..scan
-                }
-                .ir()?,
-                partial_pointers,
-                scan_launch(rows * PARTITIONS, columns)?,
-            )?;
-            let merge = self.generated(
-                MergeScan {
-                    rows,
-                    columns,
-                    partitions: PARTITIONS,
-                }
-                .ir()?,
-                vec![
-                    partials.device_ptr(&self.stream).0,
-                    normalizers.device_ptr(&self.stream).0,
-                    target.pointer,
-                ],
-                scan_launch(rows, columns)?,
-            )?;
-            split.insert(scan_id, (partial, merge));
-            storage.push(partials);
-            storage.push(normalizers);
-            available.insert(attention.output, target);
+            let tiled = self.dtype() == DType::BF16
+                && self.options.prefill == GptPrefillMode::Auto
+                && chunk >= 16
+                && columns <= 128;
+            if tiled {
+                let partitions = prefill::partitions(chunk);
+                let partial_count = (batch * chunk * width)
+                    .checked_mul(partitions)
+                    .context("decoder tiled partial workspace overflow")?;
+                let partials = self.stream.alloc_zeros::<f32>(partial_count)?;
+                let normalizers = self
+                    .stream
+                    .alloc_zeros::<f32>(prefill::STATISTICS_WIDTH * rows * partitions)?;
+                let mut partial_pointers = pointers;
+                partial_pointers[6] = partials.device_ptr(&self.stream).0;
+                partial_pointers.push(normalizers.device_ptr(&self.stream).0);
+                let scan = AttentionScan { partitions, ..scan };
+                kernels.push(self.generated(
+                    prefill::ir(&scan)?,
+                    partial_pointers,
+                    prefill::launch(&scan)?,
+                )?);
+                kernels.push(
+                    self.generated(
+                        MergeScan {
+                            rows,
+                            columns,
+                            partitions,
+                            dtype: self.dtype(),
+                            raw_partials: true,
+                        }
+                        .ir()?,
+                        vec![
+                            partials.device_ptr(&self.stream).0,
+                            normalizers.device_ptr(&self.stream).0,
+                            target.pointer,
+                        ],
+                        scan_launch(rows, columns)?,
+                    )?,
+                );
+                storage.push(Buffer::F32(partials));
+                storage.push(Buffer::F32(normalizers));
+            } else {
+                let scan_id = kernels.len();
+                kernels.push(self.generated(
+                    scan.ir()?,
+                    pointers.clone(),
+                    scan_launch(rows, columns)?,
+                )?);
+                let partial_count = (batch * chunk * width)
+                    .checked_mul(partitions)
+                    .context("decoder partial workspace overflow")?;
+                let partials = self.stream.alloc_zeros::<f32>(partial_count)?;
+                let normalizers = self.stream.alloc_zeros::<f32>(rows * partitions)?;
+                let mut partial_pointers = pointers;
+                partial_pointers[6] = partials.device_ptr(&self.stream).0;
+                partial_pointers.push(normalizers.device_ptr(&self.stream).0);
+                let partial = self.generated(
+                    AttentionScan { partitions, ..scan }.ir()?,
+                    partial_pointers,
+                    scan_launch(rows * partitions, columns)?,
+                )?;
+                let merge = self.generated(
+                    MergeScan {
+                        rows,
+                        columns,
+                        partitions,
+                        dtype: self.dtype(),
+                        raw_partials: false,
+                    }
+                    .ir()?,
+                    vec![
+                        partials.device_ptr(&self.stream).0,
+                        normalizers.device_ptr(&self.stream).0,
+                        target.pointer,
+                    ],
+                    scan_launch(rows, columns)?,
+                )?;
+                split.insert(scan_id, (partial, merge));
+                storage.push(Buffer::F32(partials));
+                storage.push(Buffer::F32(normalizers));
+            }
+            let promoted = if self.dtype() == DType::BF16 {
+                let output = self.stream.alloc_zeros(batch * chunk * width)?;
+                let promoted = binding(&output, &self.stream);
+                kernels.push(convert(&self.stream, target, promoted, false)?);
+                storage.push(Buffer::F32(output));
+                promoted
+            } else {
+                target
+            };
+            available.insert(attention.output, promoted);
             storage.push(buffer);
             programs.push(program);
         }
@@ -365,21 +488,22 @@ impl CudaDecoder {
 
     fn generated(
         &self,
-        ir: crate::tile::TileIR,
+        mut ir: crate::tile::TileIR,
         pointers: Vec<u64>,
         config: cudarc::driver::LaunchConfig,
     ) -> Result<Kernel> {
         ir.validate_layouts()?;
-        let label = if ir.kernel_name == "decoder_attention" {
-            "decoder generated scan"
-        } else {
-            "decoder generated copy"
+        let label = match ir.kernel_name.as_str() {
+            "decoder_attention" => "decoder generated scan",
+            "decoder_prefill_bf16" => "decoder tensor-core prefill",
+            "decoder_merge" => "decoder generated merge",
+            _ => "decoder generated copy",
         };
+        ir.optimize_indices()?;
         let mut tiles = TileGraph::from_graph(&TensorGraph::<f32>::new());
         tiles
             .region_kernels
             .push(crate::tile::graph::TileRegionKernel { region_id: 0, ir });
-        tiles.optimize_indices()?;
         let ptx =
             PtxGraph::from(tiles).with_target(PtxTarget::from_context(self.stream.context())?);
         let module = self
@@ -434,7 +558,7 @@ impl CudaDecoder {
         let mut ir = TileIRBuilder::new();
         ir.start_kernel("decoder_cache_copy");
         ir.add_param("input", DType::F32, true);
-        ir.add_param("output", DType::F32, false);
+        ir.add_param("output", target.dtype, false);
         ir.bounds_check(len);
         let linear = Expr::Mul(
             Box::new(Expr::BlockIdx(Dim::X)),
@@ -471,13 +595,13 @@ impl CudaDecoder {
     }
 }
 
-fn scan_lengths(position: usize, chunk: usize) -> Result<Vec<u32>> {
-    let span = (position + chunk).div_ceil(PARTITIONS);
-    let mut lengths = Vec::with_capacity(2 + chunk * PARTITIONS);
+fn scan_lengths(position: usize, chunk: usize, partitions: usize) -> Result<Vec<u32>> {
+    let span = (position + chunk).div_ceil(partitions);
+    let mut lengths = Vec::with_capacity(2 + chunk * partitions);
     lengths.push(u32::try_from(position)?);
     lengths.push(u32::try_from(span)?);
     for query in 0..chunk {
-        for part in 0..PARTITIONS {
+        for part in 0..partitions {
             lengths.push(u32::try_from(
                 (position + query + 1).saturating_sub(part * span).min(span),
             )?);
@@ -500,3 +624,6 @@ fn scan_launch(rows: usize, columns: usize) -> Result<cudarc::driver::LaunchConf
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bf16_tests;

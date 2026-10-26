@@ -241,3 +241,93 @@ fn cuda_kv_cache_crosses_scan_tiles_with_one_compiled_chunk_shape() {
         }
     }
 }
+
+#[test]
+fn bf16_cpu_cache_preserves_chunk_and_reset_semantics() -> anyhow::Result<()> {
+    use tnsr::nn::{GptAttentionPrecision, GptDecoderOptions};
+    let model = model(40);
+    let options = GptDecoderOptions {
+        attention_precision: GptAttentionPrecision::Bf16,
+        ..Default::default()
+    };
+    let mut whole = model.decoder_with_options(Backend::Cpu, 2, 40, options)?;
+    let mut chunked = model.decoder_with_options(Backend::Cpu, 2, 40, options)?;
+    let tokens: Vec<_> = (0..66).map(|i| (i * 53 + 7) % 367).collect();
+    let expected = whole.decode(&tokens)?;
+    for _ in 0..2 {
+        let mut start = 0;
+        for size in [16, 1, 16] {
+            let chunk: Vec<_> = (0..2)
+                .flat_map(|b| {
+                    tokens[b * 33 + start..b * 33 + start + size]
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            let actual = chunked.decode(&chunk)?;
+            let selected: Vec<_> = (0..2)
+                .flat_map(|b| {
+                    expected[(b * 33 + start) * 367..(b * 33 + start + size) * 367]
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            close(&actual, &selected);
+            start += size;
+        }
+        chunked.reset()?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn bf16_cuda_cache_matches_cpu_for_prefill_decode_and_reset() -> anyhow::Result<()> {
+    use tnsr::nn::{GptAttentionPrecision, GptDecoderOptions, GptPrefillMode};
+    if !cuda_available() {
+        return Ok(());
+    }
+    for width in [8, 66, 128, 258] {
+        let model = Gpt::new(GptConfig {
+            vocab_size: 32,
+            max_sequence_length: 160,
+            embed_dim: width,
+            num_heads: 2,
+            feed_forward_dim: width * 2,
+            num_layers: 2,
+            layer_norm_epsilon: 1e-5,
+        });
+        for prefill in [GptPrefillMode::Scalar, GptPrefillMode::Auto] {
+            let options = GptDecoderOptions {
+                attention_precision: GptAttentionPrecision::Bf16,
+                prefill,
+            };
+            let mut cpu = model.decoder_with_options(Backend::Cpu, 2, 160, options)?;
+            let mut gpu = model.decoder_with_options(Backend::Ptx, 2, 160, options)?;
+            for _ in 0..2 {
+                let sizes: &[usize] = if width == 8 {
+                    &[17, 1, 17, 3, 16, 75, 1]
+                } else {
+                    &[17, 1, 17, 3, 16]
+                };
+                for &size in sizes {
+                    let tokens: Vec<_> = (0..2 * size)
+                        .map(|i| (i * 17 + cpu.len() + 3) % 32)
+                        .collect();
+                    let expected = cpu.decode(&tokens)?;
+                    let actual = gpu.decode(&tokens)?;
+                    let scale = expected.iter().map(|x| x.abs()).fold(1f32, f32::max);
+                    for (a, b) in actual.iter().zip(expected) {
+                        assert!(
+                            a.is_finite() && (a - b).abs() <= scale / 128.,
+                            "width={width} prefill={prefill:?}: {a} vs {b}"
+                        );
+                    }
+                }
+                gpu.reset()?;
+                cpu.reset()?;
+            }
+        }
+    }
+    Ok(())
+}

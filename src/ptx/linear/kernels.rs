@@ -11,7 +11,7 @@ use cudarc::{
 };
 use std::sync::Arc;
 
-pub(super) fn convert(
+pub(crate) fn convert(
     stream: &Arc<CudaStream>,
     source: Binding,
     target: Binding,

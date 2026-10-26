@@ -115,7 +115,7 @@ fn check_packed_reductions(full_epilogue: bool) {
     };
     ptx.set_fusion_policy(PtxFusionPolicy::Greedy);
     let widths: &[usize] = if full_epilogue {
-        &[1, 33, 64, 127, 255, 256, 683]
+        &[1, 31, 32, 33, 64, 127, 255, 256, 683]
     } else {
         &[32, 33, 64, 127, 255]
     };
@@ -140,18 +140,24 @@ fn check_packed_reductions(full_epilogue: bool) {
                 let region = &ptx.execution_plan().unwrap().reduction_regions()[0];
                 assert_eq!(
                     region.schedule,
-                    if full_epilogue {
+                    if width >= 256 {
                         tnsr::tile::ReductionSchedule::Block { threads: 128 }
-                    } else {
+                    } else if width >= 32 {
                         tnsr::tile::ReductionSchedule::Subgroup { width: 32 }
+                    } else {
+                        tnsr::tile::ReductionSchedule::Serial
                     }
                 );
                 assert_eq!(region.full_epilogue_operations.is_empty(), !full_epilogue);
                 let source = ptx.module_source().unwrap();
-                if full_epilogue {
+                if width >= 256 {
                     assert!(source.contains("reduction_partials[512]"));
-                } else {
+                    assert!(!source.contains("shfl.sync"));
+                } else if width >= 32 {
                     assert!(source.contains("shfl.sync.idx.b32"));
+                    assert!(!source.contains("reduction_partials"));
+                } else {
+                    assert!(!source.contains("shfl.sync"));
                     assert!(!source.contains("reduction_partials"));
                 }
                 for changed in [false, true] {
@@ -177,17 +183,17 @@ fn ptx_packed_subgroups_cover_partial_blocks_and_changed_feeds() {
 }
 
 #[test]
-fn ptx_block_reductions_cover_full_epilogues_and_changed_feeds() {
+fn ptx_extent_selected_reductions_cover_full_epilogues_and_changed_feeds() {
     check_packed_reductions(true);
 }
 
 #[test]
-fn ptx_full_epilogue_preserves_block_sum_tree() {
+fn ptx_full_epilogue_preserves_extent_selected_sum_tree() {
     let Some(mut ptx) = cooperative_ptx_executor() else {
         return;
     };
     ptx.set_fusion_policy(PtxFusionPolicy::Greedy);
-    for width in [7, 33, 64, 127, 129, 255] {
+    for width in [7, 31, 32, 33, 64, 127, 129, 255, 256, 257, 683] {
         let shape = vec![23, width];
         let input = TensorExpr::input("tree", shape.clone());
         let producer = if width <= 128 {
@@ -197,6 +203,20 @@ fn ptx_full_epilogue_preserves_block_sum_tree() {
         };
         let graph: TensorGraph<f32> =
             (input - producer.reduce_sum(1).broadcast_axis(1, width)).into();
+        ptx.compile_owned(graph.clone()).unwrap();
+        let regions = ptx.execution_plan().unwrap().reduction_regions();
+        assert_eq!(regions.len(), 1);
+        assert!(!regions[0].full_epilogue_operations.is_empty());
+        assert_eq!(
+            regions[0].schedule,
+            if width >= 256 {
+                tnsr::tile::ReductionSchedule::Block { threads: 128 }
+            } else if width >= 32 {
+                tnsr::tile::ReductionSchedule::Subgroup { width: 32 }
+            } else {
+                tnsr::tile::ReductionSchedule::Serial
+            }
+        );
         for changed in [0u32, 1] {
             let data: Vec<f32> = (0..23 * width)
                 .map(|i| {
@@ -207,34 +227,67 @@ fn ptx_full_epilogue_preserves_block_sum_tree() {
                     f32::from_bits((bits & 0x807f_ffff) | ((117 + ((bits >> 24) % 20)) << 23))
                 })
                 .collect();
-            let mut expected = Vec::new();
-            for row in data.chunks_exact(width) {
-                // Independent reference for the previous 128-thread block:
-                // each logical lane accumulates in order, then descending hops.
-                let mut partials = [0.0f32; 128];
-                for (lane, partial) in partials.iter_mut().enumerate() {
-                    for index in (lane..width).step_by(128) {
-                        *partial += if width <= 128 {
-                            row[index] * 1.3
+            let reference = |contracted: bool| {
+                let mut expected = Vec::new();
+                for row in data.chunks_exact(width) {
+                    // Independent f32 reference for the extent-selected tree.
+                    // PTX mul.f32 followed by add.f32 permits contraction. The
+                    // original multiply producer remains present. Model either
+                    // permitted contraction strategy across the entire vector;
+                    // neither changes the tree or allows elementwise tolerances.
+                    let accumulate = |partial: f32, index: usize| {
+                        if width <= 128 && contracted {
+                            row[index].mul_add(1.3, partial)
+                        } else if width <= 128 {
+                            partial + row[index] * 1.3
                         } else {
-                            -row[index]
-                        };
-                    }
+                            partial + -row[index]
+                        }
+                    };
+                    let sum = if width < 32 {
+                        (0..width).fold(0.0_f32, accumulate)
+                    } else if width < 256 {
+                        let mut partials = [0.0_f32; 32];
+                        for (lane, partial) in partials.iter_mut().enumerate() {
+                            for index in (lane..width).step_by(32) {
+                                *partial = accumulate(*partial, index);
+                            }
+                        }
+                        // Subgroup lowering uses ascending shuffle distances.
+                        // Ascending lane order reads each peer before it changes.
+                        for hop in [1, 2, 4, 8, 16] {
+                            for lane in 0..32 - hop {
+                                partials[lane] += partials[lane + hop];
+                            }
+                        }
+                        partials[0]
+                    } else {
+                        let mut partials = [0.0_f32; 128];
+                        for (lane, partial) in partials.iter_mut().enumerate() {
+                            for index in (lane..width).step_by(128) {
+                                *partial = accumulate(*partial, index);
+                            }
+                        }
+                        for hop in [64, 32, 16, 8, 4, 2, 1] {
+                            for lane in 0..hop {
+                                partials[lane] += partials[lane + hop];
+                            }
+                        }
+                        partials[0]
+                    };
+                    expected.extend(row.iter().map(|x| (*x - sum).to_bits()));
                 }
-                for hop in [64, 32, 16, 8, 4, 2, 1] {
-                    for lane in 0..hop {
-                        partials[lane] += partials[lane + hop];
-                    }
-                }
-                expected.extend(row.iter().map(|x| *x - partials[0]));
-            }
+                expected
+            };
+            let separate = reference(false);
+            let contracted = reference(true);
             let actual = ptx
                 .execute(&graph, HashMap::from([("tree".to_owned(), data)]))
                 .unwrap();
-            assert_eq!(
-                actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-                "width={width}, changed={changed}"
+            let actual: Vec<_> = actual.iter().map(|x| x.to_bits()).collect();
+            assert!(
+                actual == separate || actual == contracted,
+                "neither exact same-tree oracle matched: width={width}, changed={changed}\nactual={actual:?}\nseparate={separate:?}\ncontracted={contracted:?}"
             );
         }
     }
@@ -1888,11 +1941,9 @@ fn ptx_singleton_reduction_outputs_use_ssa_domains_in_serial_and_cooperative_pla
                 );
                 assert_eq!(
                     ptx.execution_plan().unwrap().reduction_regions()[0].schedule,
-                    if mode == PtxReductionMode::Strict {
-                        tnsr::tile::ReductionSchedule::Serial
-                    } else {
-                        tnsr::tile::ReductionSchedule::Block { threads: 128 }
-                    }
+                    // Extent one remains serial even with a full epilogue
+                    // in cooperative mode; domain ownership is unchanged.
+                    tnsr::tile::ReductionSchedule::Serial
                 );
             }
         }

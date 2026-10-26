@@ -5,7 +5,7 @@
 //! boundary values, rounds operands/upstream contributions to BF16, computes
 //! linear and its analytical backward with BF16 outputs, and promotes results.
 //! Master weights and accumulated parameter gradients stay physically f32.
-mod kernels;
+pub(crate) mod kernels;
 pub(crate) mod program;
 #[cfg(test)]
 mod tests;

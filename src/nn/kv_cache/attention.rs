@@ -14,6 +14,7 @@ pub(super) struct AttentionScan {
     pub chunk: usize,
     pub capacity: usize,
     pub partitions: usize,
+    pub dtype: DType,
 }
 
 fn index(n: usize) -> Expr {
@@ -56,7 +57,7 @@ impl AttentionScan {
             .into_iter()
             .map(|name| KernelParam {
                 name: name.into(),
-                dtype: DType::F32,
+                dtype: self.dtype,
                 is_input: true,
             })
             .collect();
@@ -67,7 +68,11 @@ impl AttentionScan {
         });
         params.push(KernelParam {
             name: "output_0".into(),
-            dtype: DType::F32,
+            dtype: if self.partitions > 1 {
+                DType::F32
+            } else {
+                self.dtype
+            },
             is_input: false,
         });
         if self.partitions > 1 {
@@ -108,7 +113,7 @@ impl AttentionScan {
         }
     }
 
-    fn load_kv(
+    pub(super) fn load_kv(
         &self,
         b: &mut ScalarBuilder,
         kind: &str,
@@ -233,14 +238,19 @@ impl NormalizedScan for AttentionScan {
     }
 }
 
-/// Merge normalized partials, weighted by their log-sum-exp normalizers.
+/// Merge either normalized/LSE partials or raw numerator/max/denominator partials.
 pub(super) struct MergeScan {
     pub rows: usize,
     pub columns: usize,
     pub partitions: usize,
+    pub dtype: DType,
+    pub raw_partials: bool,
 }
 impl MergeScan {
     pub fn ir(&self) -> Result<TileIR> {
+        if self.partitions <= 8 || self.raw_partials {
+            return self.pointwise_ir();
+        }
         let (body, shared_mem_bytes) = lower_scan(
             self,
             self.rows * self.columns,
@@ -255,7 +265,7 @@ impl MergeScan {
         .into_iter()
         .map(|(name, is_input)| KernelParam {
             name: name.into(),
-            dtype: DType::F32,
+            dtype: if is_input { DType::F32 } else { self.dtype },
             is_input,
         })
         .collect();
@@ -264,6 +274,85 @@ impl MergeScan {
             params,
             body,
             shared_mem_bytes,
+        })
+    }
+    // A handful of partitions is cheaper to merge per output element than
+    // through a cooperative CTA: no shared score tile or block barriers.
+    fn pointwise_ir(&self) -> Result<TileIR> {
+        let mut b = ScalarBuilder::default();
+        b.stmts.push(Stmt::BoundsCheck {
+            extent: self.rows * self.columns,
+        });
+        let output = Expr::Mul(
+            Box::new(Expr::BlockIdx(crate::tile::Dim::X)),
+            Box::new(Expr::BlockDim(crate::tile::Dim::X)),
+        ) + Expr::ThreadIdx(crate::tile::Dim::X);
+        let row = Expr::FloorDiv(Box::new(output.clone()), self.columns);
+        let column = Expr::Mod(Box::new(output.clone()), self.columns);
+        let maximum = b.value(ScalarExpr::Constant(f32::NEG_INFINITY));
+        let mut scores = Vec::new();
+        for part in 0..self.partitions {
+            let score = b.load(
+                ScalarMemory::Global("normalizers".into()),
+                (row.clone() * self.partitions + index(part))
+                    * if self.raw_partials {
+                        super::prefill::STATISTICS_WIDTH
+                    } else {
+                        1usize
+                    },
+            );
+            b.set(
+                maximum,
+                ScalarExpr::binary(ScalarBinaryOp::Max, maximum, score),
+            );
+            scores.push(score);
+        }
+        let numerator = b.value(ScalarExpr::Constant(0.));
+        let denominator = b.value(ScalarExpr::Constant(0.));
+        for (part, score) in scores.into_iter().enumerate() {
+            let weight = b.value(ScalarExpr::unary(
+                crate::tensor::UnaryOp::Exp,
+                math(BinaryOp::Sub, score, maximum),
+            ));
+            let value = b.load(
+                ScalarMemory::Global("partials".into()),
+                (row.clone() * self.partitions + index(part)) * self.columns + column.clone(),
+            );
+            b.set(
+                numerator,
+                math(BinaryOp::Add, numerator, math(BinaryOp::Mul, weight, value)),
+            );
+            let contribution = if self.raw_partials {
+                let den = b.load(
+                    ScalarMemory::Global("normalizers".into()),
+                    (row.clone() * self.partitions + index(part))
+                        * super::prefill::STATISTICS_WIDTH
+                        + index(1),
+                );
+                math(BinaryOp::Mul, weight, den)
+            } else {
+                weight.into()
+            };
+            b.set(denominator, math(BinaryOp::Add, denominator, contribution));
+        }
+        let value = b.value(math(BinaryOp::Div, numerator, denominator));
+        b.store(ScalarMemory::Global("output_0".into()), output, value);
+        Ok(TileIR {
+            kernel_name: "decoder_merge".into(),
+            params: [
+                ("partials", DType::F32, true),
+                ("normalizers", DType::F32, true),
+                ("output_0", self.dtype, false),
+            ]
+            .into_iter()
+            .map(|(name, dtype, is_input)| KernelParam {
+                name: name.into(),
+                dtype,
+                is_input,
+            })
+            .collect(),
+            body: crate::tile::Block { stmts: b.stmts },
+            shared_mem_bytes: 0,
         })
     }
 }

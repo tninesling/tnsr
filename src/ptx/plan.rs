@@ -900,10 +900,19 @@ fn form_reduction_regions<D: crate::tile::TileDType, G>(
         {
             continue;
         }
+        // Fusion complexity must not silently change a cooperative reduction
+        // into the legacy serial kernel. Keep an anchor-only region when its
+        // surrounding pointwise work must execute separately.
         if producer_members.len() + epilogue_members.len() + full_epilogue_members.len()
             > MAX_POINTWISE_REGION_OPS
         {
-            continue;
+            if reduction_mode == PtxReductionMode::Strict {
+                continue;
+            }
+            producer_members.clear();
+            epilogue_members.clear();
+            broadcast_members.clear();
+            full_epilogue_members.clear();
         }
 
         let member_set: HashSet<_> = producer_members
@@ -940,9 +949,10 @@ fn form_reduction_regions<D: crate::tile::TileDType, G>(
         )?;
         if reduction_mode != PtxReductionMode::Strict {
             let reduction_extent = region.input_shape[region.axis];
-            if reduction_extent >= MIN_BLOCK_REDUCTION_AXIS
-                || !region.full_epilogue_operations.is_empty()
-            {
+            // A fusion decision must not change floating-point association.
+            // Select the tree only from the reduction extent; both cooperative
+            // schedules support full-domain epilogues, including tail elements.
+            if reduction_extent >= MIN_BLOCK_REDUCTION_AXIS {
                 region.schedule = ReductionSchedule::Block {
                     threads: CUDA_BLOCK_REDUCTION_THREADS,
                 };
@@ -1497,7 +1507,7 @@ mod tests {
     }
 
     #[test]
-    fn cooperative_mode_fuses_large_full_epilogue_with_block_schedule() {
+    fn cooperative_mode_fuses_full_epilogue_without_changing_subgroup_tree() {
         let width = 64;
         let input = TensorExpr::constant(vec![0.25; 2 * width], vec![2, width]);
         let producer = input.exp();
@@ -1512,8 +1522,8 @@ mod tests {
         assert_eq!(plan.reduction_regions.len(), 1);
         assert_eq!(
             plan.reduction_regions[0].schedule,
-            ReductionSchedule::Block {
-                threads: CUDA_BLOCK_REDUCTION_THREADS
+            ReductionSchedule::Subgroup {
+                width: CUDA_WARP_SIZE
             }
         );
         assert_eq!(plan.reduction_regions[0].full_epilogue_operations.len(), 1);
@@ -1543,5 +1553,105 @@ mod tests {
                 .iter()
                 .any(|step| matches!(step.action, PtxPlanAction::PointwiseRegion(_)))
         );
+    }
+
+    #[test]
+    fn cooperative_reduction_tree_survives_pointwise_fusion_budget() {
+        let mut producer = TensorExpr::<f32>::input("x", vec![2, 32]);
+        for _ in 0..=MAX_POINTWISE_REGION_OPS {
+            producer = -producer;
+        }
+        let graph: TensorGraph<f32> = producer.reduce_sum(1).into();
+        for mode in [
+            PtxReductionMode::DeterministicTree,
+            PtxReductionMode::Online,
+        ] {
+            let plan = PtxExecutionPlan::build_with_reduction_mode(&graph, mode).unwrap();
+            let [region] = plan.reduction_regions.as_slice() else {
+                panic!("over-budget pointwise work lost the cooperative reduction");
+            };
+            assert_eq!(region.schedule, ReductionSchedule::Subgroup { width: 32 });
+            assert!(region.producer_operations.is_empty());
+        }
+        let strict = PtxExecutionPlan::build(&graph).unwrap();
+        assert!(strict.reduction_regions.is_empty());
+        assert!(strict.steps.iter().any(|step| {
+            step.action == PtxPlanAction::Kernel
+                && matches!(graph[step.node], TensorGraphNode::ReduceAxis { .. })
+        }));
+    }
+
+    #[test]
+    fn over_budget_reduction_keeps_extent_selected_tree() {
+        let mut producer = TensorExpr::<f32>::input("x", vec![2, 64]);
+        for _ in 0..=MAX_POINTWISE_REGION_OPS {
+            producer = -producer;
+        }
+        let denominator = producer.clone().reduce_sum(1).broadcast(vec![2, 64]);
+        let graph: TensorGraph<f32> = (producer / denominator).into();
+        let plan = PtxExecutionPlan::build_with_reduction_mode(
+            &graph,
+            PtxReductionMode::DeterministicTree,
+        )
+        .unwrap();
+        let [region] = plan.reduction_regions.as_slice() else {
+            panic!("over-budget full epilogue lost its reduction anchor");
+        };
+        assert_eq!(
+            region.schedule,
+            ReductionSchedule::Subgroup {
+                width: CUDA_WARP_SIZE
+            }
+        );
+        assert!(region.producer_operations.is_empty());
+        assert!(region.full_epilogue_operations.is_empty());
+        assert!(region.broadcast_members.is_empty());
+    }
+
+    #[test]
+    fn cooperative_reduction_schedule_depends_only_on_axis_extent() {
+        for mode in [
+            PtxReductionMode::DeterministicTree,
+            PtxReductionMode::Online,
+        ] {
+            for width in [31, 32, 33, 64, 255, 256] {
+                let expected = if width >= MIN_BLOCK_REDUCTION_AXIS {
+                    ReductionSchedule::Block {
+                        threads: CUDA_BLOCK_REDUCTION_THREADS,
+                    }
+                } else if width >= CUDA_WARP_SIZE as usize {
+                    ReductionSchedule::Subgroup {
+                        width: CUDA_WARP_SIZE,
+                    }
+                } else {
+                    ReductionSchedule::Serial
+                };
+                for (axis, shape) in [(0, vec![width, 2]), (1, vec![2, width])] {
+                    for full_epilogue in [false, true] {
+                        let input = TensorExpr::<f32>::input("x", shape.clone());
+                        let sum = input.reduce_sum(axis);
+                        let output = if full_epilogue {
+                            -sum.broadcast(shape.clone())
+                        } else {
+                            sum
+                        };
+                        let graph: TensorGraph<f32> = output.into();
+                        let plan =
+                            PtxExecutionPlan::build_with_reduction_mode(&graph, mode).unwrap();
+                        let [region] = plan.reduction_regions.as_slice() else {
+                            panic!("missing reduction: mode={mode:?}, width={width}, axis={axis}");
+                        };
+                        assert_eq!(
+                            region.schedule, expected,
+                            "width={width}, axis={axis}, full={full_epilogue}"
+                        );
+                        assert_eq!(
+                            region.full_epilogue_operations.len(),
+                            usize::from(full_epilogue)
+                        );
+                    }
+                }
+            }
+        }
     }
 }

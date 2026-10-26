@@ -56,7 +56,11 @@ use petgraph::visit::EdgeRef;
 use crate::tensor::{BinaryOp, DType, ReduceOp, TensorExpr, UnaryOp};
 
 pub mod fusion;
+mod gradient_options;
 mod gradient_pruning;
+pub use gradient_options::GradientOptions;
+#[cfg(test)]
+mod gradient_tests;
 pub(crate) mod indices;
 pub mod liveness;
 pub mod mixed;
@@ -394,9 +398,24 @@ where
     }
 
     /// Create a new graph with gradient computation nodes for automatic differentiation.
-    pub fn with_gradients(mut self, loss_node: NodeIndex) -> TensorGraph<D, WithGrad> {
+    pub fn with_gradients(self, loss_node: NodeIndex) -> TensorGraph<D, WithGrad> {
+        self.with_gradients_with_options(loss_node, GradientOptions::default())
+    }
+
+    /// Differentiate with explicit numerical optimization options.
+    ///
+    /// The default preserves primitive differentiation. See [`GradientOptions`]
+    /// before enabling algebraic floating-point rewrites.
+    pub fn with_gradients_with_options(
+        mut self,
+        loss_node: NodeIndex,
+        options: GradientOptions,
+    ) -> TensorGraph<D, WithGrad> {
         let forward_nodes = self.graph.node_count();
         let primal_dtypes = mixed::value_dtypes(&self);
+        let compact_softmax = options.compact_softmax
+            && std::any::TypeId::of::<D>() == std::any::TypeId::of::<f32>()
+            && primal_dtypes.is_empty();
         let mut param_to_grad: HashMap<usize, NodeIndex> = HashMap::new();
         let mut gradient_nodes: HashSet<NodeIndex> = HashSet::new();
         let mut node_to_grad: HashMap<NodeIndex, NodeIndex> = HashMap::new();
@@ -446,6 +465,28 @@ where
                 Some(&grad) => grad,
                 None => continue,
             };
+
+            if compact_softmax
+                && self.graph[grad_output].shape() == self.graph[node_idx].shape()
+                && let Some((score, axis)) = gradient_options::softmax(&self, node_idx)
+            {
+                let shape = self.graph[node_idx].shape().clone();
+                let probabilities = TensorExpr::node_ref(node_idx, shape.clone());
+                let incoming = TensorExpr::node_ref(grad_output, shape.clone());
+                let dot = (probabilities.clone() * incoming.clone())
+                    .reduce_axis_sum(axis)
+                    .broadcast(shape);
+                let derivative = probabilities * (incoming - dot);
+                let gradient = self.lower_gradient_expr(&derivative, &mut gradient_nodes);
+                self.accumulate_gradient(
+                    &primal_dtypes,
+                    &mut node_to_grad,
+                    &mut gradient_nodes,
+                    score,
+                    gradient,
+                );
+                continue;
+            }
 
             // Get the node's inputs
             let inputs = self.inputs(node_idx);
@@ -664,12 +705,10 @@ where
 
                             let grad_out_shape = self.graph[grad_output].shape().clone();
                             let input_x_shape = self.graph[input_x].shape().clone();
-                            let num_elements: usize = input_x_shape.iter().product();
-
                             let grad_out_expr = TensorExpr::node_ref(grad_output, grad_out_shape);
                             let input_x_expr = TensorExpr::node_ref(input_x, input_x_shape.clone());
-                            let zero_expr =
-                                TensorExpr::constant(vec![D::zero(); num_elements], input_x_shape);
+                            let zero_expr = TensorExpr::constant(vec![D::zero()], vec![])
+                                .broadcast(input_x_shape);
 
                             let condition_expr = input_x_expr.gt(zero_expr);
                             let grad_x_expr = grad_out_expr.mask(condition_expr);
@@ -927,11 +966,8 @@ where
 
                             // Create scale constant (1/axis_size)
                             let scale = D::from(1.0).unwrap() / D::from(axis_size).unwrap();
-                            let num_elements: usize = input_shape.iter().product();
-                            let scale_const_expr = TensorExpr::constant(
-                                vec![scale; num_elements],
-                                input_shape.clone(),
-                            );
+                            let scale_const_expr = TensorExpr::constant(vec![scale], vec![])
+                                .broadcast(input_shape.clone());
 
                             // grad_x = grad_broadcast * scale
                             let grad_x_expr = grad_broadcast_expr * scale_const_expr;
@@ -1262,15 +1298,11 @@ where
                                 // d(relu(x))/dx = grad * (x > 0)
                                 let grad_shape = self.graph[current_grad].shape().clone();
                                 let input_shape = self.graph[intermediate_input].shape().clone();
-                                let num_elements: usize = input_shape.iter().product();
-
                                 let grad_expr = TensorExpr::node_ref(current_grad, grad_shape);
                                 let input_expr =
                                     TensorExpr::node_ref(intermediate_input, input_shape.clone());
-                                let zero_expr = TensorExpr::constant(
-                                    vec![D::zero(); num_elements],
-                                    input_shape,
-                                );
+                                let zero_expr = TensorExpr::constant(vec![D::zero()], vec![])
+                                    .broadcast(input_shape);
 
                                 let condition_expr = input_expr.gt(zero_expr);
                                 let grad_x_expr = grad_expr.mask(condition_expr);

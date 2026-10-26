@@ -19,6 +19,56 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 const LEN: usize = 4096;
 const NODE_BYTES: usize = LEN * size_of::<f32>();
 
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_scalar_autograd_sources_preserve_mixed_replay_outputs_and_gradients() {
+    use tnsr::ptx::mixed::MixedExecutor;
+    use tnsr::tensor::ValueDType;
+    use tnsr::tile::MatMulPrecision;
+    let Some(_available) = ptx_executor() else {
+        return;
+    };
+    let bits = |values: &[f32]| {
+        values
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<u32>>()
+    };
+    for bf16 in [false, true] {
+        let parameter = Parameter::new(vec![-2.0_f32, 0.0, 1.0, 3.0], vec![4]);
+        let mut x = TensorExpr::from(parameter.clone());
+        let mut feed = TensorExpr::input("feed", vec![4]);
+        if bf16 {
+            x = x.cast(ValueDType::BF16);
+            feed = feed.cast(ValueDType::BF16);
+        }
+        let y = x * feed;
+        let mut graph = TensorGraph::new();
+        let loss = graph.add_expr(&(y.clone().relu() + y.clone() * y).mean_all(), false);
+        let graph = graph.with_gradients(loss);
+        let mut gpu = MixedExecutor::new(&graph, MatMulPrecision::StrictF32, true).unwrap();
+        assert!(gpu.info().replay);
+        assert_eq!(gpu.info().immutable_source_bytes, 12);
+        let initial_bytes = gpu.info().f32_bytes + gpu.info().bf16_bytes;
+        for data in [vec![1.0; 4], vec![-1.0, 1.0, 2.0, 0.5]] {
+            let inputs = HashMap::from([("feed".into(), data)]);
+            let mut cpu = SimpleExecutor::new();
+            cpu.execute(&graph, inputs.clone()).unwrap();
+            gpu.upload(inputs).unwrap();
+            gpu.run().unwrap();
+            assert_eq!(
+                bits(&gpu.read(loss).unwrap()),
+                bits(&cpu.get_value(loss).unwrap())
+            );
+            assert_eq!(
+                bits(&gpu.gradients(&graph).unwrap()[&parameter.id()]),
+                bits(&cpu.get_gradients(&graph)[&parameter.id()])
+            );
+            assert_eq!(gpu.info().f32_bytes + gpu.info().bf16_bytes, initial_bytes);
+        }
+    }
+}
+
 /// Builds `x -> neg -> ... -> neg` with `depth` negations.
 fn chain_graph(depth: usize) -> TensorGraph<f32> {
     let mut expr = TensorExpr::<f32>::input("x", vec![LEN]);

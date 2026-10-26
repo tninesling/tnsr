@@ -20,6 +20,27 @@
 //! let optimized = complex.optimize_with(config);
 //! ```
 //!
+//! `optimize`, `optimize_with`, and [`optimize_expr`] use conservative rules:
+//! they simplify structural round trips without reassociating arithmetic or
+//! cancelling exp/log operations. For supported expressions, callers may opt
+//! into real-algebra rewrites explicitly:
+//!
+//! ```rust
+//! use tnsr::graph::rewrite::{optimize_expr_with_numerics, RewriteConfig, RewriteNumerics};
+//! use tnsr::tensor::TensorExpr;
+//!
+//! let x = TensorExpr::<f32>::input("x", vec![1]);
+//! let expr = x.log().exp();
+//! let optimized = optimize_expr_with_numerics(
+//!     &expr,
+//!     RewriteConfig::default(),
+//!     RewriteNumerics::RealAlgebra,
+//! );
+//! ```
+//!
+//! Real-algebra rewrites can change rounding, signed zero, NaNs and infinities.
+//! They are independent of backend matmul precision settings.
+//!
 //! # Integration with TensorGraph
 //!
 //! ```rust
@@ -28,7 +49,7 @@
 //!
 //! let x = Parameter::new(vec![1.0f32], vec![1]);
 //! let expr: TensorExpr<f32> = x.into();
-//! let expr = expr.log().exp(); // Will be optimized to just x
+//! let expr = expr.log().exp(); // Conservative rules retain both operations
 //!
 //! let mut graph = TensorGraph::new();
 //! // Optimize before lowering to graph
@@ -78,8 +99,32 @@ fn leaf_symbol<D: DType>(expr: &TensorExpr<D>) -> Option<Symbol> {
     Some(name.into())
 }
 
-/// Returns all rewrite rules for tensor optimization.
+/// Returns conservative rewrite rules for supported tensor expressions.
 pub fn make_rules() -> Vec<Rewrite<TensorOp, ()>> {
+    make_rules_with_numerics(RewriteNumerics::PreserveOperations)
+}
+
+/// Numerical assumptions permitted during expression rewriting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RewriteNumerics {
+    /// Preserve arithmetic order, domains and rounding boundaries in supported
+    /// expressions, while eliminating double negation and double transpose.
+    #[default]
+    PreserveOperations,
+    /// Permit real-algebra identities, including reassociation and exp/log
+    /// cancellation. These may change finite results, signed zero, NaNs and
+    /// infinities; callers must establish suitability for their workload.
+    RealAlgebra,
+}
+
+/// Returns rewrite rules under explicit numerical assumptions.
+pub fn make_rules_with_numerics(numerics: RewriteNumerics) -> Vec<Rewrite<TensorOp, ()>> {
+    if numerics == RewriteNumerics::PreserveOperations {
+        return vec![
+            rw!("double-neg"; "(neg (neg ?x))" => "?x"),
+            rw!("transpose-transpose"; "(transpose (transpose ?x))" => "?x"),
+        ];
+    }
     vec![
         // Negation
         rw!("double-neg"; "(neg (neg ?x))" => "?x"),
@@ -410,28 +455,68 @@ fn recexpr_to_expr<D: DType + Clone + Default + 'static>(
     build(root, rec, &mut cache, &leaves)
 }
 
-/// Optimize a `TensorExpr` using e-graph rewrites.
+/// Optimize a supported `TensorExpr` using conservative e-graph rewrites.
+///
+/// Arithmetic reassociation and inverse exp/log rules require explicit opt-in
+/// through [`optimize_expr_with_numerics`]. This is also the default used by
+/// `TensorExpr::optimize`, `TensorExpr::optimize_with`, and
+/// `TensorGraph::add_expr(expr, true)`.
 pub fn optimize_expr<D: DType + Clone + Default + 'static>(
     expr: &TensorExpr<D>,
     config: RewriteConfig,
 ) -> TensorExpr<D> {
+    optimize_expr_with_numerics(expr, config, RewriteNumerics::PreserveOperations)
+}
+
+/// Optimize a supported `TensorExpr` under explicit numerical assumptions.
+///
+/// [`RewriteNumerics::RealAlgebra`] restores the algebraic rules that can alter
+/// floating-point behavior. Expressions not fully represented by [`TensorOp`]
+/// retain their structure under both policies.
+pub fn optimize_expr_with_numerics<D: DType + Clone + Default + 'static>(
+    expr: &TensorExpr<D>,
+    config: RewriteConfig,
+    numerics: RewriteNumerics,
+) -> TensorExpr<D> {
     fn requires_exact_structure<D: DType>(expr: &TensorExpr<D>) -> bool {
-        matches!(
-            expr.kind(),
-            ExprKind::Linear { .. }
-                | ExprKind::Cast { .. }
-                | ExprKind::Index { .. }
-                | ExprKind::Narrow { .. }
-                | ExprKind::Concat { .. }
-                | ExprKind::Embedding { .. }
-                | ExprKind::EmbeddingBackward { .. }
-                | ExprKind::IndexedCrossEntropy { .. }
-                | ExprKind::IndexedCrossEntropyBackward { .. }
-        ) || expr.children().into_iter().any(requires_exact_structure)
+        let wide_axis = match expr.kind() {
+            ExprKind::Permute { axes, .. } => axes.iter().any(|&axis| i32::try_from(axis).is_err()),
+            ExprKind::BroadcastAxis { axis, .. } | ExprKind::ReduceAxis { axis, .. } => {
+                i32::try_from(*axis).is_err()
+            }
+            _ => false,
+        };
+        // TensorOp metadata uses i32 literals. Avoid narrowing dimensions even
+        // when only a descendant reshape or broadcast would serialize them.
+        wide_axis
+            || expr.shape().iter().any(|&dim| i32::try_from(dim).is_err())
+            || matches!(
+                expr.kind(),
+                ExprKind::Linear { .. }
+                    | ExprKind::Cast { .. }
+                    | ExprKind::Index { .. }
+                    | ExprKind::Narrow { .. }
+                    | ExprKind::Concat { .. }
+                    | ExprKind::Embedding { .. }
+                    | ExprKind::EmbeddingBackward { .. }
+                    | ExprKind::IndexedCrossEntropy { .. }
+                    | ExprKind::IndexedCrossEntropyBackward { .. }
+                    | ExprKind::ReduceAxis {
+                        op: ReduceOp::Max,
+                        ..
+                    }
+                    | ExprKind::Conv2d { .. }
+                    | ExprKind::ConvTranspose2d { .. }
+                    | ExprKind::Conv2dBackwardWeight { .. }
+                    | ExprKind::MaxPool2d { .. }
+                    | ExprKind::MaxPool2dBackward { .. }
+                    | ExprKind::Flatten { .. }
+            )
+            || expr.children().into_iter().any(requires_exact_structure)
     }
 
-    // Indexed operations and observable cast identities are not represented
-    // in TensorOp. Preserve the entire expression, including cast sharing.
+    // Preserve unsupported operations, wide metadata and observable cast
+    // identities instead of rebuilding them from lossy placeholder symbols.
     if requires_exact_structure(expr) {
         return expr.clone();
     }
@@ -445,7 +530,7 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
         .with_node_limit(config.node_limit)
         .with_time_limit(std::time::Duration::from_secs_f64(config.time_limit_secs))
         .with_expr(&start)
-        .run(&make_rules());
+        .run(&make_rules_with_numerics(numerics));
 
     tracing::debug!("Iterations: {}", runner.iterations.len());
     tracing::debug!("E-graph size: {} nodes", runner.egraph.total_size());
@@ -512,7 +597,11 @@ mod tests {
         let x_id = x.id();
         let expr: TensorExpr<f32> = x.into();
         let exp_log = expr.log().exp();
-        let optimized = optimize_expr(&exp_log, RewriteConfig::default());
+        let optimized = optimize_expr_with_numerics(
+            &exp_log,
+            RewriteConfig::default(),
+            RewriteNumerics::RealAlgebra,
+        );
         assert!(matches!(optimized.kind(), ExprKind::Parameter { id, .. } if *id == x_id));
     }
 
@@ -573,5 +662,205 @@ mod tests {
         let complex = expr.transpose().transpose();
         let optimized = complex.optimize();
         assert!(matches!(optimized.kind(), ExprKind::Parameter { id, .. } if *id == x_id));
+    }
+}
+
+#[cfg(test)]
+mod numerical_contract_tests {
+    use super::*;
+    use crate::{Executor, SimpleExecutor, graph::TensorGraph};
+
+    fn scalar(value: f32) -> TensorExpr<f32> {
+        TensorExpr::constant(vec![value], vec![1])
+    }
+
+    fn execute(expr: TensorExpr<f32>) -> Vec<f32> {
+        SimpleExecutor::new()
+            .execute(&TensorGraph::from(expr), HashMap::new())
+            .unwrap()
+    }
+
+    fn assert_preserved(expr: &TensorExpr<f32>) {
+        let expected = execute(expr.clone());
+        let actual = execute(optimize_expr(expr, RewriteConfig::default()));
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            if expected.is_nan() {
+                assert!(actual.is_nan());
+            } else {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "{actual} vs {expected}"
+                );
+            }
+        }
+    }
+
+    fn real_algebra(expr: &TensorExpr<f32>) -> TensorExpr<f32> {
+        optimize_expr_with_numerics(expr, RewriteConfig::default(), RewriteNumerics::RealAlgebra)
+    }
+
+    #[test]
+    fn conservative_preserves_exp_log_domain_overflow_and_underflow() {
+        let values = vec![
+            -1.0f32,
+            -0.0,
+            0.0,
+            f32::MIN_POSITIVE,
+            1.0,
+            100.0,
+            -110.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        let x = TensorExpr::constant(values.clone(), vec![values.len()]);
+        assert_preserved(&x.clone().log().exp());
+        assert_preserved(&x.exp().log());
+        assert!(execute(scalar(-1.0).log().exp())[0].is_nan());
+        assert!(execute(scalar(100.0).exp().log())[0].is_infinite());
+        assert_eq!(execute(scalar(-110.0).exp().log())[0], f32::NEG_INFINITY);
+    }
+
+    #[test]
+    fn conservative_preserves_signed_zero_in_negated_subtraction() {
+        let x = scalar(0.0);
+        let expr = -(x.clone() - x);
+        assert_preserved(&expr);
+        assert_eq!(execute(expr.clone())[0].to_bits(), (-0.0f32).to_bits());
+        assert_eq!(execute(real_algebra(&expr))[0].to_bits(), 0.0f32.to_bits());
+    }
+
+    #[test]
+    fn conservative_preserves_nonfinite_products_and_finite_cancellation() {
+        for value in [f32::MAX, f32::INFINITY] {
+            let a = scalar(value);
+            let expr = a.clone() * scalar(2.0) + a * scalar(-2.0);
+            assert_preserved(&expr);
+            assert!(execute(expr.clone())[0].is_nan());
+            let optimized = execute(real_algebra(&expr))[0];
+            if value.is_finite() {
+                assert_eq!(optimized, 0.0);
+            }
+        }
+        let a = scalar(1e10);
+        let expr = a.clone() * scalar(1.0000001) + a * scalar(-1.0);
+        assert_preserved(&expr);
+        assert_eq!(execute(expr.clone())[0], 1024.0);
+        assert_ne!(execute(real_algebra(&expr))[0], 1024.0);
+    }
+
+    #[test]
+    fn algebraic_inverse_rules_require_explicit_opt_in() {
+        let expr = scalar(-1.0).log().exp();
+        assert!(execute(optimize_expr(&expr, RewriteConfig::default()))[0].is_nan());
+        assert_eq!(execute(real_algebra(&expr)), vec![-1.0]);
+    }
+
+    #[test]
+    fn conservative_still_eliminates_structural_round_trips() {
+        let x = TensorExpr::constant(vec![-0.0f32], vec![1, 1]);
+        let optimized = optimize_expr(
+            &(-(-x.clone().transpose().transpose())),
+            RewriteConfig::default(),
+        );
+        assert!(matches!(optimized.kind(), ExprKind::Constant { .. }));
+        assert_eq!(execute(optimized)[0].to_bits(), (-0.0f32).to_bits());
+    }
+
+    #[test]
+    fn public_optimization_entry_points_use_conservative_rules() {
+        let expr = scalar(-1.0).log().exp();
+        let config = RewriteConfig {
+            iter_limit: 10,
+            node_limit: 10_000,
+            time_limit_secs: 2.0,
+        };
+        assert!(execute(expr.optimize())[0].is_nan());
+        assert!(execute(expr.optimize_with(config))[0].is_nan());
+        let mut graph = TensorGraph::new();
+        graph.add_expr(&expr, true);
+        let actual = SimpleExecutor::new()
+            .execute(&graph, HashMap::new())
+            .unwrap();
+        assert!(actual[0].is_nan());
+    }
+
+    fn assert_unsupported_preserved(expr: &TensorExpr<f32>, expected: &[f32]) {
+        assert_eq!(execute(expr.clone()), expected);
+        for numerics in [
+            RewriteNumerics::PreserveOperations,
+            RewriteNumerics::RealAlgebra,
+        ] {
+            let optimized = optimize_expr_with_numerics(expr, RewriteConfig::default(), numerics);
+            assert_eq!(optimized.shape(), expr.shape());
+            assert_eq!(execute(optimized), expected);
+        }
+    }
+
+    #[test]
+    fn unsupported_max_reductions_keep_distinct_inputs_and_axes() {
+        let a = TensorExpr::constant(vec![-1.0f32, 2.0, 3.0, -4.0], vec![2, 2]);
+        let b = TensorExpr::constant(vec![10.0f32, 20.0, 30.0, 40.0], vec![2, 2]);
+        let expression = a.reduce_max(0) + b.reduce_max(1);
+        assert_eq!(expression.shape(), &[2, 2]);
+        assert_unsupported_preserved(&expression, &[23.0, 22.0, 43.0, 42.0]);
+    }
+
+    #[test]
+    fn unsupported_convolution_pooling_and_flatten_keep_shapes_and_values() {
+        let input = TensorExpr::constant((1_u8..=9).map(f32::from).collect(), vec![1, 1, 3, 3]);
+        let weight = TensorExpr::constant(vec![1.0f32, -1.0, 2.0, 0.0], vec![1, 1, 2, 2]);
+        let convolution = input.clone().conv2d(weight, 1, 0);
+        assert_unsupported_preserved(&convolution, &[7.0, 9.0, 13.0, 15.0]);
+        let pooling = input.max_pool2d(2, 1);
+        assert_unsupported_preserved(&pooling, &[5.0, 6.0, 8.0, 9.0]);
+        let flattened = convolution.flatten();
+        assert_eq!(flattened.shape(), &[1, 4]);
+        assert_unsupported_preserved(&flattened, &[7.0, 9.0, 13.0, 15.0]);
+    }
+
+    #[test]
+    fn unsupported_convolution_and_pooling_backward_keep_values() {
+        let input = TensorExpr::constant((1_u8..=9).map(f32::from).collect(), vec![1, 1, 3, 3]);
+        let weight = TensorExpr::constant(vec![1.0f32, -1.0, 2.0, 0.0], vec![1, 1, 2, 2]);
+        let gradient = TensorExpr::constant(vec![1.0f32; 4], vec![1, 1, 2, 2]);
+        let input_gradient =
+            TensorExpr::conv_transpose_2d(gradient.clone(), weight, vec![1, 1, 3, 3], 1, 0);
+        assert_unsupported_preserved(
+            &input_gradient,
+            &[1.0, 0.0, -1.0, 3.0, 2.0, -1.0, 2.0, 2.0, 0.0],
+        );
+        let weight_gradient = TensorExpr::conv2d_backward_weight(
+            input.clone(),
+            gradient.clone(),
+            vec![1, 1, 2, 2],
+            1,
+            0,
+        );
+        assert_unsupported_preserved(&weight_gradient, &[12.0, 16.0, 24.0, 28.0]);
+        let pooled = input.clone().max_pool2d(2, 1);
+        let pool_gradient =
+            TensorExpr::max_pool2d_backward(input, pooled, gradient, vec![1, 1, 3, 3], 2, 1);
+        assert_unsupported_preserved(
+            &pool_gradient,
+            &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0],
+        );
+    }
+
+    #[test]
+    fn wide_shape_metadata_bypasses_i32_rewrite_encoding() {
+        let wide = usize::try_from(i32::MAX).unwrap() + 1;
+        let expression = TensorExpr::<f32>::input("wide", vec![wide]).reshape(vec![1, wide]);
+        for numerics in [
+            RewriteNumerics::PreserveOperations,
+            RewriteNumerics::RealAlgebra,
+        ] {
+            let optimized =
+                optimize_expr_with_numerics(&expression, RewriteConfig::default(), numerics);
+            assert_eq!(optimized.shape(), &[1, wide]);
+            assert!(matches!(optimized.kind(), ExprKind::Reshape { .. }));
+        }
     }
 }

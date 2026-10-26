@@ -273,11 +273,22 @@ impl MatMulSchedule {
             if contiguous && aligned(group) {
                 self.copy_bytes = 16;
             }
-            // Auto amortizes pipeline startup only on vectorized copies with
-            // several K tiles and computing warps. Explicit mode exercises the other paths.
+            // Large BF16 register tiles amortize vectorized, two-operand staging
+            // with only two K tiles. Hybrid copies and smaller tiles retain the
+            // longer startup threshold.
+            let short_register_pipeline = self.plan == MatMulPlan::TensorCoreBF16
+                && tile
+                    == (MatMulTile {
+                        m: 64,
+                        n: 64,
+                        k: 32,
+                    })
+                && self.warp_topology == (2, 2)
+                && self.warp_fragments == (2, 2)
+                && async_operands == (true, true);
             if policy == MatMulPipeline::Auto
                 && (self.copy_bytes != 16
-                    || self.logical_shape.k.div_ceil(tile.k) < 4
+                    || (self.logical_shape.k.div_ceil(tile.k) < 4 && !short_register_pipeline)
                     || self.warp_topology.0 * self.warp_topology.1 == 1)
             {
                 self.pipeline_stages = 1;
@@ -802,6 +813,151 @@ mod tests {
                 4
             );
         }
+    }
+
+    fn short_k_schedule(m: usize, k: usize, n: usize, dtype: DType) -> MatMulSchedule {
+        MatMulSchedule::select_with_resources(
+            m,
+            n,
+            k,
+            dtype,
+            MatMulCapabilities {
+                tf32: true,
+                f16: true,
+                bf16: true,
+            },
+            MatMulPrecision::AllowTf32,
+            short_k_resources(),
+        )
+        .with_shared_layout(MatMulSharedLayout::Auto, short_k_resources())
+        .unwrap()
+    }
+
+    fn short_k_resources() -> MatMulResources {
+        MatMulResources {
+            shared_bytes_per_sm: 100 * 1024,
+            threads_per_sm: 1536,
+            ..MatMulResources::default()
+        }
+    }
+
+    #[test]
+    fn short_k_bf16_register_pipeline_matches_explicit_double_buffering() {
+        let resources = short_k_resources();
+        for (k, n) in [(64, 256), (64, 768), (64, 1024), (96, 768)] {
+            for orientations in [(false, false), (false, true)] {
+                let base = short_k_schedule(2048, k, n, DType::BF16)
+                    .with_operand_orientations(MatMulSharedLayout::Auto, orientations, resources)
+                    .unwrap();
+                let selected = base.with_pipeline(MatMulPipeline::Auto, true, true, resources);
+                let explicit =
+                    base.with_pipeline(MatMulPipeline::DoubleBuffered, true, true, resources);
+                assert_eq!(selected, explicit);
+                assert_eq!(selected.pipeline_stages, 2);
+                assert_eq!(selected.copy_bytes, 16);
+                assert_eq!(selected.async_operands, (true, true));
+                assert_eq!(selected.warp_fragments, (2, 2));
+            }
+        }
+    }
+
+    #[test]
+    fn short_k_bf16_pipeline_keeps_hybrid_tail_and_small_tile_fallbacks() {
+        let resources = short_k_resources();
+        for (m, k, n, dtype, active) in [
+            (2048, 64, 768, DType::BF16, (true, false)),
+            (2048, 64, 768, DType::BF16, (false, true)),
+            (2048, 64, 770, DType::BF16, (true, true)),
+            (2048, 65, 768, DType::BF16, (true, true)),
+            (256, 64, 768, DType::BF16, (true, true)),
+            (16, 64, 768, DType::BF16, (true, true)),
+            (2048, 64, 768, DType::F16, (true, true)),
+            (2048, 64, 768, DType::F32, (true, true)),
+        ] {
+            let selected = short_k_schedule(m, k, n, dtype).with_operand_pipeline(
+                MatMulPipeline::Auto,
+                true,
+                true,
+                active,
+                resources,
+            );
+            assert_eq!(
+                selected.pipeline_stages, 1,
+                "unexpected short pipeline for {m}x{k}x{n}, {dtype:?}, {active:?}"
+            );
+            assert_eq!(selected.async_operands, (false, false));
+        }
+    }
+
+    #[test]
+    fn short_k_bf16_pipeline_keeps_capability_alignment_and_resource_guards() {
+        let resources = short_k_resources();
+        let base = short_k_schedule(2048, 64, 768, DType::BF16);
+        for (policy, supports_async, contiguous, budget) in [
+            (MatMulPipeline::Synchronous, true, true, resources),
+            (MatMulPipeline::Auto, false, true, resources),
+            (MatMulPipeline::Auto, true, false, resources),
+            (
+                MatMulPipeline::Auto,
+                true,
+                true,
+                MatMulResources {
+                    shared_bytes_per_block: 32 * 1024,
+                    ..resources
+                },
+            ),
+            (
+                MatMulPipeline::Auto,
+                true,
+                true,
+                MatMulResources {
+                    shared_bytes_per_sm: 64 * 1024,
+                    ..resources
+                },
+            ),
+        ] {
+            let selected = base.with_pipeline(policy, supports_async, contiguous, budget);
+            assert_eq!(selected.pipeline_stages, 1);
+            assert_eq!(selected.async_operands, (false, false));
+        }
+        let constrained = MatMulSchedule::select_with_resources(
+            2048,
+            768,
+            64,
+            DType::BF16,
+            MatMulCapabilities {
+                tf32: true,
+                f16: true,
+                bf16: true,
+            },
+            MatMulPrecision::AllowTf32,
+            MatMulResources {
+                registers_per_sm: 32 * 1024,
+                ..resources
+            },
+        );
+        assert_eq!(constrained.warp_fragments, (1, 1));
+    }
+
+    #[test]
+    fn short_k_bf16_pipeline_keeps_unmeasured_register_geometries_synchronous() {
+        let resources = short_k_resources();
+        let mut base = short_k_schedule(2048, 64, 768, DType::BF16);
+        base.block_tile = MatMulTile {
+            m: 128,
+            n: 32,
+            k: 32,
+        };
+        base.warp_topology = (4, 1);
+        let base = base
+            .with_shared_layout(MatMulSharedLayout::Auto, resources)
+            .unwrap();
+        let explicit = base.with_pipeline(MatMulPipeline::DoubleBuffered, true, true, resources);
+        assert_eq!(explicit.pipeline_stages, 2);
+        assert_eq!(explicit.copy_bytes, 16);
+        assert_eq!(explicit.warp_fragments, (2, 2));
+        let selected = base.with_pipeline(MatMulPipeline::Auto, true, true, resources);
+        assert_eq!(selected.pipeline_stages, 1);
     }
 
     #[test]

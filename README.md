@@ -40,6 +40,11 @@ with long reduction axes. Those trees are repeatable for a fixed schedule but
 can round differently from strict mode. Half-storage convolution weight
 gradients retain serial accumulation.
 
+Forward and input-gradient convolutions with kernel area at most 121 use
+structured channel/row/column loops and hoisted plane offsets. This avoids
+repeated flat-index division while retaining product order and storage
+conversions; larger kernels retain the generic lowering.
+
 ## Operator fusion
 
 After rewriting the graph, we can apply operator fusion. This combines multiple operations into a single kernel. For example, the sequence of operations `A + B + C` can be fused into a single kernel that computes the sum of three tensors in one pass. This helps reduce memory bandwidth because the fused computation keeps the intermediate results in registers instead of writing them back to memory.

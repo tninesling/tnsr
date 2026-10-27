@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod bf16_tuning;
+mod convolution;
+use convolution::{lower_conv_transpose2d, lower_conv2d};
 mod matmul;
 mod scalar;
 use std::collections::{HashMap, HashSet};
@@ -1768,7 +1770,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
     }
 }
 
-fn lower_conv2d<'a>(
+fn lower_conv2d_serial<'a>(
     func: &mut Function<'a>,
     ctx: &mut LoweringContext<'a>,
     geometry: crate::tile::Conv2dGeometry,
@@ -1845,7 +1847,7 @@ fn lower_conv2d<'a>(
     store_param_f32_at(func, ctx, "output", tid, accumulator);
 }
 
-fn lower_conv_transpose2d<'a>(
+fn lower_conv_transpose2d_serial<'a>(
     func: &mut Function<'a>,
     ctx: &mut LoweringContext<'a>,
     geometry: crate::tile::Conv2dGeometry,

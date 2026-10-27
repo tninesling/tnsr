@@ -1930,6 +1930,10 @@ fn lower_conv2d_backward_weight<'a>(
     geometry: crate::tile::Conv2dGeometry,
     threads: u32,
 ) {
+    if threads == 1 {
+        convolution::lower_weight_gradient(func, ctx, geometry);
+        return;
+    }
     let global_tid = global_linear_tid(func);
     let tid = func.add_u64_register();
     let lane = func.add_u64_register();

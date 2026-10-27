@@ -2,6 +2,9 @@
 use super::*;
 use crate::tile::Conv2dGeometry;
 
+mod weight;
+pub(super) use weight::lower_weight_gradient;
+
 const MAX_SPECIALIZED_AREA: usize = 121;
 
 #[derive(Clone, Copy)]

@@ -7,6 +7,9 @@ use super::{DType, MatMulPlan, SharedLayout, TileLayout};
 pub enum MatMulPrecision {
     /// Use increasing-K scalar f32 accumulation for every storage dtype.
     StrictF32,
+    /// Keep f32 operands on ordered scalar accumulation while allowing native
+    /// FP16/BF16 tensor cores with f32 accumulation for half-storage operands.
+    NativeHalf,
     /// F32 storage uses three TF32 products (hi*hi + hi*lo + lo*hi) with f32 accumulation.
     /// Retains substantially more operand precision than a single TF32 product;
     /// accumulation order and rounding still differ from StrictF32.
@@ -390,7 +393,11 @@ impl MatMulSchedule {
                 m,
                 n,
                 k,
-                capabilities.tf32 && precision != MatMulPrecision::StrictF32,
+                capabilities.tf32
+                    && matches!(
+                        precision,
+                        MatMulPrecision::AllowTf32 | MatMulPrecision::Tf32x3
+                    ),
             ),
             _ => MatMulPlan::ScalarF32,
         };
@@ -569,6 +576,39 @@ mod tests {
             }
         );
         assert_eq!(constrained.warp_fragments, (1, 1));
+    }
+
+    #[test]
+    fn native_half_preserves_f32_and_gates_half_tensor_cores() {
+        for supported in [false, true] {
+            let capabilities = MatMulCapabilities {
+                tf32: true,
+                f16: supported,
+                bf16: supported,
+            };
+            for (dtype, native) in [
+                (DType::F32, MatMulPlan::ScalarF32),
+                (DType::F16, MatMulPlan::TensorCoreF16),
+                (DType::BF16, MatMulPlan::TensorCoreBF16),
+            ] {
+                let schedule = MatMulSchedule::select_for_dtype(
+                    128,
+                    128,
+                    128,
+                    dtype,
+                    capabilities,
+                    MatMulPrecision::NativeHalf,
+                );
+                assert_eq!(
+                    schedule.plan,
+                    if supported {
+                        native
+                    } else {
+                        MatMulPlan::ScalarF32
+                    }
+                );
+            }
+        }
     }
 
     #[test]

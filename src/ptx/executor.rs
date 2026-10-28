@@ -664,7 +664,10 @@ impl<D: CudaDType> PtxExecutor<D> {
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,
             self.target.supports_tf32()
-                && self.matmul_precision != crate::tile::MatMulPrecision::StrictF32,
+                && matches!(
+                    self.matmul_precision,
+                    crate::tile::MatMulPrecision::AllowTf32 | crate::tile::MatMulPrecision::Tf32x3
+                ),
             execution_plan.matmul_schedules(),
         );
         tile_graph.add_fusion_regions(execution_plan.regions())?;
@@ -2476,6 +2479,7 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
         crate::tile::MatMulPrecision::StrictF32 => 0,
         crate::tile::MatMulPrecision::AllowTf32 => 1,
         crate::tile::MatMulPrecision::Tf32x3 => 2,
+        crate::tile::MatMulPrecision::NativeHalf => 3,
     });
     signature.push(match matmul_shared_layout {
         MatMulSharedLayout::Auto => 0,

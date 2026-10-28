@@ -14,6 +14,34 @@ fn cuda_available() -> bool {
 }
 
 #[test]
+fn native_half_uses_bf16_mma_without_tf32_for_f32_regions() {
+    if !cuda_available() {
+        return;
+    }
+    let x = TensorExpr::input("x", vec![32, 32]);
+    let weight: TensorExpr<f32> = Parameter::new(vec![1.0078125; 1024], vec![32, 32]).into();
+    let bias: TensorExpr<f32> = Parameter::new(vec![0.125; 32], vec![32]).into();
+    let mixed = x.clone().linear_bf16(weight, bias).unwrap();
+    let f32_weight: TensorExpr<f32> = Parameter::new(vec![1.0001; 1024], vec![32, 32]).into();
+    let plain = x.matmul(f32_weight);
+    let mut graph = TensorGraph::new();
+    let mixed_output = graph.add_expr(&mixed, false);
+    let f32_output = graph.add_expr(&plain, false);
+    let mut gpu = MixedExecutor::new(&graph, MatMulPrecision::NativeHalf, true).unwrap();
+    assert!(gpu.info().bf16_tensor_core_programs > 0);
+    gpu.upload(HashMap::from([("x".into(), vec![1.0078125; 1024])]))
+        .unwrap();
+    gpu.run().unwrap();
+    // F32 accumulation and one final bias/output rounding differs from rounded
+    // BF16 products (32.5) and from a separately rounded BF16 matmul (32.5).
+    assert_eq!(gpu.read(mixed_output).unwrap(), vec![32.75; 1024]);
+    let expected = 32. * 1.0078125_f32 * 1.0001_f32;
+    for value in gpu.read(f32_output).unwrap() {
+        assert!((value - expected).abs() < 1e-5);
+    }
+}
+
+#[test]
 fn mixed_fused_linear_rounds_only_after_bias() {
     if !cuda_available() {
         return;

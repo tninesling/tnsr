@@ -10,6 +10,12 @@ The forty-five adapter now has an experimental opt-in mixed PPO path; see
 [complete PPO integration and measurements](training-mixed-ppo.md). F32 remains
 the default.
 
+`MatMulPrecision::NativeHalf` permits native FP16/BF16 tensor-core contractions
+with f32 accumulation while keeping f32 contractions on the strict scalar path.
+This supports selective mixed graphs without also enabling TF32. The policy is
+part of compilation signatures, so cached programs from another precision mode
+cannot be reused accidentally.
+
 ## Semantics
 
 Sources are f32. Views preserve their source dtype; arithmetic promotes to f32

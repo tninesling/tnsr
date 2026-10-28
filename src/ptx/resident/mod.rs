@@ -3,6 +3,9 @@ mod config;
 mod kernels;
 mod mixed;
 mod reduction;
+mod staging;
+#[cfg(test)]
+mod staging_tests;
 use super::types::{CudaDType, F32};
 use super::{PtxExecutor, PtxReductionMode};
 use crate::graph::{TensorGraph, TensorGraphNode, WithGrad};
@@ -27,6 +30,7 @@ struct ResidentParameter {
     storage: Arc<ParameterStorage<f32>>,
     revision: u64,
     weight: Arc<CudaSlice<f32>>,
+    staged_weight: Option<CudaSlice<f32>>,
     range: Range<usize>,
     group: usize,
 }
@@ -45,6 +49,7 @@ pub struct ResidentAdam {
     gradients: Arc<CudaSlice<f32>>,
     moment: CudaSlice<f32>,
     variance: CudaSlice<f32>,
+    staging: staging::Staging,
     padded_len: usize,
     norm: Reduction,
     health: Reduction,
@@ -153,6 +158,7 @@ impl ResidentAdam {
                 storage: storage.clone(),
                 revision: host.revision(),
                 weight,
+                staged_weight: None,
                 range: offset..end,
                 group,
             });
@@ -178,6 +184,7 @@ impl ResidentAdam {
         let norm = Reduction::new(stream.clone(), stream_gate.clone(), padded_len, true)?;
         let health = Reduction::new(stream.clone(), stream_gate.clone(), padded_len, false)?;
         let update_kernels = kernels::Kernels::compile(&device, ir)?;
+        let staging = staging::Staging::new(&stream, padded_len, groups.len())?;
         Ok(Self {
             device,
             stream,
@@ -189,6 +196,7 @@ impl ResidentAdam {
             gradients,
             moment,
             variance,
+            staging,
             padded_len,
             norm,
             health,
@@ -372,32 +380,29 @@ impl ResidentAdam {
         let exponent =
             i32::try_from(next_step).context("Adam bias-correction timestep exceeds i32")?;
         let stream = self.stream.clone();
-        let settings = self
-            .groups
-            .iter()
-            .map(|g| {
-                stream
-                    .memcpy_stod(&[
-                        g.learning_rate,
-                        g.beta1,
-                        g.beta2,
-                        1.0 - g.beta1,
-                        1.0 - g.beta2,
-                        1.0 - g.beta1.powi(exponent),
-                        1.0 - g.beta2.powi(exponent),
-                        g.epsilon,
-                        g.weight_decay,
-                        scale,
-                    ])
-                    .map_err(Into::into)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let mut next_m = stream.alloc_zeros::<f32>(self.padded_len)?;
-        let mut next_v = stream.alloc_zeros::<f32>(self.padded_len)?;
-        let mut health = stream.alloc_zeros::<f32>(self.padded_len)?;
-        let mut weights = Vec::new();
+        for (g, settings) in self.groups.iter().zip(&mut self.staging.settings) {
+            stream.memcpy_htod(
+                &[
+                    g.learning_rate,
+                    g.beta1,
+                    g.beta2,
+                    1.0 - g.beta1,
+                    1.0 - g.beta2,
+                    1.0 - g.beta1.powi(exponent),
+                    1.0 - g.beta2.powi(exponent),
+                    g.epsilon,
+                    g.weight_decay,
+                    scale,
+                ],
+                settings,
+            )?;
+        }
+        let next_m = &mut self.staging.moment;
+        let next_v = &mut self.staging.variance;
+        let health = Arc::get_mut(&mut self.staging.health)
+            .context("resident health staging still borrowed")?;
         self.kernel_launches += self.parameters.len();
-        for parameter in &self.parameters {
+        for parameter in &mut self.parameters {
             ensure!(
                 parameter.storage.revision()? == parameter.revision,
                 "parameter changed during resident update"
@@ -409,7 +414,13 @@ impl ResidentAdam {
             let mut nm = next_m.slice_mut(parameter.range.clone());
             let mut nv = next_v.slice_mut(parameter.range.clone());
             let mut status = health.slice_mut(parameter.range.clone());
-            let mut weight = stream.alloc_zeros::<f32>(len)?;
+            if parameter.staged_weight.is_none() {
+                parameter.staged_weight = Some(stream.alloc_zeros::<f32>(len)?);
+            }
+            let weight = parameter
+                .staged_weight
+                .as_mut()
+                .context("resident weight staging absent")?;
             let id = self.update_ids[&len];
             let function = self
                 .update_kernels
@@ -421,22 +432,27 @@ impl ResidentAdam {
                 .arg(&g)
                 .arg(&m)
                 .arg(&v)
-                .arg(&settings[parameter.group])
-                .arg(&mut weight)
+                .arg(&self.staging.settings[parameter.group])
+                .arg(weight)
                 .arg(&mut nm)
                 .arg(&mut nv)
                 .arg(&mut status);
             // SAFETY: all operands cover exactly len f32 elements. Output weights
             // and state are staged in distinct allocations/disjoint parameter ranges.
             unsafe { launch.launch(LaunchConfig::for_num_elems(u32::try_from(len)?)) }?;
-            weights.push(Arc::new(weight));
         }
         ensure!(
-            self.health.run(Arc::new(health))? == 0.0,
+            self.health.run(self.staging.health.clone())? == 0.0,
             "Adam produced nonfinite parameters/moments"
         );
         self.kernel_launches += self.health.executor.execution_metrics().kernel_launches;
-        for (parameter, weight) in self.parameters.iter_mut().zip(weights) {
+        for parameter in &mut self.parameters {
+            let weight = Arc::new(
+                parameter
+                    .staged_weight
+                    .take()
+                    .context("resident weight staging absent after update")?,
+            );
             let stream = self.readback_stream.clone();
             let latest = weight.clone();
             parameter.revision = parameter.storage.publish_device(
@@ -449,10 +465,14 @@ impl ResidentAdam {
                     Ok(host)
                 }),
             )?;
-            parameter.weight = weight;
+            let previous = std::mem::replace(&mut parameter.weight, weight);
+            // A lazy reader or executor may retain an immutable old version.
+            // Only recycle exclusive allocations. try_unwrap also permits
+            // weak replay identities, which must get a fresh Arc on reuse.
+            parameter.staged_weight = Arc::try_unwrap(previous).ok();
         }
-        self.moment = next_m;
-        self.variance = next_v;
+        std::mem::swap(&mut self.moment, &mut self.staging.moment);
+        std::mem::swap(&mut self.variance, &mut self.staging.variance);
         self.timestep = next_step;
         self.last_scale = scale;
         self.active = false;

@@ -76,6 +76,7 @@ pub struct MatMulTile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatMulAccumulatorLayout {
     ThreadScalar,
+    ThreadArray { elements: usize },
     WarpFragment,
 }
 
@@ -322,6 +323,9 @@ impl MatMulSchedule {
     pub fn accumulator_tile_layout(&self) -> TileLayout {
         match self.accumulator_layout {
             MatMulAccumulatorLayout::ThreadScalar => TileLayout::ThreadScalar,
+            MatMulAccumulatorLayout::ThreadArray { elements } => {
+                TileLayout::ThreadArray { elements }
+            }
             MatMulAccumulatorLayout::WarpFragment => TileLayout::WarpAccumulator {
                 operand_dtype: self.operand_dtype,
                 block_width: self.block_threads.0,
@@ -398,7 +402,18 @@ impl MatMulSchedule {
         let tensor_core = plan != MatMulPlan::ScalarF32;
         // Keep small and narrow work on the original tile. Larger tiles reuse
         // operands across two or four computing warps without growing the block.
-        let block_tile = if plan == MatMulPlan::TensorCoreBF16 && m >= 2048 && n >= 256 && k >= 64 {
+        let register_tiled = plan == MatMulPlan::ScalarF32
+            && storage_dtype == DType::F32
+            && m >= 128
+            && n >= 256
+            && k >= 128;
+        let block_tile = if register_tiled {
+            MatMulTile {
+                m: 32,
+                n: 32,
+                k: 16,
+            }
+        } else if plan == MatMulPlan::TensorCoreBF16 && m >= 2048 && n >= 256 && k >= 64 {
             MatMulTile {
                 m: 64,
                 n: 64,
@@ -455,7 +470,11 @@ impl MatMulSchedule {
             } else {
                 MatMulTile { m: 1, n: 1, k: 1 }
             },
-            block_threads: if expanded { (32, 8, 1) } else { (16, 16, 1) },
+            block_threads: if expanded && tensor_core {
+                (32, 8, 1)
+            } else {
+                (16, 16, 1)
+            },
             warp_topology: if multi_fragment {
                 (2, 2)
             } else if tensor_core {
@@ -482,6 +501,8 @@ impl MatMulSchedule {
             storage_dtype,
             accumulator_layout: if tensor_core {
                 MatMulAccumulatorLayout::WarpFragment
+            } else if block_tile.m * block_tile.n == 1024 {
+                MatMulAccumulatorLayout::ThreadArray { elements: 4 }
             } else {
                 MatMulAccumulatorLayout::ThreadScalar
             },
@@ -1050,5 +1071,134 @@ mod tests {
                 assert_eq!(fallback.async_operands, (false, false));
             }
         }
+    }
+    #[test]
+    fn scalar_register_tiles_respect_precision_shapes_and_resource_fallbacks() {
+        let caps = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        let resources = MatMulResources::default();
+        let selected = MatMulSchedule::select_with_resources(
+            129,
+            257,
+            129,
+            DType::F32,
+            caps,
+            MatMulPrecision::StrictF32,
+            resources,
+        );
+        assert_eq!(
+            selected.accumulator_tile_layout(),
+            TileLayout::ThreadArray { elements: 4 }
+        );
+        assert_eq!(selected.block_threads, (16, 16, 1));
+        for (m, n, k, dtype, precision, budget) in [
+            (
+                127,
+                257,
+                129,
+                DType::F32,
+                MatMulPrecision::StrictF32,
+                resources,
+            ),
+            (
+                129,
+                255,
+                129,
+                DType::F32,
+                MatMulPrecision::StrictF32,
+                resources,
+            ),
+            (
+                129,
+                257,
+                127,
+                DType::F32,
+                MatMulPrecision::StrictF32,
+                resources,
+            ),
+            (
+                129,
+                257,
+                129,
+                DType::F32,
+                MatMulPrecision::AllowTf32,
+                resources,
+            ),
+            (
+                129,
+                257,
+                129,
+                DType::BF16,
+                MatMulPrecision::StrictF32,
+                resources,
+            ),
+            (
+                129,
+                257,
+                129,
+                DType::F16,
+                MatMulPrecision::StrictF32,
+                resources,
+            ),
+            (
+                129,
+                257,
+                129,
+                DType::F32,
+                MatMulPrecision::StrictF32,
+                MatMulResources {
+                    shared_bytes_per_block: 4096,
+                    ..resources
+                },
+            ),
+        ] {
+            let fallback =
+                MatMulSchedule::select_with_resources(m, n, k, dtype, caps, precision, budget);
+            assert!(!matches!(
+                fallback.accumulator_tile_layout(),
+                TileLayout::ThreadArray { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn register_array_extraction_rejects_wrong_slots_and_scalar_consumption() {
+        use crate::tile::{MatMulLayout, TileIRBuilder};
+        for index in [0, 3, 4] {
+            let mut b = TileIRBuilder::new();
+            b.start_kernel("register_array_validation");
+            let array = b.alloc_register_array(32, 32, 4);
+            let scalar = b.alloc_register(DType::F32, 1, 1);
+            b.extract_register(scalar, array, index);
+            assert_eq!(b.finish().validate_layouts().is_ok(), index < 4);
+        }
+        let mut b = TileIRBuilder::new();
+        b.start_kernel("array_scalar_rejection");
+        let array = b.alloc_register_array(32, 32, 4);
+        let scalar = b.alloc_register(DType::F32, 1, 1);
+        b.add(scalar, array, scalar);
+        assert!(b.finish().validate_layouts().is_err());
+        let schedule = MatMulSchedule::select(
+            129,
+            257,
+            129,
+            MatMulCapabilities {
+                tf32: true,
+                f16: true,
+                bf16: true,
+            },
+            MatMulPrecision::StrictF32,
+        );
+        let mut b = TileIRBuilder::new();
+        b.start_kernel("array_matrix_layout");
+        let a = b.alloc_shared(DType::F32, 32, 16);
+        let rhs = b.alloc_shared(DType::F32, 16, 32);
+        let dest = b.alloc_register_array(32, 32, 4);
+        b.zero(dest);
+        b.matmul(dest, a, rhs, MatMulLayout::NN, schedule);
+        assert!(b.finish().validate_layouts().is_ok());
     }
 }

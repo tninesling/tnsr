@@ -571,8 +571,12 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
 
             match space {
                 MemorySpace::Register => {
-                    // Allocate register for this tile variable
-                    ctx.get_or_alloc_reg(func, *var);
+                    if let TileLayout::ThreadArray { elements } = layout {
+                        let registers = (0..*elements).map(|_| func.add_f32_register()).collect();
+                        ctx.fragment_regs.insert(*var, registers);
+                    } else {
+                        ctx.get_or_alloc_reg(func, *var);
+                    }
                 }
                 MemorySpace::Fragment => {
                     let count = if let TileLayout::WarpAccumulator { warp_fragments, .. } = layout {
@@ -1046,6 +1050,13 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 lower_tensor_core_matmul(func, ctx, *dest, *a, *b, schedule);
                 return;
             }
+            if matches!(
+                schedule.accumulator_layout,
+                crate::tile::MatMulAccumulatorLayout::ThreadArray { .. }
+            ) {
+                matmul::lower_register_tiled_scalar_matmul(func, ctx, *dest, *a, *b, schedule);
+                return;
+            }
             // Matrix multiply: each thread computes one output element
             // Thread at (ty, tx) computes C[ty][tx] = sum over k of A[ty][k] * B[k][tx]
 
@@ -1217,6 +1228,11 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
 
             // Loop end label
             func.add_inst(Inst::Label(loop_end));
+        }
+        Stmt::ExtractRegister { dest, src, index } => {
+            let value = ctx.fragment_regs[src][*index].clone();
+            let output = ctx.get_or_alloc_reg(func, *dest);
+            func.add_inst(Inst::mov_f32(output, value));
         }
         Stmt::ConvertLayout {
             dest,

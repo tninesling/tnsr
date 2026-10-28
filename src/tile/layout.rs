@@ -65,6 +65,9 @@ fn validate(
                 );
                 let valid = match (space, layout) {
                     (MemorySpace::Register, TileLayout::ThreadScalar) => true,
+                    (MemorySpace::Register, TileLayout::ThreadArray { elements }) => {
+                        *elements == 4 && *dtype == DType::F32 && *rows == 32 && *cols == 32
+                    }
                     (MemorySpace::Shared, TileLayout::Shared(layout)) => {
                         layout.validate(*rows, *cols, *dtype)?;
                         true
@@ -229,9 +232,23 @@ fn validate(
                 }
                 let dest = get(tiles, dest)?;
                 let expected = schedule.accumulator_tile_layout();
+                if let TileLayout::ThreadArray { elements } = expected {
+                    anyhow::ensure!(
+                        elements == 4
+                            && schedule.storage_dtype == DType::F32
+                            && schedule.block_tile.m == 32
+                            && schedule.block_tile.n == 32
+                            && schedule.block_tile.k == 16
+                            && schedule.block_threads == (16, 16, 1),
+                        "unsupported thread accumulator mapping"
+                    );
+                }
                 anyhow::ensure!(
                     (schedule.plan == MatMulPlan::ScalarF32)
-                        == (expected == TileLayout::ThreadScalar),
+                        == matches!(
+                            expected,
+                            TileLayout::ThreadScalar | TileLayout::ThreadArray { .. }
+                        ),
                     "matmul arithmetic and accumulator layout are incompatible"
                 );
                 anyhow::ensure!(
@@ -240,6 +257,20 @@ fn validate(
                         && dest.rows == schedule.block_tile.m
                         && dest.cols == schedule.block_tile.n,
                     "matmul accumulator layout does not match its schedule"
+                );
+            }
+            Stmt::ExtractRegister { dest, src, index } => {
+                let (dest, src) = (get(tiles, dest)?, get(tiles, src)?);
+                let TileLayout::ThreadArray { elements } = src.layout else {
+                    anyhow::bail!("register extraction requires a thread array");
+                };
+                anyhow::ensure!(
+                    *index < elements
+                        && dest.layout == TileLayout::ThreadScalar
+                        && dest.dtype == DType::F32
+                        && dest.rows == 1
+                        && dest.cols == 1,
+                    "invalid register array extraction"
                 );
             }
             Stmt::ConvertLayout {

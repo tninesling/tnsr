@@ -81,6 +81,24 @@ impl TileIRBuilder {
         var
     }
 
+    pub fn alloc_register_array(&mut self, rows: usize, cols: usize, elements: usize) -> TileVar {
+        let var = TileVar(self.next_var);
+        self.next_var += 1;
+        self.stmts.push(Stmt::AllocTile {
+            var,
+            space: MemorySpace::Register,
+            layout: TileLayout::ThreadArray { elements },
+            dtype: DType::F32,
+            rows,
+            cols,
+        });
+        var
+    }
+
+    pub fn extract_register(&mut self, dest: TileVar, src: TileVar, index: usize) {
+        self.stmts.push(Stmt::ExtractRegister { dest, src, index });
+    }
+
     pub fn alloc_fragment(
         &mut self,
         dtype: DType,

@@ -159,6 +159,13 @@ pub enum Stmt {
         coordinates: Option<(Expr, Expr)>,
     },
 
+    /// Extract one thread-owned register-array element into a scalar.
+    ExtractRegister {
+        dest: TileVar,
+        src: TileVar,
+        index: usize,
+    },
+
     /// Gather rows from a contiguous [vocabulary, width] table.
     Embedding {
         vocabulary: usize,
@@ -347,6 +354,10 @@ pub struct TileVar(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TileLayout {
     ThreadScalar,
+    /// Independent scalar accumulators owned by each thread.
+    ThreadArray {
+        elements: usize,
+    },
     Shared(SharedLayout),
     WarpAccumulator {
         operand_dtype: DType,

@@ -809,7 +809,12 @@ impl TileGraph {
 
         // Allocate register tiles for computation
         let c_reg = match plan {
-            MatMulPlan::ScalarF32 => builder.alloc_register(DType::F32, tile_m, tile_n),
+            MatMulPlan::ScalarF32 => match schedule.accumulator_layout {
+                super::MatMulAccumulatorLayout::ThreadArray { elements } => {
+                    builder.alloc_register_array(tile_m, tile_n, elements)
+                }
+                _ => builder.alloc_register(DType::F32, tile_m, tile_n),
+            },
             MatMulPlan::TensorCoreTf32
             | MatMulPlan::TensorCoreTf32x3
             | MatMulPlan::TensorCoreF16
@@ -975,6 +980,13 @@ impl TileGraph {
             let matmul_element = if let Some(c_smem) = c_smem {
                 let scalar = builder.alloc_register(DType::F32, 1, 1);
                 builder.extract_scalar(scalar, c_smem, (local_row.clone(), local_col.clone()));
+                scalar
+            } else if matches!(
+                schedule.accumulator_layout,
+                super::MatMulAccumulatorLayout::ThreadArray { .. }
+            ) {
+                let scalar = builder.alloc_register(DType::F32, 1, 1);
+                builder.extract_register(scalar, c_reg, round);
                 scalar
             } else {
                 c_reg
@@ -1499,7 +1511,7 @@ fn tile_thread_coordinates(
     transposed: bool,
     round: usize,
 ) -> (Expr, Expr) {
-    if schedule.block_threads == (16, 16, 1) {
+    if schedule.block_threads == (16, 16, 1) && rows == 16 && cols == 16 {
         return staging_coordinates(transposed);
     }
     let width = if transposed { rows } else { cols };

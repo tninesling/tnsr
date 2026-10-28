@@ -127,3 +127,89 @@ pub(super) fn lower_tiled_tensor_core_matmul<'a>(
     }
     func.add_inst(Inst::Label(done));
 }
+
+/// Four independent increasing-K sums per thread, with a shared RHS load.
+/// The surrounding IR owns staging, barriers, tail predicates and epilogues.
+pub(super) fn lower_register_tiled_scalar_matmul<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    dest: TileVar,
+    a: TileVar,
+    b: TileVar,
+    schedule: &crate::tile::MatMulSchedule,
+) {
+    let accumulators = ctx.fragment_regs[&dest].clone();
+    let a = ctx.reg_to_shared.get(&a).copied().unwrap_or(a);
+    let b = ctx.reg_to_shared.get(&b).copied().unwrap_or(b);
+    let linear =
+        Expr::ThreadIdx(Dim::Y) * schedule.block_threads.0 as usize + Expr::ThreadIdx(Dim::X);
+    let row = lower_expr(
+        func,
+        ctx,
+        &Expr::FloorDiv(Box::new(linear.clone()), schedule.block_tile.n),
+    );
+    let col = lower_expr(
+        func,
+        ctx,
+        &Expr::Mod(Box::new(linear), schedule.block_tile.n),
+    );
+    let row_step = schedule.thread_count() / schedule.block_tile.n;
+    let mut rows = Vec::new();
+    let mut a_bases = Vec::new();
+    for index in 0..accumulators.len() {
+        let coordinate = func.add_u64_register();
+        func.add_inst(Inst::add_u64(
+            coordinate.clone(),
+            row.clone(),
+            Operand::imm_u64((index * row_step) as u64),
+        ));
+        let base = shared_address(func, ctx, a, coordinate.clone(), Operand::imm_u64(0));
+        rows.push(coordinate);
+        a_bases.push(base);
+    }
+    let b_base = shared_address(func, ctx, b, Operand::imm_u64(0), col.clone());
+    let a_layout = shared_layout(ctx, a);
+    let b_layout = shared_layout(ctx, b);
+    let reduction = begin_counted_loop(func, ctx, "register_matmul", schedule.block_tile.k);
+    let k = reduction.counter.clone();
+    let b_address = if b_layout.xor_mask == 0 && !b_layout.column_major {
+        let offset = multiply_u64(func, k.clone(), b_layout.row_stride * 4);
+        let address = func.add_u64_register();
+        func.add_inst(Inst::add_u64(address.clone(), b_base, offset));
+        address
+    } else {
+        shared_address(func, ctx, b, k.clone(), col)
+    };
+    let b_value = func.add_f32_register();
+    load_shared_as_f32(func, DType::F32, b_value.clone(), b_address);
+    let a_offset = multiply_u64(func, k.clone(), 4);
+    let a_value = func.add_f32_register();
+    let product = func.add_f32_register();
+    for (index, accumulator) in accumulators.into_iter().enumerate() {
+        let address = if a_layout.xor_mask == 0 && !a_layout.column_major {
+            let address = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                address.clone(),
+                a_bases[index].clone(),
+                a_offset.clone(),
+            ));
+            address
+        } else {
+            shared_address(func, ctx, a, rows[index].clone(), k.clone())
+        };
+        load_shared_as_f32(func, DType::F32, a_value.clone(), address);
+        // Keep the original multiply followed by add for each output. No
+        // reassociation, split-K or precision conversion is introduced.
+        func.add_inst(Inst::mul_f32(
+            product.clone(),
+            a_value.clone(),
+            b_value.clone(),
+        ));
+        func.add_inst(Inst::add_f32(
+            accumulator.clone(),
+            accumulator,
+            product.clone(),
+        ));
+    }
+    end_counted_loop(func, reduction);
+}

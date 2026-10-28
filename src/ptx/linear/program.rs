@@ -271,6 +271,18 @@ impl<D: CudaDType> Program<D> {
                             step.shape.iter().product::<usize>(),
                         )?))
                 }
+                PtxPlanAction::Kernel
+                    if matches!(
+                        graph[step.node],
+                        TensorGraphNode::IndexedCrossEntropyBackward { .. }
+                    ) =>
+                {
+                    executor
+                        .indexed_loss_row_launch_config(step.node, step.shape.iter().product())?
+                        .unwrap_or(crate::ptx::target::pointwise_launch_config(u32::try_from(
+                            step.shape.iter().product::<usize>(),
+                        )?))
+                }
                 PtxPlanAction::Kernel | PtxPlanAction::PointwiseRegion(_) => {
                     crate::ptx::target::pointwise_launch_config(u32::try_from(
                         step.shape.iter().product::<usize>(),

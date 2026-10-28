@@ -397,6 +397,17 @@ impl<D: CudaDType> PtxExecutor<D> {
         }))
     }
 
+    pub(crate) fn indexed_loss_row_launch_config(
+        &self,
+        node: petgraph::graph::NodeIndex,
+        len: usize,
+    ) -> Result<Option<LaunchConfig>> {
+        self.ptx_graph
+            .as_ref()
+            .context("missing compiled PTX graph")?
+            .indexed_loss_row_launch(node, len)
+    }
+
     /// Describe the current physical PTX execution plan.
     pub fn describe_plan<G>(&self, graph: &TensorGraph<D::HostType, G>) -> Result<String> {
         let supplied_signature = graph_compilation_signature(
@@ -1902,8 +1913,13 @@ impl<D: CudaDType> PtxExecutor<D> {
                         launcher.arg(grad_output.as_ref());
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
-                        unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
-                            .context("PTX indexed_cross_entropy_backward kernel launch failed")?;
+                        unsafe {
+                            launcher.launch(
+                                self.indexed_loss_row_launch_config(*node_idx, output_len)?
+                                    .unwrap_or(LaunchConfig::for_num_elems(launch_len)),
+                            )
+                        }
+                        .context("PTX indexed_cross_entropy_backward kernel launch failed")?;
                     }
                     output
                 }

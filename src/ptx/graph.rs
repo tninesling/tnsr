@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod bf16_tuning;
 mod convolution;
+mod indexed_loss;
 use convolution::{lower_conv_transpose2d, lower_conv2d};
 mod matmul;
 mod scalar;
@@ -26,6 +27,7 @@ pub struct PtxGraph {
     physical_nodes: Option<HashSet<NodeIndex>>,
     target: PtxTarget,
     conv_weight_threads: HashMap<NodeIndex, u32>,
+    indexed_loss_rows: HashMap<NodeIndex, indexed_loss::RowSchedule>,
     // Only entry names differ between these otherwise identical PTX functions.
     kernel_aliases: HashMap<String, String>,
     #[allow(dead_code)]
@@ -112,6 +114,25 @@ impl PtxGraph {
         self.conv_weight_threads.get(&node).copied().unwrap_or(1)
     }
 
+    pub(crate) fn indexed_loss_row_launch(
+        &self,
+        node: NodeIndex,
+        len: usize,
+    ) -> anyhow::Result<Option<cudarc::driver::LaunchConfig>> {
+        let Some(schedule) = self.indexed_loss_rows.get(&node) else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            len == schedule.rows as usize * schedule.vocabulary,
+            "Indexed cross entropy row schedule/output extent mismatch"
+        );
+        Ok(Some(cudarc::driver::LaunchConfig {
+            grid_dim: (schedule.rows, 1, 1),
+            block_dim: (indexed_loss::ROW_THREADS, 1, 1),
+            shared_mem_bytes: 0,
+        }))
+    }
+
     pub(crate) fn region_kernel_name(&self, region_id: usize) -> Option<&str> {
         self.region_functions
             .iter()
@@ -166,6 +187,10 @@ impl From<TileGraph> for PtxGraph {
                         _ => None,
                     })
             })
+            .collect();
+        let indexed_loss_rows = tile_nodes
+            .node_indices()
+            .filter_map(|node| indexed_loss::schedule_for_ir(&tile_nodes[node]).map(|s| (node, s)))
             .collect();
         let graph = tile_nodes.map_owned(
             |node_idx, tile_ir| {
@@ -235,6 +260,7 @@ impl From<TileGraph> for PtxGraph {
             physical_nodes,
             target: PtxTarget::sm80(),
             conv_weight_threads,
+            indexed_loss_rows,
             kernel_aliases: HashMap::new(),
             arena,
         };
@@ -244,10 +270,19 @@ impl From<TileGraph> for PtxGraph {
 }
 
 fn tile_ir_to_function<'a>(
-    tile_ir: TileIR,
+    mut tile_ir: TileIR,
     arena: &'a bumpalo::Bump,
     node_index: usize,
 ) -> Function<'a> {
+    let indexed_loss_rows = indexed_loss::schedule_for_ir(&tile_ir);
+    if indexed_loss_rows.is_some() {
+        // The row launch owns exactly one valid row per block. Every lane must
+        // reach the broadcast barrier, including vocabulary-tail lanes.
+        tile_ir
+            .body
+            .stmts
+            .retain(|s| !matches!(s, Stmt::BoundsCheck { .. }));
+    }
     // Allocate kernel name in arena with node index suffix for uniqueness
     let kernel_name = bumpalo::format!(in arena, "{}_{}", tile_ir.kernel_name, node_index);
     let kernel_name_str = kernel_name.into_bump_str();
@@ -256,6 +291,7 @@ fn tile_ir_to_function<'a>(
 
     // Create lowering context to track tile variable mappings
     let mut ctx = LoweringContext::new(arena);
+    ctx.indexed_loss_rows = indexed_loss_rows;
 
     // Add parameters as u64 pointers and store their loaded addresses
     for param in &tile_ir.params {
@@ -307,6 +343,7 @@ struct LoweringContext<'a> {
     reg_to_shared: HashMap<TileVar, TileVar>,
     /// Counter for generating unique labels
     label_counter: usize,
+    indexed_loss_rows: Option<indexed_loss::RowSchedule>,
     return_label: &'a str,
 }
 
@@ -327,6 +364,7 @@ impl<'a> LoweringContext<'a> {
             fragment_regs: HashMap::new(),
             reg_to_shared: HashMap::new(),
             label_counter: 0,
+            indexed_loss_rows: None,
             return_label,
         }
     }
@@ -1380,8 +1418,16 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
         }
         Stmt::IndexedCrossEntropyBackward {
             vocabulary,
-            row_count: _,
+            row_count,
         } => {
+            if ctx.indexed_loss_rows.is_some() {
+                debug_assert_eq!(
+                    ctx.indexed_loss_rows.map(|s| s.rows as usize),
+                    Some(*row_count)
+                );
+                indexed_loss::lower_backward(func, ctx, *vocabulary);
+                return;
+            }
             let tid = global_linear_tid(func);
             let row = func.add_u64_register();
             func.add_inst(Inst::div_u64(

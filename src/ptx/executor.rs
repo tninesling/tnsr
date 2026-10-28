@@ -1843,8 +1843,13 @@ impl<D: CudaDType> PtxExecutor<D> {
                         }
                         launcher.arg(&mut output);
                         self.record_kernel_launch();
-                        unsafe { launcher.launch(LaunchConfig::for_num_elems(launch_len)) }
-                            .context("PTX indexed_cross_entropy kernel launch failed")?;
+                        unsafe {
+                            launcher.launch(
+                                self.indexed_loss_row_launch_config(*node_idx, row_count)?
+                                    .unwrap_or(LaunchConfig::for_num_elems(launch_len)),
+                            )
+                        }
+                        .context("PTX indexed_cross_entropy kernel launch failed")?;
                     }
                     output
                 }

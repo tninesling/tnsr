@@ -167,3 +167,142 @@ fn row_program_checks_f32_and_half_bound_launches_with_changed_indices() {
         }
     }
 }
+
+#[test]
+fn forward_row_launch_tracks_output_extent_and_physical_dtype() {
+    for vocabulary in [255, 256, 257, 4096, 65537] {
+        let mut g = TensorGraph::<f32>::new();
+        let x = g.graph.add_node(TensorGraphNode::Input {
+            name: "x",
+            shape: vec![33, vocabulary],
+        });
+        let t = g.graph.add_node(TensorGraphNode::Input {
+            name: "t",
+            shape: vec![33],
+        });
+        let out = g
+            .graph
+            .add_node(TensorGraphNode::IndexedCrossEntropy { shape: vec![33] });
+        g.graph.add_edge(x, out, 0);
+        g.graph.add_edge(t, out, 1);
+        let ptx = PtxGraph::from(TileGraph::from_graph(&g));
+        let config = ptx.indexed_loss_row_launch(out, 33).unwrap();
+        assert_eq!(config.is_some(), (256..=65536).contains(&vocabulary));
+        assert!(!ptx.to_ptx().contains("bar.sync"));
+        if let Some(c) = config {
+            assert_eq!(c.grid_dim, (33, 1, 1));
+            assert_eq!(c.block_dim, (32, 1, 1));
+            assert!(ptx.indexed_loss_row_launch(out, 34).is_err());
+        }
+        for name in ["logits", "output"] {
+            for dtype in [DType::BF16, DType::F16] {
+                let mut tiles = TileGraph::from_graph(&g);
+                tiles.graph[out]
+                    .params
+                    .iter_mut()
+                    .find(|p| p.name == name)
+                    .unwrap()
+                    .dtype = dtype;
+                assert!(
+                    PtxGraph::from(tiles)
+                        .indexed_loss_row_launch(out, 33)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn forward_row_program_reuses_exact_targets_with_changed_feeds() {
+    use crate::ptx::F32 as StorageF32;
+    use crate::ptx::linear::program::{Program, binding};
+    use crate::ptx::linear::{Binding, Buffer};
+    use cudarc::driver::{CudaContext, DevicePtr};
+    let device = match CudaContext::new(0) {
+        Ok(v) => v,
+        Err(error) => {
+            assert_ne!(
+                std::env::var("TNSR_REQUIRE_CUDA").as_deref(),
+                Ok("1"),
+                "{error}"
+            );
+            return;
+        }
+    };
+    let stream = device.default_stream();
+    let mut g = TensorGraph::<f32>::new();
+    let x = g.graph.add_node(TensorGraphNode::Input {
+        name: "x",
+        shape: vec![3, 257],
+    });
+    let t = g.graph.add_node(TensorGraphNode::IndexSource {
+        source: crate::tensor::IndexTensor::input("t", vec![3]),
+    });
+    let out = g
+        .graph
+        .add_node(TensorGraphNode::IndexedCrossEntropy { shape: vec![3] });
+    g.graph.add_edge(x, out, 0);
+    g.graph.add_edge(t, out, 1);
+    let mut logits = Buffer::F32(stream.alloc_zeros::<f32>(3 * 257).unwrap());
+    let mut targets = stream.memcpy_stod(&[0_u32, 256, 3]).unwrap();
+    let output = Buffer::F32(stream.alloc_zeros::<f32>(3).unwrap());
+    let program = Program::<StorageF32>::new_bound(
+        &stream,
+        g,
+        HashMap::from([
+            (x, binding(&logits, &stream)),
+            (
+                t,
+                Binding {
+                    pointer: targets.device_ptr(&stream).0,
+                    len: 3,
+                    dtype: DType::U32,
+                },
+            ),
+        ]),
+        Some(binding(&output, &stream)),
+        crate::tile::MatMulPrecision::StrictF32,
+    )
+    .unwrap();
+    assert_eq!(program.kernels.len(), 1);
+    assert_eq!(program.kernels[0].config.grid_dim, (3, 1, 1));
+    assert_eq!(program.kernels[0].config.block_dim, (32, 1, 1));
+    for feed in 0..2 {
+        let values: Vec<f32> = (0..3 * 257)
+            .map(|i| ((i * 7 + feed * 13) % 257) as f32 / 64.0)
+            .collect();
+        let indices = if feed == 0 {
+            [0_u32, 256, 3]
+        } else {
+            [256, 0, 42]
+        };
+        if let Buffer::F32(v) = &mut logits {
+            stream.memcpy_htod(&values, v).unwrap();
+        }
+        stream.memcpy_htod(&indices, &mut targets).unwrap();
+        for kernel in &program.kernels {
+            kernel.run(&stream).unwrap();
+        }
+        stream.synchronize().unwrap();
+        if let Buffer::F32(v) = &output {
+            let actual = stream.memcpy_dtov(v).unwrap();
+            for r in 0..3 {
+                let row = &values[r * 257..(r + 1) * 257];
+                let maximum = row
+                    .iter()
+                    .copied()
+                    .map(f64::from)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let expected = maximum - f64::from(row[indices[r] as usize])
+                    + row
+                        .iter()
+                        .map(|&v| (f64::from(v) - maximum).exp())
+                        .sum::<f64>()
+                        .ln();
+                assert!((f64::from(actual[r]) - expected).abs() < 2e-5);
+            }
+        }
+    }
+}

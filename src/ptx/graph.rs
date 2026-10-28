@@ -123,12 +123,12 @@ impl PtxGraph {
             return Ok(None);
         };
         anyhow::ensure!(
-            len == schedule.rows as usize * schedule.vocabulary,
+            len == schedule.output_len,
             "Indexed cross entropy row schedule/output extent mismatch"
         );
         Ok(Some(cudarc::driver::LaunchConfig {
             grid_dim: (schedule.rows, 1, 1),
-            block_dim: (indexed_loss::ROW_THREADS, 1, 1),
+            block_dim: (schedule.threads, 1, 1),
             shared_mem_bytes: 0,
         }))
     }
@@ -276,8 +276,8 @@ fn tile_ir_to_function<'a>(
 ) -> Function<'a> {
     let indexed_loss_rows = indexed_loss::schedule_for_ir(&tile_ir);
     if indexed_loss_rows.is_some() {
-        // The row launch owns exactly one valid row per block. Every lane must
-        // reach the broadcast barrier, including vocabulary-tail lanes.
+        // The row launch owns exactly one valid row per block. Backward lanes
+        // must all reach the broadcast barrier, including vocabulary tails.
         tile_ir
             .body
             .stmts
@@ -1396,7 +1396,12 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             vocabulary,
             row_count: _,
         } => {
-            let row = global_linear_tid(func);
+            let row = if let Some(schedule) = ctx.indexed_loss_rows {
+                debug_assert_eq!(schedule.vocabulary, *vocabulary);
+                indexed_loss::forward_row(func, ctx)
+            } else {
+                global_linear_tid(func)
+            };
             let row_start = func.add_u64_register();
             func.add_inst(Inst::mul_u64(
                 row_start.clone(),

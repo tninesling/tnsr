@@ -1,4 +1,4 @@
-//! Share ordered f32 loss normalization within a row, without reassociation.
+//! Schedule ordered f32 indexed losses by row, without reassociation.
 use super::*;
 
 pub(super) const ROW_THREADS: u32 = 256;
@@ -7,6 +7,8 @@ pub(super) const ROW_THREADS: u32 = 256;
 pub(super) struct RowSchedule {
     pub rows: u32,
     pub vocabulary: usize,
+    pub output_len: usize,
+    pub threads: u32,
 }
 
 pub(super) fn schedule<'a>(
@@ -26,6 +28,8 @@ pub(super) fn schedule<'a>(
     Some(RowSchedule {
         rows: u32::try_from(rows).ok()?,
         vocabulary,
+        output_len: rows * vocabulary,
+        threads: ROW_THREADS,
     })
 }
 
@@ -49,8 +53,41 @@ pub(super) fn schedule_for_ir(ir: &TileIR) -> Option<RowSchedule> {
             *row_count,
             ir.params.iter().map(|p| (p.name.as_str(), p.dtype)),
         ),
+        Stmt::IndexedCrossEntropy {
+            vocabulary,
+            row_count,
+        } => {
+            let mut schedule = schedule(
+                *vocabulary,
+                *row_count,
+                ir.params.iter().map(|p| (p.name.as_str(), p.dtype)),
+            )?;
+            schedule.output_len = *row_count;
+            schedule.threads = 32;
+            Some(schedule)
+        }
         _ => None,
     })
+}
+
+pub(super) fn forward_row<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+) -> Operand<'a, U64> {
+    // Each row owns one warp-sized block. Only its first lane executes the
+    // original ordered scalar loops; independent rows can occupy different SMs.
+    let lane = lower_expr(func, ctx, &Expr::ThreadIdx(Dim::X));
+    let follower = func.add_predicate_register();
+    func.add_inst(Inst::setp_ne_u64(
+        follower.clone(),
+        lane,
+        Operand::imm_u64(0),
+    ));
+    func.add_inst(Inst::Bra {
+        condition: follower,
+        target: ctx.return_label,
+    });
+    lower_expr(func, ctx, &Expr::BlockIdx(Dim::X))
 }
 
 pub(super) fn lower_backward<'a>(

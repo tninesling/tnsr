@@ -275,6 +275,7 @@ impl<D: CudaDType> Program<D> {
                     if matches!(
                         graph[step.node],
                         TensorGraphNode::IndexedCrossEntropyBackward { .. }
+                            | TensorGraphNode::IndexedCrossEntropy { .. }
                     ) =>
                 {
                     executor

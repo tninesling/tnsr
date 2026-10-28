@@ -1,4 +1,4 @@
-//! Schedule ordered f32 indexed losses by row, without reassociation.
+//! Schedule ordered f32 indexed losses by row, including promoted BF16 logits.
 use super::*;
 
 pub(super) const ROW_THREADS: u32 = 256;
@@ -19,9 +19,11 @@ pub(super) fn schedule<'a>(
     if !(256..=65536).contains(&vocabulary)
         || rows == 0
         || rows.checked_mul(vocabulary)? > u32::MAX as usize
-        || parameters
-            .into_iter()
-            .any(|(name, dtype)| dtype != DType::F32 && !(name == "targets" && dtype == DType::U32))
+        || parameters.into_iter().any(|(name, dtype)| {
+            dtype != DType::F32
+                && !(name == "targets" && dtype == DType::U32)
+                && !(name == "logits" && dtype == DType::BF16)
+        })
     {
         return None;
     }

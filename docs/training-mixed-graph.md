@@ -166,3 +166,9 @@ The standalone subgraph measurements above predate complete PPO integration.
 They remain subgraph evidence and must not be used as full-update speedup claims.
 See [the complete update report](training-mixed-ppo.md) for actual model losses,
 named gradients, resident optimizer state and end-to-end timing.
+
+Indexed cross-entropy with BF16-backed logits promoted to FP32 uses the ordered
+row kernels through typed FP32 loads. Loss outputs and upstream gradients stay
+FP32, and exact integer targets retain their representation. The backward row
+kernel preserves the original generic kernel's arithmetic bit for bit while
+sharing each row's normalization work across its output columns.

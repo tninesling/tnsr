@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "rows": 16,
+  "case_count": 8,
+  "shape_group_count": 7,
+  "family_count": 5,
+  "validation": {
+    "shape_key": {
+      "folds": [
+        {
+          "group": "128x8x128x8",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "16x32x64",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "256x128x256",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "256x256",
+          "train_rows": 12,
+          "test_rows": 4
+        },
+        {
+          "group": "256x32x256x32",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "2x256x2",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "64x32x64",
+          "train_rows": 14,
+          "test_rows": 2
+        }
+      ],
+      "rows_evaluated": 16,
+      "cases_evaluated": 8,
+      "log_latency_rmse": 1.074067945319259,
+      "absolute_log_error_p90": 1.7574445728052437,
+      "pairwise_accuracy_excluding_ties": 1.0,
+      "pairwise_comparisons": 7,
+      "geomean_regret_vs_oracle": 1.0004558398662813,
+      "max_regret_vs_oracle": 1.003652542357079,
+      "heuristic_geomean_regret_vs_oracle": 1.0004558398662813,
+      "geomean_speedup_vs_original": 3.6948342032345205,
+      "selections": [
+        {
+          "case_id": "chain_large",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.8980182467685607
+        },
+        {
+          "case_id": "factor_large",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 2.520222619031254
+        },
+        {
+          "case_id": "factor_matmul",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 2.2150732682453547
+        },
+        {
+          "case_id": "factor_rejected",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.7342189382543947
+        },
+        {
+          "case_id": "matrix_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 2.022469190467323
+        },
+        {
+          "case_id": "permute_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 292.81770122356687
+        },
+        {
+          "case_id": "reshape_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 3.1918986410075036
+        },
+        {
+          "case_id": "transpose_add",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 1.003652542357079,
+          "speedup_vs_original": 1.0
+        }
+      ]
+    },
+    "family": {
+      "folds": [
+        {
+          "group": "matmul_chain",
+          "train_rows": 12,
+          "test_rows": 4
+        },
+        {
+          "group": "matmul_factor",
+          "train_rows": 10,
+          "test_rows": 6
+        },
+        {
+          "group": "permutation",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "reshape",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "transpose_control",
+          "train_rows": 14,
+          "test_rows": 2
+        }
+      ],
+      "rows_evaluated": 16,
+      "cases_evaluated": 8,
+      "log_latency_rmse": 1.1735361161318967,
+      "absolute_log_error_p90": 1.8860730562268673,
+      "pairwise_accuracy_excluding_ties": 1.0,
+      "pairwise_comparisons": 7,
+      "geomean_regret_vs_oracle": 1.0004558398662813,
+      "max_regret_vs_oracle": 1.003652542357079,
+      "heuristic_geomean_regret_vs_oracle": 1.0004558398662813,
+      "geomean_speedup_vs_original": 3.6948342032345205,
+      "selections": [
+        {
+          "case_id": "chain_large",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.8980182467685607
+        },
+        {
+          "case_id": "factor_large",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 2.520222619031254
+        },
+        {
+          "case_id": "factor_matmul",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 2.2150732682453547
+        },
+        {
+          "case_id": "factor_rejected",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.7342189382543947
+        },
+        {
+          "case_id": "matrix_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 2.022469190467323
+        },
+        {
+          "case_id": "permute_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 292.81770122356687
+        },
+        {
+          "case_id": "reshape_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 3.1918986410075036
+        },
+        {
+          "case_id": "transpose_add",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 1.003652542357079,
+          "speedup_vs_original": 1.0
+        }
+      ]
+    }
+  },
+  "eligible_for_opt_in": false,
+  "ineligibility_reasons": [
+    "only 7 shape groups; need >= 12",
+    "shape_key held-out regret does not beat the supplied heuristic",
+    "family held-out regret does not beat the supplied heuristic"
+  ],
+  "decision_margin_log": 3.7721461124537345,
+  "note": "Held-out results describe the unguarded ranker. The final coverage/margin gate is conservative and is not claimed as independently validated."
+}

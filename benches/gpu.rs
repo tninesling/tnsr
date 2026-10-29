@@ -1,3 +1,6 @@
+#[path = "cpu/rewrite.rs"]
+mod rewrite;
+
 use std::sync::Arc;
 
 use criterion::BenchmarkId;
@@ -436,5 +439,28 @@ fn attention_benches(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches_group, benches, fusion_benches, attention_benches);
+fn rewrite_benches(c: &mut Criterion) {
+    rewrite::benches(
+        c,
+        || {
+            let mut exec = PtxExecutor::new();
+            exec.set_matmul_precision(tnsr::tile::MatMulPrecision::StrictF32);
+            exec
+        },
+        |exec, graph, prepare| {
+            if prepare {
+                exec.compile(graph).unwrap();
+            }
+            exec.execute_compiled(graph, Default::default()).unwrap()
+        },
+    );
+}
+
+criterion_group!(
+    benches_group,
+    benches,
+    fusion_benches,
+    attention_benches,
+    rewrite_benches
+);
 criterion_main!(benches_group);

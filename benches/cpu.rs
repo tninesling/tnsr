@@ -1,3 +1,6 @@
+#[path = "cpu/rewrite.rs"]
+mod rewrite;
+
 use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -600,5 +603,17 @@ pub fn fusion_benches(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches_group, benches, optimization_benches, fusion_benches);
+fn rewrite_benches(c: &mut Criterion) {
+    rewrite::benches(c, SimpleExecutor::new, |exec, graph, _| {
+        exec.execute(graph, Default::default()).unwrap()
+    });
+}
+
+criterion_group!(
+    benches_group,
+    benches,
+    optimization_benches,
+    fusion_benches,
+    rewrite_benches
+);
 criterion_main!(benches_group);

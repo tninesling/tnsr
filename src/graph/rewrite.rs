@@ -56,11 +56,14 @@
 //! graph.add_expr(&expr, true);
 //! ```
 
+mod layout_rules;
 mod linear_rows;
+mod reduction_rules;
+mod tensor_analysis;
 
 use crate::tensor::{BinaryOp, DType, ExprKind, ReduceOp, TensorExpr, UnaryOp};
 use egg::{
-    AstSize, Extractor, Id, RecExpr, Rewrite, Runner, Symbol, define_language, rewrite as rw,
+    Analysis, Extractor, Id, RecExpr, Rewrite, Runner, Symbol, define_language, rewrite as rw,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -90,12 +93,49 @@ define_language! {
     }
 }
 
+fn is_opaque<D: DType>(expr: &TensorExpr<D>) -> bool {
+    let wide_axis = match expr.kind() {
+        ExprKind::Permute { axes, .. } => axes.iter().any(|&axis| i32::try_from(axis).is_err()),
+        ExprKind::BroadcastAxis { axis, .. } | ExprKind::ReduceAxis { axis, .. } => {
+            i32::try_from(*axis).is_err()
+        }
+        _ => false,
+    };
+    // TensorOp metadata uses i32 literals. Avoid narrowing dimensions even
+    // when only a descendant reshape or broadcast would serialize them.
+    wide_axis
+        || expr.shape().iter().any(|&dim| i32::try_from(dim).is_err())
+        || matches!(
+            expr.kind(),
+            ExprKind::Linear { .. }
+                | ExprKind::Cast { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Narrow { .. }
+                | ExprKind::Concat { .. }
+                | ExprKind::Embedding { .. }
+                | ExprKind::EmbeddingBackward { .. }
+                | ExprKind::IndexedCrossEntropy { .. }
+                | ExprKind::IndexedCrossEntropyBackward { .. }
+                | ExprKind::ReduceAxis {
+                    op: ReduceOp::Max,
+                    ..
+                }
+                | ExprKind::Conv2d { .. }
+                | ExprKind::ConvTranspose2d { .. }
+                | ExprKind::Conv2dBackwardWeight { .. }
+                | ExprKind::MaxPool2d { .. }
+                | ExprKind::MaxPool2dBackward { .. }
+                | ExprKind::Flatten { .. }
+        )
+}
+
 fn leaf_symbol<D: DType>(expr: &TensorExpr<D>) -> Option<Symbol> {
     let name = match expr.kind() {
         ExprKind::Constant { data } => format!("const_{:p}", Arc::as_ptr(data)),
         ExprKind::Parameter { id, .. } => format!("param_{id}"),
         ExprKind::Input { name } => format!("input_{name}"),
         ExprKind::NodeRef { idx } => format!("node_{}", idx.index()),
+        _ if is_opaque(expr) => format!("opaque_{:p}", expr.kind()),
         _ => return None,
     };
     Some(name.into())
@@ -110,26 +150,35 @@ pub fn make_rules() -> Vec<Rewrite<TensorOp, ()>> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RewriteNumerics {
     /// Preserve arithmetic order, domains and rounding boundaries in supported
-    /// expressions, while eliminating double negation and double transpose.
+    /// expressions, while simplifying redundant layouts and double negation.
     #[default]
     PreserveOperations,
     /// Permit real-algebra identities, including reassociation and exp/log
-    /// cancellation. These may change finite results, signed zero, NaNs and
-    /// infinities; callers must establish suitability for their workload.
+    /// cancellation, matrix factoring and matrix-chain reassociation. These may
+    /// change finite results, signed zero, NaNs and infinities; callers must
+    /// establish suitability for their workload.
     RealAlgebra,
 }
 
-/// Returns rewrite rules under explicit numerical assumptions.
+/// Returns shape-independent rewrite rules under explicit numerical assumptions.
+/// The expression optimizer also uses shape analysis for layout composition,
+/// guarded matrix identities and cost-based extraction.
 pub fn make_rules_with_numerics(numerics: RewriteNumerics) -> Vec<Rewrite<TensorOp, ()>> {
-    if numerics == RewriteNumerics::PreserveOperations {
-        return vec![
-            rw!("double-neg"; "(neg (neg ?x))" => "?x"),
-            rw!("transpose-transpose"; "(transpose (transpose ?x))" => "?x"),
-        ];
-    }
-    vec![
-        // Negation
+    rules_with_numerics::<()>(numerics)
+}
+
+fn rules_with_numerics<A: Analysis<TensorOp> + 'static>(
+    numerics: RewriteNumerics,
+) -> Vec<Rewrite<TensorOp, A>> {
+    let mut rules = vec![
         rw!("double-neg"; "(neg (neg ?x))" => "?x"),
+        rw!("transpose-transpose"; "(transpose (transpose ?x))" => "?x"),
+    ];
+    if numerics == RewriteNumerics::PreserveOperations {
+        return rules;
+    }
+    rules.extend(vec![
+        // Negation
         rw!("neg-sub"; "(neg (- ?x ?y))" => "(- ?y ?x)"),
         rw!("add-neg"; "(+ ?x (neg ?y))" => "(- ?x ?y)"),
         rw!("sub-neg"; "(- ?x (neg ?y))" => "(+ ?x ?y)"),
@@ -146,11 +195,11 @@ pub fn make_rules_with_numerics(numerics: RewriteNumerics) -> Vec<Rewrite<Tensor
         rw!("exp-log"; "(exp (log ?x))" => "?x"),
         rw!("log-exp"; "(log (exp ?x))" => "?x"),
         // Matrix
-        rw!("transpose-transpose"; "(transpose (transpose ?x))" => "?x"),
         rw!("transpose-matmul"; 
             "(transpose (matmul ?a ?b))" => 
             "(matmul (transpose ?b) (transpose ?a))"),
-    ]
+    ]);
+    rules
 }
 
 /// Configuration for the rewrite optimization process.
@@ -174,6 +223,9 @@ impl Default for RewriteConfig {
 /// Convert a `TensorExpr` to an e-graph `RecExpr`.
 fn expr_to_recexpr<D: DType>(expr: &TensorExpr<D>) -> RecExpr<TensorOp> {
     fn build_rec<D: DType>(expr: &TensorExpr<D>, rec: &mut RecExpr<TensorOp>) -> Id {
+        if let Some(symbol) = leaf_symbol(expr) {
+            return rec.add(TensorOp::Sym(symbol));
+        }
         match expr.kind() {
             ExprKind::Linear { .. } | ExprKind::Cast { .. } | ExprKind::Index { .. } => {
                 unreachable!("index sources bypass expression rewriting")
@@ -473,57 +525,22 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
 /// Optimize a supported `TensorExpr` under explicit numerical assumptions.
 ///
 /// [`RewriteNumerics::RealAlgebra`] restores the algebraic rules that can alter
-/// floating-point behavior. It also collapses batched matrix rows when a rank-2
-/// RHS is shared across rows, including an optional shared bias vector. Apply
+/// floating-point behavior, including rank-2 shared-matmul factoring and
+/// cost-guided matrix-chain reassociation. It also collapses batched matrix rows
+/// when a rank-2 RHS is shared across rows, including an optional shared bias vector. Apply
 /// before differentiation to avoid batched parameter-gradient partials; this
 /// changes gradient reduction grouping and may change backend matmul rounding.
-/// Unsupported inputs remain opaque to this local row rewrite. Other unsupported
-/// expressions retain their structure under both policies.
+/// Unsupported operations and wide metadata remain opaque leaves. Rewriting
+/// supported parents can remove redundant work without crossing cast/index or
+/// unsupported operation boundaries.
 pub fn optimize_expr_with_numerics<D: DType + Clone + Default + 'static>(
     expr: &TensorExpr<D>,
     config: RewriteConfig,
     numerics: RewriteNumerics,
 ) -> TensorExpr<D> {
-    fn requires_exact_structure<D: DType>(expr: &TensorExpr<D>) -> bool {
-        let wide_axis = match expr.kind() {
-            ExprKind::Permute { axes, .. } => axes.iter().any(|&axis| i32::try_from(axis).is_err()),
-            ExprKind::BroadcastAxis { axis, .. } | ExprKind::ReduceAxis { axis, .. } => {
-                i32::try_from(*axis).is_err()
-            }
-            _ => false,
-        };
-        // TensorOp metadata uses i32 literals. Avoid narrowing dimensions even
-        // when only a descendant reshape or broadcast would serialize them.
-        wide_axis
-            || expr.shape().iter().any(|&dim| i32::try_from(dim).is_err())
-            || matches!(
-                expr.kind(),
-                ExprKind::Linear { .. }
-                    | ExprKind::Cast { .. }
-                    | ExprKind::Index { .. }
-                    | ExprKind::Narrow { .. }
-                    | ExprKind::Concat { .. }
-                    | ExprKind::Embedding { .. }
-                    | ExprKind::EmbeddingBackward { .. }
-                    | ExprKind::IndexedCrossEntropy { .. }
-                    | ExprKind::IndexedCrossEntropyBackward { .. }
-                    | ExprKind::ReduceAxis {
-                        op: ReduceOp::Max,
-                        ..
-                    }
-                    | ExprKind::Conv2d { .. }
-                    | ExprKind::ConvTranspose2d { .. }
-                    | ExprKind::Conv2dBackwardWeight { .. }
-                    | ExprKind::MaxPool2d { .. }
-                    | ExprKind::MaxPool2dBackward { .. }
-                    | ExprKind::Flatten { .. }
-            )
-            || expr.children().into_iter().any(requires_exact_structure)
-    }
-
     // Preserve unsupported operations, wide metadata and observable cast
     // identities instead of rebuilding them from lossy placeholder symbols.
-    if requires_exact_structure(expr) {
+    if is_opaque(expr) {
         return if numerics == RewriteNumerics::RealAlgebra {
             linear_rows::rewrite(expr).unwrap_or_else(|| expr.clone())
         } else {
@@ -535,17 +552,18 @@ pub fn optimize_expr_with_numerics<D: DType + Clone + Default + 'static>(
 
     tracing::debug!("Starting expression: {}", start);
 
-    let runner = Runner::default()
+    let analysis = tensor_analysis::TensorAnalysis::new(expr);
+    let runner = Runner::<_, _, ()>::new(analysis)
         .with_iter_limit(config.iter_limit)
         .with_node_limit(config.node_limit)
         .with_time_limit(std::time::Duration::from_secs_f64(config.time_limit_secs))
         .with_expr(&start)
-        .run(&make_rules_with_numerics(numerics));
+        .run(tensor_analysis::rules(numerics));
 
     tracing::debug!("Iterations: {}", runner.iterations.len());
     tracing::debug!("E-graph size: {} nodes", runner.egraph.total_size());
 
-    let extractor = Extractor::new(&runner.egraph, AstSize);
+    let extractor = Extractor::new(&runner.egraph, tensor_analysis::TensorCost(&runner.egraph));
     let (best_cost, best) = extractor.find_best(runner.roots[0]);
 
     tracing::debug!("Best cost: {}", best_cost);

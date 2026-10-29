@@ -1,0 +1,1793 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-29",
+  "primary_options": [
+    "unary_layout",
+    "unary_reshape",
+    "unary_broadcast",
+    "mean_broadcast",
+    "sum_matmul_cols"
+  ],
+  "scope": "diagnostic graphs, not model-level speedups",
+  "minimum_speedup": 1.1,
+  "discovery_samples": 16,
+  "acceptance_samples": 20,
+  "acceptance_reverse_order": true,
+  "results": {
+    "cpu": {
+      "mixed_layout/n256": {
+        "before_ns": 1036836.69375,
+        "after_ns": 5442.345414118955,
+        "before_ci95_ns": [
+          1035228.0485441888,
+          1038445.3389558111
+        ],
+        "after_ci95_ns": [
+          5289.31191260915,
+          5595.37891562876
+        ],
+        "speedup": 190.51284232348755,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1060406.975,
+          "after_ns": 6337.264830508473,
+          "before_ci95_ns": [
+            1024619.6233137504,
+            1096194.3266862498
+          ],
+          "after_ci95_ns": [
+            6309.779353125653,
+            6364.750307891293
+          ],
+          "speedup": 167.32880877804786,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "singleton_reshape/n256": {
+        "before_ns": 973211.9909090908,
+        "after_ns": 11057.211438278597,
+        "before_ci95_ns": [
+          971631.4789892304,
+          974792.5028289513
+        ],
+        "after_ci95_ns": [
+          10849.049782234475,
+          11265.373094322718
+        ],
+        "speedup": 88.01604241191954,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 957034.7187500001,
+          "after_ns": 11479.594902073733,
+          "before_ci95_ns": [
+            956450.3555676006,
+            957619.0819323997
+          ],
+          "after_ci95_ns": [
+            11457.06638656161,
+            11502.123417585857
+          ],
+          "speedup": 83.36833546078498,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "singleton_identity/n256": {
+        "before_ns": 957664.0863636362,
+        "after_ns": 5333.13295890411,
+        "before_ci95_ns": [
+          952634.3752757845,
+          962693.7974514879
+        ],
+        "after_ci95_ns": [
+          5269.855631336532,
+          5396.410286471688
+        ],
+        "speedup": 179.5687626284914,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 966070.4166666666,
+          "after_ns": 5219.6314086294415,
+          "before_ci95_ns": [
+            944688.9716884488,
+            987451.8616448845
+          ],
+          "after_ci95_ns": [
+            5147.19427504074,
+            5292.068542218143
+          ],
+          "speedup": 185.08403008486286,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "unary_layout/n256": {
+        "before_ns": 1158246.672222222,
+        "after_ns": 48271.55790697674,
+        "before_ci95_ns": [
+          1135072.6012350875,
+          1181420.7432093564
+        ],
+        "after_ci95_ns": [
+          46876.39121548068,
+          49666.7245984728
+        ],
+        "speedup": 23.994391779404726,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1114594.7125,
+          "after_ns": 49543.49871134021,
+          "before_ci95_ns": [
+            1106815.6524503382,
+            1122373.7725496616
+          ],
+          "after_ci95_ns": [
+            48302.46600303048,
+            50784.53141964994
+          ],
+          "speedup": 22.4972951344043,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "unary_reshape/n256": {
+        "before_ns": 90995.04722222219,
+        "after_ns": 50079.704455445535,
+        "before_ci95_ns": [
+          87102.33124731078,
+          94887.7631971336
+        ],
+        "after_ci95_ns": [
+          48774.810979187496,
+          51384.597931703574
+        ],
+        "speedup": 1.8170044773961844,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 89928.97656250001,
+          "after_ns": 50756.47690217392,
+          "before_ci95_ns": [
+            86888.317523985,
+            92969.63560101503
+          ],
+          "after_ci95_ns": [
+            48318.832987593,
+            53194.12081675484
+          ],
+          "speedup": 1.7717734179191684,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "opaque_cast_layout/n256": {
+        "before_ns": 1577152.6285714284,
+        "after_ns": 531818.8124999999,
+        "before_ci95_ns": [
+          1568268.210317753,
+          1586037.0468251037
+        ],
+        "after_ci95_ns": [
+          529899.1253890025,
+          533738.4996109973
+        ],
+        "speedup": 2.965582622317312,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1252925.984375,
+          "after_ns": 467796.1119791666,
+          "before_ci95_ns": [
+            1249283.6254357453,
+            1256568.3433142547
+          ],
+          "after_ci95_ns": [
+            400963.94593799865,
+            534628.2780203345
+          ],
+          "speedup": 2.6783591233242214,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "unary_broadcast/n256": {
+        "before_ns": 760865.1583333332,
+        "after_ns": 532161.0421052632,
+        "before_ci95_ns": [
+          742333.7722098326,
+          779396.5444568339
+        ],
+        "after_ci95_ns": [
+          530269.087818404,
+          534052.9963921225
+        ],
+        "speedup": 1.4297648608836562,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 774597.875,
+          "after_ns": 528228.00625,
+          "before_ci95_ns": [
+            743213.2338932165,
+            805982.5161067835
+          ],
+          "after_ci95_ns": [
+            527505.9340404514,
+            528950.0784595485
+          ],
+          "speedup": 1.466408190847416,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "mean_broadcast/n256": {
+        "before_ns": 1092930.4650000003,
+        "after_ns": 375.438855,
+        "before_ci95_ns": [
+          1063721.0756359755,
+          1122139.8543640252
+        ],
+        "after_ci95_ns": [
+          374.544600683251,
+          376.33310931674896
+        ],
+        "speedup": 2911.0744677718567,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1058012.4625,
+          "after_ns": 386.47129375000003,
+          "before_ci95_ns": [
+            1053309.6633116242,
+            1062715.2616883756
+          ],
+          "after_ci95_ns": [
+            383.59000859105055,
+            389.3525789089495
+          ],
+          "speedup": 2737.622378712571,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "sum_matmul_rows/n256": {
+        "before_ns": 1251982.5,
+        "after_ns": 145261.43188405797,
+        "before_ci95_ns": [
+          1176129.739732901,
+          1327835.260267099
+        ],
+        "after_ci95_ns": [
+          145033.00011469907,
+          145489.86365341686
+        ],
+        "speedup": 8.618822517179122,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1775097.25,
+          "after_ns": 149736.85845588232,
+          "before_ci95_ns": [
+            1289173.4588968991,
+            2261021.041103101
+          ],
+          "after_ci95_ns": [
+            148509.5463446097,
+            150964.17056715494
+          ],
+          "speedup": 11.854778230992506,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "sum_matmul_cols/n256": {
+        "before_ns": 1160559.1555555556,
+        "after_ns": 206899.27900000004,
+        "before_ci95_ns": [
+          1133948.6151000846,
+          1187169.6960110266
+        ],
+        "after_ci95_ns": [
+          200134.7700233381,
+          213663.787976662
+        ],
+        "speedup": 5.609295311055943,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1208405.2125,
+          "after_ns": 217382.0885416667,
+          "before_ci95_ns": [
+            1136554.8929486005,
+            1280255.5320513994
+          ],
+          "after_ci95_ns": [
+            198607.5207522677,
+            236156.65633106566
+          ],
+          "speedup": 5.55889963431085,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "mean_matmul_rows/n256": {
+        "before_ns": 1249314.8111111114,
+        "after_ns": 150686.02575757573,
+        "before_ci95_ns": [
+          1199223.461557622,
+          1299406.1606646008
+        ],
+        "after_ci95_ns": [
+          148518.4537458173,
+          152853.59776933416
+        ],
+        "speedup": 8.290847175975124,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1374917.796875,
+          "after_ns": 146847.64285714284,
+          "before_ci95_ns": [
+            1270148.2353153797,
+            1479687.3584346203
+          ],
+          "after_ci95_ns": [
+            146005.82446790868,
+            147689.461246377
+          ],
+          "speedup": 9.362886391118687,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "invariant_reduction/n256": {
+        "before_ns": 1185584.2222222225,
+        "after_ns": 529468.4763157895,
+        "before_ci95_ns": [
+          1168577.3057795377,
+          1202591.1386649073
+        ],
+        "after_ci95_ns": [
+          528837.9296831439,
+          530099.0229484352
+        ],
+        "speedup": 2.239196997093945,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1204729.0,
+          "after_ns": 540791.975,
+          "before_ci95_ns": [
+            1169600.221052038,
+            1239857.778947962
+          ],
+          "after_ci95_ns": [
+            522201.89253452263,
+            559382.0574654774
+          ],
+          "speedup": 2.2277124212133512,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "transpose_sink/n256": {
+        "before_ns": 1210691.3055555557,
+        "after_ns": 1253544.2125,
+        "before_ci95_ns": [
+          1186636.2225936956,
+          1234746.3885174158
+        ],
+        "after_ci95_ns": [
+          1186035.4565615829,
+          1321052.968438417
+        ],
+        "speedup": 0.965814602694403,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 1249470.6499999997,
+          "after_ns": 1212087.5625000002,
+          "before_ci95_ns": [
+            1202509.6173041086,
+            1296431.6826958908
+          ],
+          "after_ci95_ns": [
+            1186175.1277170458,
+            1237999.9972829546
+          ],
+          "speedup": 1.030841903387652,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "factor_matmul/n256": {
+        "before_ns": 641050.9000000001,
+        "after_ns": 663948.146875,
+        "before_ci95_ns": [
+          619542.0207306545,
+          662559.7792693458
+        ],
+        "after_ci95_ns": [
+          632898.1924242643,
+          694998.1013257357
+        ],
+        "speedup": 0.965513501343787,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 1201364.225,
+          "after_ns": 658078.2812499999,
+          "before_ci95_ns": [
+            1109835.2786556995,
+            1292893.1713443007
+          ],
+          "after_ci95_ns": [
+            590933.308732739,
+            725223.2537672608
+          ],
+          "speedup": 1.8255643123764014,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": false
+      },
+      "factor_skinny/n256": {
+        "before_ns": 2158.563602442334,
+        "after_ns": 2125.4910239792616,
+        "before_ci95_ns": [
+          2148.980729174675,
+          2168.1464757099925
+        ],
+        "after_ci95_ns": [
+          2122.684742477074,
+          2128.2973054814493
+        ],
+        "speedup": 1.0155599708914107,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 2257.0386223087494,
+          "after_ns": 2291.531294410232,
+          "before_ci95_ns": [
+            2246.9335922664854,
+            2267.1436523510133
+          ],
+          "after_ci95_ns": [
+            2280.2539222302216,
+            2302.8086665902424
+          ],
+          "speedup": 0.9849477630152287,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "mixed_layout/n384": {
+        "before_ns": 2471675.2899999996,
+        "after_ns": 12338.59355036855,
+        "before_ci95_ns": [
+          2443782.923354247,
+          2499567.656645752
+        ],
+        "after_ci95_ns": [
+          11857.212196979961,
+          12819.97490375714
+        ],
+        "speedup": 200.32066701201705,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 2464164.75,
+          "after_ns": 13256.475267379683,
+          "before_ci95_ns": [
+            2451126.485219753,
+            2477203.014780247
+          ],
+          "after_ci95_ns": [
+            13215.303793763069,
+            13297.646740996297
+          ],
+          "speedup": 185.8838567793047,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "singleton_reshape/n384": {
+        "before_ns": 2206129.4399999995,
+        "after_ns": 23898.54642004773,
+        "before_ci95_ns": [
+          2184994.4336305386,
+          2227264.4463694603
+        ],
+        "after_ci95_ns": [
+          23880.686178330587,
+          23916.40666176487
+        ],
+        "speedup": 92.31228549320254,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 2198236.0,
+          "after_ns": 24992.97388059702,
+          "before_ci95_ns": [
+            2160071.4979497525,
+            2236400.5020502475
+          ],
+          "after_ci95_ns": [
+            24929.486522897205,
+            25056.461238296833
+          ],
+          "speedup": 87.95415905694091,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "singleton_identity/n384": {
+        "before_ns": 2184373.1700000004,
+        "after_ns": 12556.617747858018,
+        "before_ci95_ns": [
+          2180762.3108147136,
+          2187984.029185287
+        ],
+        "after_ci95_ns": [
+          12428.774141782056,
+          12684.461353933979
+        ],
+        "speedup": 173.96190708860462,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 2214258.25,
+          "after_ns": 12312.877969121142,
+          "before_ci95_ns": [
+            2174128.6181669137,
+            2254387.8818330863
+          ],
+          "after_ci95_ns": [
+            12248.95854624622,
+            12376.797391996064
+          ],
+          "speedup": 179.83271299797082,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "unary_layout/n384": {
+        "before_ns": 2592437.025,
+        "after_ns": 86367.39094488189,
+        "before_ci95_ns": [
+          2577505.1759293037,
+          2607368.874070696
+        ],
+        "after_ci95_ns": [
+          83794.40710291063,
+          88940.37478685315
+        ],
+        "speedup": 30.016386933054935,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 2715693.28125,
+          "after_ns": 91539.43640350878,
+          "before_ci95_ns": [
+            2600755.0801564646,
+            2830631.4823435354
+          ],
+          "after_ci95_ns": [
+            85545.38706003326,
+            97533.4857469843
+          ],
+          "speedup": 29.666921579887564,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "unary_reshape/n384": {
+        "before_ns": 144653.67250000002,
+        "after_ns": 81842.293359375,
+        "before_ci95_ns": [
+          137533.92416219148,
+          151773.42083780855
+        ],
+        "after_ci95_ns": [
+          78956.62124860985,
+          84727.96547014016
+        ],
+        "speedup": 1.767468463582955,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 186275.45,
+          "after_ns": 85544.74124999999,
+          "before_ci95_ns": [
+            179152.97089143892,
+            193397.9291085611
+          ],
+          "after_ci95_ns": [
+            81142.39755961906,
+            89947.08494038093
+          ],
+          "speedup": 2.177520760225574,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "opaque_cast_layout/n384": {
+        "before_ns": 3664118.0,
+        "after_ns": 1207087.46875,
+        "before_ci95_ns": [
+          3645136.14272744,
+          3683099.85727256
+        ],
+        "after_ci95_ns": [
+          1196627.10101211,
+          1217547.83648789
+        ],
+        "speedup": 3.035503304325062,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 3070333.8125,
+          "after_ns": 1120886.48125,
+          "before_ci95_ns": [
+            2925502.9600265976,
+            3215164.6649734024
+          ],
+          "after_ci95_ns": [
+            998297.2526552492,
+            1243475.7098447506
+          ],
+          "speedup": 2.739201394485549,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "unary_broadcast/n384": {
+        "before_ns": 1537911.7,
+        "after_ns": 1234608.377777778,
+        "before_ci95_ns": [
+          1486947.635876635,
+          1588875.7641233648
+        ],
+        "after_ci95_ns": [
+          1232656.7677202064,
+          1236559.9878353497
+        ],
+        "speedup": 1.245667636540868,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1563036.359375,
+          "after_ns": 1231985.0875,
+          "before_ci95_ns": [
+            1508331.2116951554,
+            1617741.5070548446
+          ],
+          "after_ci95_ns": [
+            1230061.8493228615,
+            1233908.3256771383
+          ],
+          "speedup": 1.268713700542256,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "mean_broadcast/n384": {
+        "before_ns": 2489780.775,
+        "after_ns": 426.035715,
+        "before_ci95_ns": [
+          2450748.3314823844,
+          2528813.2185176155
+        ],
+        "after_ci95_ns": [
+          424.76065571078175,
+          427.3107742892182
+        ],
+        "speedup": 5844.065854901391,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 2451886.4999999995,
+          "after_ns": 435.26832500000006,
+          "before_ci95_ns": [
+            2446619.3460324625,
+            2457153.6539675365
+          ],
+          "after_ci95_ns": [
+            433.70090927789727,
+            436.83574072210286
+          ],
+          "speedup": 5633.046006736188,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "sum_matmul_rows/n384": {
+        "before_ns": 3145587.1833333336,
+        "after_ns": 343064.7965517241,
+        "before_ci95_ns": [
+          3029252.038933463,
+          3261922.3277332042
+        ],
+        "after_ci95_ns": [
+          341296.0769797293,
+          344833.5161237189
+        ],
+        "speedup": 9.169075973258806,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 3322508.03125,
+          "after_ns": 337730.74583333335,
+          "before_ci95_ns": [
+            3204903.3232805193,
+            3440112.7392194807
+          ],
+          "after_ci95_ns": [
+            337073.3274457434,
+            338388.1642209233
+          ],
+          "speedup": 9.837742261374164,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "sum_matmul_cols/n384": {
+        "before_ns": 3088098.55,
+        "after_ns": 423256.1909090908,
+        "before_ci95_ns": [
+          2979672.4528509136,
+          3196524.647149086
+        ],
+        "after_ci95_ns": [
+          403325.37237220706,
+          443187.00944597455
+        ],
+        "speedup": 7.296050515805161,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 3259668.71875,
+          "after_ns": 423332.1614583334,
+          "before_ci95_ns": [
+            3096669.0799179045,
+            3422668.3575820955
+          ],
+          "after_ci95_ns": [
+            404372.57353979023,
+            442291.7493768765
+          ],
+          "speedup": 7.700026162720061,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "mean_matmul_rows/n384": {
+        "before_ns": 3033102.1625,
+        "after_ns": 343075.5465517241,
+        "before_ci95_ns": [
+          2935638.0782226273,
+          3130566.246777373
+        ],
+        "after_ci95_ns": [
+          339576.0929657609,
+          346575.00013768725
+        ],
+        "speedup": 8.840916215060847,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 3029935.84375,
+          "after_ns": 341375.70416666666,
+          "before_ci95_ns": [
+            2943479.9675983842,
+            3116391.7199016158
+          ],
+          "after_ci95_ns": [
+            333336.18103873404,
+            349415.2272945993
+          ],
+          "speedup": 8.875663401841635,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "invariant_reduction/n384": {
+        "before_ns": 2637286.675,
+        "after_ns": 1237297.0277777775,
+        "before_ci95_ns": [
+          2587763.7117310767,
+          2686809.638268923
+        ],
+        "after_ci95_ns": [
+          1222495.1584237893,
+          1252098.8971317657
+        ],
+        "speedup": 2.131490350168096,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 2653978.65625,
+          "after_ns": 1232853.075,
+          "before_ci95_ns": [
+            2507982.969028354,
+            2799974.343471646
+          ],
+          "after_ci95_ns": [
+            1230966.4167003394,
+            1234739.7332996605
+          ],
+          "speedup": 2.1527128496232204,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "transpose_sink/n384": {
+        "before_ns": 2640818.3875,
+        "after_ns": 2645299.4625,
+        "before_ci95_ns": [
+          2615041.512662375,
+          2666595.2623376255
+        ],
+        "after_ci95_ns": [
+          2618673.394422378,
+          2671925.530577622
+        ],
+        "speedup": 0.9983060235472302,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 2652802.96875,
+          "after_ns": 2592085.90625,
+          "before_ci95_ns": [
+            2567562.0623871707,
+            2738043.8751128293
+          ],
+          "after_ci95_ns": [
+            2575635.4989766516,
+            2608536.3135233484
+          ],
+          "speedup": 1.02342401629267,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "factor_matmul/n384": {
+        "before_ns": 1722980.3428571434,
+        "after_ns": 1868302.2250000003,
+        "before_ci95_ns": [
+          1668937.2457423182,
+          1777023.4399719685
+        ],
+        "after_ci95_ns": [
+          1803213.8773924808,
+          1933390.5726075198
+        ],
+        "speedup": 0.9222171444222003,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 3341751.46875,
+          "after_ns": 1835893.4999999998,
+          "before_ci95_ns": [
+            3212806.968147914,
+            3470695.969352086
+          ],
+          "after_ci95_ns": [
+            1768888.940027151,
+            1902898.0599728485
+          ],
+          "speedup": 1.8202316576370037,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": false
+      },
+      "factor_skinny/n384": {
+        "before_ns": 2467.664079110012,
+        "after_ns": 2361.8344926840973,
+        "before_ci95_ns": [
+          2414.254200356401,
+          2521.0739578636235
+        ],
+        "after_ci95_ns": [
+          2358.258783642716,
+          2365.4102017254786
+        ],
+        "speedup": 1.0448082144425137,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 2386.5716107871717,
+          "after_ns": 2388.773259340126,
+          "before_ci95_ns": [
+            2379.6398589430987,
+            2393.5033626312447
+          ],
+          "after_ci95_ns": [
+            2383.455742691791,
+            2394.0907759884612
+          ],
+          "speedup": 0.9990783350640979,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      }
+    },
+    "cuda": {
+      "mixed_layout/n256": {
+        "before_ns": 50112.23216080402,
+        "after_ns": 52132.43020833334,
+        "before_ci95_ns": [
+          49656.74154189448,
+          50567.722779713564
+        ],
+        "after_ci95_ns": [
+          51042.74773233662,
+          53222.11268433006
+        ],
+        "speedup": 0.961248726762667,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 50324.33486842105,
+          "after_ns": 50258.577806122456,
+          "before_ci95_ns": [
+            49723.27979222485,
+            50925.38994461725
+          ],
+          "after_ci95_ns": [
+            49520.81287496799,
+            50996.34273727692
+          ],
+          "speedup": 1.001308374911687,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "singleton_reshape/n256": {
+        "before_ns": 57696.394385026746,
+        "after_ns": 50839.653282828294,
+        "before_ci95_ns": [
+          55522.80627348888,
+          59869.98249656461
+        ],
+        "after_ci95_ns": [
+          50230.31206090972,
+          51448.99450474687
+        ],
+        "speedup": 1.1348699422486896,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 50155.218098958336,
+          "after_ns": 50486.0,
+          "before_ci95_ns": [
+            49664.62668873595,
+            50645.80950918072
+          ],
+          "after_ci95_ns": [
+            49883.8176373597,
+            51088.1823626403
+          ],
+          "speedup": 0.9934480469626894,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "singleton_identity/n256": {
+        "before_ns": 52825.582887700526,
+        "after_ns": 51008.89289617487,
+        "before_ci95_ns": [
+          52232.932398200355,
+          53418.2333772007
+        ],
+        "after_ci95_ns": [
+          50372.67262751162,
+          51645.11316483811
+        ],
+        "speedup": 1.0356151621487533,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 52376.90109890111,
+          "after_ns": 52245.90394736843,
+          "before_ci95_ns": [
+            51228.647456053724,
+            53525.15474174849
+          ],
+          "after_ci95_ns": [
+            51365.458185763106,
+            53126.34970897376
+          ],
+          "speedup": 1.0025073190745182,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "unary_layout/n256": {
+        "before_ns": 389148.40370370366,
+        "after_ns": 54759.54675675676,
+        "before_ci95_ns": [
+          378911.0788544119,
+          399385.7285529954
+        ],
+        "after_ci95_ns": [
+          52945.15837779008,
+          56573.93513572344
+        ],
+        "speedup": 7.106494241676439,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 465508.49375,
+          "after_ns": 54953.8417721519,
+          "before_ci95_ns": [
+            451735.8468406167,
+            479281.1406593833
+          ],
+          "after_ci95_ns": [
+            52558.030000099054,
+            57349.653544204746
+          ],
+          "speedup": 8.470899917790616,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "unary_reshape/n256": {
+        "before_ns": 5847272.975,
+        "after_ns": 54150.52972972973,
+        "before_ci95_ns": [
+          5797991.82539481,
+          5896554.124605189
+        ],
+        "after_ci95_ns": [
+          52625.475568875205,
+          55675.583890584254
+        ],
+        "speedup": 107.98182407788579,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 5925443.125,
+          "after_ns": 56410.393543956045,
+          "before_ci95_ns": [
+            5881903.630324518,
+            5968982.619675482
+          ],
+          "after_ci95_ns": [
+            53519.77077609698,
+            59301.01631181511
+          ],
+          "speedup": 105.04169094978539,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "opaque_cast_layout/n256": {
+        "before_ns": 57850.231111111105,
+        "after_ns": 55686.28621794871,
+        "before_ci95_ns": [
+          56252.680420034485,
+          59447.781802187725
+        ],
+        "after_ci95_ns": [
+          54002.16456789607,
+          57370.407868001355
+        ],
+        "speedup": 1.0388595656153654,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 60087.90334302326,
+          "after_ns": 56737.004807692305,
+          "before_ci95_ns": [
+            55866.50762834634,
+            64309.29905770018
+          ],
+          "after_ci95_ns": [
+            54021.11663089879,
+            59452.89298448582
+          ],
+          "speedup": 1.0590601944302256,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "unary_broadcast/n256": {
+        "before_ns": 55270.67151898735,
+        "after_ns": 15466.210817717201,
+        "before_ci95_ns": [
+          53768.632479989785,
+          56772.710557984916
+        ],
+        "after_ci95_ns": [
+          14930.054975048319,
+          16002.366660386084
+        ],
+        "speedup": 3.5736401223544974,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 53674.00470430107,
+          "after_ns": 15765.586194029851,
+          "before_ci95_ns": [
+            51631.058273189694,
+            55716.95113541245
+          ],
+          "after_ci95_ns": [
+            14963.132368051214,
+            16568.040020008488
+          ],
+          "speedup": 3.404504218474697,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "mean_broadcast/n256": {
+        "before_ns": 21536.956666666665,
+        "after_ns": 6940.4712290502775,
+        "before_ci95_ns": [
+          20924.67548781588,
+          22149.23784551745
+        ],
+        "after_ci95_ns": [
+          6895.036770775314,
+          6985.905687325241
+        ],
+        "speedup": 3.103097175379221,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 21970.439971751413,
+          "after_ns": 7115.94027181688,
+          "before_ci95_ns": [
+            20650.195736099464,
+            23290.684207403363
+          ],
+          "after_ci95_ns": [
+            7057.749025884428,
+            7174.1315177493325
+          ],
+          "speedup": 3.0874963999861964,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "sum_matmul_rows/n256": {
+        "before_ns": 22109.515021008403,
+        "after_ns": 13388.133418693982,
+        "before_ci95_ns": [
+          21372.447620083898,
+          22846.582421932908
+        ],
+        "after_ci95_ns": [
+          12830.534295086914,
+          13945.73254230105
+        ],
+        "speedup": 1.651426254098773,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 21884.714989626555,
+          "after_ns": 13791.250641025643,
+          "before_ci95_ns": [
+            20680.18270194983,
+            23089.24727730328
+          ],
+          "after_ci95_ns": [
+            12834.108149948415,
+            14748.39313210287
+          ],
+          "speedup": 1.5868549966400298,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "sum_matmul_cols/n256": {
+        "before_ns": 40081.65931558934,
+        "after_ns": 21367.229157427937,
+        "before_ci95_ns": [
+          38920.793645172875,
+          41242.52498600581
+        ],
+        "after_ci95_ns": [
+          20754.908770106846,
+          21979.54954474903
+        ],
+        "speedup": 1.8758473089925967,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 50603.048349056604,
+          "after_ns": 22258.93277310924,
+          "before_ci95_ns": [
+            47533.852363368205,
+            53672.244334745
+          ],
+          "after_ci95_ns": [
+            21050.380080377858,
+            23467.485465840626
+          ],
+          "speedup": 2.2733816066055765,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "mean_matmul_rows/n256": {
+        "before_ns": 21655.663786008234,
+        "after_ns": 13281.630127388536,
+        "before_ci95_ns": [
+          21072.856161027088,
+          22238.47141098938
+        ],
+        "after_ci95_ns": [
+          12901.835420589183,
+          13661.42483418789
+        ],
+        "speedup": 1.6304974297809496,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 21591.099710982657,
+          "after_ns": 14097.213028169013,
+          "before_ci95_ns": [
+            20884.029746046202,
+            22298.16967591911
+          ],
+          "after_ci95_ns": [
+            13106.24906810129,
+            15088.176988236737
+          ],
+          "speedup": 1.5315863971012837,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "invariant_reduction/n256": {
+        "before_ns": 22110.733333333334,
+        "after_ns": 18715.75667903525,
+        "before_ci95_ns": [
+          21497.15925336968,
+          22724.30741329699
+        ],
+        "after_ci95_ns": [
+          18181.878258252982,
+          19249.63509981752
+        ],
+        "speedup": 1.1813967082667312,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 22059.54661016949,
+          "after_ns": 19211.24351851852,
+          "before_ci95_ns": [
+            21011.925295987396,
+            23107.167924351586
+          ],
+          "after_ci95_ns": [
+            18164.787597635193,
+            20257.699439401847
+          ],
+          "speedup": 1.1482622969671574,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "transpose_sink/n256": {
+        "before_ns": 57047.04059139785,
+        "after_ns": 57994.42942857143,
+        "before_ci95_ns": [
+          55324.913421575795,
+          58769.1677612199
+        ],
+        "after_ci95_ns": [
+          56019.57276700109,
+          59969.286090141766
+        ],
+        "speedup": 0.9836641407371646,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 55753.31456043956,
+          "after_ns": 56490.37293956045,
+          "before_ci95_ns": [
+            52885.18807373078,
+            58621.44104714834
+          ],
+          "after_ci95_ns": [
+            53291.301143032695,
+            59689.44473608821
+          ],
+          "speedup": 0.9869524957834943,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "factor_matmul/n256": {
+        "before_ns": 60930.27426035503,
+        "after_ns": 60034.26722222222,
+        "before_ci95_ns": [
+          58452.16579511302,
+          63408.38272559704
+        ],
+        "after_ci95_ns": [
+          57714.94308912734,
+          62353.5913553171
+        ],
+        "speedup": 1.0149249267058789,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 58212.837643678155,
+          "after_ns": 56783.808908045976,
+          "before_ci95_ns": [
+            55389.454652147746,
+            61036.22063520856
+          ],
+          "after_ci95_ns": [
+            54348.93209278898,
+            59218.68572330297
+          ],
+          "speedup": 1.0251661303303254,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "factor_skinny/n256": {
+        "before_ns": 22108.276694915254,
+        "after_ns": 22022.620919540237,
+        "before_ci95_ns": [
+          21432.968698745633,
+          22783.584691084874
+        ],
+        "after_ci95_ns": [
+          21172.67080511004,
+          22872.571033970435
+        ],
+        "speedup": 1.0038894451159088,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 22097.56842417062,
+          "after_ns": 21700.40625,
+          "before_ci95_ns": [
+            20816.286263739777,
+            23378.85058460146
+          ],
+          "after_ci95_ns": [
+            20458.821532678277,
+            22941.990967321723
+          ],
+          "speedup": 1.018302061703136,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "mixed_layout/n384": {
+        "before_ns": 105080.39574468085,
+        "after_ns": 104821.18802083333,
+        "before_ci95_ns": [
+          103988.4057276232,
+          106172.3857617385
+        ],
+        "after_ci95_ns": [
+          103860.76388376203,
+          105781.61215790463
+        ],
+        "speedup": 1.0024728561919751,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 105695.65234375001,
+          "after_ns": 107781.15896739133,
+          "before_ci95_ns": [
+            104123.2332739799,
+            107268.07141352013
+          ],
+          "after_ci95_ns": [
+            105778.96274654155,
+            109783.3551882411
+          ],
+          "speedup": 0.980650545571956,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "singleton_reshape/n384": {
+        "before_ns": 105634.8472826087,
+        "after_ns": 110480.41458333335,
+        "before_ci95_ns": [
+          104393.73558198939,
+          106875.958983228
+        ],
+        "after_ci95_ns": [
+          108651.81272874057,
+          112309.01643792613
+        ],
+        "speedup": 0.9561409384731289,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 109000.56781914893,
+          "after_ns": 116193.25581395348,
+          "before_ci95_ns": [
+            106814.64048495503,
+            111186.49515334282
+          ],
+          "after_ci95_ns": [
+            112942.18977127319,
+            119444.32185663377
+          ],
+          "speedup": 0.9380971989775263,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "singleton_identity/n384": {
+        "before_ns": 116443.30324675325,
+        "after_ns": 106188.6806122449,
+        "before_ci95_ns": [
+          105177.77726328745,
+          127708.82923021904
+        ],
+        "after_ci95_ns": [
+          103724.3662068685,
+          108652.99501762132
+        ],
+        "speedup": 1.0965698281152374,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 107756.15694444443,
+          "after_ns": 108117.5421511628,
+          "before_ci95_ns": [
+            105330.98142463413,
+            110181.33246425474
+          ],
+          "after_ci95_ns": [
+            105573.87262579982,
+            110661.21167652577
+          ],
+          "speedup": 0.9966574785226517,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "unary_layout/n384": {
+        "before_ns": 820550.6153846154,
+        "after_ns": 112298.575,
+        "before_ci95_ns": [
+          815700.2662025415,
+          825400.9645666892
+        ],
+        "after_ci95_ns": [
+          107696.97369164467,
+          116900.17630835532
+        ],
+        "speedup": 7.306865785114508,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 1001774.4895833335,
+          "after_ns": 119736.11432926827,
+          "before_ci95_ns": [
+            982506.923132271,
+            1021042.0560343959
+          ],
+          "after_ci95_ns": [
+            114830.63291459958,
+            124641.59574393695
+          ],
+          "speedup": 8.366519117436066,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "unary_reshape/n384": {
+        "before_ns": 14221446.1,
+        "after_ns": 116828.9429347826,
+        "before_ci95_ns": [
+          13785503.851553028,
+          14657388.34844697
+        ],
+        "after_ci95_ns": [
+          112634.30165444016,
+          121023.58421512503
+        ],
+        "speedup": 121.72879205060373,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 13074320.5625,
+          "after_ns": 114524.63081395348,
+          "before_ci95_ns": [
+            13031688.191928918,
+            13116952.933071082
+          ],
+          "after_ci95_ns": [
+            109823.44064387621,
+            119225.82098403075
+          ],
+          "speedup": 114.16164775714822,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "opaque_cast_layout/n384": {
+        "before_ns": 112340.77934782607,
+        "after_ns": 112645.22471910114,
+        "before_ci95_ns": [
+          109705.55394771203,
+          114976.00474794011
+        ],
+        "after_ci95_ns": [
+          109474.51844829293,
+          115815.93098990935
+        ],
+        "speedup": 0.9972973077905943,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 114831.89024390242,
+          "after_ns": 111423.58888888889,
+          "before_ci95_ns": [
+            110259.20331000788,
+            119404.57717779696
+          ],
+          "after_ci95_ns": [
+            107760.31102387384,
+            115086.86675390393
+          ],
+          "speedup": 1.030588687628903,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "unary_broadcast/n384": {
+        "before_ns": 116178.32586206899,
+        "after_ns": 22530.01132075472,
+        "before_ci95_ns": [
+          112985.88758858683,
+          119370.76413555114
+        ],
+        "after_ci95_ns": [
+          21741.284559667904,
+          23318.738081841533
+        ],
+        "speedup": 5.156603084129174,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 117151.675,
+          "after_ns": 21543.52022058824,
+          "before_ci95_ns": [
+            112746.51872746924,
+            121556.83127253076
+          ],
+          "after_ci95_ns": [
+            20745.221700728347,
+            22341.818740448136
+          ],
+          "speedup": 5.437907723550353,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "mean_broadcast/n384": {
+        "before_ns": 21506.329951690823,
+        "after_ns": 6994.405658362988,
+        "before_ci95_ns": [
+          20698.362305551713,
+          22314.297597829933
+        ],
+        "after_ci95_ns": [
+          6968.7891641313345,
+          7020.022152594642
+        ],
+        "speedup": 3.0747901969306555,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 22197.721238938047,
+          "after_ns": 7143.251522206303,
+          "before_ci95_ns": [
+            20748.475520773998,
+            23646.966957102097
+          ],
+          "after_ci95_ns": [
+            7105.812162542736,
+            7180.69088186987
+          ],
+          "speedup": 3.1075093981965707,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "sum_matmul_rows/n384": {
+        "before_ns": 31220.42696793003,
+        "after_ns": 21210.823668032786,
+        "before_ci95_ns": [
+          30290.166707467015,
+          32150.687228393046
+        ],
+        "after_ci95_ns": [
+          20647.193658224875,
+          21774.4536778407
+        ],
+        "speedup": 1.4719101651381363,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 30182.275219298244,
+          "after_ns": 22102.893914473683,
+          "before_ci95_ns": [
+            28833.304600710926,
+            31531.245837885563
+          ],
+          "after_ci95_ns": [
+            20829.95683808001,
+            23375.83099086736
+          ],
+          "speedup": 1.3655349989954901,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "sum_matmul_cols/n384": {
+        "before_ns": 81935.455859375,
+        "after_ns": 30424.540033783785,
+        "before_ci95_ns": [
+          79731.73879096925,
+          84139.17292778075
+        ],
+        "after_ci95_ns": [
+          29511.795885678504,
+          31337.284181889067
+        ],
+        "speedup": 2.693071309160068,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 87233.26666666666,
+          "after_ns": 29835.178912213745,
+          "before_ci95_ns": [
+            82747.06691967107,
+            91719.46641366226
+          ],
+          "after_ci95_ns": [
+            28448.641907787576,
+            31221.715916639914
+          ],
+          "speedup": 2.9238392343260133,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "mean_matmul_rows/n384": {
+        "before_ns": 30052.92390572391,
+        "after_ns": 21558.2762345679,
+        "before_ci95_ns": [
+          29180.09814522223,
+          30925.74966622559
+        ],
+        "after_ci95_ns": [
+          20947.427880988613,
+          22169.124588147188
+        ],
+        "speedup": 1.3940318594459402,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 31012.035714285714,
+          "after_ns": 21314.849401595748,
+          "before_ci95_ns": [
+            29100.873813301445,
+            32923.197615269986
+          ],
+          "after_ci95_ns": [
+            20411.31754532931,
+            22218.381257862184
+          ],
+          "speedup": 1.4549497925124435,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "invariant_reduction/n384": {
+        "before_ns": 22639.298161764702,
+        "after_ns": 19329.840552016987,
+        "before_ci95_ns": [
+          21583.143122479312,
+          23695.45320105009
+        ],
+        "after_ci95_ns": [
+          18720.92219802683,
+          19938.758906007144
+        ],
+        "speedup": 1.1712097728298325,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 22035.44910337553,
+          "after_ns": 19494.793588560882,
+          "before_ci95_ns": [
+            20811.86834314772,
+            23259.02986360334
+          ],
+          "after_ci95_ns": [
+            18475.02762739519,
+            20514.559549726575
+          ],
+          "speedup": 1.1303248225364873,
+          "nonoverlapping_ci": true
+        },
+        "accepted_profit": true
+      },
+      "transpose_sink/n384": {
+        "before_ns": 116344.72558139537,
+        "after_ns": 110908.45,
+        "before_ci95_ns": [
+          113852.44281558346,
+          118837.00834720727
+        ],
+        "after_ci95_ns": [
+          108403.49809255684,
+          113413.40190744316
+        ],
+        "speedup": 1.0490158827519036,
+        "nonoverlapping_ci": true,
+        "discovery_repeat": {
+          "before_ns": 115140.04211956522,
+          "after_ns": 110341.33776595743,
+          "before_ci95_ns": [
+            109627.8651763539,
+            120652.21906277654
+          ],
+          "after_ci95_ns": [
+            105903.23388750067,
+            114779.4416444142
+          ],
+          "speedup": 1.043489633629295,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "factor_matmul/n384": {
+        "before_ns": 114485.66910112358,
+        "after_ns": 116193.28231707317,
+        "before_ci95_ns": [
+          111432.33361860242,
+          117539.00458364474
+        ],
+        "after_ci95_ns": [
+          113443.13835205333,
+          118943.42628209302
+        ],
+        "speedup": 0.985303683811171,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 116788.77083333331,
+          "after_ns": 120873.21955128203,
+          "before_ci95_ns": [
+            111339.19046590987,
+            122238.35120075676
+          ],
+          "after_ci95_ns": [
+            113832.82554045439,
+            127913.61356210968
+          ],
+          "speedup": 0.9662088200090025,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      },
+      "factor_skinny/n384": {
+        "before_ns": 29530.19584487535,
+        "after_ns": 29903.48864942529,
+        "before_ci95_ns": [
+          28753.64823809718,
+          30306.74345165352
+        ],
+        "after_ci95_ns": [
+          29088.48339155247,
+          30718.49390729811
+        ],
+        "speedup": 0.9875167473291745,
+        "nonoverlapping_ci": false,
+        "discovery_repeat": {
+          "before_ns": 29745.783598265898,
+          "after_ns": 30206.528061224493,
+          "before_ci95_ns": [
+            28363.574998794607,
+            31127.99219773719
+          ],
+          "after_ci95_ns": [
+            28574.108252418406,
+            31838.94787003058
+          ],
+          "speedup": 0.9847468579631288,
+          "nonoverlapping_ci": false
+        },
+        "accepted_profit": false
+      }
+    }
+  },
+  "confirmed_discovery_regressions": [
+    {
+      "backend": "cuda",
+      "family": "invariant_reduction",
+      "shape_key": "n192",
+      "slowdown": 1.2635006219443616,
+      "original_ns": 15088.95588235294,
+      "optimized_ns": 19064.905141843974
+    }
+  ],
+  "data_sha256": {
+    "rewrite-search-cpu.jsonl": "1dfd4b70fa72fbd6a5250e0d3c98307caeea1572abecdbde4f87e229ee5b122b",
+    "rewrite-search-previous-cpu.jsonl": "c90634e3b7827df47a818725cdd08d02db11d500cec6a7fe43d4a5d39d31bd58",
+    "rewrite-search-accept-cpu.jsonl": "a38e35a84deb29e1cf7337b5e43acd68d69392df89a8bb7c8d54b151bb5544b4",
+    "rewrite-search-cuda.jsonl": "3addefb616da1c6a28ed1990d881f57326fa21d7801f098d8ac8be70845672e3",
+    "rewrite-search-previous-cuda.jsonl": "ed0793212d1671cf17cf5d139a85c6fe82ae8d110629fe1aa7f3270b2710dbf6",
+    "rewrite-search-accept-cuda.jsonl": "63b3249da79ae5d8b300af8b4dbdad261dff21bf1a808694a2267bf54e33b7cc"
+  },
+  "five_options_verified_on_both_backends": true,
+  "previous_source_archive_sha256": "ca03059084b0608b353a6e2f588550170c2a26033d8c1bbfc1c2d1f9c5e7d1c2",
+  "validation": {
+    "cpu_tests_passed": 279,
+    "cuda_tests_passed": 541,
+    "cuda_existing_manual_tests_ignored": 3,
+    "python_tests_passed": 8,
+    "build_cpu": "passed",
+    "build_cuda": "passed",
+    "rustfmt": "passed",
+    "clippy_all_targets_all_features_deny_warnings": "passed",
+    "git_diff_check": "passed"
+  }
+}

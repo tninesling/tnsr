@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "rows": 16,
+  "case_count": 8,
+  "shape_group_count": 7,
+  "family_count": 5,
+  "validation": {
+    "shape_key": {
+      "folds": [
+        {
+          "group": "128x8x128x8",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "16x32x64",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "256x128x256",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "256x256",
+          "train_rows": 12,
+          "test_rows": 4
+        },
+        {
+          "group": "256x32x256x32",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "2x256x2",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "64x32x64",
+          "train_rows": 14,
+          "test_rows": 2
+        }
+      ],
+      "rows_evaluated": 16,
+      "cases_evaluated": 8,
+      "log_latency_rmse": 1.7253889318974334,
+      "absolute_log_error_p90": 1.9803988309926561,
+      "pairwise_accuracy_excluding_ties": 0.4,
+      "pairwise_comparisons": 5,
+      "geomean_regret_vs_oracle": 1.9910557424493687,
+      "max_regret_vs_oracle": 197.43153774362918,
+      "heuristic_geomean_regret_vs_oracle": 1.0028604571745516,
+      "geomean_speedup_vs_original": 1.0406553957628268,
+      "selections": [
+        {
+          "case_id": "chain_large",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.2167029623584882
+        },
+        {
+          "case_id": "factor_large",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 1.1423450061499592,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "factor_matmul",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.0542644672368666
+        },
+        {
+          "case_id": "factor_rejected",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 1.070359027511384,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "matrix_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.0349686665472413
+        },
+        {
+          "case_id": "permute_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.0360821374394908
+        },
+        {
+          "case_id": "reshape_chain",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 197.43153774362918,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_add",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 1.023114074793559,
+          "speedup_vs_original": 1.0
+        }
+      ]
+    },
+    "family": {
+      "folds": [
+        {
+          "group": "matmul_chain",
+          "train_rows": 12,
+          "test_rows": 4
+        },
+        {
+          "group": "matmul_factor",
+          "train_rows": 10,
+          "test_rows": 6
+        },
+        {
+          "group": "permutation",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "reshape",
+          "train_rows": 14,
+          "test_rows": 2
+        },
+        {
+          "group": "transpose_control",
+          "train_rows": 14,
+          "test_rows": 2
+        }
+      ],
+      "rows_evaluated": 16,
+      "cases_evaluated": 8,
+      "log_latency_rmse": 1.642311139594921,
+      "absolute_log_error_p90": 1.393881877295553,
+      "pairwise_accuracy_excluding_ties": 0.2,
+      "pairwise_comparisons": 5,
+      "geomean_regret_vs_oracle": 2.0042510281849,
+      "max_regret_vs_oracle": 197.43153774362918,
+      "heuristic_geomean_regret_vs_oracle": 1.0028604571745516,
+      "geomean_speedup_vs_original": 1.033804085669326,
+      "selections": [
+        {
+          "case_id": "chain_large",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.2167029623584882
+        },
+        {
+          "case_id": "factor_large",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 1.1423450061499592,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "factor_matmul",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 1.0542644672368666,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "factor_rejected",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 1.070359027511384,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "matrix_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.0349686665472413
+        },
+        {
+          "case_id": "permute_chain",
+          "selected": "rewrite",
+          "oracle": "rewrite",
+          "regret": 1.0,
+          "speedup_vs_original": 1.0360821374394908
+        },
+        {
+          "case_id": "reshape_chain",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 197.43153774362918,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_add",
+          "selected": "original",
+          "oracle": "rewrite",
+          "regret": 1.023114074793559,
+          "speedup_vs_original": 1.0
+        }
+      ]
+    }
+  },
+  "eligible_for_opt_in": false,
+  "ineligibility_reasons": [
+    "only 7 shape groups; need >= 12",
+    "shape_key held-out regret does not beat the supplied heuristic",
+    "shape_key held-out worst-case regret exceeds 10% or is unavailable",
+    "family held-out regret does not beat the supplied heuristic",
+    "family held-out worst-case regret exceeds 10% or is unavailable"
+  ],
+  "decision_margin_log": 3.9607976619853122,
+  "note": "Held-out results describe the unguarded ranker. The final coverage/margin gate is conservative and is not claimed as independently validated."
+}

@@ -56,6 +56,8 @@
 //! graph.add_expr(&expr, true);
 //! ```
 
+mod linear_rows;
+
 use crate::tensor::{BinaryOp, DType, ExprKind, ReduceOp, TensorExpr, UnaryOp};
 use egg::{
     AstSize, Extractor, Id, RecExpr, Rewrite, Runner, Symbol, define_language, rewrite as rw,
@@ -471,8 +473,12 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
 /// Optimize a supported `TensorExpr` under explicit numerical assumptions.
 ///
 /// [`RewriteNumerics::RealAlgebra`] restores the algebraic rules that can alter
-/// floating-point behavior. Expressions not fully represented by [`TensorOp`]
-/// retain their structure under both policies.
+/// floating-point behavior. It also collapses batched matrix rows when a rank-2
+/// RHS is shared across rows, including an optional shared bias vector. Apply
+/// before differentiation to avoid batched parameter-gradient partials; this
+/// changes gradient reduction grouping and may change backend matmul rounding.
+/// Unsupported inputs remain opaque to this local row rewrite. Other unsupported
+/// expressions retain their structure under both policies.
 pub fn optimize_expr_with_numerics<D: DType + Clone + Default + 'static>(
     expr: &TensorExpr<D>,
     config: RewriteConfig,
@@ -518,7 +524,11 @@ pub fn optimize_expr_with_numerics<D: DType + Clone + Default + 'static>(
     // Preserve unsupported operations, wide metadata and observable cast
     // identities instead of rebuilding them from lossy placeholder symbols.
     if requires_exact_structure(expr) {
-        return expr.clone();
+        return if numerics == RewriteNumerics::RealAlgebra {
+            linear_rows::rewrite(expr).unwrap_or_else(|| expr.clone())
+        } else {
+            expr.clone()
+        };
     }
 
     let start = expr_to_recexpr(expr);
@@ -541,7 +551,12 @@ pub fn optimize_expr_with_numerics<D: DType + Clone + Default + 'static>(
     tracing::debug!("Best cost: {}", best_cost);
     tracing::debug!("Best expression: {}", best);
 
-    recexpr_to_expr(&best, expr)
+    let optimized = recexpr_to_expr(&best, expr);
+    if numerics == RewriteNumerics::RealAlgebra {
+        linear_rows::rewrite(&optimized).unwrap_or(optimized)
+    } else {
+        optimized
+    }
 }
 
 #[cfg(test)]

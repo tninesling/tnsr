@@ -83,3 +83,15 @@ required-features = ["cuda"]
 [[example]]
 name = "mixed_graph_probe"
 required-features = ["cuda"]
+
+[[example]]
+name = "fusion_probe"
+required-features = ["cuda"]
+
+[[example]]
+name = "structural_rewrite_probe"
+required-features = ["cuda"]
+
+[[example]]
+name = "matmul_grid_probe"
+required-features = ["cuda"]

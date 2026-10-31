@@ -117,18 +117,34 @@ log error. This margin is exploratory calibration. Reported cross-validation
 metrics concern the unguarded ranker; they are not an independent validation of
 the final calibrated gate. The prototype remains experimental even if eligible.
 
-The eight unit tests use a synthetic relation with a known ranking. They verify
+The unit tests use a synthetic relation with a known ranking. They verify
 cross-shape/family evaluation, complete variant grouping, JSON inference
 roundtripping, out-of-coverage and hardware fallbacks, and input rejection.
 Those tests establish software behavior, not real performance accuracy.
 
-`--feature-mode static` excludes the current post-execution counters and generated
-kernel/fused-region counts. `--feature-mode all` includes them and marks the model
-as requiring executed-candidate features. These models must be reported as a
-separate ablation: today's runtime cannot collect execution counters without
-running a candidate, so an all-feature model is not evidence of free online
-profitability prediction. The static feature model is the directly portable
-baseline; compile-only plan features could later be made available before timing.
+`--feature-mode static` uses graph facts and excludes compiler-plan features and
+runtime counters. `--feature-mode compiled` also includes pre-execution plan facts:
+`plan_` / `compiler_` feature names and generated kernel/fused-region counts.
+`--feature-mode all` additionally includes actual launch, materialization and copy
+counters. Exports separately mark whether they require compiled-candidate or
+executed-candidate features. An all-feature model is not evidence of free online
+profitability prediction: runtime counters still require running each candidate.
+
+`PtxExecutionPlan::kernel_features(&graph)` now exposes the current partition's
+compiler-visible features before input upload or execution, including reduction
+extent and logical stride, cooperating lanes, selected block size, active threads,
+serial working set, estimated registers/shared memory, full-domain visits, and
+input-map complexity. The same facts are present in scored alternative diagnostics.
+Serial block size follows the region's selected geometry; standalone elementwise
+and materialized-view kernels use the existing 1,024-thread helper, while fused
+pointwise SSA uses 256 threads. Resource-aware launch fallback can still reduce a
+selected block after compilation, so these values remain planning estimates,
+not measured occupancy, register allocation, or cache transactions.
+
+These compiler facts make a separate compiled-feature ablation possible without
+using target latency or execution counters as inputs. The existing stored models
+and their recorded results below are historical experiments; adding a feature
+mode does not retrain them or enable a runtime model.
 
 ## Measured results
 

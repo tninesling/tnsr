@@ -22,6 +22,19 @@ pub enum FusionAlternativeKind {
     MaterializeProducersAndSplitFullEpilogue,
     SplitMatMulEpilogue,
     SplitPointwiseRegion,
+    /// Change ownership of independent serial fibers, retaining reduction order.
+    SerialReductionThreads {
+        threads: u32,
+    },
+    MaterializeProducersWithSerialThreads {
+        threads: u32,
+    },
+    SplitFullEpilogueWithSerialThreads {
+        threads: u32,
+    },
+    MaterializeProducersAndSplitFullEpilogueWithSerialThreads {
+        threads: u32,
+    },
 }
 
 impl Display for FusionAlternativeKind {
@@ -35,6 +48,18 @@ impl Display for FusionAlternativeKind {
             }
             Self::SplitMatMulEpilogue => "split matmul epilogue",
             Self::SplitPointwiseRegion => "split pointwise region",
+            Self::SerialReductionThreads { threads } => {
+                return write!(formatter, "serial reduction {threads} threads/block");
+            }
+            Self::MaterializeProducersWithSerialThreads { threads } => {
+                return write!(formatter, "materialize producers; serial reduction {threads} threads/block");
+            }
+            Self::SplitFullEpilogueWithSerialThreads { threads } => {
+                return write!(formatter, "split full epilogue; serial reduction {threads} threads/block");
+            }
+            Self::MaterializeProducersAndSplitFullEpilogueWithSerialThreads { threads } => {
+                return write!(formatter, "materialize producers and split full epilogue; serial reduction {threads} threads/block");
+            }
         })
     }
 }
@@ -105,25 +130,114 @@ impl PtxExecutionPlan {
         description
     }
 
-    /// Rank a bounded set of legal region partitions. Existing schedules and
-    /// arithmetic ordering are retained; this does not perform global search.
+    /// Rank bounded legal region partitions and serial launch geometries.
+    /// Reduction arithmetic ordering is retained; this is local plan search.
     pub fn select_fusion<D: TileDType, G>(
         &mut self,
         graph: &TensorGraph<D, G>,
         scorer: &dyn FusionScorer,
     ) -> Result<()> {
+        self.select_fusion_with_serial_threads(graph, scorer, None)
+    }
+
+    /// Force a legal serial launch geometry without altering arithmetic trees.
+    /// Cooperative reduction schedules are unchanged.
+    pub fn set_serial_reduction_block_threads(&mut self, threads: u32) -> Result<()> {
+        ReductionRegion::validate_serial_block_threads(threads)?;
+        for region in &mut self.reduction_regions {
+            if region.schedule == ReductionSchedule::Serial {
+                region.serial_block_threads = threads;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn select_fusion_with_serial_threads<D: TileDType, G>(
+        &mut self,
+        graph: &TensorGraph<D, G>,
+        scorer: &dyn FusionScorer,
+        serial_threads: Option<u32>,
+    ) -> Result<()> {
+        if let Some(threads) = serial_threads {
+            self.set_serial_reduction_block_threads(threads)?;
+        }
         // Splitting half regions introduces additional narrowing stores. Until
         // boundary rounding is represented in legality, retain their fusion.
         if D::TILE_DTYPE != DType::F32 {
             self.fusion_decisions.clear();
             return Ok(());
         }
+        self.fusion_decisions.clear();
         let order = graph.toposort();
         let mut decisions = Vec::new();
         // A large backward plan has thousands of mostly unchanged kernels in
         // hundreds of alternatives. Retain every feature without duplicating
         // its shape/allocation for every local decision.
         let mut feature_pool = HashMap::new();
+        // Legacy standalone strict reductions are also candidates for the
+        // serial region schedule. Keep the original kernel available, and
+        // exclude empty axes because legacy and region empty-mean contracts
+        // differ. No cooperative arithmetic tree is introduced here.
+        let standalone: Vec<_> = self
+            .steps
+            .iter()
+            .filter_map(|step| {
+                if step.action != PtxPlanAction::Kernel {
+                    return None;
+                }
+                let TensorGraphNode::ReduceAxis { op, axis, .. } = graph[step.node] else {
+                    return None;
+                };
+                if !matches!(
+                    op,
+                    crate::tensor::ReduceOp::Sum | crate::tensor::ReduceOp::Mean
+                ) {
+                    return None;
+                }
+                let input = graph.inputs(step.node).first().copied()?;
+                let shape = graph[input].shape();
+                (!shape.contains(&0) && shape.get(axis).is_some_and(|&d| d > 0))
+                    .then_some(step.node)
+            })
+            .collect();
+        for anchor in standalone.iter().copied() {
+            let region = ReductionRegion::from_graph(
+                graph,
+                Vec::new(),
+                anchor,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![anchor],
+            )?;
+            let mut reductions = self.reduction_regions.clone();
+            reductions.push(region);
+            let mut candidates = Vec::new();
+            if let Some(mut plan) =
+                self.repartition(graph, &order, reductions, self.matmul_regions.clone())?
+            {
+                if let Some(threads) = serial_threads {
+                    plan.set_serial_reduction_block_threads(threads)?;
+                }
+                let threads = plan
+                    .reduction_regions
+                    .iter()
+                    .find(|r| r.members.contains(&anchor))
+                    .map_or(1024, |r| r.serial_block_threads);
+                candidates.push((
+                    FusionAlternativeKind::SerialReductionThreads { threads },
+                    plan,
+                ));
+            }
+            decisions.push(self.choose(
+                graph,
+                scorer,
+                anchor,
+                candidates,
+                serial_threads.is_none(),
+                &mut feature_pool,
+            ));
+        }
         // Anchors survive partitioning, so region indices can change safely.
         let anchors: Vec<_> = self
             .reduction_regions
@@ -135,6 +249,7 @@ impl PtxExecutionPlan {
                     .copied()
                     .find(|&node| matches!(graph[node], TensorGraphNode::ReduceAxis { .. }))
             })
+            .filter(|anchor| !standalone.contains(anchor))
             .collect();
         for anchor in anchors {
             let Some(index) = self
@@ -214,6 +329,7 @@ impl PtxExecutionPlan {
                     outputs(graph, &members),
                 )?;
                 alternative.schedule = region.schedule;
+                alternative.serial_block_threads = region.serial_block_threads;
                 let mut reductions = self.reduction_regions.clone();
                 reductions[index] = alternative;
                 if let Some(plan) =
@@ -222,7 +338,14 @@ impl PtxExecutionPlan {
                     candidates.push((kind, plan));
                 }
             }
-            decisions.push(self.choose(graph, scorer, anchor, candidates, &mut feature_pool));
+            decisions.push(self.choose(
+                graph,
+                scorer,
+                anchor,
+                candidates,
+                serial_threads.is_none(),
+                &mut feature_pool,
+            ));
         }
         let anchors: Vec<_> = self
             .matmul_regions
@@ -252,7 +375,14 @@ impl PtxExecutionPlan {
                     candidates.push((FusionAlternativeKind::SplitMatMulEpilogue, plan));
                 }
             }
-            decisions.push(self.choose(graph, scorer, anchor, candidates, &mut feature_pool));
+            decisions.push(self.choose(
+                graph,
+                scorer,
+                anchor,
+                candidates,
+                serial_threads.is_none(),
+                &mut feature_pool,
+            ));
         }
         // Same-shape pointwise SSA shares producers already. Compare one balanced
         // cut to relieve live-value pressure without enumerating every partition.
@@ -300,7 +430,14 @@ impl PtxExecutionPlan {
                 }
                 Err(error) => return Err(error),
             };
-            decisions.push(self.choose(graph, scorer, members[0], candidates, &mut feature_pool));
+            decisions.push(self.choose(
+                graph,
+                scorer,
+                members[0],
+                candidates,
+                false,
+                &mut feature_pool,
+            ));
         }
         self.fusion_decisions = decisions;
         Ok(())
@@ -368,41 +505,163 @@ impl PtxExecutionPlan {
         graph: &TensorGraph<D, G>,
         scorer: &dyn FusionScorer,
         node: NodeIndex,
-        candidates: Vec<(FusionAlternativeKind, Self)>,
+        mut candidates: Vec<(FusionAlternativeKind, Self)>,
+        serial_geometry: bool,
         feature_pool: &mut HashMap<FusionFeatures, Arc<FusionFeatures>>,
     ) -> FusionDecision {
-        let features = self.fusion_features(graph);
-        let cost = scorer.score(&features);
-        let mut alternatives = vec![FusionAlternative {
-            kind: FusionAlternativeKind::KeepFusion,
-            features: share_features(features, feature_pool),
-            cost,
-            selected: false,
-        }];
+        let mut alternatives = Vec::new();
+        let mut best = usize::MAX;
         let mut selected = 0;
-        let mut best = cost.total_ns();
+        // Geometry alternatives only modify one feature and one region field.
+        // Keep complete ordered inputs for arbitrary, non-additive scorers, but
+        // neither clone plans nor recompute unrelated kernels for these variants.
         let mut winner = None;
-        for (kind, plan) in candidates {
-            let features = plan.fusion_features(graph);
-            let cost = scorer.score(&features);
-            if cost.total_ns() < best {
-                selected = alternatives.len();
+        for (candidate, kind, plan) in
+            std::iter::once((None, FusionAlternativeKind::KeepFusion, &*self)).chain(
+                candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (kind, plan))| (Some(index), *kind, plan)),
+            )
+        {
+            let mut features = plan.fusion_features(graph);
+            let shared = share_features(features.clone(), feature_pool);
+            // The original keep-fusion entry precedes all geometry alternatives;
+            // each partition's geometry alternatives precede its unmodified plan.
+            if candidate.is_none() {
+                let cost = scorer.score(&features);
                 best = cost.total_ns();
-                winner = Some(plan);
+                alternatives.push(FusionAlternative {
+                    kind,
+                    features: shared.clone(),
+                    cost,
+                    selected: false,
+                });
             }
-            alternatives.push(FusionAlternative {
-                kind,
-                features: share_features(features, feature_pool),
-                cost,
-                selected: false,
-            });
+            if serial_geometry
+                && let Some((region_index, region)) = plan
+                    .reduction_regions
+                    .iter()
+                    .enumerate()
+                    .find(|(_, region)| region.members.contains(&node))
+                && region.schedule == ReductionSchedule::Serial
+            {
+                let fibers = region
+                    .output_shape
+                    .iter()
+                    .copied()
+                    .fold(1usize, usize::saturating_mul);
+                if fibers > 0 {
+                    let feature_index = plan
+                        .steps
+                        .iter()
+                        .filter(|step| {
+                            !matches!(
+                                step.action,
+                                PtxPlanAction::Upload | PtxPlanAction::VirtualView
+                            )
+                        })
+                        .position(|step| {
+                            step.action == PtxPlanAction::ReductionRegion(region_index)
+                        });
+                    if let Some(feature_index) = feature_index {
+                        let original = features[feature_index].clone();
+                        let largest = fibers.clamp(32, 1024).next_power_of_two();
+                        for threads in [32u32, 64, 128, 256, 512, 1024] {
+                            if threads == region.serial_block_threads || threads as usize > largest
+                            {
+                                continue;
+                            }
+                            let Some(kind) = serial_geometry_kind(kind, threads) else {
+                                continue;
+                            };
+                            super::fusion_features::set_serial_geometry_features(
+                                &mut features[feature_index],
+                                region,
+                                threads as usize,
+                            );
+                            let cost = scorer.score(&features);
+                            if cost.total_ns() < best {
+                                best = cost.total_ns();
+                                selected = alternatives.len();
+                                winner = Some((candidate, Some((region_index, threads))));
+                            }
+                            let mut variant_shared = shared.clone();
+                            variant_shared[feature_index] =
+                                share_feature(features[feature_index].clone(), feature_pool);
+                            alternatives.push(FusionAlternative {
+                                kind,
+                                features: variant_shared,
+                                cost,
+                                selected: false,
+                            });
+                        }
+                        features[feature_index] = original;
+                    }
+                }
+            }
+            if candidate.is_some() {
+                let cost = scorer.score(&features);
+                if cost.total_ns() < best {
+                    best = cost.total_ns();
+                    selected = alternatives.len();
+                    winner = Some((candidate, None));
+                }
+                alternatives.push(FusionAlternative {
+                    kind,
+                    features: shared,
+                    cost,
+                    selected: false,
+                });
+            }
         }
         alternatives[selected].selected = true;
-        if let Some(plan) = winner {
-            *self = plan;
+        if let Some((candidate, geometry)) = winner {
+            if let Some(index) = candidate {
+                *self = candidates.swap_remove(index).1;
+            }
+            if let Some((index, threads)) = geometry {
+                self.reduction_regions[index].serial_block_threads = threads;
+            }
         }
         FusionDecision { node, alternatives }
     }
+}
+
+fn serial_geometry_kind(
+    kind: FusionAlternativeKind,
+    threads: u32,
+) -> Option<FusionAlternativeKind> {
+    Some(match kind {
+        FusionAlternativeKind::KeepFusion
+        | FusionAlternativeKind::SerialReductionThreads { .. } => {
+            FusionAlternativeKind::SerialReductionThreads { threads }
+        }
+        FusionAlternativeKind::MaterializeProducers => {
+            FusionAlternativeKind::MaterializeProducersWithSerialThreads { threads }
+        }
+        FusionAlternativeKind::SplitFullEpilogue => {
+            FusionAlternativeKind::SplitFullEpilogueWithSerialThreads { threads }
+        }
+        FusionAlternativeKind::MaterializeProducersAndSplitFullEpilogue => {
+            FusionAlternativeKind::MaterializeProducersAndSplitFullEpilogueWithSerialThreads {
+                threads,
+            }
+        }
+        _ => return None,
+    })
+}
+
+fn share_feature(
+    feature: FusionFeatures,
+    pool: &mut HashMap<FusionFeatures, Arc<FusionFeatures>>,
+) -> Arc<FusionFeatures> {
+    if let Some(shared) = pool.get(&feature) {
+        return shared.clone();
+    }
+    let shared = Arc::new(feature.clone());
+    pool.insert(feature, shared.clone());
+    shared
 }
 
 fn share_features(
@@ -411,14 +670,7 @@ fn share_features(
 ) -> Vec<Arc<FusionFeatures>> {
     features
         .into_iter()
-        .map(|feature| {
-            if let Some(shared) = pool.get(&feature) {
-                return shared.clone();
-            }
-            let shared = Arc::new(feature.clone());
-            pool.insert(feature, shared.clone());
-            shared
-        })
+        .map(|feature| share_feature(feature, pool))
         .collect()
 }
 
@@ -484,15 +736,16 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(
-            decision
-                .alternatives
-                .iter()
-                .find(|alternative| alternative.selected)
-                .unwrap()
-                .kind,
+        let selected = decision
+            .alternatives
+            .iter()
+            .find(|alternative| alternative.selected)
+            .unwrap();
+        assert!(matches!(
+            selected.kind,
             FusionAlternativeKind::MaterializeProducers
-        );
+                | FusionAlternativeKind::MaterializeProducersWithSerialThreads { .. }
+        ));
         assert!(
             decision.alternatives[0]
                 .features
@@ -514,7 +767,16 @@ mod tests {
             )
             .unwrap();
             assert!(!plan.reduction_regions()[0].producer_operations.is_empty());
-            assert!(plan.fusion_decisions()[0].alternatives[0].selected);
+            let selected = plan.fusion_decisions()[0]
+                .alternatives
+                .iter()
+                .find(|a| a.selected)
+                .unwrap();
+            assert!(matches!(
+                selected.kind,
+                FusionAlternativeKind::KeepFusion
+                    | FusionAlternativeKind::SerialReductionThreads { .. }
+            ));
         }
     }
 
@@ -631,6 +893,295 @@ mod tests {
                 .flat_map(|decision| &decision.alternatives)
                 .flat_map(|alternative| &alternative.features)
                 .all(|features| features.repeated_operations == 0)
+        );
+    }
+    // Reference expansion deliberately retains the old expensive implementation:
+    // clone a complete plan for every geometry and recompute all its features.
+    fn choose_full_plan_reference(
+        plan: &mut PtxExecutionPlan,
+        graph: &TensorGraph<f32>,
+        scorer: &dyn FusionScorer,
+        node: NodeIndex,
+        candidates: Vec<(FusionAlternativeKind, PtxExecutionPlan)>,
+    ) -> FusionDecision {
+        fn expand(
+            plan: &PtxExecutionPlan,
+            node: NodeIndex,
+            kind: FusionAlternativeKind,
+        ) -> Vec<(FusionAlternativeKind, PtxExecutionPlan)> {
+            let Some((index, region)) = plan
+                .reduction_regions
+                .iter()
+                .enumerate()
+                .find(|(_, region)| region.members.contains(&node))
+            else {
+                return Vec::new();
+            };
+            if region.schedule != ReductionSchedule::Serial {
+                return Vec::new();
+            }
+            let fibers = region
+                .output_shape
+                .iter()
+                .copied()
+                .fold(1usize, usize::saturating_mul);
+            if fibers == 0 {
+                return Vec::new();
+            }
+            let largest = fibers.clamp(32, 1024).next_power_of_two();
+            [32u32, 64, 128, 256, 512, 1024]
+                .into_iter()
+                .filter_map(|threads| {
+                    if threads == region.serial_block_threads || threads as usize > largest {
+                        return None;
+                    }
+                    let kind = serial_geometry_kind(kind, threads)?;
+                    let mut variant = plan.clone();
+                    variant.reduction_regions[index].serial_block_threads = threads;
+                    Some((kind, variant))
+                })
+                .collect()
+        }
+        let mut expanded = expand(plan, node, FusionAlternativeKind::KeepFusion);
+        for (kind, candidate) in candidates {
+            expanded.extend(expand(&candidate, node, kind));
+            expanded.push((kind, candidate));
+        }
+        plan.choose(graph, scorer, node, expanded, false, &mut HashMap::new())
+    }
+
+    fn producer_cut(
+        plan: &PtxExecutionPlan,
+        graph: &TensorGraph<f32>,
+        index: usize,
+    ) -> (NodeIndex, Vec<(FusionAlternativeKind, PtxExecutionPlan)>) {
+        let region = &plan.reduction_regions[index];
+        let anchor = region
+            .members
+            .iter()
+            .copied()
+            .find(|&node| matches!(graph[node], TensorGraphNode::ReduceAxis { .. }))
+            .unwrap();
+        let reduced: Vec<_> = region
+            .epilogue_operations
+            .iter()
+            .map(|op| op.node)
+            .collect();
+        let full: Vec<_> = region
+            .full_epilogue_operations
+            .iter()
+            .map(|op| op.node)
+            .collect();
+        let members: Vec<_> = std::iter::once(anchor)
+            .chain(reduced.iter().copied())
+            .chain(region.broadcast_members.iter().copied())
+            .chain(full.iter().copied())
+            .collect();
+        let mut cut = ReductionRegion::from_graph(
+            graph,
+            Vec::new(),
+            anchor,
+            reduced,
+            region.broadcast_members.clone(),
+            full,
+            outputs(graph, &members),
+        )
+        .unwrap();
+        cut.schedule = region.schedule;
+        cut.serial_block_threads = region.serial_block_threads;
+        let mut reductions = plan.reduction_regions.clone();
+        reductions[index] = cut;
+        let candidate = plan
+            .repartition(
+                graph,
+                &graph.toposort(),
+                reductions,
+                plan.matmul_regions.clone(),
+            )
+            .unwrap()
+            .unwrap();
+        (
+            anchor,
+            vec![(FusionAlternativeKind::MaterializeProducers, candidate)],
+        )
+    }
+
+    fn many_normalizations(count: usize) -> TensorGraph<f32> {
+        (0..count)
+            .map(|_| {
+                let input = TensorExpr::<f32>::input("input", vec![128, 192]).relu();
+                input.clone() / input.reduce_sum(1).broadcast(vec![128, 192])
+            })
+            .reduce(|left, right| left + right)
+            .unwrap()
+            .into()
+    }
+
+    #[test]
+    fn serial_geometry_overlays_match_full_plan_expansion() {
+        struct InteractingScorer;
+        impl FusionScorer for InteractingScorer {
+            fn score(&self, kernels: &[FusionFeatures]) -> FusionCost {
+                // Non-additive and order sensitive, so scoring only changed
+                // kernels would not preserve this scorer's behavior.
+                let interaction = kernels
+                    .windows(2)
+                    .enumerate()
+                    .map(|(index, pair)| {
+                        (index + 1).saturating_mul(
+                            pair[0]
+                                .threads_per_block
+                                .abs_diff(pair[1].threads_per_block),
+                        )
+                    })
+                    .fold(0usize, usize::saturating_add);
+                FusionCost {
+                    compute_ns: interaction,
+                    ..Default::default()
+                }
+            }
+        }
+        for graph in [
+            normalization(2, 32, false),
+            normalization(1024, 32, true),
+            normalization(0, 32, false),
+            many_normalizations(4),
+        ] {
+            let baseline = PtxExecutionPlan::build(&graph).unwrap();
+            let (anchor, candidates) = producer_cut(&baseline, &graph, 0);
+            for scorer in [
+                &AnalyticalFusionScorer::default() as &dyn FusionScorer,
+                &InteractingScorer,
+            ] {
+                let mut actual = baseline.clone();
+                let mut expected = baseline.clone();
+                let decision = actual.choose(
+                    &graph,
+                    scorer,
+                    anchor,
+                    candidates.clone(),
+                    true,
+                    &mut HashMap::new(),
+                );
+                let reference = choose_full_plan_reference(
+                    &mut expected,
+                    &graph,
+                    scorer,
+                    anchor,
+                    candidates.clone(),
+                );
+                assert_eq!(decision, reference);
+                assert_eq!(actual, expected);
+                assert_eq!(
+                    actual.kernel_features(&graph),
+                    expected.kernel_features(&graph)
+                );
+                let ptx = |plan: &PtxExecutionPlan| {
+                    let mut tile = crate::tile::TileGraph::from_graph(&TensorGraph::<f32>::new());
+                    tile.add_fusion_regions(&plan.regions).unwrap();
+                    tile.add_reduction_regions(&plan.reduction_regions).unwrap();
+                    tile.add_matmul_regions(&plan.matmul_regions).unwrap();
+                    crate::ptx::PtxGraph::from(tile).to_ptx()
+                };
+                assert_eq!(ptx(&actual), ptx(&expected));
+            }
+        }
+    }
+
+    #[test]
+    fn standalone_promotion_geometry_matches_full_plan_expansion() {
+        let graph: TensorGraph<f32> = TensorExpr::input("x", vec![128, 192]).reduce_sum(0).into();
+        let baseline = PtxExecutionPlan::build(&graph).unwrap();
+        let anchor = baseline.graph_output.unwrap();
+        assert!(baseline.reduction_regions.is_empty());
+        let region = ReductionRegion::from_graph(
+            &graph,
+            Vec::new(),
+            anchor,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![anchor],
+        )
+        .unwrap();
+        let promoted = baseline
+            .repartition(&graph, &graph.toposort(), vec![region], Vec::new())
+            .unwrap()
+            .unwrap();
+        let candidates = vec![(
+            FusionAlternativeKind::SerialReductionThreads { threads: 1024 },
+            promoted,
+        )];
+        let scorer = AnalyticalFusionScorer::default();
+        let mut actual = baseline.clone();
+        let mut expected = baseline;
+        let decision = actual.choose(
+            &graph,
+            &scorer,
+            anchor,
+            candidates.clone(),
+            true,
+            &mut HashMap::new(),
+        );
+        let reference =
+            choose_full_plan_reference(&mut expected, &graph, &scorer, anchor, candidates);
+        assert_eq!(decision, reference);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[ignore = "device-free fusion planning microbenchmark; run with --ignored --nocapture"]
+    fn serial_geometry_overlay_planning_benchmark() {
+        let graph = many_normalizations(64);
+        let baseline = PtxExecutionPlan::build(&graph).unwrap();
+        let (anchor, candidates) = producer_cut(&baseline, &graph, 0);
+        let scorer = AnalyticalFusionScorer::default();
+        let repetitions = 20;
+        let mut reference = std::time::Duration::ZERO;
+        let mut overlays = std::time::Duration::ZERO;
+        // Alternate order and discard one warm pair to reduce allocator/cache
+        // and host-load drift; this measures planning only, never CUDA/JIT.
+        for iteration in 0..=repetitions {
+            let order = if iteration % 2 == 0 {
+                [true, false]
+            } else {
+                [false, true]
+            };
+            for full_plan in order {
+                let start = std::time::Instant::now();
+                let mut plan = baseline.clone();
+                let decision = if full_plan {
+                    choose_full_plan_reference(
+                        &mut plan,
+                        &graph,
+                        &scorer,
+                        anchor,
+                        candidates.clone(),
+                    )
+                } else {
+                    plan.choose(
+                        &graph,
+                        &scorer,
+                        anchor,
+                        candidates.clone(),
+                        true,
+                        &mut HashMap::new(),
+                    )
+                };
+                std::hint::black_box(decision);
+                if iteration > 0 {
+                    if full_plan {
+                        reference += start.elapsed();
+                    } else {
+                        overlays += start.elapsed();
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "geometry planning {repetitions} iterations / {} physical steps: full-plan={reference:?}, overlays={overlays:?}, speedup={:.2}x",
+            baseline.steps.len(),
+            reference.as_secs_f64() / overlays.as_secs_f64()
         );
     }
 }

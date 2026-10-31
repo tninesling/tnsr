@@ -509,6 +509,21 @@ impl TileIRBuilder {
     }
 
     #[allow(dead_code)]
+    pub fn if_then<F>(&mut self, condition: super::ScalarPredicate, body_fn: F)
+    where
+        F: FnOnce(&mut Self),
+    {
+        let mut body = Self::new();
+        body.next_var = self.next_var;
+        body_fn(&mut body);
+        self.next_var = body.next_var;
+        self.stmts.push(Stmt::If {
+            condition,
+            body: Block { stmts: body.stmts },
+        });
+    }
+
+    #[allow(dead_code)]
     pub fn for_loop<F>(&mut self, var_name: &str, start: i64, end: i64, body_fn: F)
     where
         F: FnOnce(&mut Self, String),

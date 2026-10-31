@@ -5,7 +5,8 @@ Tracking issue: [#15 Implement operator fusion](https://github.com/tninesling/tn
 Status: the PTX execution planner now includes general pointwise regions,
 virtual views, strict and cooperative reductions, batched matmul epilogues,
 target-aware schedules and layouts, pipelined operand copies, and bounded
-cost-based fusion selection. Opt-in online normalization composes with indexed
+cost-based fusion selection, including joint serial-reduction block geometry
+and partition search. Opt-in online normalization composes with indexed
 contractions and lowers through scalar loops with carried state.
 
 Remaining compiler work includes broader scheduling search, operand-producer
@@ -15,6 +16,8 @@ Static CUDA has been removed; tiled PTX is the production GPU path.
 Primary reference: [DNNFusion, PLDI 2021](references/dnnfusion-pldi-2021.pdf).
 
 Implementation baseline: [Fusion Baseline](fusion-baseline.md).
+Latest strict-reduction and host-layout measurements:
+[Fusion iteration](fusion-iteration.md).
 
 ## Summary
 

@@ -14,15 +14,28 @@ pub(crate) fn pointwise_launch_config(elements: u32) -> LaunchConfig {
     }
 }
 
+/// Independent serial fibers use launch geometry only; no CUDA resource query
+/// belongs in this hot path. All supported choices are at most the historical
+/// 1,024-thread launch, and never change one fiber's accumulation sequence.
+pub(crate) fn serial_reduction_launch_config(rows: u32, threads: u32) -> Result<LaunchConfig> {
+    crate::tile::ReductionRegion::validate_serial_block_threads(threads)?;
+    Ok(LaunchConfig {
+        grid_dim: (rows.div_ceil(threads), 1, 1),
+        block_dim: (threads, 1, 1),
+        shared_mem_bytes: 0,
+    })
+}
+
 /// Compiled resource usage can require fewer independent warps per block.
 /// Reducing the number of whole warps preserves each fiber's arithmetic and mapping.
 pub(crate) fn reduction_launch_config(
     schedule: ReductionSchedule,
+    serial_threads: u32,
     rows: u32,
     function: &CudaFunction,
 ) -> Result<LaunchConfig> {
     let threads = match schedule {
-        ReductionSchedule::Serial => return Ok(LaunchConfig::for_num_elems(rows)),
+        ReductionSchedule::Serial => return serial_reduction_launch_config(rows, serial_threads),
         ReductionSchedule::Subgroup { width } => width,
         ReductionSchedule::Block { threads } => {
             return Ok(LaunchConfig {
@@ -246,6 +259,23 @@ mod reduction_launch_tests {
     use cudarc::nvrtc::Ptx;
 
     #[test]
+    fn serial_geometry_covers_each_fiber_without_changing_index_order() {
+        for threads in [32, 64, 96, 128, 256, 512, 1024] {
+            for rows in [0, 1, 31, 32, 33, 191, 192, 257, 1025, u32::MAX] {
+                let config = serial_reduction_launch_config(rows, threads).unwrap();
+                assert_eq!(config.block_dim, (threads, 1, 1));
+                let lanes = u64::from(config.grid_dim.0) * u64::from(threads);
+                assert!(lanes >= u64::from(rows));
+                assert!(lanes - u64::from(rows) < u64::from(threads));
+                assert_eq!(config.shared_mem_bytes, 0);
+            }
+        }
+        for threads in [0, 1, 31, 33, 1025] {
+            assert!(serial_reduction_launch_config(1, threads).is_err());
+        }
+    }
+
+    #[test]
     fn packed_reduction_launch_respects_compiled_function_limit() {
         let device = match CudaContext::new(0) {
             Ok(device) => device,
@@ -265,7 +295,7 @@ mod reduction_launch_tests {
             ReductionSchedule::Subgroup { width: 32 },
             ReductionSchedule::Block { threads: 128 },
         ] {
-            let config = reduction_launch_config(schedule, 9, &function).unwrap();
+            let config = reduction_launch_config(schedule, 1024, 9, &function).unwrap();
             assert_eq!(config.block_dim, (128, 1, 1));
             assert_eq!(
                 config.grid_dim,

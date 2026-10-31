@@ -1,0 +1,68 @@
+{
+  "status": "complete",
+  "change": "Strict-F32 register-tiled GEMM staging K16 to K32 when shared-memory budgets permit; legacy K16 fallback retained",
+  "baseline_report": "/home/taylor/code/tnsr-benchmarks/docs/reports/2026-10-29-ppo-refresh/README.md",
+  "raw_report": "/home/taylor/code/tnsr-benchmarks/results/ppo-staging-k-20261029/report.json",
+  "changed_compiler_files": [
+    "src/tile/layout.rs",
+    "src/tile/matmul_schedule.rs"
+  ],
+  "binary_sha256": {
+    "baseline": "21fbb3aefd2da1efe28b46377ec509bbaa049d9e039c19cfcc289ff3a92ade1c",
+    "candidate": "5dc182632948880a32529792835c336a45d8e51cda2bd852caeb40738d749aba"
+  },
+  "validated_checkpoints": 20,
+  "numerical_violations": 0,
+  "gpu_audit_records": 616,
+  "results": [
+    {
+      "microbatch": 64,
+      "candidate_speedup": 1.020992435039,
+      "bootstrap_95ci": [
+        0.9981933683861339,
+        1.035975227604996
+      ],
+      "baseline_median_ms": 53.778040000000004,
+      "candidate_median_ms": 52.75698625
+    },
+    {
+      "microbatch": 8,
+      "candidate_speedup": 1.0485703365049335,
+      "bootstrap_95ci": [
+        1.0465979096869367,
+        1.0689024643175273
+      ],
+      "baseline_median_ms": 77.30512100000001,
+      "candidate_median_ms": 73.85055775000001
+    }
+  ],
+  "padding_exploration": [
+    {
+      "microbatch": 64,
+      "repeat": 0,
+      "speedup": 0.8154047311790682
+    },
+    {
+      "microbatch": 64,
+      "repeat": 1,
+      "speedup": 0.8227996017049158
+    },
+    {
+      "microbatch": 8,
+      "repeat": 0,
+      "speedup": 0.8384529223806878
+    },
+    {
+      "microbatch": 8,
+      "repeat": 1,
+      "speedup": 0.8399516631012158
+    }
+  ],
+  "padding_decision": "rejected",
+  "caveats": [
+    "Optimization A/B only; competitor rankings were not rerun.",
+    "Microbatch64 confidence interval includes parity.",
+    "Initial /tmp qualification stopped before measurement because diagnostic hardlinks crossed filesystems.",
+    "Initial layout-screen affected inference executor only; superseded by layout-screen-resident."
+  ]
+}

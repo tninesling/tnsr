@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow, ensure};
 
-use super::{DType, MatMulPlan, SharedLayout, TileLayout};
+use super::{DType, Dim, Expr, MatMulPlan, SharedLayout, TileLayout};
 
 /// Arithmetic policy, independent of the target's available instructions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -89,6 +89,9 @@ pub enum MatMulAccumulatorLayout {
 pub struct MatMulSchedule {
     pub plan: MatMulPlan,
     pub logical_shape: MatMulTile,
+    /// Number of neighboring output row tiles visited before advancing columns.
+    /// One retains the ordinary row-major CUDA grid traversal.
+    pub grid_group_m: usize,
     pub block_tile: MatMulTile,
     pub instruction_tile: MatMulTile,
     pub block_threads: (u32, u32, u32),
@@ -110,6 +113,120 @@ pub struct MatMulSchedule {
 }
 
 impl MatMulSchedule {
+    /// Experimental SIMT outer-product tile. Defaults never call this selector.
+    /// Small output grids, including PPO weight gradients, retain their schedule.
+    /// Apply this before selecting operand layouts and asynchronous staging.
+    pub fn with_experimental_register_tile(mut self, resources: MatMulResources) -> Self {
+        if self.plan != MatMulPlan::ScalarF32
+            || self.storage_dtype != DType::F32
+            || self.logical_shape.m < 1024
+            || self.logical_shape.n < 256
+            || self.logical_shape.k < 128
+        {
+            return self;
+        }
+        // No shared accumulator exchange is needed. Budget two resident CTAs
+        // at 128 registers/thread; the actual JIT resource usage must be measured.
+        let shared_bytes = (64 * 16 + 16 * 64) * 4;
+        if resources.shared_bytes_per_block < shared_bytes
+            || resources.shared_bytes_per_sm < 2 * shared_bytes
+            || resources.registers_per_sm < 2 * 128 * 256
+            || resources.threads_per_sm < 512
+        {
+            return self;
+        }
+        self.block_tile = MatMulTile {
+            m: 64,
+            n: 64,
+            k: 16,
+        };
+        self.block_threads = (16, 16, 1);
+        self.warp_topology = (8, 1);
+        self.warp_fragments = (1, 1);
+        self.accumulator_layout = MatMulAccumulatorLayout::ThreadArray { elements: 16 };
+        self.operand_layouts = (SharedLayout::row_major(16), SharedLayout::row_major(64));
+        self.pipeline_stages = 1;
+        self.copy_bytes = 4;
+        self.async_operands = (false, false);
+        self
+    }
+
+    /// Per-thread output shape for supported scalar register-array schedules.
+    /// The flattened accumulator slot is row-major within this microtile.
+    pub fn register_thread_tile(&self) -> Option<(usize, usize)> {
+        if self.plan != MatMulPlan::ScalarF32
+            || self.storage_dtype != DType::F32
+            || self.block_threads != (16, 16, 1)
+        {
+            return None;
+        }
+        match (self.block_tile, self.accumulator_layout) {
+            (
+                MatMulTile {
+                    m: 32,
+                    n: 32,
+                    k: 16 | 32,
+                },
+                MatMulAccumulatorLayout::ThreadArray { elements: 4 },
+            ) => Some((4, 1)),
+            (
+                MatMulTile {
+                    m: 64,
+                    n: 64,
+                    k: 16,
+                },
+                MatMulAccumulatorLayout::ThreadArray { elements: 16 },
+            ) => Some((4, 4)),
+            _ => None,
+        }
+    }
+
+    /// Authoritative output ownership shared by scalar lowering and epilogues.
+    pub fn register_accumulator_coordinates(&self, slot: usize) -> Option<(Expr, Expr)> {
+        let (thread_rows, thread_cols) = self.register_thread_tile()?;
+        if slot >= thread_rows * thread_cols {
+            return None;
+        }
+        let lane_rows = self.block_tile.m / thread_rows;
+        let lane_cols = self.block_tile.n / thread_cols;
+        let linear =
+            Expr::ThreadIdx(Dim::Y) * self.block_threads.0 as usize + Expr::ThreadIdx(Dim::X);
+        let row = Expr::ShiftRight(
+            Box::new(linear.clone()),
+            u64::from(lane_cols.trailing_zeros()),
+        ) + Expr::Const(((slot / thread_cols) * lane_rows) as i64);
+        let col = Expr::BitAnd(Box::new(linear), (lane_cols - 1) as u64)
+            + Expr::Const(((slot % thread_cols) * lane_cols) as i64);
+        Some((row, col))
+    }
+
+    pub fn validate_grid_group_m(group: usize) -> Result<()> {
+        ensure!(
+            group.is_power_of_two() && group <= 32,
+            "matmul grid row group must be a power of two from 1 through 32"
+        );
+        Ok(())
+    }
+
+    /// Change output-tile launch order only; each output retains its K order.
+    pub fn with_grid_group_m(mut self, group: usize) -> Result<Self> {
+        Self::validate_grid_group_m(group)?;
+        self.grid_group_m = group;
+        Ok(self)
+    }
+
+    /// Partial output-row groups require more expensive index selection. Keep
+    /// a power-of-two group dividing the tile grid; odd row counts fall back
+    /// to row-major traversal. Logical element tails still use normal bounds.
+    pub fn effective_grid_group_m(&self) -> usize {
+        let rows = self.logical_shape.m.div_ceil(self.block_tile.m);
+        let mut group = self.grid_group_m;
+        while group > 1 && !rows.is_multiple_of(group) {
+            group /= 2;
+        }
+        group
+    }
+
     pub fn with_shared_layout(
         self,
         policy: MatMulSharedLayout,
@@ -414,11 +531,22 @@ impl MatMulSchedule {
             && m >= 128
             && n >= 256
             && k >= 128;
+        // A wider staging tile halves the outer load/barrier iterations without
+        // changing the increasing-K multiply/add sequence. Include accumulator
+        // storage in the budget and retain two resident blocks; tighter targets
+        // keep the existing 16-wide staging tile.
+        let scalar_staging_k = if resources.shared_bytes_per_block >= 12 * 1024
+            && resources.shared_bytes_per_sm >= 24 * 1024
+        {
+            32
+        } else {
+            16
+        };
         let block_tile = if register_tiled {
             MatMulTile {
                 m: 32,
                 n: 32,
-                k: 16,
+                k: scalar_staging_k,
             }
         } else if plan == MatMulPlan::TensorCoreBF16 && m >= 2048 && n >= 256 && k >= 64 {
             MatMulTile {
@@ -467,6 +595,7 @@ impl MatMulSchedule {
         Self {
             plan,
             logical_shape: MatMulTile { m, n, k },
+            grid_group_m: 1,
             block_tile,
             instruction_tile: if tensor_core {
                 MatMulTile {
@@ -520,6 +649,169 @@ impl MatMulSchedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn experimental_register_tile_is_opt_in_and_preserves_gradient_fallbacks() {
+        let caps = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        let resources = MatMulResources::default();
+        let base = MatMulSchedule::select(4096, 683, 256, caps, MatMulPrecision::StrictF32);
+        assert_eq!(base.register_thread_tile(), Some((4, 1)));
+        let experimental = base.with_experimental_register_tile(resources);
+        assert_eq!(experimental.register_thread_tile(), Some((4, 4)));
+        assert_eq!(
+            experimental.block_tile,
+            MatMulTile {
+                m: 64,
+                n: 64,
+                k: 16
+            }
+        );
+        assert_eq!(experimental.pipeline_stages, 1);
+        for (m, n, k) in [
+            (683, 256, 4096),
+            (768, 256, 4096),
+            (512, 683, 256),
+            (4096, 128, 256),
+            (1024, 256, 127),
+        ] {
+            let base = MatMulSchedule::select(m, n, k, caps, MatMulPrecision::StrictF32);
+            assert_eq!(base.with_experimental_register_tile(resources), base);
+        }
+        for resources in [
+            MatMulResources {
+                registers_per_sm: 32 * 1024,
+                ..resources
+            },
+            MatMulResources {
+                shared_bytes_per_block: 4096,
+                ..resources
+            },
+            MatMulResources {
+                shared_bytes_per_sm: 8192,
+                ..resources
+            },
+            MatMulResources {
+                threads_per_sm: 256,
+                ..resources
+            },
+        ] {
+            assert_eq!(base.with_experimental_register_tile(resources), base);
+        }
+        for precision in [MatMulPrecision::AllowTf32, MatMulPrecision::Tf32x3] {
+            let base = MatMulSchedule::select(4096, 683, 256, caps, precision);
+            assert_eq!(base.with_experimental_register_tile(resources), base);
+        }
+        let half = MatMulSchedule::select_for_dtype(
+            4096,
+            683,
+            256,
+            DType::BF16,
+            caps,
+            MatMulPrecision::StrictF32,
+        );
+        assert_eq!(half.with_experimental_register_tile(resources), half);
+    }
+
+    #[test]
+    fn register_accumulator_ownership_is_a_bijection() {
+        fn value(expression: &Expr, x: u64, y: u64) -> u64 {
+            match expression {
+                Expr::Const(v) => *v as u64,
+                Expr::ThreadIdx(Dim::X) => x,
+                Expr::ThreadIdx(Dim::Y) => y,
+                Expr::Add(a, b) => value(a, x, y) + value(b, x, y),
+                Expr::Mul(a, b) => value(a, x, y) * value(b, x, y),
+                Expr::ShiftRight(a, shift) => value(a, x, y) >> shift,
+                Expr::BitAnd(a, mask) => value(a, x, y) & mask,
+                _ => panic!("unexpected ownership expression"),
+            }
+        }
+        let base = MatMulSchedule::select(
+            4096,
+            683,
+            256,
+            MatMulCapabilities {
+                tf32: false,
+                f16: false,
+                bf16: false,
+            },
+            MatMulPrecision::StrictF32,
+        );
+        for schedule in [
+            base,
+            base.with_experimental_register_tile(MatMulResources::default()),
+        ] {
+            let (rows, cols) = schedule.register_thread_tile().unwrap();
+            let mut seen = std::collections::HashSet::new();
+            for slot in 0..rows * cols {
+                let (r, c) = schedule.register_accumulator_coordinates(slot).unwrap();
+                for y in 0..16 {
+                    for x in 0..16 {
+                        let coordinate = (value(&r, x, y), value(&c, x, y));
+                        assert!(coordinate.0 < schedule.block_tile.m as u64);
+                        assert!(coordinate.1 < schedule.block_tile.n as u64);
+                        assert!(seen.insert(coordinate), "duplicate {coordinate:?}");
+                    }
+                }
+            }
+            assert_eq!(seen.len(), schedule.block_tile.m * schedule.block_tile.n);
+            assert!(
+                schedule
+                    .register_accumulator_coordinates(rows * cols)
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn experimental_register_tile_layouts_validate_all_supported_staging_policies() {
+        use crate::tile::{MatMulLayout, TileIRBuilder};
+        let resources = MatMulResources::default();
+        let base = MatMulSchedule::select(
+            1025,
+            683,
+            129,
+            MatMulCapabilities {
+                tf32: false,
+                f16: false,
+                bf16: false,
+            },
+            MatMulPrecision::StrictF32,
+        )
+        .with_experimental_register_tile(resources);
+        for policy in [
+            MatMulSharedLayout::Contiguous,
+            MatMulSharedLayout::Padded,
+            MatMulSharedLayout::Swizzled,
+        ] {
+            for orientations in [(false, false), (true, false), (false, true), (true, true)] {
+                for pipeline in [MatMulPipeline::Synchronous, MatMulPipeline::DoubleBuffered] {
+                    let schedule = base
+                        .with_operand_orientations(policy, orientations, resources)
+                        .unwrap()
+                        .with_pipeline(pipeline, true, true, resources);
+                    let mut builder = TileIRBuilder::new();
+                    builder.start_kernel("experimental_register_tile_layout_validation");
+                    let a =
+                        builder.alloc_shared_layout(DType::F32, 64, 16, schedule.operand_layouts.0);
+                    let b =
+                        builder.alloc_shared_layout(DType::F32, 16, 64, schedule.operand_layouts.1);
+                    let dest = builder.alloc_register_array(64, 64, 16);
+                    builder.zero(dest);
+                    builder.matmul(dest, a, b, MatMulLayout::NN, schedule);
+                    for slot in 0..16 {
+                        let element = builder.alloc_register(DType::F32, 1, 1);
+                        builder.extract_register(element, dest, slot);
+                    }
+                    builder.finish().validate_layouts().unwrap();
+                }
+            }
+        }
+    }
 
     #[test]
     fn large_bf16_register_tiles_respect_resources_and_keep_f32_schedule() {
@@ -1134,6 +1426,27 @@ mod tests {
             TileLayout::ThreadArray { elements: 4 }
         );
         assert_eq!(selected.block_threads, (16, 16, 1));
+        assert_eq!(selected.block_tile.k, 32);
+        let constrained_staging = MatMulSchedule::select_with_resources(
+            129,
+            257,
+            129,
+            DType::F32,
+            caps,
+            MatMulPrecision::StrictF32,
+            MatMulResources {
+                shared_bytes_per_block: 8 * 1024,
+                ..resources
+            },
+        );
+        assert_eq!(
+            constrained_staging.block_tile,
+            MatMulTile {
+                m: 32,
+                n: 32,
+                k: 16
+            }
+        );
         for (m, n, k, dtype, precision, budget) in [
             (
                 127,
@@ -1234,8 +1547,8 @@ mod tests {
         );
         let mut b = TileIRBuilder::new();
         b.start_kernel("array_matrix_layout");
-        let a = b.alloc_shared(DType::F32, 32, 16);
-        let rhs = b.alloc_shared(DType::F32, 16, 32);
+        let a = b.alloc_shared(DType::F32, 32, schedule.block_tile.k);
+        let rhs = b.alloc_shared(DType::F32, schedule.block_tile.k, 32);
         let dest = b.alloc_register_array(32, 32, 4);
         b.zero(dest);
         b.matmul(dest, a, rhs, MatMulLayout::NN, schedule);

@@ -311,6 +311,109 @@ impl<D: DType> TensorExpr<D> {
         &self.0.kind
     }
 
+    /// Rebuild an operator only when a child changes, preserving leaf storage,
+    /// operator metadata, and shared expression identities during graph passes.
+    pub(crate) fn map_children(&self, mut map: impl FnMut(&Self) -> Self) -> Self {
+        let mut kind = self.kind().clone();
+        let mut changed = false;
+        let mut replace = |child: &mut Self| {
+            let next = map(child);
+            changed |= !Arc::ptr_eq(&child.0, &next.0);
+            *child = next;
+        };
+        match &mut kind {
+            ExprKind::Cast { x, .. }
+            | ExprKind::Unary { x, .. }
+            | ExprKind::Transpose { x }
+            | ExprKind::Reshape { x }
+            | ExprKind::Permute { x, .. }
+            | ExprKind::Narrow { x, .. }
+            | ExprKind::BroadcastAxis { x, .. }
+            | ExprKind::ReduceAxis { x, .. }
+            | ExprKind::MaxPool2d { x, .. }
+            | ExprKind::Flatten { x } => replace(x),
+            ExprKind::Binary { a, b, .. } | ExprKind::MatMul { a, b } | ExprKind::Gt { a, b } => {
+                replace(a);
+                replace(b);
+            }
+            ExprKind::Linear { x, weight, bias } => {
+                replace(x);
+                replace(weight);
+                replace(bias);
+            }
+            ExprKind::Concat { inputs, .. } => inputs.iter_mut().for_each(&mut replace),
+            ExprKind::Embedding { weight, indices } => {
+                replace(weight);
+                replace(indices);
+            }
+            ExprKind::EmbeddingBackward {
+                indices,
+                grad_output,
+            } => {
+                replace(indices);
+                replace(grad_output);
+            }
+            ExprKind::IndexedCrossEntropy { logits, targets } => {
+                replace(logits);
+                replace(targets);
+            }
+            ExprKind::IndexedCrossEntropyBackward {
+                logits,
+                targets,
+                grad_output,
+            } => {
+                replace(logits);
+                replace(targets);
+                replace(grad_output);
+            }
+            ExprKind::Mask { values, condition } => {
+                replace(values);
+                replace(condition);
+            }
+            ExprKind::Conv2d { input, weight, .. } => {
+                replace(input);
+                replace(weight);
+            }
+            ExprKind::ConvTranspose2d {
+                grad_output,
+                weight,
+                ..
+            } => {
+                replace(grad_output);
+                replace(weight);
+            }
+            ExprKind::Conv2dBackwardWeight {
+                input, grad_output, ..
+            } => {
+                replace(input);
+                replace(grad_output);
+            }
+            ExprKind::MaxPool2dBackward {
+                input,
+                output,
+                grad_output,
+                ..
+            } => {
+                replace(input);
+                replace(output);
+                replace(grad_output);
+            }
+            ExprKind::NodeRef { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::Constant { .. }
+            | ExprKind::Input { .. }
+            | ExprKind::Parameter { .. } => {}
+        }
+        if changed {
+            Self(Arc::new(ExprNode {
+                shape: self.shape().clone(),
+                kind,
+            }))
+        } else {
+            self.clone()
+        }
+    }
+
     /// Returns references to child expressions for tree traversal.
     pub fn children(&self) -> Vec<&TensorExpr<D>> {
         match &self.0.kind {

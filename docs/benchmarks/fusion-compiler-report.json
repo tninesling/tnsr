@@ -1,0 +1,729 @@
+{
+  "schema_version": 1,
+  "rows": 66,
+  "deduplication": {
+    "raw_rows": 66,
+    "deduplicated_rows": 66,
+    "merged_duplicate_groups": [],
+    "no_choice_cases_dropped": []
+  },
+  "feature_mode": "compiled",
+  "training_data_sha256": "b15e9bf3b0560540df2f5c2acdb09311c3d685fa0cbdbe9206696cf19f81e622",
+  "case_count": 33,
+  "shape_group_count": 3,
+  "family_count": 11,
+  "validation": {
+    "shape_key": {
+      "folds": [
+        {
+          "group": "128x192",
+          "train_rows": 44,
+          "test_rows": 22
+        },
+        {
+          "group": "192x192",
+          "train_rows": 44,
+          "test_rows": 22
+        },
+        {
+          "group": "256x256",
+          "train_rows": 44,
+          "test_rows": 22
+        }
+      ],
+      "rows_evaluated": 66,
+      "cases_evaluated": 33,
+      "log_latency_rmse": 0.28354738336184115,
+      "absolute_log_error_p90": 0.49715960985023333,
+      "pairwise_accuracy_excluding_ties": 0.9333333333333333,
+      "pairwise_comparisons": 15,
+      "geomean_regret_vs_oracle": 1.0071200390410966,
+      "ci_aware_geomean_regret_vs_oracle": 1.0023551634669126,
+      "max_regret_vs_oracle": 1.0807216535659765,
+      "optimizer_cases_evaluated": 33,
+      "optimizer_geomean_regret_vs_oracle": 1.016740063617306,
+      "heuristic_cases_evaluated": 0,
+      "heuristic_geomean_regret_vs_oracle": null,
+      "geomean_speedup_vs_original": 1.2156727006783299,
+      "selections": [
+        {
+          "case_id": "factored_axis0:128x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.068202349564064,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "factored_axis0:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.5246609437773173
+        },
+        {
+          "case_id": "factored_axis0:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.752978001482711
+        },
+        {
+          "case_id": "full_epilogue:128x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0285781455388416,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "full_epilogue:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.2224806668974808
+        },
+        {
+          "case_id": "full_epilogue:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.2951549859777722
+        },
+        {
+          "case_id": "mlp_backward:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_backward:192x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_backward:256x256",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0027281047105587,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_forward:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_forward:192x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_forward:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "producer_axis0:128x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.5943504124947667
+        },
+        {
+          "case_id": "producer_axis0:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.6638368944090864
+        },
+        {
+          "case_id": "producer_axis0:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.6540706627920474
+        },
+        {
+          "case_id": "producer_axis1:128x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.7313392347583212
+        },
+        {
+          "case_id": "producer_axis1:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 2.192501678718322
+        },
+        {
+          "case_id": "producer_axis1:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 3.2873401736561827
+        },
+        {
+          "case_id": "reduction_chain:128x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0245525431290046,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reduction_chain:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.4359864307987251
+        },
+        {
+          "case_id": "reduction_chain:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.8917805683100566
+        },
+        {
+          "case_id": "reshape_roundtrip:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_roundtrip:192x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0807216535659765,
+          "ci_overlap_with_oracle": false,
+          "near_tie_with_oracle": false,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_roundtrip:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_unary:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_unary:192x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_unary:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_after_binary:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_after_binary:192x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0359975668477452,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_after_binary:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_before_binary:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_before_binary:192x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_before_binary:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        }
+      ]
+    },
+    "family": {
+      "folds": [
+        {
+          "group": "factored_axis0",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "full_epilogue",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "mlp_backward",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "mlp_forward",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "producer_axis0",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "producer_axis1",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "reduction_chain",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "reshape_roundtrip",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "reshape_unary",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "transpose_after_binary",
+          "train_rows": 60,
+          "test_rows": 6
+        },
+        {
+          "group": "transpose_before_binary",
+          "train_rows": 60,
+          "test_rows": 6
+        }
+      ],
+      "rows_evaluated": 66,
+      "cases_evaluated": 33,
+      "log_latency_rmse": 2.2135407360892927,
+      "absolute_log_error_p90": 2.3448624749029374,
+      "pairwise_accuracy_excluding_ties": 0.9333333333333333,
+      "pairwise_comparisons": 15,
+      "geomean_regret_vs_oracle": 1.0071200390410966,
+      "ci_aware_geomean_regret_vs_oracle": 1.0023551634669126,
+      "max_regret_vs_oracle": 1.0807216535659765,
+      "optimizer_cases_evaluated": 33,
+      "optimizer_geomean_regret_vs_oracle": 1.016740063617306,
+      "heuristic_cases_evaluated": 0,
+      "heuristic_geomean_regret_vs_oracle": null,
+      "geomean_speedup_vs_original": 1.2156727006783299,
+      "selections": [
+        {
+          "case_id": "factored_axis0:128x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.068202349564064,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "factored_axis0:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.5246609437773173
+        },
+        {
+          "case_id": "factored_axis0:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.752978001482711
+        },
+        {
+          "case_id": "full_epilogue:128x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0285781455388416,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "full_epilogue:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.2224806668974808
+        },
+        {
+          "case_id": "full_epilogue:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.2951549859777722
+        },
+        {
+          "case_id": "mlp_backward:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_backward:192x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_backward:256x256",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0027281047105587,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_forward:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_forward:192x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "mlp_forward:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "producer_axis0:128x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.5943504124947667
+        },
+        {
+          "case_id": "producer_axis0:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.6638368944090864
+        },
+        {
+          "case_id": "producer_axis0:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.6540706627920474
+        },
+        {
+          "case_id": "producer_axis1:128x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.7313392347583212
+        },
+        {
+          "case_id": "producer_axis1:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 2.192501678718322
+        },
+        {
+          "case_id": "producer_axis1:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 3.2873401736561827
+        },
+        {
+          "case_id": "reduction_chain:128x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0245525431290046,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reduction_chain:192x192",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.4359864307987251
+        },
+        {
+          "case_id": "reduction_chain:256x256",
+          "selected": "optimized",
+          "oracle": "optimized",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.8917805683100566
+        },
+        {
+          "case_id": "reshape_roundtrip:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_roundtrip:192x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0807216535659765,
+          "ci_overlap_with_oracle": false,
+          "near_tie_with_oracle": false,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_roundtrip:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_unary:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_unary:192x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "reshape_unary:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_after_binary:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_after_binary:192x192",
+          "selected": "original",
+          "oracle": "optimized",
+          "regret": 1.0359975668477452,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_after_binary:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_before_binary:128x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_before_binary:192x192",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        },
+        {
+          "case_id": "transpose_before_binary:256x256",
+          "selected": "original",
+          "oracle": "original",
+          "regret": 1.0,
+          "ci_overlap_with_oracle": true,
+          "near_tie_with_oracle": true,
+          "speedup_vs_original": 1.0
+        }
+      ]
+    }
+  },
+  "eligible_for_opt_in": false,
+  "ineligibility_reasons": [
+    "only 3 shape groups; need >= 12",
+    "shape_key held-out regret does not beat the supplied heuristic",
+    "family held-out regret does not beat the supplied heuristic"
+  ],
+  "decision_margin_log": 4.689724949805875,
+  "note": "Held-out results describe the unguarded ranker. The final coverage/margin gate is conservative and is not claimed as independently validated."
+}

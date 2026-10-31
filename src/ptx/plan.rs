@@ -691,6 +691,7 @@ impl PtxExecutionPlan {
         &self.reduction_regions
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn schedule_matmuls(
         &mut self,
         capabilities: MatMulCapabilities,
@@ -699,6 +700,7 @@ impl PtxExecutionPlan {
         shared_layout: MatMulSharedLayout,
         pipeline: MatMulPipeline,
         supports_async: bool,
+        experimental_register_tiles: bool,
     ) -> Result<()> {
         for schedule in self.matmul_schedules.values_mut() {
             let shape = schedule.logical_shape;
@@ -710,9 +712,13 @@ impl PtxExecutionPlan {
                 capabilities,
                 precision,
                 resources,
-            )
-            .with_shared_layout(shared_layout, resources)?
-            .with_pipeline(pipeline, supports_async, true, resources);
+            );
+            if experimental_register_tiles {
+                *schedule = schedule.with_experimental_register_tile(resources);
+            }
+            *schedule = schedule
+                .with_shared_layout(shared_layout, resources)?
+                .with_pipeline(pipeline, supports_async, true, resources);
         }
         for region in &mut self.matmul_regions {
             region.schedule = MatMulSchedule::select_with_resources(
@@ -724,6 +730,9 @@ impl PtxExecutionPlan {
                 precision,
                 resources,
             );
+            if experimental_register_tiles {
+                region.schedule = region.schedule.with_experimental_register_tile(resources);
+            }
             region.configure_pipeline(shared_layout, pipeline, supports_async, resources)?;
         }
         Ok(())
@@ -731,6 +740,18 @@ impl PtxExecutionPlan {
 
     pub fn matmul_schedules(&self) -> &HashMap<NodeIndex, MatMulSchedule> {
         &self.matmul_schedules
+    }
+
+    /// Reorder output tiles without changing matmul arithmetic or launch dimensions.
+    pub fn set_matmul_grid_group_m(&mut self, group: usize) -> Result<()> {
+        MatMulSchedule::validate_grid_group_m(group)?;
+        for schedule in self.matmul_schedules.values_mut() {
+            schedule.grid_group_m = group;
+        }
+        for region in &mut self.matmul_regions {
+            region.schedule.grid_group_m = group;
+        }
+        Ok(())
     }
 
     pub fn matmul_regions(&self) -> &[MatMulRegion] {

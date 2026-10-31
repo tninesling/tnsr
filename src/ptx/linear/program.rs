@@ -229,8 +229,13 @@ impl<D: CudaDType> Program<D> {
                 }
                 PtxPlanAction::ReductionRegion(id) => {
                     let len = u32::try_from(step.shape.iter().product::<usize>())?;
-                    let schedule = plan.reduction_regions()[id].schedule;
-                    crate::ptx::target::reduction_launch_config(schedule, len, &function)?
+                    let region = &plan.reduction_regions()[id];
+                    crate::ptx::target::reduction_launch_config(
+                        region.schedule,
+                        region.serial_block_threads,
+                        len,
+                        &function,
+                    )?
                 }
                 PtxPlanAction::Kernel
                     if matches!(graph[step.node], TensorGraphNode::MatMul { .. }) =>

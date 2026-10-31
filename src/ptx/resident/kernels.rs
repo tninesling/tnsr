@@ -5,7 +5,7 @@ use crate::tile::ir::MatrixLayout;
 use crate::tile::{
     DType, Dim, Expr, RegionInput, RegionValue, TileGraph, TileIR, TileIRBuilder, TileVar,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use cudarc::driver::{CudaContext, CudaModule};
 use cudarc::nvrtc::Ptx;
 use std::sync::Arc;
@@ -131,61 +131,146 @@ pub(super) fn adam(len: usize) -> TileIR {
         b.add_param(name, DType::F32, false);
     }
     b.bounds_check(len);
-    let w = load(&mut b, "weight", linear(), len);
-    let g = load(&mut b, "gradient", linear(), len);
-    let m = load(&mut b, "moment", linear(), len);
-    let v = load(&mut b, "variance", linear(), len);
+    adam_body(&mut b, "weight", "next_weight", linear(), len, len);
+    b.finish()
+}
+
+/// Bounded horizontal fusion. Each grid-Y lane owns one independent parameter;
+/// explicit pointer parameters retain normal allocation tracking and avoid raw
+/// device-pointer tables. Parameters in a batch share their Adam settings.
+pub(super) fn adam_batch(parameters: &[(usize, usize)], flat_len: usize) -> Result<TileIR> {
+    ensure!(
+        (2..=16).contains(&parameters.len()),
+        "Adam batch requires 2 through 16 parameters"
+    );
+    ensure!(
+        parameters
+            .iter()
+            .all(|&(offset, len)| len > 0
+                && offset.checked_add(len).is_some_and(|end| end <= flat_len)),
+        "Adam batch parameter range exceeds flat storage"
+    );
+    let mut b = TileIRBuilder::new();
+    b.start_kernel("resident_adam_batch");
+    for name in ["gradient", "moment", "variance", "settings"] {
+        b.add_param(name, DType::F32, true);
+    }
+    for name in ["next_moment", "next_variance", "health"] {
+        b.add_param(name, DType::F32, false);
+    }
+    for i in 0..parameters.len() {
+        b.add_param(&format!("weight_{i}"), DType::F32, true);
+        b.add_param(&format!("next_weight_{i}"), DType::F32, false);
+    }
+    for (i, &(offset, len)) in parameters.iter().enumerate() {
+        let lower = i64::try_from(i)?;
+        let upper = i64::try_from(i + 1)?;
+        let offset = i64::try_from(offset)?;
+        b.if_then(
+            crate::tile::ScalarPredicate::IndexLt {
+                lhs: Expr::BlockIdx(Dim::Y),
+                rhs: Expr::Const(upper),
+            },
+            |b| {
+                b.if_then(
+                    crate::tile::ScalarPredicate::IndexLt {
+                        lhs: Expr::Const(lower),
+                        rhs: Expr::BlockIdx(Dim::Y) + Expr::Const(1),
+                    },
+                    |b| {
+                        b.bounds_check(len);
+                        adam_body(
+                            b,
+                            &format!("weight_{i}"),
+                            &format!("next_weight_{i}"),
+                            linear() + Expr::Const(offset),
+                            len,
+                            flat_len,
+                        );
+                    },
+                );
+            },
+        );
+    }
+    Ok(b.finish())
+}
+
+fn store_at(b: &mut TileIRBuilder, name: &str, value: TileVar, index: Expr, len: usize) {
+    b.store_global_indexed(
+        name,
+        value,
+        index.clone(),
+        (Expr::Const(0), index),
+        MatrixLayout {
+            rows: 1,
+            cols: len,
+            row_stride: len,
+        },
+    );
+}
+
+fn adam_body(
+    b: &mut TileIRBuilder,
+    weight_name: &str,
+    next_name: &str,
+    flat: Expr,
+    len: usize,
+    flat_len: usize,
+) {
+    let w = load(b, weight_name, linear(), len);
+    let g = load(b, "gradient", flat.clone(), flat_len);
+    let m = load(b, "moment", flat.clone(), flat_len);
+    let v = load(b, "variance", flat.clone(), flat_len);
     // lr, beta1, beta2, 1-beta1, 1-beta2, correction1, correction2, eps, decay, clip scale.
     let c: Vec<_> = (0..10)
-        .map(|i| load(&mut b, "settings", Expr::Const(i), 10))
+        .map(|i| load(b, "settings", Expr::Const(i), 10))
         .collect();
-    let scaled = reg(&mut b);
+    let scaled = reg(b);
     b.mul(scaled, g, c[9]);
-    let decay = reg(&mut b);
+    let decay = reg(b);
     b.mul(decay, w, c[8]);
-    let g = reg(&mut b);
+    let g = reg(b);
     b.add(g, scaled, decay);
-    let m_old = reg(&mut b);
+    let m_old = reg(b);
     b.mul(m_old, m, c[1]);
-    let m_new = reg(&mut b);
+    let m_new = reg(b);
     b.mul(m_new, g, c[3]);
-    let m = reg(&mut b);
+    let m = reg(b);
     b.add(m, m_old, m_new);
-    let v_old = reg(&mut b);
+    let v_old = reg(b);
     b.mul(v_old, v, c[2]);
-    let v_g = reg(&mut b);
+    let v_g = reg(b);
     b.mul(v_g, g, c[4]);
-    let v_new = reg(&mut b);
+    let v_new = reg(b);
     b.mul(v_new, v_g, g);
-    let v = reg(&mut b);
+    let v = reg(b);
     b.add(v, v_old, v_new);
-    let m_hat = reg(&mut b);
+    let m_hat = reg(b);
     b.div(m_hat, m, c[5]);
-    let v_hat = reg(&mut b);
+    let v_hat = reg(b);
     b.div(v_hat, v, c[6]);
-    let root = reg(&mut b);
+    let root = reg(b);
     b.sqrt(root, v_hat);
-    let denom = reg(&mut b);
+    let denom = reg(b);
     b.add(denom, root, c[7]);
-    let step = reg(&mut b);
+    let step = reg(b);
     b.mul(step, c[0], m_hat);
-    let delta = reg(&mut b);
+    let delta = reg(b);
     b.div(delta, step, denom);
-    let next = reg(&mut b);
+    let next = reg(b);
     b.sub(next, w, delta);
-    store(&mut b, "next_weight", next, len);
-    store(&mut b, "next_moment", m, len);
-    store(&mut b, "next_variance", v, len);
-    let nw = reg(&mut b);
+    store(b, next_name, next, len);
+    store_at(b, "next_moment", m, flat.clone(), flat_len);
+    store_at(b, "next_variance", v, flat.clone(), flat_len);
+    let nw = reg(b);
     b.sub(nw, next, next);
-    let nm = reg(&mut b);
+    let nm = reg(b);
     b.sub(nm, m, m);
-    let nv = reg(&mut b);
+    let nv = reg(b);
     b.sub(nv, v, v);
-    let a = reg(&mut b);
+    let a = reg(b);
     b.add(a, nw, nm);
-    let health = reg(&mut b);
+    let health = reg(b);
     b.add(health, a, nv);
-    store(&mut b, "health", health, len);
-    b.finish()
+    store_at(b, "health", health, flat.clone(), flat_len);
 }

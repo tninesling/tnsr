@@ -1,0 +1,717 @@
+{
+  "status": "research_complete",
+  "counter_status": "unavailable",
+  "counter_reason": "ERR_NVGPUCTRPERM; RmProfilingAdminOnly=1",
+  "ncu_version": "2025.2.1.0",
+  "hardware_counters": {
+    "issue_utilization": null,
+    "eligible_warps_per_cycle": null,
+    "achieved_occupancy": null,
+    "shared_bank_conflicts": null,
+    "dram_throughput": null,
+    "stall_breakdown": null
+  },
+  "retained_worker_sha256": "17a2a3d0ccc1c7493268859f5788c64467ad4bfc7357e12bbe6915976e6902fa",
+  "cached_driver_code": {
+    "cache": "/home/taylor/code/tnsr-benchmarks/results/ppo-index-reconstruct-20261030/m64-pair0/cache/candidate/cuda/7/3/57cfcdbdb41810",
+    "cache_sha256": "b9b8ad46b9a0ba7625c9df601e1da74b5d4eb2e443c88fd001f51d5428f17a86",
+    "embedded_ptx": "/home/taylor/code/tnsr-benchmarks/results/ppo-dense-canonical-20261030/profiles/m64-baseline/program/micro-64-clip-3e4ccccd.ptx",
+    "embedded_ptx_offset": 58,
+    "embedded_ptx_bytes": 926856,
+    "embedded_ptx_sha256": "69e4f6361c24a9b0a7e25e27d9f9f59f689f1ca437eeb7b1b259e546b3cb2242",
+    "exact_embedded_ptx_match": true,
+    "elf_offset": 926916,
+    "elf_sha256": "6f8ff70727d5924f244cc520a27fc85b3dab2210a7db0090a14928da4ca9d190",
+    "elf_bytes": 1650784
+  },
+  "sass_static": [
+    {
+      "file": "matmul_region_1_4796.sass",
+      "static_instruction_count": 714,
+      "opcodes": {
+        "BAR.SYNC.DEFER_BLOCKING": 2,
+        "BRA": 5,
+        "BSSY": 3,
+        "BSYNC": 3,
+        "CALL.REL.NOINC": 3,
+        "EXIT": 3,
+        "F2I.U64.TRUNC": 1,
+        "FFMA": 128,
+        "I2F.U64.RP": 1,
+        "IADD3": 79,
+        "IADD3.X": 26,
+        "IMAD": 18,
+        "IMAD.HI.U32": 3,
+        "IMAD.IADD": 12,
+        "IMAD.MOV.U32": 17,
+        "IMAD.SHL.U32": 5,
+        "IMAD.U32": 6,
+        "IMAD.WIDE.U32": 72,
+        "IMAD.X": 5,
+        "ISETP.GE.U32.AND": 22,
+        "ISETP.GE.U32.AND.EX": 22,
+        "ISETP.NE.AND.EX": 1,
+        "ISETP.NE.U32.AND": 1,
+        "LDG.E": 8,
+        "LDS": 32,
+        "LDS.128": 32,
+        "LEA": 6,
+        "LOP3.LUT": 4,
+        "MOV": 58,
+        "MUFU.RCP": 1,
+        "PLOP3.LUT": 12,
+        "R2UR": 2,
+        "RET.REL.NODEC": 1,
+        "S2R": 14,
+        "SEL": 3,
+        "SHF.L.U32": 18,
+        "SHF.R.U32.HI": 7,
+        "SHF.R.U64": 7,
+        "STG.E": 4,
+        "STS": 8,
+        "UIADD3": 9,
+        "UIADD3.X": 10,
+        "UIMAD": 6,
+        "UIMAD.WIDE.U32": 11,
+        "UISETP.GE.U32.AND": 1,
+        "UISETP.GE.U32.AND.EX": 1,
+        "ULDC.64": 1,
+        "UMOV": 19,
+        "USHF.L.U32": 1
+      }
+    },
+    {
+      "file": "matmul_region_50_4845.sass",
+      "static_instruction_count": 694,
+      "opcodes": {
+        "BAR.SYNC.DEFER_BLOCKING": 2,
+        "BRA": 5,
+        "BSSY": 3,
+        "BSYNC": 3,
+        "CALL.REL.NOINC": 3,
+        "CS2R": 2,
+        "EXIT": 3,
+        "F2I.U64.TRUNC": 1,
+        "FFMA": 128,
+        "I2F.U64.RP": 1,
+        "IADD3": 81,
+        "IADD3.X": 26,
+        "IMAD": 17,
+        "IMAD.HI.U32": 3,
+        "IMAD.IADD": 10,
+        "IMAD.MOV.U32": 15,
+        "IMAD.SHL.U32": 11,
+        "IMAD.U32": 3,
+        "IMAD.WIDE.U32": 68,
+        "IMAD.X": 3,
+        "ISETP.GE.U32.AND": 23,
+        "ISETP.GE.U32.AND.EX": 23,
+        "ISETP.NE.AND.EX": 1,
+        "ISETP.NE.U32.AND": 1,
+        "LDG.E": 8,
+        "LDS": 32,
+        "LDS.128": 32,
+        "LEA": 7,
+        "LOP3.LUT": 4,
+        "MOV": 50,
+        "MUFU.RCP": 1,
+        "PLOP3.LUT": 11,
+        "R2UR": 2,
+        "RET.REL.NODEC": 1,
+        "S2R": 14,
+        "S2UR": 2,
+        "SEL": 3,
+        "SHF.L.U32": 14,
+        "SHF.R.U32.HI": 7,
+        "SHF.R.U64": 7,
+        "STG.E": 4,
+        "STS": 8,
+        "UIADD3": 9,
+        "UIADD3.X": 9,
+        "UIMAD": 6,
+        "UIMAD.WIDE.U32": 12,
+        "ULDC.64": 1,
+        "UMOV": 14
+      }
+    },
+    {
+      "file": "matmul_region_5_4800.sass",
+      "static_instruction_count": 714,
+      "opcodes": {
+        "BAR.SYNC.DEFER_BLOCKING": 2,
+        "BRA": 5,
+        "BSSY": 3,
+        "BSYNC": 3,
+        "CALL.REL.NOINC": 3,
+        "EXIT": 3,
+        "F2I.U64.TRUNC": 1,
+        "FFMA": 128,
+        "I2F.U64.RP": 1,
+        "IADD3": 79,
+        "IADD3.X": 26,
+        "IMAD": 18,
+        "IMAD.HI.U32": 3,
+        "IMAD.IADD": 12,
+        "IMAD.MOV.U32": 17,
+        "IMAD.SHL.U32": 5,
+        "IMAD.U32": 6,
+        "IMAD.WIDE.U32": 72,
+        "IMAD.X": 5,
+        "ISETP.GE.U32.AND": 22,
+        "ISETP.GE.U32.AND.EX": 22,
+        "ISETP.NE.AND.EX": 1,
+        "ISETP.NE.U32.AND": 1,
+        "LDG.E": 8,
+        "LDS": 32,
+        "LDS.128": 32,
+        "LEA": 6,
+        "LOP3.LUT": 4,
+        "MOV": 58,
+        "MUFU.RCP": 1,
+        "PLOP3.LUT": 12,
+        "R2UR": 2,
+        "RET.REL.NODEC": 1,
+        "S2R": 14,
+        "SEL": 3,
+        "SHF.L.U32": 18,
+        "SHF.R.U32.HI": 7,
+        "SHF.R.U64": 7,
+        "STG.E": 4,
+        "STS": 8,
+        "UIADD3": 9,
+        "UIADD3.X": 10,
+        "UIMAD": 6,
+        "UIMAD.WIDE.U32": 11,
+        "UISETP.GE.U32.AND": 1,
+        "UISETP.GE.U32.AND.EX": 1,
+        "ULDC.64": 1,
+        "UMOV": 19,
+        "USHF.L.U32": 1
+      }
+    },
+    {
+      "file": "matmul_region_94_4889.sass",
+      "static_instruction_count": 717,
+      "opcodes": {
+        "BAR.SYNC.DEFER_BLOCKING": 2,
+        "BRA": 5,
+        "BSSY": 3,
+        "BSYNC": 3,
+        "CALL.REL.NOINC": 3,
+        "CS2R": 3,
+        "EXIT": 3,
+        "F2I.U64.TRUNC": 1,
+        "FFMA": 128,
+        "I2F.U64.RP": 1,
+        "IADD3": 88,
+        "IADD3.X": 23,
+        "IMAD": 22,
+        "IMAD.HI.U32": 3,
+        "IMAD.IADD": 6,
+        "IMAD.MOV.U32": 15,
+        "IMAD.SHL.U32": 12,
+        "IMAD.U32": 4,
+        "IMAD.WIDE.U32": 73,
+        "IMAD.X": 4,
+        "ISETP.GE.U32.AND": 23,
+        "ISETP.GE.U32.AND.EX": 23,
+        "ISETP.NE.AND.EX": 1,
+        "ISETP.NE.U32.AND": 1,
+        "LDG.E": 8,
+        "LDS": 32,
+        "LDS.128": 32,
+        "LEA": 6,
+        "LOP3.LUT": 4,
+        "MOV": 54,
+        "MUFU.RCP": 1,
+        "PLOP3.LUT": 11,
+        "R2UR": 2,
+        "RET.REL.NODEC": 1,
+        "S2R": 12,
+        "S2UR": 2,
+        "SEL": 3,
+        "SHF.L.U32": 17,
+        "SHF.R.U32.HI": 7,
+        "SHF.R.U64": 7,
+        "STG.E": 4,
+        "STS": 8,
+        "UIADD3": 9,
+        "UIADD3.X": 9,
+        "UIMAD": 6,
+        "UIMAD.WIDE.U32": 12,
+        "ULDC.64": 1,
+        "UMOV": 15,
+        "USHF.L.U32": 4
+      }
+    },
+    {
+      "file": "region96.sass",
+      "static_instruction_count": 717,
+      "opcodes": {
+        "BAR.SYNC.DEFER_BLOCKING": 2,
+        "BRA": 5,
+        "BSSY": 3,
+        "BSYNC": 3,
+        "CALL.REL.NOINC": 3,
+        "CS2R": 3,
+        "EXIT": 3,
+        "F2I.U64.TRUNC": 1,
+        "FFMA": 128,
+        "I2F.U64.RP": 1,
+        "IADD3": 83,
+        "IADD3.X": 23,
+        "IMAD": 22,
+        "IMAD.HI.U32": 3,
+        "IMAD.IADD": 11,
+        "IMAD.MOV.U32": 11,
+        "IMAD.SHL.U32": 11,
+        "IMAD.U32": 4,
+        "IMAD.WIDE.U32": 73,
+        "IMAD.X": 4,
+        "ISETP.GE.U32.AND": 23,
+        "ISETP.GE.U32.AND.EX": 23,
+        "ISETP.NE.AND.EX": 1,
+        "ISETP.NE.U32.AND": 1,
+        "LDG.E": 8,
+        "LDS": 32,
+        "LDS.128": 32,
+        "LEA": 6,
+        "LOP3.LUT": 4,
+        "MOV": 58,
+        "MUFU.RCP": 1,
+        "PLOP3.LUT": 11,
+        "R2UR": 2,
+        "RET.REL.NODEC": 1,
+        "S2R": 12,
+        "S2UR": 2,
+        "SEL": 3,
+        "SHF.L.U32": 18,
+        "SHF.R.U32.HI": 7,
+        "SHF.R.U64": 7,
+        "STG.E": 4,
+        "STS": 8,
+        "UIADD3": 9,
+        "UIADD3.X": 9,
+        "UIMAD": 6,
+        "UIMAD.WIDE.U32": 12,
+        "ULDC.64": 1,
+        "UMOV": 15,
+        "USHF.L.U32": 4
+      }
+    }
+  ],
+  "region96_segments": {
+    "staging": {
+      "start_hex": "0x550",
+      "end_exclusive_hex": "0x1320",
+      "static_instruction_count": 221,
+      "opcodes": {
+        "CS2R": 1,
+        "IADD3": 32,
+        "IADD3.X": 7,
+        "IMAD": 14,
+        "IMAD.IADD": 11,
+        "IMAD.MOV.U32": 5,
+        "IMAD.SHL.U32": 6,
+        "IMAD.U32": 1,
+        "IMAD.WIDE.U32": 37,
+        "IMAD.X": 1,
+        "ISETP.GE.U32.AND": 12,
+        "ISETP.GE.U32.AND.EX": 12,
+        "LDG.E": 8,
+        "LEA": 6,
+        "MOV": 28,
+        "PLOP3.LUT": 8,
+        "S2R": 2,
+        "SHF.L.U32": 16,
+        "STS": 8,
+        "UMOV": 4,
+        "USHF.L.U32": 2
+      }
+    },
+    "shared_coordinate_setup": {
+      "start_hex": "0x1330",
+      "end_exclusive_hex": "0x1450",
+      "static_instruction_count": 18,
+      "opcodes": {
+        "CALL.REL.NOINC": 2,
+        "IADD3": 2,
+        "IADD3.X": 1,
+        "IMAD": 1,
+        "IMAD.MOV.U32": 1,
+        "IMAD.SHL.U32": 1,
+        "IMAD.WIDE.U32": 1,
+        "ISETP.GE.U32.AND": 1,
+        "MOV": 3,
+        "S2R": 2,
+        "SHF.L.U32": 2,
+        "UMOV": 1
+      }
+    },
+    "compute": {
+      "start_hex": "0x1450",
+      "end_exclusive_hex": "0x2060",
+      "static_instruction_count": 193,
+      "opcodes": {
+        "FFMA": 128,
+        "ISETP.GE.U32.AND.EX": 1,
+        "LDS": 32,
+        "LDS.128": 32
+      }
+    },
+    "u64_division_helper": {
+      "start_hex": "0x28a0",
+      "end_exclusive_hex": "0x2cc0",
+      "static_instruction_count": 66,
+      "opcodes": {
+        "F2I.U64.TRUNC": 1,
+        "I2F.U64.RP": 1,
+        "IADD3": 6,
+        "IADD3.X": 3,
+        "IMAD": 3,
+        "IMAD.HI.U32": 3,
+        "IMAD.WIDE.U32": 2,
+        "IMAD.X": 1,
+        "ISETP.GE.U32.AND": 2,
+        "ISETP.GE.U32.AND.EX": 2,
+        "ISETP.NE.AND.EX": 1,
+        "ISETP.NE.U32.AND": 1,
+        "MOV": 3,
+        "MUFU.RCP": 1,
+        "R2UR": 2,
+        "RET.REL.NODEC": 1,
+        "SEL": 3,
+        "UIADD3": 4,
+        "UIADD3.X": 6,
+        "UIMAD": 6,
+        "UIMAD.WIDE.U32": 10,
+        "UMOV": 4
+      }
+    }
+  },
+  "replay_summary": {
+    "scope": "Existing diagnostic Nsight Systems trace, graph-node kernels only; not ranking timers",
+    "trace": "/tmp/ppo-registers/reconstruct-nodes.sqlite",
+    "matmul_fraction": 0.612442091728879,
+    "kernels": [
+      {
+        "kernel": "matmul_region_96_4891",
+        "replay_gpu_time_fraction": 0.09990040299868187,
+        "instances": 144,
+        "mean_us": 393.2143472222223,
+        "registers": 78,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          22,
+          8,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          256,
+          683,
+          4096
+        ],
+        "diagnostic_effective_gflops": 3642.6819777013757
+      },
+      {
+        "kernel": "matmul_region_5_4800",
+        "replay_gpu_time_fraction": 0.07878743683306458,
+        "instances": 144,
+        "mean_us": 310.1123680555556,
+        "registers": 76,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          22,
+          128,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          4096,
+          683,
+          256
+        ],
+        "diagnostic_effective_gflops": 4618.8251857900705
+      },
+      {
+        "kernel": "matmul_region_97_4892",
+        "replay_gpu_time_fraction": 0.05864366548143773,
+        "instances": 144,
+        "mean_us": 230.82520138888887,
+        "registers": 78,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          8,
+          128,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          4096,
+          256,
+          683
+        ],
+        "diagnostic_effective_gflops": 6205.365823928394
+      },
+      {
+        "kernel": "matmul_region_94_4889",
+        "replay_gpu_time_fraction": 0.05025381136871111,
+        "instances": 72,
+        "mean_us": 395.60440277777775,
+        "registers": 78,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          8,
+          22,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          683,
+          256,
+          4096
+        ],
+        "diagnostic_effective_gflops": 3620.6746081251135
+      },
+      {
+        "kernel": "matmul_region_106_4901",
+        "replay_gpu_time_fraction": 0.049233555600596876,
+        "instances": 72,
+        "mean_us": 387.57281944444446,
+        "registers": 78,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          24,
+          8,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          256,
+          768,
+          4096
+        ],
+        "diagnostic_effective_gflops": 4155.63903141786
+      },
+      {
+        "kernel": "matmul_region_7_4802",
+        "replay_gpu_time_fraction": 0.04400978586952589,
+        "instances": 72,
+        "mean_us": 346.4506388888889,
+        "registers": 76,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          8,
+          128,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          4096,
+          256,
+          683
+        ],
+        "diagnostic_effective_gflops": 4134.369099718631
+      },
+      {
+        "kernel": "matmul_region_50_4845",
+        "replay_gpu_time_fraction": 0.04141745399193405,
+        "instances": 120,
+        "mean_us": 195.62608333333336,
+        "registers": 78,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          8,
+          8,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          256,
+          256,
+          4096
+        ],
+        "diagnostic_effective_gflops": 2744.372850757376
+      },
+      {
+        "kernel": "matmul_region_1_4796",
+        "replay_gpu_time_fraction": 0.04018327009865569,
+        "instances": 72,
+        "mean_us": 316.32781944444446,
+        "registers": 76,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          24,
+          128,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          4096,
+          768,
+          256
+        ],
+        "diagnostic_effective_gflops": 5091.593710691216
+      },
+      {
+        "kernel": "matmul_region_107_4902",
+        "replay_gpu_time_fraction": 0.03126018796461536,
+        "instances": 72,
+        "mean_us": 246.08418055555555,
+        "registers": 78,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          8,
+          128,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          4096,
+          256,
+          768
+        ],
+        "diagnostic_effective_gflops": 6544.966573486794
+      },
+      {
+        "kernel": "matmul_region_95_4890",
+        "replay_gpu_time_fraction": 0.028243503760363775,
+        "instances": 72,
+        "mean_us": 222.33645833333335,
+        "registers": 78,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          22,
+          128,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          4096,
+          683,
+          256
+        ],
+        "diagnostic_effective_gflops": 6442.284934900652
+      },
+      {
+        "kernel": "matmul_region_4_4799",
+        "replay_gpu_time_fraction": 0.023122219385816205,
+        "instances": 120,
+        "mean_us": 109.21263333333333,
+        "registers": 76,
+        "shared_bytes": 8192,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          8,
+          128,
+          1
+        ],
+        "block": [
+          16,
+          16,
+          1
+        ],
+        "mnk": [
+          4096,
+          256,
+          256
+        ],
+        "diagnostic_effective_gflops": 4915.8315811449165
+      },
+      {
+        "kernel": "reindex_2825",
+        "replay_gpu_time_fraction": 0.02210960132442951,
+        "instances": 216,
+        "mean_us": 58.01653240740741,
+        "registers": 26,
+        "shared_bytes": 0,
+        "local_bytes_per_thread": 0,
+        "grid": [
+          1024,
+          1,
+          1
+        ],
+        "block": [
+          1024,
+          1,
+          1
+        ],
+        "mnk": null,
+        "diagnostic_effective_gflops": null
+      }
+    ]
+  },
+  "old_padding_comparison": [
+    {
+      "label": "contiguous",
+      "source": "/home/taylor/code/tnsr-benchmarks/results/ppo-staging-k-20261029/layout-screen-resident/m64-pair0/cache/contiguous/cuda/b/d/7e467456cc3d0d",
+      "source_sha256": "45ffeb0bda8a7aec7eb5dfee7e92981874cfd65e575b77f98c5b7e4fc69e131b",
+      "elf_offset": 905630,
+      "elf_sha256": "a723e536349a4e8817b894bf7194ca49b14c0dc50ff3c6e9f6c7c41e65681c40",
+      "resources": "REG:72 STACK:0 SHARED:8192 LOCAL:0 CONSTANT[0]:376 TEXTURE:0 SURFACE:0 SAMPLER:0"
+    },
+    {
+      "label": "padded",
+      "source": "/home/taylor/code/tnsr-benchmarks/results/ppo-staging-k-20261029/layout-screen-resident/m64-pair0/cache/padded/cuda/9/2/a15623eacb38e7",
+      "source_sha256": "5aadc784cbdfee636acdd9ec781f86a73831546b337159119246e48454b00462",
+      "elf_offset": 905630,
+      "elf_sha256": "bdfc010b15ee2552b90f8a462a5ca1575b0aa98445d3376b6a2f18cb9ea0394b",
+      "resources": "REG:64 STACK:0 SHARED:8448 LOCAL:0 CONSTANT[0]:376 TEXTURE:0 SURFACE:0 SAMPLER:0"
+    }
+  ],
+  "recommended_first_experiment": "Replace direct register-matmul unsigned divide/remainder by32 with shift5/mask31; verify SASS and full numerical qualification before timing claims.",
+  "measured_speedup_for_recommendation": null,
+  "raw_artifacts": "/tmp/ppo-gemm-research",
+  "gpu_jobs_remaining": 0
+}

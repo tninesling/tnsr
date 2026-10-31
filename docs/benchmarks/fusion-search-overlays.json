@@ -1,0 +1,13 @@
+{
+  "build": "debug",
+  "device_required": false,
+  "physical_steps": 131,
+  "normalizations": 64,
+  "iterations": 20,
+  "order": "alternating with discarded warm pair",
+  "full_plan_ms": 634.714392,
+  "overlays_ms": 158.860224,
+  "speedup": 3.9954267721541172,
+  "scope": "local serial geometry selection, not complete model compilation/JIT",
+  "reproduce": "cargo test --features cuda --lib serial_geometry_overlay_planning_benchmark -- --ignored --nocapture"
+}

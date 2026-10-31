@@ -1,0 +1,14 @@
+{
+  "batch_sha256": "b90ab61b9b830d7132a559d8f1c033f9b45dd917fcbbd69f9f1015c7694886ac",
+  "batch": 64,
+  "allocated_rows": 4096,
+  "valid_rows": 2173,
+  "observable_query_rows": 2253,
+  "extra_observable_padded_rows": 80,
+  "dense_attention_pairs": 262144,
+  "observable_attention_pairs": 84437,
+  "min_valid": 18,
+  "max_valid": 52,
+  "median_valid": 35.0,
+  "scope": "Fixture opportunity counts only; no performance or universal-equivalence claim; observable queries include all original card slots10..14 andCLS"
+}

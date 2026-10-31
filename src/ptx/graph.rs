@@ -4371,6 +4371,7 @@ mod tests {
                     MatMulSharedLayout::Auto,
                     policy,
                     target.supports_async_copy(),
+                    false,
                 )
                 .unwrap();
                 let mut tiles = TileGraph::from_with_matmul_schedules(
@@ -4467,6 +4468,7 @@ mod tests {
                 crate::tile::MatMulSharedLayout::Auto,
                 crate::tile::MatMulPipeline::Auto,
                 target.supports_async_copy(),
+                false,
             )
             .unwrap();
             let mut tile_graph = TileGraph::from_with_tf32_support(graph, target.supports_tf32());
@@ -4518,6 +4520,7 @@ mod tests {
                     MatMulSharedLayout::Auto,
                     MatMulPipeline::Auto,
                     target.supports_async_copy(),
+                    false,
                 )
                 .unwrap();
                 assert_eq!(plan.matmul_regions().len(), 1);

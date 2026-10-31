@@ -49,6 +49,10 @@ pub struct Settings {
     pub tf32x3: bool,
     /// Experimental explicit BF16 model graph with f32 resident optimizer.
     pub mixed_bf16: bool,
+    /// Experimental observable-row packing of encoder FFNs; dense attention.
+    pub packed_ffn: bool,
+    /// Experimental strict-f32 register-tile selection for CUDA matmuls.
+    pub experimental_register_tiles: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -67,11 +71,17 @@ impl Default for Settings {
             cuda_graphs: false,
             tf32x3: false,
             mixed_bf16: false,
+            packed_ffn: false,
+            experimental_register_tiles: false,
         }
     }
 }
 impl Settings {
     fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.packed_ffn || !self.mixed_bf16,
+            "packed FFN prototype currently supports f32 model graphs only"
+        );
         ensure!(
             [
                 self.learning_rate,
@@ -203,9 +213,12 @@ fn build(
     clip: f32,
     split_k: bool,
     mixed_bf16: bool,
+    packed_ffn_rows: Option<usize>,
 ) -> Result<(TensorGraph<f32, WithGrad>, NodeIndex, usize)> {
     let (logits, values) = if mixed_bf16 {
         model.forward_mixed(n)?
+    } else if let Some(rows) = packed_ffn_rows {
+        model.forward_packed_ffn(n, rows)?
     } else {
         model.forward(n)?
     };
@@ -358,7 +371,7 @@ pub struct Trainer {
     initial: Settings,
     backend: String,
     steps: usize,
-    compiled: HashMap<(usize, u32), Compiled>,
+    compiled: HashMap<(usize, u32, usize), Compiled>,
     profile: bool,
     #[cfg(feature = "cuda")]
     resident: Option<tnsr::ptx::resident::ResidentAdam>,
@@ -393,7 +406,8 @@ impl Trainer {
             !(settings.tree_reductions
                 || settings.cuda_graphs
                 || settings.tf32x3
-                || settings.mixed_bf16)
+                || settings.mixed_bf16
+                || settings.experimental_register_tiles)
                 || backend == "cuda",
             "tree reductions, CUDA Graphs and TF32x3 require the CUDA backend"
         );
@@ -433,7 +447,9 @@ impl Trainer {
                 && settings.tree_reductions == self.initial.tree_reductions
                 && settings.cuda_graphs == self.initial.cuda_graphs
                 && settings.tf32x3 == self.initial.tf32x3
-                && settings.mixed_bf16 == self.initial.mixed_bf16,
+                && settings.mixed_bf16 == self.initial.mixed_bf16
+                && settings.packed_ffn == self.initial.packed_ffn
+                && settings.experimental_register_tiles == self.initial.experimental_register_tiles,
             "optimizer initial rates/schedule/execution policy cannot change without starting a fresh worker"
         );
         #[cfg(feature = "cuda")]
@@ -482,8 +498,14 @@ impl Trainer {
             let micro = batch.slice(start, end);
             let size = end - start;
             let weight = size as f32 / n as f32;
-            let key = (size, settings.clip_eps.to_bits());
             let started = Instant::now();
+            let packed_indices = if settings.packed_ffn {
+                Some(micro.observations.packed_ffn_indices(&model.config)?)
+            } else {
+                None
+            };
+            let packed_rows = packed_indices.as_ref().map(|(rows, _)| rows.len());
+            let key = (size, settings.clip_eps.to_bits(), packed_rows.unwrap_or(0));
             if !self.compiled.contains_key(&key) {
                 let (graph, output, split_k_contractions) = build(
                     model,
@@ -491,6 +513,7 @@ impl Trainer {
                     settings.clip_eps,
                     self.backend == "cuda" && settings.tf32x3 && settings.tree_reductions,
                     settings.mixed_bf16,
+                    packed_rows,
                 )?;
                 #[cfg(feature = "cuda")]
                 let mixed = if settings.mixed_bf16 {
@@ -513,6 +536,7 @@ impl Trainer {
                         tnsr::ptx::PtxReductionMode::Strict
                     };
                     let mut executor = resident.executor_with_reduction_mode(mode)?;
+                    executor.set_experimental_register_tiles(settings.experimental_register_tiles);
                     executor.set_matmul_precision(if settings.tf32x3 {
                         tnsr::tile::MatMulPrecision::Tf32x3
                     } else {
@@ -549,7 +573,11 @@ impl Trainer {
                 .get_mut(&key)
                 .context("PPO compilation cache missing")?;
             let started = Instant::now();
-            let feeds = inputs(&micro, model, settings, weight)?;
+            let mut feeds = inputs(&micro, model, settings, weight)?;
+            if let Some((rows, restore)) = packed_indices {
+                feeds.indices.insert("ffn_rows".into(), rows);
+                feeds.indices.insert("ffn_restore".into(), restore);
+            }
             timing[1] += started.elapsed().as_secs_f64();
             let started = Instant::now();
             #[cfg(feature = "cuda")]
@@ -611,7 +639,10 @@ impl Trainer {
                 {
                     let directory = std::path::PathBuf::from(directory);
                     std::fs::create_dir_all(&directory).context("create PPO profile directory")?;
-                    let stem = format!("micro-{size}-clip-{:08x}", settings.clip_eps.to_bits());
+                    let mut stem = format!("micro-{size}-clip-{:08x}", settings.clip_eps.to_bits());
+                    if let Some(rows) = packed_rows {
+                        stem.push_str(&format!("-packed-ffn-{rows}"));
+                    }
                     let path = directory.join(format!("{stem}.plan"));
                     let write_new = |path: &std::path::Path, contents: &str| -> Result<()> {
                         use std::io::Write;
@@ -750,6 +781,12 @@ impl Trainer {
         } else {
             "strict_f32"
         });
+        if settings.packed_ffn {
+            result["packed_ffn"] = serde_json::json!({
+                "enabled":true,
+                "capacities":self.compiled.keys().map(|&(_, _, rows)| rows).collect::<Vec<_>>()
+            });
+        }
         #[cfg(feature = "cuda")]
         if settings.cuda_graphs {
             let states: Vec<_> = self
@@ -810,7 +847,7 @@ impl Trainer {
         }
         #[cfg(feature = "cuda")]
         if self.profile {
-            let mut modules: Vec<_> = self.compiled.iter().filter_map(|(&(size, _), compiled)| {
+            let mut modules: Vec<_> = self.compiled.iter().filter_map(|(&(size, _, _), compiled)| {
                 let Runtime::Ptx(executor) = &compiled.executor else {return None;};
                 let stats = executor.compile_metrics();
                 Some((size, serde_json::json!({
@@ -833,7 +870,7 @@ impl Trainer {
         &mut self,
         model: &Model,
         mut accumulated: HashMap<usize, Vec<f32>>,
-        update_graph: Option<(usize, u32)>,
+        update_graph: Option<(usize, u32, usize)>,
         settings: &Settings,
         return_gradients: bool,
     ) -> Result<(f64, f32, serde_json::Map<String, serde_json::Value>)> {

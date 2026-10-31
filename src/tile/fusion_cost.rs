@@ -24,6 +24,22 @@ pub struct FusionFeatures {
     /// Estimated input working set for one serial reduction block, accounting
     /// for smaller broadcast storage. Zero for other kernel classes.
     pub serial_working_set_bytes: usize,
+    /// Logical elements visited along a fused reduction axis; zero otherwise.
+    pub reduction_extent: usize,
+    /// Row-major logical stride of the reduction axis. Composed virtual maps
+    /// may change physical accesses; this is not a measured memory stride.
+    pub reduction_stride: usize,
+    /// Threads cooperating on one output fiber: one for strict serial regions,
+    /// subgroup/block width for cooperative regions, zero for other steps.
+    pub reduction_lanes: usize,
+    /// Full-domain visits required by a reduction region (one, or two when a
+    /// broadcast-back epilogue recomputes producers); zero for other steps.
+    pub full_domain_passes: usize,
+    /// Number of nonidentity or masked virtual inputs bound to this region.
+    pub non_identity_inputs: usize,
+    /// Structural integer operations in input access maps. This is distinct
+    /// from address_operations, which estimates dynamic work over all elements.
+    pub input_index_operations: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -112,7 +128,16 @@ impl FusionScorer for AnalyticalFusionScorer {
             // Small rows can reuse SM-local cache despite an underfilled grid.
             // Wide multi-input serial rows cannot: use the SM shared-memory
             // budget as a conservative cache-capacity proxy for that case.
-            let memory_slowdown = if kernel.serial_working_set_bytes > self.shared_bytes_per_sm {
+            // Cache demand belongs to concurrently resident blocks on each SM,
+            // not to one block alone. A smaller block must not look free when
+            // many such blocks run together on a large output grid.
+            let blocks = kernel.active_threads.div_ceil(threads).max(1);
+            let active_sms = blocks.min(self.multiprocessor_count.max(1));
+            let concurrent_blocks = resident.min(blocks.div_ceil(active_sms));
+            let working_set = kernel
+                .serial_working_set_bytes
+                .saturating_mul(concurrent_blocks);
+            let memory_slowdown = if working_set > self.shared_bytes_per_sm {
                 slowdown
             } else {
                 slowdown.min(4)
@@ -124,5 +149,47 @@ impl FusionScorer for AnalyticalFusionScorer {
             );
         }
         cost
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serial_cache_cost_accounts_for_concurrently_resident_blocks() {
+        let scorer = AnalyticalFusionScorer {
+            multiprocessor_count: 76,
+            shared_bytes_per_sm: 100 * 1024,
+            ..AnalyticalFusionScorer::default()
+        };
+        let small = FusionFeatures {
+            launches: 1,
+            traffic_bytes: 256 * 256 * 4,
+            weighted_operations: 256 * 256,
+            estimated_registers_per_thread: 32,
+            threads_per_block: 32,
+            active_threads: 256,
+            serial_working_set_bytes: 32 * 256 * 4,
+            reduction_lanes: 1,
+            ..FusionFeatures::default()
+        };
+        let mut wide = small.clone();
+        wide.threads_per_block = 1024;
+        wide.serial_working_set_bytes = 256 * 256 * 4;
+        assert!(
+            scorer.score(std::slice::from_ref(&small)).total_ns()
+                < scorer.score(std::slice::from_ref(&wide)).total_ns()
+        );
+        // Once many blocks are resident on each SM, their combined working set
+        // no longer fits merely because each individual 32-thread block fits.
+        let mut crowded_small = small;
+        crowded_small.active_threads = 8192;
+        let mut crowded_wide = wide;
+        crowded_wide.active_threads = 8192;
+        assert_eq!(
+            scorer.score(&[crowded_small]),
+            scorer.score(&[crowded_wide])
+        );
     }
 }

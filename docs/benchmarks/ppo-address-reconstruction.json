@@ -1,0 +1,200 @@
+{
+  "status": "complete",
+  "baseline": "Previously retained K32 staging compiler",
+  "raw_report": "/home/taylor/code/tnsr-benchmarks/results/ppo-index-reconstruct-20261030/report.json",
+  "production_files_changed": [
+    "src/tile/index_egraph.rs"
+  ],
+  "binary_sha256": {
+    "baseline": "5dc182632948880a32529792835c336a45d8e51cda2bd852caeb40738d749aba",
+    "candidate": "17a2a3d0ccc1c7493268859f5788c64467ad4bfc7357e12bbe6915976e6902fa"
+  },
+  "numerical_checkpoints": 20,
+  "numerical_violations": 0,
+  "gpu_audit_records": 616,
+  "cuda_graph_fallbacks": 0,
+  "results": [
+    {
+      "microbatch": 64,
+      "speedup": 1.093969429680651,
+      "bootstrap_95ci": [
+        1.0922690115297538,
+        1.0977559558331091
+      ],
+      "baseline_median_ms": 52.767269999999996,
+      "candidate_median_ms": 47.9685475
+    },
+    {
+      "microbatch": 8,
+      "speedup": 1.0780618979938705,
+      "bootstrap_95ci": [
+        1.0489318757546249,
+        1.0793607030473171
+      ],
+      "baseline_median_ms": 74.10100274999999,
+      "candidate_median_ms": 68.78381300000001
+    }
+  ],
+  "composed_gemm_screen": [
+    {
+      "m": 683,
+      "n": 256,
+      "k": 4096,
+      "transpose_a": true,
+      "transpose_b": false,
+      "reshape_batch": 64,
+      "before_us": 843.4482976794243,
+      "after_us": 383.2899011671543,
+      "speedup": 2.20054923208528,
+      "registers_before": 90,
+      "registers_after": 78,
+      "output_sha256": "08fd71570de7c9ee7fbae8c1d6fbefa5c6b75073bb487ef056467ed6f847ce6b",
+      "bitwise_equal": true
+    },
+    {
+      "m": 256,
+      "n": 683,
+      "k": 4096,
+      "transpose_a": true,
+      "transpose_b": false,
+      "reshape_batch": 64,
+      "before_us": 364.7026978433132,
+      "after_us": 383.5531011223793,
+      "speedup": 0.9508532111358121,
+      "registers_before": 72,
+      "registers_after": 78,
+      "output_sha256": "563ffc3f27e01b75a51b31eaebf5b61c1b7f8557605302cc07c7c30dc79cd07b",
+      "bitwise_equal": true
+    },
+    {
+      "m": 768,
+      "n": 256,
+      "k": 4096,
+      "transpose_a": true,
+      "transpose_b": false,
+      "reshape_batch": 64,
+      "before_us": 823.0199977755547,
+      "after_us": 384.5850005745888,
+      "speedup": 2.1400210526825605,
+      "registers_before": 90,
+      "registers_after": 78,
+      "output_sha256": "aae0d4a18bc1cfc3c6f86e9d6eb5c3e0359902fded338d7d32897bcbabef7e51",
+      "bitwise_equal": true
+    },
+    {
+      "m": 683,
+      "n": 256,
+      "k": 512,
+      "transpose_a": true,
+      "transpose_b": false,
+      "reshape_batch": 8,
+      "before_us": 100.91379955410957,
+      "after_us": 49.03540061786771,
+      "speedup": 2.057978486614795,
+      "registers_before": 90,
+      "registers_after": 78,
+      "output_sha256": "4a28bd6ff0cbc831b87b867179e4699f7dfbd977f4313bc869b13649f7c75ade",
+      "bitwise_equal": true
+    },
+    {
+      "m": 129,
+      "n": 257,
+      "k": 129,
+      "transpose_a": true,
+      "transpose_b": true,
+      "reshape_batch": 3,
+      "before_us": 19.769799429923296,
+      "after_us": 10.317099746316671,
+      "speedup": 1.9162167582010003,
+      "registers_before": 77,
+      "registers_after": 78,
+      "output_sha256": "5fd5c74a9650f55ea6bf1c8dda59aaedf37108dc4c44bf058a4f1123cd4e4ca1",
+      "bitwise_equal": true
+    },
+    {
+      "m": 4096,
+      "n": 683,
+      "k": 256,
+      "transpose_a": false,
+      "transpose_b": true,
+      "reshape_batch": 1,
+      "before_us": 309.84499901533127,
+      "after_us": 324.1167016327381,
+      "speedup": 0.9559673952452523,
+      "registers_before": 72,
+      "registers_after": 76,
+      "output_sha256": "3bd9925f247d04eeb48148175ac488fb7c9310c34591f74079aec67237814786",
+      "bitwise_equal": true
+    },
+    {
+      "m": 4096,
+      "n": 768,
+      "k": 256,
+      "transpose_a": false,
+      "transpose_b": true,
+      "reshape_batch": 1,
+      "before_us": 334.86069962382317,
+      "after_us": 345.7584984600544,
+      "speedup": 0.9684814722276732,
+      "registers_before": 72,
+      "registers_after": 76,
+      "output_sha256": "09397523e3b1bc51317914d4139c63fad6b9710ac18cbeccd5a5169f91b6bf83",
+      "bitwise_equal": true
+    },
+    {
+      "m": 512,
+      "n": 683,
+      "k": 256,
+      "transpose_a": false,
+      "transpose_b": true,
+      "reshape_batch": 1,
+      "before_us": 43.74400023370981,
+      "after_us": 44.88059971481562,
+      "speedup": 0.9746750380269407,
+      "registers_before": 72,
+      "registers_after": 76,
+      "output_sha256": "a7a4149bf66f0489b41d05531a23efead0f46822abc353c1ada1738fbc271c0b",
+      "bitwise_equal": true
+    },
+    {
+      "m": 512,
+      "n": 256,
+      "k": 683,
+      "transpose_a": false,
+      "transpose_b": true,
+      "reshape_batch": 1,
+      "before_us": 50.54470021277666,
+      "after_us": 52.12960001081228,
+      "speedup": 0.9695969315378039,
+      "registers_before": 72,
+      "registers_after": 76,
+      "output_sha256": "75a16afffb591f63f5a78cb02c67c6e6c5d3e686a3521313363b4a4173221664",
+      "bitwise_equal": true
+    },
+    {
+      "m": 128,
+      "n": 256,
+      "k": 128,
+      "transpose_a": false,
+      "transpose_b": false,
+      "reshape_batch": 1,
+      "before_us": 6.181400141213089,
+      "after_us": 6.438499863725156,
+      "speedup": 0.9600683811518612,
+      "registers_before": 70,
+      "registers_after": 78,
+      "output_sha256": "9b82b8776d1960e22befbc5e932ae651e2a85d57ca4c926714727a00e98c8a23",
+      "bitwise_equal": true
+    }
+  ],
+  "rejected": "Disabling scalar GEMM index sharing reduced registers but slowed hot contractions.",
+  "validation": {
+    "cpu_tile_tests": 50,
+    "cuda_tests_passed": 113,
+    "cuda_tests_ignored": 1,
+    "ignored_reason": "Manual compact-softmax GPU timing test",
+    "clippy": "passed: all-targets all-features -D warnings",
+    "format": "passed"
+  },
+  "scope": "Optimization A/B; no refreshed competitor ranking, memory ranking or full-model bitwise-equivalence claim."
+}

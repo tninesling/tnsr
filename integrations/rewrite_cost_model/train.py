@@ -67,9 +67,26 @@ def load_rows(path: Path) -> list[dict[str, Any]]:
 
 
 
-# Available only after executing a compiled candidate in the current harness.
-PLAN_FEATURES = {"launch_count", "materialized_bytes", "intermediate_bytes", "device_copies",
-                 "fused_region_count", "generated_kernel_count"}
+# Runtime counters require executing a candidate. Compiler facts come from
+# lowering/planning and may be obtained without executing it.
+EXECUTION_FEATURES = {"launch_count", "materialized_bytes", "intermediate_bytes", "device_copies"}
+COMPILE_FEATURES = {"fused_region_count", "generated_kernel_count"}
+PLAN_FEATURES = EXECUTION_FEATURES | COMPILE_FEATURES
+
+
+def is_compiler_feature(name: str) -> bool:
+    return name in COMPILE_FEATURES or name.startswith(("plan_", "compiler_"))
+
+
+def feature_names(rows: list[dict[str, Any]], mode: str) -> list[str]:
+    if mode not in ("static", "compiled", "all"):
+        raise ValueError(f"unknown feature mode: {mode}")
+    names = {name for row in rows for name in row["features"]}
+    if mode != "all":
+        names -= EXECUTION_FEATURES
+    if mode == "static":
+        names = {name for name in names if not is_compiler_feature(name)}
+    return sorted(names)
 
 
 def deduplicate_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -263,8 +280,7 @@ def train(rows: list[dict[str, Any]], alpha: float, min_shapes: int, min_familie
                                                 allow_nan=False).encode()).hexdigest()
     rows, deduplication = deduplicate_rows(rows)
     # Only numerical program features: identifiers/family/device do not enter x.
-    names = sorted({name for row in rows for name in row["features"]}
-                   - (PLAN_FEATURES if feature_mode == "static" else set()))
+    names = feature_names(rows, feature_mode)
     if set(names) & FORBIDDEN_FEATURES:
         raise ValueError("program features contain labels or identifiers")
     if not names:
@@ -300,7 +316,8 @@ def train(rows: list[dict[str, Any]], alpha: float, min_shapes: int, min_familie
                                               if v["absolute_log_error_p90"] is not None]),
                   "fallback": "original", "experimental": True,
                   "feature_mode": feature_mode,
-                  "requires_executed_candidate_features": bool(set(names) & PLAN_FEATURES)})
+                  "requires_executed_candidate_features": bool(set(names) & EXECUTION_FEATURES),
+                  "requires_compiled_candidate_features": any(is_compiler_feature(name) for name in names)})
     report = {"schema_version": 1, "rows": len(rows), "deduplication": deduplication,
               "feature_mode": feature_mode, "training_data_sha256": data_fingerprint, "case_count": len({row["case_id"] for row in rows}),
               "shape_group_count": shape_count, "family_count": family_count,
@@ -317,8 +334,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--ridge-alpha", type=float, default=1.0)
-    parser.add_argument("--feature-mode", choices=["all", "static"], default="all",
-                        help="static excludes current post-execution plan/counter features")
+    parser.add_argument("--feature-mode", choices=["all", "compiled", "static"], default="all",
+                        help="static uses graph facts; compiled adds pre-execution plan facts; all adds runtime counters")
     parser.add_argument("--min-shapes", type=int, default=12)
     parser.add_argument("--min-families", type=int, default=5)
     args = parser.parse_args()

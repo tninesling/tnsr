@@ -4,7 +4,7 @@
 //! addresses use wrapping u64 arithmetic, matching PTX. Reassociation and quotient
 //! reconstruction are restricted to the wrapping domain; erasing a checked
 //! expression requires proof that its intermediate operations cannot overflow.
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Context, Result};
 use egg::{
@@ -394,6 +394,102 @@ pub(super) fn normalize_map_in_domain(expression: IndexExpr, shape: &[usize]) ->
     decode(&result, Id::from(result.as_ref().len() - 1))
 }
 
+// Reassemble linearized reshape coordinates before the bounded e-graph search.
+// Coefficients use the scheduled address domain's wrapping u64 arithmetic.
+// Division remains opaque except for successive positive constant divisors;
+// no arithmetic is moved through a division or a memory predicate.
+fn reconstruct_address(expression: &Expr) -> Expr {
+    fn collect(expr: &Expr, scale: u64, terms: &mut BTreeMap<Expr, u64>) {
+        let mut add = |term: Expr, coefficient: u64| {
+            let entry = terms.entry(term).or_default();
+            *entry = entry.wrapping_add(coefficient);
+        };
+        match expr {
+            Expr::Add(a, b) => {
+                collect(a, scale, terms);
+                collect(b, scale, terms);
+            }
+            Expr::Sub(a, b) => {
+                collect(a, scale, terms);
+                collect(b, scale.wrapping_neg(), terms);
+            }
+            Expr::Mul(a, b) => match (&**a, &**b) {
+                (Expr::Const(c), value) | (value, Expr::Const(c)) => {
+                    collect(value, scale.wrapping_mul(*c as u64), terms);
+                }
+                _ => add(
+                    Expr::Mul(
+                        Box::new(reconstruct_address(a)),
+                        Box::new(reconstruct_address(b)),
+                    ),
+                    scale,
+                ),
+            },
+            Expr::Mod(a, d) => {
+                collect(a, scale, terms);
+                collect(
+                    &Expr::FloorDiv(a.clone(), *d),
+                    scale.wrapping_mul(*d as u64).wrapping_neg(),
+                    terms,
+                );
+            }
+            Expr::FloorDiv(a, d) => {
+                let a = reconstruct_address(a);
+                let quotient = match a {
+                    value if *d == 1 => value,
+                    Expr::FloorDiv(inner, first) => match first.checked_mul(*d) {
+                        Some(product) => Expr::FloorDiv(inner, product),
+                        None => Expr::FloorDiv(Box::new(Expr::FloorDiv(inner, first)), *d),
+                    },
+                    Expr::Const(value) => Expr::Const(((value as u64) / *d as u64) as i64),
+                    value => Expr::FloorDiv(Box::new(value), *d),
+                };
+                add(quotient, scale);
+            }
+            Expr::ShiftRight(a, shift) => {
+                if let Ok(divisor) = usize::try_from(1_u64 << shift) {
+                    collect(&Expr::FloorDiv(a.clone(), divisor), scale, terms);
+                } else {
+                    add(expr.clone(), scale);
+                }
+            }
+            Expr::BitAnd(a, mask) => {
+                if let Some(divisor) = mask.checked_add(1).filter(|d| d.is_power_of_two())
+                    && let Ok(divisor) = usize::try_from(divisor)
+                {
+                    collect(&Expr::Mod(a.clone(), divisor), scale, terms);
+                } else {
+                    add(expr.clone(), scale);
+                }
+            }
+            Expr::Const(value) => add(Expr::Const(1), scale.wrapping_mul(*value as u64)),
+            leaf => add(leaf.clone(), scale),
+        }
+    }
+    let mut terms = BTreeMap::new();
+    collect(expression, 1, &mut terms);
+    terms
+        .into_iter()
+        .filter(|(_, coefficient)| *coefficient != 0)
+        .map(|(term, coefficient)| match term {
+            Expr::Const(1) => Expr::Const(coefficient as i64),
+            value if coefficient == 1 => value,
+            value => Expr::Mul(Box::new(value), Box::new(Expr::Const(coefficient as i64))),
+        })
+        .reduce(|a, b| Expr::Add(Box::new(a), Box::new(b)))
+        .unwrap_or(Expr::Const(0))
+}
+
+fn address_cost(expression: &Expr) -> usize {
+    match expression {
+        Expr::FloorDiv(a, _) | Expr::Mod(a, _) => 80 + address_cost(a),
+        Expr::Add(a, b) | Expr::Sub(a, b) => 1 + address_cost(a) + address_cost(b),
+        Expr::Mul(a, b) => 3 + address_cost(a) + address_cost(b),
+        Expr::ShiftRight(a, _) | Expr::BitAnd(a, _) => 1 + address_cost(a),
+        _ => 0,
+    }
+}
+
 pub(super) fn normalize_address(expression: &Expr) -> Result<Expr> {
     fn encode(
         expr: &Expr,
@@ -492,7 +588,13 @@ pub(super) fn normalize_address(expression: &Expr) -> Result<Expr> {
     }
     let mut input = RecExpr::default();
     let mut leaves = HashMap::new();
+    // Validate every original divisor and shift before simplifying dead terms.
     encode(expression, &mut input, &mut leaves)?;
+    let reconstructed = reconstruct_address(expression);
+    if address_cost(&reconstructed) < address_cost(expression) {
+        input = RecExpr::default();
+        encode(&reconstructed, &mut input, &mut leaves)?;
+    }
     let result = extract(input, Semantics::Wrapping, HashMap::new());
     decode(&result, Id::from(result.as_ref().len() - 1), &leaves)
 }
@@ -541,6 +643,45 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn scheduled_reshape_coordinates_reconstruct_at_unsigned_boundaries() {
+        let x = Expr::Var("x".into());
+        let reconstruction = Expr::Mod(Box::new(x.clone()), 683)
+            + Expr::Mod(Box::new(Expr::FloorDiv(Box::new(x.clone()), 683)), 64) * 683_usize
+            + Expr::FloorDiv(Box::new(x.clone()), 43_712) * 43_712_usize;
+        let optimized = normalize_address(&reconstruction).unwrap();
+        assert_eq!(optimized, x);
+        let wrapped = Expr::Mod(Box::new(x.clone()), 683)
+            + Expr::Mod(Box::new(Expr::FloorDiv(Box::new(x.clone()), 683)), 64) * 683_usize
+            + Expr::Mod(Box::new(Expr::FloorDiv(Box::new(x.clone()), 43_712)), 64) * 43_712_usize;
+        let optimized_wrapped = normalize_address(&wrapped).unwrap();
+        assert_ne!(optimized_wrapped, x);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(683);
+        for value in [
+            0,
+            1,
+            682,
+            683,
+            43_711,
+            43_712,
+            2_797_568,
+            u64::MAX / 2,
+            u64::MAX,
+        ]
+        .into_iter()
+        .chain((0..512).map(|_| rng.random()))
+        {
+            assert_eq!(
+                evaluate(&reconstruction, value),
+                evaluate(&optimized, value)
+            );
+            assert_eq!(
+                evaluate(&wrapped, value),
+                evaluate(&optimized_wrapped, value)
+            );
+        }
+    }
+
     #[test]
     fn signed_maps_preserve_negative_values_and_overflow_errors() {
         let x = IndexExpr::IterDim(0);

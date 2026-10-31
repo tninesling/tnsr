@@ -56,9 +56,11 @@
 //! graph.add_expr(&expr, true);
 //! ```
 
+mod islands;
 mod layout_rules;
 mod linear_rows;
 mod reduction_rules;
+mod segments;
 mod tensor_analysis;
 
 use crate::tensor::{BinaryOp, DType, ExprKind, ReduceOp, TensorExpr, UnaryOp};
@@ -154,7 +156,8 @@ pub enum RewriteNumerics {
     #[default]
     PreserveOperations,
     /// Permit real-algebra identities, including reassociation and exp/log
-    /// cancellation, matrix factoring and matrix-chain reassociation. These may
+    /// cancellation, matrix factoring, matrix-chain reassociation, and
+    /// narrow/concat identities that change gradient scaffolding. These may
     /// change finite results, signed zero, NaNs and infinities; callers must
     /// establish suitability for their workload.
     RealAlgebra,
@@ -530,12 +533,23 @@ pub fn optimize_expr<D: DType + Clone + Default + 'static>(
 /// when a rank-2 RHS is shared across rows, including an optional shared bias vector. Apply
 /// before differentiation to avoid batched parameter-gradient partials; this
 /// changes gradient reduction grouping and may change backend matmul rounding.
-/// Unsupported operations and wide metadata remain opaque leaves. Rewriting
-/// supported parents can remove redundant work without crossing cast/index or
-/// unsupported operation boundaries.
+/// Supported islands beneath unsupported operators are optimized independently.
+/// Unsupported operations and wide metadata remain opaque leaves within each
+/// island, so rewriting never moves arithmetic across a cast/index boundary.
+/// Forward-exact narrow/concat identities require `RealAlgebra` because removing
+/// their gradient scaffolding can change signed zero and nonfinite gradients. Runner limits
+/// apply to each island, and shared opaque expressions are visited only once.
 pub fn optimize_expr_with_numerics<D: DType + Clone + Default + 'static>(
     expr: &TensorExpr<D>,
     config: RewriteConfig,
+    numerics: RewriteNumerics,
+) -> TensorExpr<D> {
+    islands::optimize(expr, &config, numerics)
+}
+
+fn optimize_supported<D: DType + Clone + Default + 'static>(
+    expr: &TensorExpr<D>,
+    config: &RewriteConfig,
     numerics: RewriteNumerics,
 ) -> TensorExpr<D> {
     // Preserve unsupported operations, wide metadata and observable cast
@@ -569,7 +583,11 @@ pub fn optimize_expr_with_numerics<D: DType + Clone + Default + 'static>(
     tracing::debug!("Best cost: {}", best_cost);
     tracing::debug!("Best expression: {}", best);
 
-    let optimized = recexpr_to_expr(&best, expr);
+    let optimized = if best == start {
+        expr.clone()
+    } else {
+        recexpr_to_expr(&best, expr)
+    };
     if numerics == RewriteNumerics::RealAlgebra {
         linear_rows::rewrite(&optimized).unwrap_or(optimized)
     } else {

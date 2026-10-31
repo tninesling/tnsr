@@ -31,7 +31,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 34;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 37;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -106,10 +106,13 @@ pub struct PtxExecutor<D: CudaDType = F32> {
     kernel_launches: Cell<usize>,
     reduction_mode: PtxReductionMode,
     fusion_policy: PtxFusionPolicy,
+    serial_reduction_block_threads: Option<u32>,
     target: PtxTarget,
     matmul_precision: crate::tile::MatMulPrecision,
     matmul_shared_layout: MatMulSharedLayout,
     matmul_pipeline: MatMulPipeline,
+    matmul_grid_group_m: usize,
+    experimental_register_tiles: bool,
 }
 
 impl<D: CudaDType> Default for PtxExecutor<D> {
@@ -209,10 +212,13 @@ impl<D: CudaDType> PtxExecutor<D> {
             kernel_launches: Cell::new(0),
             reduction_mode,
             fusion_policy: PtxFusionPolicy::CostAware,
+            serial_reduction_block_threads: None,
             target,
             matmul_precision: crate::tile::MatMulPrecision::AllowTf32,
             matmul_shared_layout: MatMulSharedLayout::Auto,
             matmul_pipeline: MatMulPipeline::Auto,
+            matmul_grid_group_m: 1,
+            experimental_register_tiles: false,
         })
     }
 
@@ -250,6 +256,31 @@ impl<D: CudaDType> PtxExecutor<D> {
         }
     }
 
+    /// Enable a larger scalar register tile for controlled experiments.
+    pub fn set_experimental_register_tiles(&mut self, enabled: bool) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.experimental_register_tiles != enabled {
+            self.invalidate_replay();
+            self.experimental_register_tiles = enabled;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Group adjacent GEMM row tiles to improve operand reuse in cache.
+    /// One keeps the original grid traversal; arithmetic within each tile is unchanged.
+    pub fn set_matmul_grid_group_m(&mut self, group: usize) -> Result<()> {
+        crate::tile::MatMulSchedule::validate_grid_group_m(group)?;
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.matmul_grid_group_m != group {
+            self.invalidate_replay();
+            self.matmul_grid_group_m = group;
+            self.compilation_signature = None;
+        }
+        Ok(())
+    }
+
     /// Use cost-aware selection or the previous greedy fusion for ablations.
     pub fn set_fusion_policy(&mut self, policy: PtxFusionPolicy) {
         let gate = self.stream_gate.clone();
@@ -259,6 +290,23 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.fusion_policy = policy;
             self.compilation_signature = None;
         }
+    }
+
+    /// Override the serial reduction-region block size for controlled profiling.
+    /// `None` restores planner selection. Each thread still visits its own
+    /// output fiber in increasing reduction-index order under Strict policy.
+    pub fn set_serial_reduction_block_threads(&mut self, threads: Option<u32>) -> Result<()> {
+        if let Some(threads) = threads {
+            crate::tile::ReductionRegion::validate_serial_block_threads(threads)?;
+        }
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.serial_reduction_block_threads != threads {
+            self.invalidate_replay();
+            self.serial_reduction_block_threads = threads;
+            self.compilation_signature = None;
+        }
+        Ok(())
     }
 
     fn take_buffer(&self, len: usize) -> Result<CudaSlice<D::HostType>> {
@@ -417,7 +465,12 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
-            self.fusion_policy,
+            (
+                self.fusion_policy,
+                self.serial_reduction_block_threads,
+                self.matmul_grid_group_m,
+                self.experimental_register_tiles,
+            ),
         );
         let compiled_signature = self
             .compilation_signature
@@ -469,13 +522,18 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .context("Missing compiled pointwise region kernel")?
                 ),
                 PtxPlanAction::ReductionRegion(region_id) => {
-                    let schedule = plan
+                    let region = plan
                         .reduction_regions()
                         .get(region_id)
-                        .context("Missing reduction region schedule")?
-                        .schedule;
+                        .context("Missing reduction region schedule")?;
+                    let schedule = region.schedule;
+                    let geometry = if schedule == crate::tile::ReductionSchedule::Serial {
+                        format!(" serial_block_threads={}", region.serial_block_threads)
+                    } else {
+                        String::new()
+                    };
                     format!(
-                        "kernel {} schedule={schedule:?}",
+                        "kernel {} schedule={schedule:?}{geometry}",
                         ptx_graph
                             .reduction_region_kernel_name(region_id)
                             .context("Missing compiled reduction region kernel")?
@@ -613,7 +671,12 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
-            self.fusion_policy,
+            (
+                self.fusion_policy,
+                self.serial_reduction_block_threads,
+                self.matmul_grid_group_m,
+                self.experimental_register_tiles,
+            ),
         );
         if !storage.is_empty() {
             signature.extend_from_slice(b"bound-storage");
@@ -633,10 +696,11 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_shared_layout,
             self.matmul_pipeline,
             self.target.supports_async_copy(),
+            self.experimental_register_tiles,
         )?;
         let fusion_started = Instant::now();
         if self.fusion_policy == PtxFusionPolicy::CostAware {
-            execution_plan.select_fusion(
+            execution_plan.select_fusion_with_serial_threads(
                 graph,
                 &AnalyticalFusionScorer {
                     multiprocessor_count: self.target.multiprocessor_count,
@@ -645,7 +709,10 @@ impl<D: CudaDType> PtxExecutor<D> {
                     threads_per_sm: self.target.matmul_resources.threads_per_sm,
                     ..AnalyticalFusionScorer::default()
                 },
+                self.serial_reduction_block_threads,
             )?;
+        } else if let Some(threads) = self.serial_reduction_block_threads {
+            execution_plan.set_serial_reduction_block_threads(threads)?;
         }
         if self.reduction_mode == PtxReductionMode::Online {
             execution_plan.fuse_online(graph)?;
@@ -659,7 +726,9 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_shared_layout,
             self.matmul_pipeline,
             self.target.supports_async_copy(),
+            self.experimental_register_tiles,
         )?;
+        execution_plan.set_matmul_grid_group_m(self.matmul_grid_group_m)?;
         let fusion_selection_time = fusion_started.elapsed();
         let mut tile_graph = TileGraph::from_with_matmul_schedules(
             graph,
@@ -1172,8 +1241,12 @@ impl<D: CudaDType> PtxExecutor<D> {
                 launcher.arg(output);
             }
             self.record_kernel_launch();
-            let config =
-                super::target::reduction_launch_config(region.schedule, launch_len, &function)?;
+            let config = super::target::reduction_launch_config(
+                region.schedule,
+                region.serial_block_threads,
+                launch_len,
+                &function,
+            )?;
             unsafe { launcher.launch(config) }
                 .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
         }
@@ -1237,7 +1310,12 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
-            self.fusion_policy,
+            (
+                self.fusion_policy,
+                self.serial_reduction_block_threads,
+                self.matmul_grid_group_m,
+                self.experimental_register_tiles,
+            ),
         );
         let compiled_signature = self
             .compilation_signature
@@ -2351,7 +2429,12 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
-            self.fusion_policy,
+            (
+                self.fusion_policy,
+                self.serial_reduction_block_threads,
+                self.matmul_grid_group_m,
+                self.experimental_register_tiles,
+            ),
         );
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
             self.compile_impl(graph)?;
@@ -2402,7 +2485,12 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
-            self.fusion_policy,
+            (
+                self.fusion_policy,
+                self.serial_reduction_block_threads,
+                self.matmul_grid_group_m,
+                self.experimental_register_tiles,
+            ),
         );
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
             self.compile(graph)?;
@@ -2459,8 +2547,14 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     matmul_precision: crate::tile::MatMulPrecision,
     matmul_shared_layout: MatMulSharedLayout,
     matmul_pipeline: MatMulPipeline,
-    fusion_policy: PtxFusionPolicy,
+    fusion_options: (PtxFusionPolicy, Option<u32>, usize, bool),
 ) -> Vec<u8> {
+    let (
+        fusion_policy,
+        serial_reduction_block_threads,
+        matmul_grid_group_m,
+        experimental_register_tiles,
+    ) = fusion_options;
     let mut signature = Vec::new();
     signature.extend_from_slice(PTX_GRAPH_SIGNATURE_MAGIC);
     signature.push(PTX_GRAPH_SIGNATURE_VERSION);
@@ -2496,6 +2590,9 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
         PtxFusionPolicy::CostAware => 0,
         PtxFusionPolicy::Greedy => 1,
     });
+    signature.extend_from_slice(&serial_reduction_block_threads.unwrap_or(0).to_le_bytes());
+    signature.extend_from_slice(&matmul_grid_group_m.to_le_bytes());
+    signature.push(u8::from(experimental_register_tiles));
     signature.extend_from_slice(&target.compute_capability.0.to_le_bytes());
     signature.extend_from_slice(&target.compute_capability.1.to_le_bytes());
     signature_usize(&mut signature, target.multiprocessor_count);
@@ -2704,7 +2801,12 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
-            self.fusion_policy,
+            (
+                self.fusion_policy,
+                self.serial_reduction_block_threads,
+                self.matmul_grid_group_m,
+                self.experimental_register_tiles,
+            ),
         );
         let needs_compilation = self.module.is_none()
             || self.ptx_graph.is_none()
@@ -2732,7 +2834,12 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
             self.matmul_precision,
             self.matmul_shared_layout,
             self.matmul_pipeline,
-            self.fusion_policy,
+            (
+                self.fusion_policy,
+                self.serial_reduction_block_threads,
+                self.matmul_grid_group_m,
+                self.experimental_register_tiles,
+            ),
         );
         if self.module.is_none()
             || self.compilation_signature.as_deref() != Some(signature.as_slice())

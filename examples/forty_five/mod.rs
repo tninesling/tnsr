@@ -32,6 +32,7 @@ pub struct Model {
     pub config: Config,
     pub parameters: NamedParameters,
     mixed_bf16: bool,
+    packed_ffn_rows: Option<usize>,
 }
 fn linear_specs(specs: &mut Specs, prefix: &str, input: usize, output: usize, group: &'static str) {
     specs.insert(format!("{prefix}.weight"), (vec![output, input], group));
@@ -47,6 +48,7 @@ impl Model {
         let model = Self {
             parameters,
             mixed_bf16: false,
+            packed_ffn_rows: None,
             config: serde_json::from_value(config)?,
         };
         model.validate()?;
@@ -305,6 +307,22 @@ impl Model {
             config: self.config.clone(),
             parameters: self.parameters.clone(),
             mixed_bf16: true,
+            packed_ffn_rows: None,
+        }
+        .forward(batch)
+    }
+    /// Experimental tokenwise FFN packing; attention keeps its original layout.
+    /// The caller supplies matching `ffn_rows` and `ffn_restore` integer feeds.
+    pub fn forward_packed_ffn(&self, batch: usize, rows: usize) -> Result<(Tensor, Tensor)> {
+        ensure!(
+            rows > 0 && rows <= batch * self.config.token_max_tokens,
+            "packed FFN row count is outside the dense domain"
+        );
+        Self {
+            config: self.config.clone(),
+            parameters: self.parameters.clone(),
+            mixed_bf16: false,
+            packed_ffn_rows: Some(rows),
         }
         .forward(batch)
     }
@@ -370,7 +388,14 @@ impl Model {
                 .permute(vec![0, 2, 1, 3])
                 .reshape(vec![batch, s, d]);
             x = x + self.linear(&format!("{p}.attention.out_proj"), context, d, d)?;
-            let normalized = self.norm(&format!("{p}.ffn_norm"), x.clone(), d)?;
+            let ffn_input = if let Some(rows) = self.packed_ffn_rows {
+                x.clone()
+                    .reshape(vec![batch * s, d])
+                    .embedding_indices(IndexTensor::input("ffn_rows", vec![rows]))
+            } else {
+                x.clone()
+            };
+            let normalized = self.norm(&format!("{p}.ffn_norm"), ffn_input, d)?;
             let gate = self.silu(self.linear(
                 &format!("{p}.feed_forward.gate_proj"),
                 normalized.clone(),
@@ -378,7 +403,33 @@ impl Model {
                 hidden,
             )?);
             let up = self.linear(&format!("{p}.feed_forward.up_proj"), normalized, d, hidden)?;
-            x = x + self.linear(&format!("{p}.feed_forward.down_proj"), gate * up, hidden, d)?;
+            let update =
+                self.linear(&format!("{p}.feed_forward.down_proj"), gate * up, hidden, d)?;
+            let update = if let Some(rows) = self.packed_ffn_rows {
+                let dense_rows = batch * s;
+                // Each discarded row has its own constant-zero slot, avoiding
+                // a many-to-one atomic gradient accumulation into a sentinel.
+                let table = if rows < dense_rows {
+                    Tensor::concat(
+                        &[
+                            update,
+                            Tensor::constant(
+                                vec![0.; (dense_rows - rows) * d],
+                                vec![dense_rows - rows, d],
+                            ),
+                        ],
+                        0,
+                    )
+                } else {
+                    update
+                };
+                table
+                    .embedding_indices(IndexTensor::input("ffn_restore", vec![dense_rows]))
+                    .reshape(vec![batch, s, d])
+            } else {
+                update
+            };
+            x = x + update;
         }
         self.norm(&format!("{prefix}.output_norm"), x, d)
     }
@@ -535,6 +586,62 @@ pub struct Inputs {
 }
 
 impl Observations {
+    /// Keep every key-eligible row and every directly observed query row.
+    /// This is specific to the model's current CLS/pooling/card consumers.
+    pub fn packed_ffn_indices(&self, c: &Config) -> Result<(Vec<u32>, Vec<u32>)> {
+        let dense_rows = self
+            .token_ids
+            .len()
+            .checked_mul(c.token_max_tokens)
+            .context("packed FFN dense row count overflows")?;
+        ensure!(
+            dense_rows > 0,
+            "packed FFN requires a nonempty observation batch"
+        );
+        let mut keep = Vec::with_capacity(dense_rows);
+        for ids in &self.token_ids {
+            ensure!(
+                ids.len() == c.token_max_tokens,
+                "packed FFN token width mismatch"
+            );
+            for (position, &id) in ids.iter().enumerate() {
+                keep.push(
+                    id != 0
+                        || position == 0
+                        || (c.use_card_conditioned_actions && (10..15).contains(&position)),
+                );
+            }
+        }
+        // Fixed capacities limit graph variants; fillers are distinct original
+        // rows rather than duplicate indices, so gather gradients stay injective.
+        let live = keep.iter().filter(|&&value| value).count();
+        let quantum = if dense_rows <= 512 { 32 } else { 128 };
+        let capacity = live
+            .div_ceil(quantum)
+            .saturating_mul(quantum)
+            .min(dense_rows);
+        let mut fillers = capacity - live;
+        for selected in &mut keep {
+            if !*selected && fillers > 0 {
+                *selected = true;
+                fillers -= 1;
+            }
+        }
+        let mut rows = Vec::with_capacity(capacity);
+        let mut restore = vec![0; dense_rows];
+        let mut omitted = capacity;
+        for (row, selected) in keep.into_iter().enumerate() {
+            if selected {
+                restore[row] = u32::try_from(rows.len()).context("packed FFN index exceeds u32")?;
+                rows.push(u32::try_from(row).context("packed FFN row exceeds u32")?);
+            } else {
+                restore[row] =
+                    u32::try_from(omitted).context("packed FFN inverse index exceeds u32")?;
+                omitted += 1;
+            }
+        }
+        Ok((rows, restore))
+    }
     pub fn inputs(&self, c: &Config) -> Result<Inputs> {
         let batch = self.token_ids.len();
         let s = c.token_max_tokens;
@@ -584,5 +691,87 @@ impl Observations {
                 ("phases".into(), self.phase_ids.clone()),
             ]),
         })
+    }
+}
+
+#[cfg(test)]
+mod packed_ffn_tests {
+    use super::*;
+    use tnsr::graph::TensorGraph;
+    use tnsr::{Executor, SimpleExecutor};
+
+    fn config() -> Config {
+        Config {
+            token_dim: 2,
+            token_heads: 1,
+            token_layers: 1,
+            token_max_tokens: 128,
+            token_vocab_size: 16,
+            token_type_vocab_size: 2,
+            phase_embed_dim: 2,
+            num_phases: 2,
+            use_phase_heads: true,
+            use_card_conditioned_actions: true,
+            use_separate_critic: false,
+            use_privileged_critic: false,
+            use_rope: false,
+            use_swiglu: true,
+        }
+    }
+
+    #[test]
+    fn packed_ffn_preserves_observed_rows_and_inverse_permutation() {
+        let observations = Observations {
+            token_ids: vec![vec![0; 128]; 2],
+            token_type_ids: vec![vec![0; 128]; 2],
+            phase_ids: vec![0; 2],
+        };
+        let (rows, restore) = observations.packed_ffn_indices(&config()).unwrap();
+        assert_eq!(rows.len(), 32);
+        for row in [0, 10, 11, 12, 13, 14, 128, 138, 139, 140, 141, 142] {
+            assert_eq!(rows[restore[row] as usize], row as u32);
+        }
+        assert!(rows.windows(2).all(|pair| pair[0] < pair[1]));
+        let mut permutation = restore.clone();
+        permutation.sort_unstable();
+        assert_eq!(permutation, (0u32..256).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn packed_ffn_gather_restore_has_conservative_activation_gradients() {
+        let observations = Observations {
+            token_ids: vec![vec![0; 128]; 2],
+            token_type_ids: vec![vec![0; 128]; 2],
+            phase_ids: vec![0; 2],
+        };
+        let (rows, restore) = observations.packed_ffn_indices(&config()).unwrap();
+        let input = Parameter::new(vec![1.; 512], vec![256, 2]);
+        let packed = Tensor::from(input.clone())
+            .embedding_indices(IndexTensor::constant(rows.clone(), vec![rows.len()]).unwrap());
+        let table = Tensor::concat(
+            &[
+                packed,
+                Tensor::constant(vec![0.; (256 - rows.len()) * 2], vec![256 - rows.len(), 2]),
+            ],
+            0,
+        );
+        let restored = table.embedding_indices(IndexTensor::constant(restore, vec![256]).unwrap());
+        let graph: TensorGraph<f32> = restored.reduce_sum(1).reduce_sum(0).into();
+        let output = *graph.toposort().last().unwrap();
+        let graph = graph.with_gradients(output);
+        let mut executor = SimpleExecutor::new();
+        executor
+            .execute(&graph, std::collections::HashMap::new())
+            .unwrap();
+        let gradients = executor.get_gradients(&graph);
+        let gradient = &gradients[&input.id()];
+        for row in 0..256 {
+            let expected = if rows.binary_search(&(row as u32)).is_ok() {
+                1.
+            } else {
+                0.
+            };
+            assert_eq!(&gradient[row * 2..row * 2 + 2], &[expected; 2]);
+        }
     }
 }

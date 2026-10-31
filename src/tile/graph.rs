@@ -973,8 +973,10 @@ impl TileGraph {
             builder.barrier();
         }
         let output = |builder: &mut TileIRBuilder, round: usize| {
-            let (local_row, local_col) =
-                tile_thread_coordinates(schedule, tile_m, tile_n, false, round);
+            let (local_row, local_col) = schedule
+                .register_accumulator_coordinates(round)
+                .filter(|_| schedule.register_thread_tile() == Some((4, 4)))
+                .unwrap_or_else(|| tile_thread_coordinates(schedule, tile_m, tile_n, false, round));
             // Pointwise consumers require one scalar per thread. Scalar accumulators
             // already match; fragment accumulators need an explicit shared exchange.
             let matmul_element = if let Some(c_smem) = c_smem {
@@ -993,14 +995,9 @@ impl TileGraph {
             };
 
             // Each round extracts and stores one output per thread.
-            let global_row = Expr::Add(
-                Box::new(Expr::BlockIdx(Dim::Y) * tile_m),
-                Box::new(local_row),
-            );
-            let global_col = Expr::Add(
-                Box::new(Expr::BlockIdx(Dim::X) * tile_n),
-                Box::new(local_col),
-            );
+            let (block_row, block_col) = matmul_block_coordinates(schedule);
+            let global_row = block_row * tile_m + local_row;
+            let global_col = block_col * tile_n + local_col;
             let output_layout = MatrixLayout {
                 rows: m,
                 cols: n,
@@ -1576,11 +1573,29 @@ fn matmul_operand_coordinates(
 ) -> ((Expr, Expr), (Expr, Expr)) {
     let (a_local_row, a_local_col) = operand_staging_coordinates(schedule, true, staging.0, round);
     let (b_local_row, b_local_col) = operand_staging_coordinates(schedule, false, staging.1, round);
-    let a_row = Expr::BlockIdx(Dim::Y) * schedule.block_tile.m + a_local_row;
+    let (block_row, block_col) = matmul_block_coordinates(schedule);
+    let a_row = block_row * schedule.block_tile.m + a_local_row;
     let a_col = Expr::Var("k_tile".into()) * schedule.block_tile.k + a_local_col;
     let b_row = Expr::Var("k_tile".into()) * schedule.block_tile.k + b_local_row;
-    let b_col = Expr::BlockIdx(Dim::X) * schedule.block_tile.n + b_local_col;
+    let b_col = block_col * schedule.block_tile.n + b_local_col;
     ((a_row, a_col), (b_row, b_col))
+}
+
+// Keep physical launch dimensions unchanged. CUDA visits X before Y;
+// reinterpret the linear task as groups of M tiles before advancing N.
+// A power-of-two group dividing M avoids dynamic final-group selection.
+fn matmul_block_coordinates(schedule: MatMulSchedule) -> (Expr, Expr) {
+    let cols = schedule.logical_shape.n.div_ceil(schedule.block_tile.n);
+    let group = schedule.effective_grid_group_m();
+    if group <= 1 || cols == 0 {
+        return (Expr::BlockIdx(Dim::Y), Expr::BlockIdx(Dim::X));
+    }
+    let task = Expr::BlockIdx(Dim::Y) * cols + Expr::BlockIdx(Dim::X);
+    let group_work = group * cols;
+    let row = Expr::FloorDiv(Box::new(task.clone()), group_work) * group
+        + Expr::Mod(Box::new(task.clone()), group);
+    let col = Expr::FloorDiv(Box::new(Expr::Mod(Box::new(task), group_work)), group);
+    (row, col)
 }
 
 /// Decode the output batch coordinate and drop broadcast dimensions before
@@ -1610,4 +1625,72 @@ fn batch_element_offset(output_batch: &[usize], input_shape: &[usize]) -> Expr {
         output_stride *= output_batch[dimension];
     }
     offset
+}
+
+#[cfg(test)]
+mod matmul_grid_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn index(expr: &Expr, x: usize, y: usize) -> u64 {
+        match expr {
+            Expr::Const(n) => *n as u64,
+            Expr::BlockIdx(Dim::X) => x as u64,
+            Expr::BlockIdx(Dim::Y) => y as u64,
+            Expr::Add(a, b) => index(a, x, y).wrapping_add(index(b, x, y)),
+            Expr::Sub(a, b) => index(a, x, y).wrapping_sub(index(b, x, y)),
+            Expr::Mul(a, b) => index(a, x, y).wrapping_mul(index(b, x, y)),
+            Expr::FloorDiv(a, d) => index(a, x, y) / *d as u64,
+            Expr::Mod(a, d) => index(a, x, y) % *d as u64,
+            _ => panic!("unexpected grid expression"),
+        }
+    }
+
+    #[test]
+    fn grouped_matmul_grid_is_a_permutation_including_partial_groups() {
+        for rows in 1..40 {
+            for cols in 1..14 {
+                for group in [1, 2, 4, 8, 16, 32] {
+                    let mut schedule = MatMulSchedule::select(
+                        rows * 16 - 3,
+                        cols * 16 - 5,
+                        17,
+                        MatMulCapabilities {
+                            tf32: false,
+                            f16: false,
+                            bf16: false,
+                        },
+                        MatMulPrecision::StrictF32,
+                    )
+                    .with_grid_group_m(group)
+                    .unwrap();
+                    schedule.block_tile.m = 16;
+                    schedule.block_tile.n = 16;
+                    let (r, c) = matmul_block_coordinates(schedule);
+                    let mut seen = HashSet::new();
+                    for y in 0..rows {
+                        for x in 0..cols {
+                            let coordinate = (index(&r, x, y), index(&c, x, y));
+                            assert!(
+                                coordinate.0 < rows as u64 && coordinate.1 < cols as u64,
+                                "{rows}x{cols},group={group}: {coordinate:?}"
+                            );
+                            assert!(seen.insert(coordinate));
+                        }
+                    }
+                    assert_eq!(seen.len(), rows * cols);
+                    if schedule.effective_grid_group_m() > 1 && rows > 1 && cols > 1 {
+                        assert_eq!((index(&r, 1, 0), index(&c, 1, 0)), (1, 0));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grouped_matmul_grid_rejects_unbounded_or_zero_groups() {
+        for group in [0, 3, 6, 31, 33, 64, usize::MAX] {
+            assert!(MatMulSchedule::validate_grid_group_m(group).is_err());
+        }
+    }
 }

@@ -66,9 +66,31 @@ pub struct ReductionRegion {
     pub axis: usize,
     pub op: ReduceOp,
     pub schedule: ReductionSchedule,
+    /// Desired serial launch block size. Changing the number of independent
+    /// fibers per block preserves each fiber's exact accumulation sequence.
+    pub serial_block_threads: u32,
 }
 
 impl ReductionRegion {
+    /// Preserve the historical CUDA serial geometry unless a planner or caller
+    /// deliberately selects another number of independent output fibers.
+    pub const DEFAULT_SERIAL_BLOCK_THREADS: u32 = 1024;
+
+    pub fn validate_serial_block_threads(threads: u32) -> Result<()> {
+        anyhow::ensure!(
+            (32..=1024).contains(&threads) && threads.is_multiple_of(32),
+            "serial reduction block size must be a multiple of 32 between 32 and 1024"
+        );
+        Ok(())
+    }
+
+    /// Set launch geometry without changing reduction policy or arithmetic.
+    pub fn with_serial_block_threads(mut self, threads: u32) -> Result<Self> {
+        Self::validate_serial_block_threads(threads)?;
+        self.serial_block_threads = threads;
+        Ok(self)
+    }
+
     /// Output phase is defined by SSA provenance, not shape: a singleton
     /// reduction has identical full and reduced shapes.
     pub fn output_domain(&self, output: &RegionOutput) -> ReductionInputDomain {
@@ -308,6 +330,7 @@ impl ReductionRegion {
             axis,
             op,
             schedule: ReductionSchedule::Serial,
+            serial_block_threads: Self::DEFAULT_SERIAL_BLOCK_THREADS,
         })
     }
 
@@ -345,6 +368,9 @@ impl ReductionRegion {
     }
 
     fn validate_lowering_inputs(&self) -> Result<()> {
+        if self.schedule == ReductionSchedule::Serial {
+            Self::validate_serial_block_threads(self.serial_block_threads)?;
+        }
         if let ReductionSchedule::Subgroup { width } = self.schedule {
             anyhow::ensure!(width > 0, "reduction subgroup width must be non-zero");
         }

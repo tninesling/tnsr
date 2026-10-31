@@ -1,0 +1,703 @@
+{
+  "device": "RTX 4080",
+  "build": "release",
+  "default_batch_size": 8,
+  "small_tensor_limit": 4096,
+  "max_batch_size": 16,
+  "notes": [
+    "Complete warm optimizer-step wall time; gradient preparation, model forward/backward and first-step lazy batch compilation excluded.",
+    "Includes global norm, clipping, finite validation and publication.",
+    "24 step samples, 3 warm steps; approximate CI uses 2.2 standard errors.",
+    "Two optimizer groups; benchmark gradients are prepared directly to isolate optimizer cost.",
+    "No end-to-end model-training throughput claim."
+  ],
+  "runs": {
+    "discovery": {
+      "source_sha256": "7123fc9e8501597a750cfcb0cafb1159781ee693f5394b94d67ebcbc7e415b55",
+      "comparisons": [
+        {
+          "parameter_count": 16,
+          "elements_per_parameter": 16,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              74166.21854399485,
+              76407.86478933849
+            ],
+            "count": 16,
+            "launches": 20,
+            "len": 16,
+            "mean_ns": 75287.04166666667
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              39346.593669746144,
+              40804.906330253856
+            ],
+            "count": 16,
+            "launches": 6,
+            "len": 16,
+            "mean_ns": 40075.75
+          },
+          "speedup": 1.87861840805641,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 16,
+          "elements_per_parameter": 256,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              73024.99539568218,
+              76025.83793765116
+            ],
+            "count": 16,
+            "launches": 20,
+            "len": 256,
+            "mean_ns": 74525.41666666667
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              39256.92887987263,
+              40064.1544534607
+            ],
+            "count": 16,
+            "launches": 6,
+            "len": 256,
+            "mean_ns": 39660.541666666664
+          },
+          "speedup": 1.8790821692004964,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 16,
+          "elements_per_parameter": 1024,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              72037.62667484989,
+              119590.53999181677
+            ],
+            "count": 16,
+            "launches": 20,
+            "len": 1024,
+            "mean_ns": 95814.08333333333
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              39298.302974363636,
+              41068.28035896969
+            ],
+            "count": 16,
+            "launches": 6,
+            "len": 1024,
+            "mean_ns": 40183.291666666664
+          },
+          "speedup": 2.3844259481811987,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 64,
+          "elements_per_parameter": 16,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              198568.6158168055,
+              239514.05084986117
+            ],
+            "count": 64,
+            "launches": 68,
+            "len": 16,
+            "mean_ns": 219041.33333333334
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              62940.45093661207,
+              66746.79906338794
+            ],
+            "count": 64,
+            "launches": 12,
+            "len": 16,
+            "mean_ns": 64843.625
+          },
+          "speedup": 3.3779933391036256,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 64,
+          "elements_per_parameter": 256,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              201908.05371805606,
+              216255.27961527725
+            ],
+            "count": 64,
+            "launches": 68,
+            "len": 256,
+            "mean_ns": 209081.66666666666
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              64102.03517987914,
+              67634.96482012086
+            ],
+            "count": 64,
+            "launches": 12,
+            "len": 256,
+            "mean_ns": 65868.5
+          },
+          "speedup": 3.1742284501190503,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 64,
+          "elements_per_parameter": 1024,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              199359.90554735888,
+              258808.42778597443
+            ],
+            "count": 64,
+            "launches": 68,
+            "len": 1024,
+            "mean_ns": 229084.16666666666
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              64934.44451334918,
+              68747.88881998416
+            ],
+            "count": 64,
+            "launches": 12,
+            "len": 1024,
+            "mean_ns": 66841.16666666667
+          },
+          "speedup": 3.427291564330365,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 128,
+          "elements_per_parameter": 16,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              358207.28969139827,
+              389648.2936419351
+            ],
+            "count": 128,
+            "launches": 132,
+            "len": 16,
+            "mean_ns": 373927.7916666667
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              97807.87457945081,
+              100934.45875388253
+            ],
+            "count": 128,
+            "launches": 20,
+            "len": 16,
+            "mean_ns": 99371.16666666667
+          },
+          "speedup": 3.7629405411026338,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 128,
+          "elements_per_parameter": 256,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              357109.5140833565,
+              364590.4859166435
+            ],
+            "count": 128,
+            "launches": 132,
+            "len": 256,
+            "mean_ns": 360850.0
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              97335.20240525538,
+              99057.21426141128
+            ],
+            "count": 128,
+            "launches": 20,
+            "len": 256,
+            "mean_ns": 98196.20833333333
+          },
+          "speedup": 3.674785474150606,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 128,
+          "elements_per_parameter": 1024,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              354675.903541661,
+              415404.26312500564
+            ],
+            "count": 128,
+            "launches": 132,
+            "len": 1024,
+            "mean_ns": 385040.0833333333
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              94594.8090134563,
+              100962.10765321036
+            ],
+            "count": 128,
+            "launches": 20,
+            "len": 1024,
+            "mean_ns": 97778.45833333333
+          },
+          "speedup": 3.937882534624404,
+          "ci_separated": true
+        }
+      ]
+    },
+    "reversed_acceptance": {
+      "source_sha256": "31135c4954e09f21e48d183d4923c7af4d532350c5dc20634ed455cb565e3a71",
+      "comparisons": [
+        {
+          "parameter_count": 16,
+          "elements_per_parameter": 16,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              72745.3563305894,
+              74865.97700274394
+            ],
+            "count": 16,
+            "launches": 20,
+            "len": 16,
+            "mean_ns": 73805.66666666667
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              40569.249174906494,
+              43257.834158426835
+            ],
+            "count": 16,
+            "launches": 6,
+            "len": 16,
+            "mean_ns": 41913.541666666664
+          },
+          "speedup": 1.7609026517881554,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 16,
+          "elements_per_parameter": 256,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              73136.17177274752,
+              77062.57822725248
+            ],
+            "count": 16,
+            "launches": 20,
+            "len": 256,
+            "mean_ns": 75099.375
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              39428.62432702958,
+              41869.87567297042
+            ],
+            "count": 16,
+            "launches": 6,
+            "len": 256,
+            "mean_ns": 40649.25
+          },
+          "speedup": 1.84749718629495,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 16,
+          "elements_per_parameter": 1024,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              74642.1262757779,
+              77268.79039088875
+            ],
+            "count": 16,
+            "launches": 20,
+            "len": 1024,
+            "mean_ns": 75955.45833333333
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              39551.55066911977,
+              42073.032664213555
+            ],
+            "count": 16,
+            "launches": 6,
+            "len": 1024,
+            "mean_ns": 40812.291666666664
+          },
+          "speedup": 1.8610927059352014,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 64,
+          "elements_per_parameter": 16,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              195616.30809607013,
+              198942.77523726318
+            ],
+            "count": 64,
+            "launches": 68,
+            "len": 16,
+            "mean_ns": 197279.54166666666
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              62840.29340451452,
+              64558.789928818805
+            ],
+            "count": 64,
+            "launches": 12,
+            "len": 16,
+            "mean_ns": 63699.541666666664
+          },
+          "speedup": 3.097032356983207,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 64,
+          "elements_per_parameter": 256,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              191950.66023657806,
+              255553.25643008863
+            ],
+            "count": 64,
+            "launches": 68,
+            "len": 256,
+            "mean_ns": 223751.95833333334
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              63942.754701534664,
+              65757.32863179866
+            ],
+            "count": 64,
+            "launches": 12,
+            "len": 256,
+            "mean_ns": 64850.041666666664
+          },
+          "speedup": 3.450297834555491,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 64,
+          "elements_per_parameter": 1024,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              198991.0621995397,
+              203953.1878004603
+            ],
+            "count": 64,
+            "launches": 68,
+            "len": 1024,
+            "mean_ns": 201472.125
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              65661.82988379663,
+              67002.67011620337
+            ],
+            "count": 64,
+            "launches": 12,
+            "len": 1024,
+            "mean_ns": 66332.25
+          },
+          "speedup": 3.037317820517169,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 128,
+          "elements_per_parameter": 16,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              358650.510356462,
+              383099.90631020465
+            ],
+            "count": 128,
+            "launches": 132,
+            "len": 16,
+            "mean_ns": 370875.2083333333
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              99422.62881032749,
+              101513.95452300586
+            ],
+            "count": 128,
+            "launches": 20,
+            "len": 16,
+            "mean_ns": 100468.29166666667
+          },
+          "speedup": 3.6914652591468533,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 128,
+          "elements_per_parameter": 256,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              355594.15738275286,
+              410768.59261724714
+            ],
+            "count": 128,
+            "launches": 132,
+            "len": 256,
+            "mean_ns": 383181.375
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              97827.79573734771,
+              100227.20426265229
+            ],
+            "count": 128,
+            "launches": 20,
+            "len": 256,
+            "mean_ns": 99027.5
+          },
+          "speedup": 3.8694440938123247,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 128,
+          "elements_per_parameter": 1024,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              360439.51030495734,
+              370891.4063617093
+            ],
+            "count": 128,
+            "launches": 132,
+            "len": 1024,
+            "mean_ns": 365665.4583333333
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              99541.29839080914,
+              102092.45160919086
+            ],
+            "count": 128,
+            "launches": 20,
+            "len": 1024,
+            "mean_ns": 100816.875
+          },
+          "speedup": 3.6270263121459907,
+          "ci_separated": true
+        }
+      ]
+    },
+    "cutoff_and_large_control": {
+      "source_sha256": "c24f5adf1405e7cf0f44908126603b960102f6d6745223acb6539ba027362883",
+      "comparisons": [
+        {
+          "parameter_count": 16,
+          "elements_per_parameter": 4096,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              74281.40357420448,
+              76467.59642579552
+            ],
+            "count": 16,
+            "launches": 20,
+            "len": 4096,
+            "mean_ns": 75374.5
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              40864.262258211085,
+              42304.154408455586
+            ],
+            "count": 16,
+            "launches": 6,
+            "len": 4096,
+            "mean_ns": 41584.208333333336
+          },
+          "speedup": 1.8125750860953826,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 16,
+          "elements_per_parameter": 8192,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              77159.24895133729,
+              83258.66771532937
+            ],
+            "count": 16,
+            "launches": 20,
+            "len": 8192,
+            "mean_ns": 80208.95833333333
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              79067.91013772004,
+              83504.1731956133
+            ],
+            "count": 16,
+            "launches": 20,
+            "len": 8192,
+            "mean_ns": 81286.04166666667
+          },
+          "speedup": 0.9867494675438843,
+          "ci_separated": false
+        },
+        {
+          "parameter_count": 64,
+          "elements_per_parameter": 4096,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              189563.0411622969,
+              199590.04217103642
+            ],
+            "count": 64,
+            "launches": 68,
+            "len": 4096,
+            "mean_ns": 194576.54166666666
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              61044.0389513503,
+              107916.04438198304
+            ],
+            "count": 64,
+            "launches": 12,
+            "len": 4096,
+            "mean_ns": 84480.04166666667
+          },
+          "speedup": 2.303224972762304,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 64,
+          "elements_per_parameter": 8192,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              184657.91007025013,
+              249895.58992974987
+            ],
+            "count": 64,
+            "launches": 68,
+            "len": 8192,
+            "mean_ns": 217276.75
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              177156.85803572705,
+              231429.97529760626
+            ],
+            "count": 64,
+            "launches": 68,
+            "len": 8192,
+            "mean_ns": 204293.41666666666
+          },
+          "speedup": 1.0635523823781237,
+          "ci_separated": false
+        },
+        {
+          "parameter_count": 128,
+          "elements_per_parameter": 4096,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              332772.8377766987,
+              394560.07888996793
+            ],
+            "count": 128,
+            "launches": 132,
+            "len": 4096,
+            "mean_ns": 363666.4583333333
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              93272.07070401715,
+              140920.42929598285
+            ],
+            "count": 128,
+            "launches": 20,
+            "len": 4096,
+            "mean_ns": 117096.25
+          },
+          "speedup": 3.1057054203984613,
+          "ci_separated": true
+        },
+        {
+          "parameter_count": 128,
+          "elements_per_parameter": 8192,
+          "baseline": {
+            "batch": 1,
+            "ci95_ns": [
+              350748.29792910453,
+              389724.3687375621
+            ],
+            "count": 128,
+            "launches": 132,
+            "len": 8192,
+            "mean_ns": 370236.3333333333
+          },
+          "batched": {
+            "batch": 8,
+            "ci95_ns": [
+              337054.84144636226,
+              393855.57522030437
+            ],
+            "count": 128,
+            "launches": 132,
+            "len": 8192,
+            "mean_ns": 365455.2083333333
+          },
+          "speedup": 1.0130826566183155,
+          "ci_separated": false
+        }
+      ]
+    }
+  }
+}

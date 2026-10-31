@@ -19,3 +19,5 @@ pub use instructions::*;
 pub use plan::*;
 pub use target::*;
 pub use types::*;
+
+pub mod swiglu;

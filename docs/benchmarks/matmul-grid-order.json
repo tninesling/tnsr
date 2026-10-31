@@ -1,0 +1,463 @@
+{
+  "device": "NVIDIA RTX4080 (sm89)",
+  "default_group_m": 1,
+  "automatic_group_selection_enabled": false,
+  "runs": [
+    {
+      "dtype": "bf16",
+      "k": 512,
+      "m": 2048,
+      "n": 2048,
+      "precision": "native",
+      "protocol": "balanced rotated/reversed candidate order; resident preallocated storage; CUDA graph repetitions; CUDA events; uploads/readback excluded; exact output bits compared with group1",
+      "repeats": 8,
+      "results": [
+        {
+          "ci95_us": [
+            80.60044964807412,
+            82.75355042857746
+          ],
+          "group_m": 1,
+          "mean_us": 81.67700003832579,
+          "effective_group_m": 1
+        },
+        {
+          "ci95_us": [
+            88.71650582629225,
+            88.94099222046354
+          ],
+          "group_m": 4,
+          "mean_us": 88.8287490233779,
+          "effective_group_m": 4
+        },
+        {
+          "ci95_us": [
+            88.23707975813967,
+            90.06491586199182
+          ],
+          "group_m": 8,
+          "mean_us": 89.15099781006575,
+          "effective_group_m": 8
+        },
+        {
+          "ci95_us": [
+            88.68673316444894,
+            88.89926538560847
+          ],
+          "group_m": 16,
+          "mean_us": 88.7929992750287,
+          "effective_group_m": 16
+        }
+      ],
+      "run": "fit"
+    },
+    {
+      "dtype": "bf16",
+      "k": 4096,
+      "m": 8192,
+      "n": 8192,
+      "precision": "native",
+      "protocol": "balanced rotated/reversed candidate order; resident preallocated storage; CUDA graph repetitions; CUDA events; uploads/readback excluded; exact output bits compared with group1",
+      "repeats": 8,
+      "results": [
+        {
+          "ci95_us": [
+            8210.308389345748,
+            8324.443407376664
+          ],
+          "group_m": 1,
+          "mean_us": 8267.375898361206,
+          "effective_group_m": 1
+        },
+        {
+          "ci95_us": [
+            8867.731520074893,
+            9011.355928045225
+          ],
+          "group_m": 4,
+          "mean_us": 8939.543724060059,
+          "effective_group_m": 4
+        },
+        {
+          "ci95_us": [
+            8795.266544897158,
+            8921.962058465879
+          ],
+          "group_m": 8,
+          "mean_us": 8858.614301681519,
+          "effective_group_m": 8
+        },
+        {
+          "ci95_us": [
+            8826.21210628311,
+            8975.074209634859
+          ],
+          "group_m": 16,
+          "mean_us": 8900.643157958984,
+          "effective_group_m": 16
+        }
+      ],
+      "run": "large"
+    },
+    {
+      "dtype": "bf16",
+      "k": 128,
+      "m": 8192,
+      "n": 8192,
+      "precision": "native",
+      "protocol": "balanced rotated/reversed candidate order; resident preallocated storage; CUDA graph repetitions; CUDA events; uploads/readback excluded; exact output bits compared with group1",
+      "repeats": 8,
+      "results": [
+        {
+          "ci95_us": [
+            481.31503361562164,
+            510.23855310579864
+          ],
+          "group_m": 1,
+          "mean_us": 495.77679336071014,
+          "effective_group_m": 1
+        },
+        {
+          "ci95_us": [
+            483.36854016609925,
+            512.265851737778
+          ],
+          "group_m": 4,
+          "mean_us": 497.81719595193863,
+          "effective_group_m": 4
+        },
+        {
+          "ci95_us": [
+            486.5875334502077,
+            523.582067990222
+          ],
+          "group_m": 8,
+          "mean_us": 505.08480072021484,
+          "effective_group_m": 8
+        },
+        {
+          "ci95_us": [
+            486.39533185819846,
+            514.3686566366746
+          ],
+          "group_m": 16,
+          "mean_us": 500.3819942474365,
+          "effective_group_m": 16
+        }
+      ],
+      "run": "short"
+    },
+    {
+      "dtype": "bf16",
+      "k": 2048,
+      "m": 4096,
+      "n": 16384,
+      "precision": "native",
+      "protocol": "balanced rotated/reversed candidate order; resident preallocated storage; CUDA graph repetitions; CUDA events; uploads/readback excluded; exact output bits compared with group1",
+      "repeats": 8,
+      "results": [
+        {
+          "ci95_us": [
+            4348.5563667821825,
+            4407.624396462446
+          ],
+          "group_m": 1,
+          "mean_us": 4378.090381622314,
+          "effective_group_m": 1
+        },
+        {
+          "ci95_us": [
+            4494.3007917477125,
+            4572.477105133391
+          ],
+          "group_m": 4,
+          "mean_us": 4533.388948440552,
+          "effective_group_m": 4
+        },
+        {
+          "ci95_us": [
+            4498.613799876479,
+            4553.642736607286
+          ],
+          "group_m": 8,
+          "mean_us": 4526.128268241882,
+          "effective_group_m": 8
+        },
+        {
+          "ci95_us": [
+            4491.416809599037,
+            4567.235162217979
+          ],
+          "group_m": 16,
+          "mean_us": 4529.325985908508,
+          "effective_group_m": 16
+        }
+      ],
+      "run": "wide"
+    },
+    {
+      "dtype": "f32",
+      "k": 1024,
+      "m": 2048,
+      "n": 2048,
+      "precision": "strict",
+      "protocol": "balanced rotated/reversed candidate order; resident preallocated storage; CUDA graph repetitions; CUDA events; uploads/readback excluded; exact output bits compared with group1",
+      "repeats": 8,
+      "results": [
+        {
+          "ci95_us": [
+            1373.7961401000846,
+            1434.8718415245187
+          ],
+          "group_m": 1,
+          "mean_us": 1404.3339908123016,
+          "effective_group_m": 1
+        },
+        {
+          "ci95_us": [
+            1320.503219429381,
+            1367.9015671573804
+          ],
+          "group_m": 4,
+          "mean_us": 1344.2023932933807,
+          "effective_group_m": 4
+        },
+        {
+          "ci95_us": [
+            1347.0869534971944,
+            1408.0278283593425
+          ],
+          "group_m": 8,
+          "mean_us": 1377.5573909282684,
+          "effective_group_m": 8
+        },
+        {
+          "ci95_us": [
+            1338.8886997972368,
+            1398.9329030241133
+          ],
+          "group_m": 16,
+          "mean_us": 1368.910801410675,
+          "effective_group_m": 16
+        }
+      ],
+      "run": "strict"
+    },
+    {
+      "dtype": "f32",
+      "k": 1024,
+      "m": 2048,
+      "n": 2048,
+      "precision": "strict",
+      "protocol": "balanced rotated/reversed candidate order; resident preallocated storage; CUDA graph repetitions; CUDA events; uploads/readback excluded; exact output bits compared with group1",
+      "repeats": 8,
+      "results": [
+        {
+          "ci95_us": [
+            1393.6453015328818,
+            1439.0800346214203
+          ],
+          "effective_group_m": 1,
+          "group_m": 1,
+          "mean_us": 1416.362668077151,
+          "resources": {
+            "active_blocks_per_sm": 4,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 54,
+            "static_shared_bytes": 4096
+          }
+        },
+        {
+          "ci95_us": [
+            1331.7404326467863,
+            1383.6362325480432
+          ],
+          "effective_group_m": 4,
+          "group_m": 4,
+          "mean_us": 1357.6883325974147,
+          "resources": {
+            "active_blocks_per_sm": 4,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 52,
+            "static_shared_bytes": 4096
+          }
+        },
+        {
+          "ci95_us": [
+            1334.9877974473006,
+            1391.351532828553
+          ],
+          "effective_group_m": 8,
+          "group_m": 8,
+          "mean_us": 1363.1696651379268,
+          "resources": {
+            "active_blocks_per_sm": 4,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 52,
+            "static_shared_bytes": 4096
+          }
+        },
+        {
+          "ci95_us": [
+            1346.9722728437912,
+            1399.1617400937546
+          ],
+          "effective_group_m": 16,
+          "group_m": 16,
+          "mean_us": 1373.067006468773,
+          "resources": {
+            "active_blocks_per_sm": 4,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 52,
+            "static_shared_bytes": 4096
+          }
+        }
+      ],
+      "run": "strict-repeat"
+    },
+    {
+      "dtype": "bf16",
+      "k": 513,
+      "m": 2051,
+      "n": 2057,
+      "precision": "native",
+      "protocol": "balanced rotated/reversed candidate order; resident preallocated storage; CUDA graph repetitions; CUDA events; uploads/readback excluded; exact output bits compared with group1",
+      "repeats": 8,
+      "results": [
+        {
+          "ci95_us": [
+            173.22425198815043,
+            174.4654113822999
+          ],
+          "effective_group_m": 1,
+          "group_m": 1,
+          "mean_us": 173.84483168522516,
+          "resources": {
+            "active_blocks_per_sm": 2,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 100,
+            "static_shared_bytes": 26112
+          }
+        },
+        {
+          "ci95_us": [
+            173.1090119286562,
+            174.52798577108135
+          ],
+          "effective_group_m": 1,
+          "group_m": 4,
+          "mean_us": 173.81849884986877,
+          "resources": {
+            "active_blocks_per_sm": 2,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 100,
+            "static_shared_bytes": 26112
+          }
+        },
+        {
+          "ci95_us": [
+            173.2461930745211,
+            174.38613186941876
+          ],
+          "effective_group_m": 1,
+          "group_m": 8,
+          "mean_us": 173.81616247196993,
+          "resources": {
+            "active_blocks_per_sm": 2,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 100,
+            "static_shared_bytes": 26112
+          }
+        },
+        {
+          "ci95_us": [
+            173.1791972451254,
+            174.30979963810796
+          ],
+          "effective_group_m": 1,
+          "group_m": 16,
+          "mean_us": 173.74449844161668,
+          "resources": {
+            "active_blocks_per_sm": 2,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 100,
+            "static_shared_bytes": 26112
+          }
+        }
+      ],
+      "run": "tail-final"
+    },
+    {
+      "dtype": "bf16",
+      "k": 512,
+      "m": 2048,
+      "n": 2048,
+      "precision": "native",
+      "protocol": "balanced rotated/reversed candidate order; resident preallocated storage; CUDA graph repetitions; CUDA events; uploads/readback excluded; exact output bits compared with group1",
+      "repeats": 8,
+      "results": [
+        {
+          "ci95_us": [
+            73.3373607580549,
+            75.14230766547854
+          ],
+          "effective_group_m": 1,
+          "group_m": 1,
+          "mean_us": 74.23983421176672,
+          "resources": {
+            "active_blocks_per_sm": 2,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 84,
+            "static_shared_bytes": 35840
+          }
+        },
+        {
+          "ci95_us": [
+            80.56381489829229,
+            80.8538525452613
+          ],
+          "effective_group_m": 4,
+          "group_m": 4,
+          "mean_us": 80.7088337217768,
+          "resources": {
+            "active_blocks_per_sm": 2,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 85,
+            "static_shared_bytes": 35840
+          }
+        },
+        {
+          "ci95_us": [
+            80.65982658080755,
+            80.91083915618562
+          ],
+          "effective_group_m": 8,
+          "group_m": 8,
+          "mean_us": 80.78533286849658,
+          "resources": {
+            "active_blocks_per_sm": 2,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 85,
+            "static_shared_bytes": 35840
+          }
+        },
+        {
+          "ci95_us": [
+            80.64171846600948,
+            80.88761579600396
+          ],
+          "effective_group_m": 16,
+          "group_m": 16,
+          "mean_us": 80.76466713100672,
+          "resources": {
+            "active_blocks_per_sm": 2,
+            "local_bytes_per_thread": 0,
+            "registers_per_thread": 85,
+            "static_shared_bytes": 35840
+          }
+        }
+      ],
+      "run": "fit-repeat"
+    }
+  ]
+}

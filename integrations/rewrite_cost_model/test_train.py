@@ -95,6 +95,24 @@ class TrainingTests(unittest.TestCase):
         self.assertIn("launch_count", all_features["feature_names"])
         self.assertTrue(all_features["requires_executed_candidate_features"])
 
+    def test_compiled_features_are_available_without_runtime_counters(self):
+        rows = fixture()
+        for row in rows:
+            row["features"].update(plan_serial_working_set_bytes=row["features"]["work"] * 4,
+                                   generated_kernel_count=1, launch_count=2)
+        static, _ = train.train(rows, 1.0, 12, 5, "static")
+        compiled, _ = train.train(rows, 1.0, 12, 5, "compiled")
+        self.assertNotIn("plan_serial_working_set_bytes", static["feature_names"])
+        self.assertNotIn("generated_kernel_count", static["feature_names"])
+        self.assertFalse(static["requires_compiled_candidate_features"])
+        self.assertIn("plan_serial_working_set_bytes", compiled["feature_names"])
+        self.assertIn("generated_kernel_count", compiled["feature_names"])
+        self.assertNotIn("launch_count", compiled["feature_names"])
+        self.assertTrue(compiled["requires_compiled_candidate_features"])
+        self.assertFalse(compiled["requires_executed_candidate_features"])
+        with self.assertRaisesRegex(ValueError, "unknown feature mode"):
+            train.feature_names(rows, "unsupported")
+
     def test_ci_aware_report_does_not_count_indistinguishable_ranking(self):
         rows = fixture()[:2]
         rows[0].update(mean_ns=110, ci95_ns=[90, 130])

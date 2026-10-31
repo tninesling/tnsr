@@ -73,6 +73,7 @@ fn schedule(m: usize, n: usize, k: usize, warps: usize) -> MatMulSchedule {
     MatMulSchedule {
         plan: MatMulPlan::TensorCoreBF16,
         logical_shape: tile,
+        grid_group_m: 1,
         block_tile: tile,
         instruction_tile: MatMulTile {
             m: 16,

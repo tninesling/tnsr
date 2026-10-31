@@ -1,4 +1,5 @@
 //! CUDA-resident f32 parameters, accumulated gradients and grouped Adam state.
+mod batch;
 mod config;
 mod kernels;
 mod mixed;
@@ -55,6 +56,8 @@ pub struct ResidentAdam {
     health: Reduction,
     update_kernels: kernels::Kernels,
     update_ids: HashMap<usize, usize>,
+    update_batch_size: usize,
+    batched_updates: Option<batch::Updates>,
     accumulate_kernels: HashMap<Vec<(VirtualTensor, Shape)>, kernels::Kernels>,
     active: bool,
     timestep: usize,
@@ -202,12 +205,29 @@ impl ResidentAdam {
             health,
             update_kernels,
             update_ids,
+            update_batch_size: 8,
+            batched_updates: None,
             accumulate_kernels: HashMap::new(),
             active: false,
             timestep: 0,
             last_scale: 1.0,
             kernel_launches: 0,
         })
+    }
+
+    /// Batch up to this many small same-group parameter updates in one launch.
+    /// The default is eight; one retains the per-parameter path. Legal sizes are 1 through 16.
+    /// Batches include only tensors of at most 4096 elements and compile lazily.
+    pub fn set_update_batch_size(&mut self, size: usize) -> Result<()> {
+        ensure!(
+            (1..=16).contains(&size),
+            "resident Adam batch size must be 1 through 16"
+        );
+        if size != self.update_batch_size {
+            self.update_batch_size = size;
+            self.batched_updates = None;
+        }
+        Ok(())
     }
 
     /// Create a model executor on the same CUDA context/stream as this owner.
@@ -397,16 +417,31 @@ impl ResidentAdam {
                 settings,
             )?;
         }
-        let next_m = &mut self.staging.moment;
-        let next_v = &mut self.staging.variance;
-        let health = Arc::get_mut(&mut self.staging.health)
-            .context("resident health staging still borrowed")?;
-        self.kernel_launches += self.parameters.len();
+        if self.update_batch_size > 1 && self.batched_updates.is_none() {
+            self.batched_updates = Some(batch::Updates::new(self)?);
+        }
         for parameter in &mut self.parameters {
             ensure!(
                 parameter.storage.revision()? == parameter.revision,
                 "parameter changed during resident update"
             );
+            if parameter.staged_weight.is_none() {
+                parameter.staged_weight = Some(stream.alloc_zeros::<f32>(parameter.range.len())?);
+            }
+        }
+        let next_m = &mut self.staging.moment;
+        let next_v = &mut self.staging.variance;
+        let health = Arc::get_mut(&mut self.staging.health)
+            .context("resident health staging still borrowed")?;
+        for (index, parameter) in self.parameters.iter_mut().enumerate() {
+            if self
+                .batched_updates
+                .as_ref()
+                .is_some_and(|updates| updates.covers(index))
+            {
+                continue;
+            }
+            self.kernel_launches += 1;
             let len = parameter.range.len();
             let g = self.gradients.slice(parameter.range.clone());
             let m = self.moment.slice(parameter.range.clone());
@@ -414,9 +449,6 @@ impl ResidentAdam {
             let mut nm = next_m.slice_mut(parameter.range.clone());
             let mut nv = next_v.slice_mut(parameter.range.clone());
             let mut status = health.slice_mut(parameter.range.clone());
-            if parameter.staged_weight.is_none() {
-                parameter.staged_weight = Some(stream.alloc_zeros::<f32>(len)?);
-            }
             let weight = parameter
                 .staged_weight
                 .as_mut()
@@ -440,6 +472,22 @@ impl ResidentAdam {
             // SAFETY: all operands cover exactly len f32 elements. Output weights
             // and state are staged in distinct allocations/disjoint parameter ranges.
             unsafe { launch.launch(LaunchConfig::for_num_elems(u32::try_from(len)?)) }?;
+        }
+        if let Some(updates) = &self.batched_updates {
+            updates.launch(
+                &stream,
+                &mut self.parameters,
+                batch::State {
+                    gradient: self.gradients.as_ref(),
+                    moment: &self.moment,
+                    variance: &self.variance,
+                    next_moment: next_m,
+                    next_variance: next_v,
+                    health,
+                    settings: &self.staging.settings,
+                },
+            )?;
+            self.kernel_launches += updates.launches();
         }
         ensure!(
             self.health.run(self.staging.health.clone())? == 0.0,

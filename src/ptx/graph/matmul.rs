@@ -138,6 +138,10 @@ pub(super) fn lower_register_tiled_scalar_matmul<'a>(
     b: TileVar,
     schedule: &crate::tile::MatMulSchedule,
 ) {
+    if schedule.register_thread_tile() == Some((4, 4)) {
+        lower_outer_product_scalar_matmul(func, ctx, dest, a, b, schedule);
+        return;
+    }
     let accumulators = ctx.fragment_regs[&dest].clone();
     let a = ctx.reg_to_shared.get(&a).copied().unwrap_or(a);
     let b = ctx.reg_to_shared.get(&b).copied().unwrap_or(b);
@@ -210,6 +214,102 @@ pub(super) fn lower_register_tiled_scalar_matmul<'a>(
             accumulator,
             product.clone(),
         ));
+    }
+    end_counted_loop(func, reduction);
+}
+
+/// Experimental 4x4 outer product. Each output retains the same increasing-K
+/// multiply/add sequence; operands are reused across both accumulator axes.
+fn lower_outer_product_scalar_matmul<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    dest: TileVar,
+    a: TileVar,
+    b: TileVar,
+    schedule: &crate::tile::MatMulSchedule,
+) {
+    let accumulators = ctx.fragment_regs[&dest].clone();
+    let a = ctx.reg_to_shared.get(&a).copied().unwrap_or(a);
+    let b = ctx.reg_to_shared.get(&b).copied().unwrap_or(b);
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut a_bases = Vec::new();
+    let mut b_bases = Vec::new();
+    // Validation guarantees these sixteen slots exist. Obtain coordinates from
+    // exactly the same ownership map used for register extraction and stores.
+    for i in 0..4 {
+        if let Some((row, _)) = schedule.register_accumulator_coordinates(i * 4) {
+            let row = lower_expr(func, ctx, &row);
+            a_bases.push(shared_address(
+                func,
+                ctx,
+                a,
+                row.clone(),
+                Operand::imm_u64(0),
+            ));
+            rows.push(row);
+        }
+        if let Some((_, col)) = schedule.register_accumulator_coordinates(i) {
+            let col = lower_expr(func, ctx, &col);
+            b_bases.push(shared_address(
+                func,
+                ctx,
+                b,
+                Operand::imm_u64(0),
+                col.clone(),
+            ));
+            cols.push(col);
+        }
+    }
+    let a_layout = shared_layout(ctx, a);
+    let b_layout = shared_layout(ctx, b);
+    let a_values: Vec<_> = (0..4).map(|_| func.add_f32_register()).collect();
+    let b_values: Vec<_> = (0..4).map(|_| func.add_f32_register()).collect();
+    let product = func.add_f32_register();
+    let reduction = begin_counted_loop(func, ctx, "outer_product_matmul", schedule.block_tile.k);
+    let k = reduction.counter.clone();
+    let a_offset = multiply_u64(func, k.clone(), 4);
+    let b_offset = multiply_u64(func, k.clone(), b_layout.row_stride * 4);
+    for i in 0..4 {
+        let address = if a_layout.xor_mask == 0 && !a_layout.column_major {
+            let address = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                address.clone(),
+                a_bases[i].clone(),
+                a_offset.clone(),
+            ));
+            address
+        } else {
+            shared_address(func, ctx, a, rows[i].clone(), k.clone())
+        };
+        load_shared_as_f32(func, DType::F32, a_values[i].clone(), address);
+        let address = if b_layout.xor_mask == 0 && !b_layout.column_major {
+            let address = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                address.clone(),
+                b_bases[i].clone(),
+                b_offset.clone(),
+            ));
+            address
+        } else {
+            shared_address(func, ctx, b, k.clone(), cols[i].clone())
+        };
+        load_shared_as_f32(func, DType::F32, b_values[i].clone(), address);
+    }
+    for (i, a_value) in a_values.iter().enumerate() {
+        for (j, b_value) in b_values.iter().enumerate() {
+            let accumulator = accumulators[i * 4 + j].clone();
+            func.add_inst(Inst::mul_f32(
+                product.clone(),
+                a_value.clone(),
+                b_value.clone(),
+            ));
+            func.add_inst(Inst::add_f32(
+                accumulator.clone(),
+                accumulator,
+                product.clone(),
+            ));
+        }
     }
     end_counted_loop(func, reduction);
 }

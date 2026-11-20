@@ -244,16 +244,18 @@ fn compact_softmax_is_opt_in_handles_axes_and_probability_fanout_and_roundtrips(
 }
 
 #[test]
-fn escaping_normalizer_and_any_cast_keep_primitive_derivatives() {
+fn escaping_normalizer_and_bf16_softmax_keep_primitive_derivatives() {
     let p = Parameter::new(vec![0.1, 0.3, -0.2, 0.8], vec![2, 2]);
     let x = TensorExpr::from(p);
     let exp = (x.clone() - x.reduce_max(1).broadcast(vec![2, 2])).exp();
     let probabilities = exp.clone() / exp.clone().reduce_sum(1).broadcast(vec![2, 2]);
     for loss in [
         (probabilities + exp).mean_all(),
-        softmax(Parameter::new(vec![0.1, 0.2], vec![1, 2]), 1)
-            .cast(ValueDType::BF16)
-            .mean_all(),
+        softmax(
+            TensorExpr::from(Parameter::new(vec![0.1, 0.2], vec![1, 2])).cast(ValueDType::BF16),
+            1,
+        )
+        .mean_all(),
     ] {
         let mut graph = TensorGraph::new();
         let loss = graph.add_expr(&loss, false);
@@ -279,6 +281,230 @@ fn escaping_normalizer_and_any_cast_keep_primitive_derivatives() {
         graph.clone().with_gradients(loss).len(),
         graph.with_gradients_with_options(loss, options()).len()
     );
+}
+
+fn mixed_softmax_fixture(
+    values: Vec<f32>,
+    shape: Vec<usize>,
+    weights: Vec<f32>,
+    escaping: bool,
+) -> (Parameter<f32>, TensorGraph<f32>, NodeIndex, NodeIndex) {
+    let parameter = Parameter::new(values, shape.clone());
+    let score = TensorExpr::from(parameter.clone())
+        .cast(ValueDType::BF16)
+        .cast(ValueDType::F32);
+    let maximum = score.clone().reduce_max(1).broadcast(shape.clone());
+    let exponentials = (score - maximum).exp();
+    let denominator = exponentials.clone().reduce_sum(1).broadcast(shape.clone());
+    let probability = exponentials.clone() / denominator;
+    let output = probability.cast(ValueDType::BF16).cast(ValueDType::F32);
+    let mut objective = (output * TensorExpr::constant(weights, shape.clone())).mean_all();
+    if escaping {
+        objective = objective + exponentials.mean_all();
+    }
+    let mut forward = TensorGraph::new();
+    let loss = forward.add_expr(&objective, false);
+    let probability = forward
+        .graph
+        .node_indices()
+        .find(|&node| {
+            matches!(
+                forward[node],
+                tnsr::graph::TensorGraphNode::Binary {
+                    op: tnsr::tensor::BinaryOp::Div,
+                    ..
+                }
+            ) && forward[node].shape() == &shape
+        })
+        .unwrap();
+    (parameter, forward, loss, probability)
+}
+
+#[test]
+fn mixed_local_f32_softmax_keeps_forward_and_gradient_cast_boundaries() {
+    let (parameter, forward, loss, _) = mixed_softmax_fixture(
+        vec![0.1, 0.7, -0.2, 0.8, 1.1, -0.9],
+        vec![2, 3],
+        vec![0.3, -0.7, 0.2, 0.5, -0.6, 0.4],
+        false,
+    );
+    let primitive = forward.clone().with_gradients(loss);
+    let explicit_default = forward
+        .clone()
+        .with_gradients_with_options(loss, GradientOptions::default());
+    let compact = forward.clone().with_gradients_with_options(loss, options());
+    assert_eq!(primitive.len(), explicit_default.len());
+    assert!(compact.len() < primitive.len());
+    // Every primal BF16/F32 conversion and its source remains unchanged.
+    let mut casts = 0;
+    for node in forward.graph.node_indices() {
+        if let tnsr::graph::TensorGraphNode::Cast { dtype, .. } = forward[node] {
+            assert!(
+                matches!(compact[node], tnsr::graph::TensorGraphNode::Cast { dtype: actual, .. } if actual == dtype)
+            );
+            assert_eq!(forward.inputs(node), compact.inputs(node));
+            casts += 1;
+        }
+    }
+    assert_eq!(casts, 4);
+    let dtypes = tnsr::graph::mixed::value_dtypes(&compact);
+    let gradient = compact.gradient_metadata().param_to_grad[&parameter.id()];
+    assert_eq!(dtypes[&gradient], ValueDType::F32);
+    let source = compact.inputs(gradient);
+    assert_eq!(source.len(), 1);
+    assert_eq!(dtypes[&source[0]], ValueDType::BF16);
+    assert!(matches!(
+        compact[source[0]],
+        tnsr::graph::TensorGraphNode::Cast {
+            dtype: ValueDType::BF16,
+            ..
+        }
+    ));
+    let mut cpu = SimpleExecutor::new();
+    cpu.execute(&primitive, HashMap::new()).unwrap();
+    let expected = cpu.get_gradients(&primitive);
+    let expected_loss = cpu.get_value(loss).unwrap();
+    cpu.execute(&compact, HashMap::new()).unwrap();
+    compare(
+        &cpu.get_gradients(&compact)[&parameter.id()],
+        &expected[&parameter.id()],
+        2e-7,
+    );
+    assert_eq!(cpu.get_value(loss).unwrap(), expected_loss);
+    // SimpleExecutor's casts are identity operations. These checks establish
+    // topology and derivative algebra; CUDA below checks real BF16 storage.
+}
+
+#[test]
+fn mixed_softmax_with_escaping_normalizer_still_falls_back() {
+    let (parameter, forward, loss, _) = mixed_softmax_fixture(
+        vec![0.1, 0.7, -0.2, 0.8, 1.1, -0.9],
+        vec![2, 3],
+        vec![0.3, -0.7, 0.2, 0.5, -0.6, 0.4],
+        true,
+    );
+    let primitive = forward.clone().with_gradients(loss);
+    let compact = forward.with_gradients_with_options(loss, options());
+    assert_eq!(primitive.len(), compact.len());
+    assert_eq!(
+        tnsr::graph::mixed::value_dtypes(&primitive),
+        tnsr::graph::mixed::value_dtypes(&compact)
+    );
+    let mut cpu = SimpleExecutor::new();
+    cpu.execute(&primitive, HashMap::new()).unwrap();
+    let expected = cpu.get_gradients(&primitive);
+    cpu.execute(&compact, HashMap::new()).unwrap();
+    compare(
+        &cpu.get_gradients(&compact)[&parameter.id()],
+        &expected[&parameter.id()],
+        0.0,
+    );
+}
+
+#[test]
+fn mixed_local_f32_softmax_retains_masked_and_nonfinite_formula_conventions() {
+    for values in [
+        vec![f32::NEG_INFINITY, 2.0, 3.0],
+        vec![f32::NEG_INFINITY; 3],
+        vec![f32::INFINITY, 2.0, 3.0],
+        vec![f32::NAN, 2.0, 3.0],
+    ] {
+        let (parameter, forward, loss, _) =
+            mixed_softmax_fixture(values.clone(), vec![1, 3], vec![1.0, -2.0, 0.5], false);
+        let primitive_len = forward.clone().with_gradients(loss).len();
+        let compact = forward.with_gradients_with_options(loss, options());
+        assert!(compact.len() < primitive_len);
+        let mut cpu = SimpleExecutor::new();
+        cpu.execute(&compact, HashMap::new()).unwrap();
+        let gradient = cpu.get_gradients(&compact)[&parameter.id()].clone();
+        if values[1].is_finite() && values[0] == f32::NEG_INFINITY {
+            assert_eq!(gradient[0], 0.0);
+            assert!(gradient.iter().all(|g| g.is_finite()));
+        } else {
+            assert!(gradient.iter().all(|g| g.is_nan()));
+        }
+    }
+    let (parameter, forward, loss, _) =
+        mixed_softmax_fixture(vec![0.2, 0.3], vec![1, 2], vec![f32::INFINITY, 0.0], false);
+    let compact = forward.with_gradients_with_options(loss, options());
+    let mut cpu = SimpleExecutor::new();
+    cpu.execute(&compact, HashMap::new()).unwrap();
+    let gradient = &cpu.get_gradients(&compact)[&parameter.id()];
+    assert!(gradient[0].is_nan());
+    assert_eq!(gradient[1], f32::NEG_INFINITY);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn mixed_compact_softmax_cuda_rounds_at_both_bf16_boundaries_with_changed_weights() {
+    use half::bf16;
+    use tnsr::ptx::mixed::MixedExecutor;
+    use tnsr::tile::MatMulPrecision;
+    if !cuda_available() {
+        return;
+    }
+    let weights = vec![0.3, -0.7, 0.2, 0.5, -0.6, 0.4];
+    let (parameter, forward, loss, probabilities) = mixed_softmax_fixture(
+        vec![0.1, 0.7, -0.2, 0.8, 1.1, -0.9],
+        vec![2, 3],
+        weights.clone(),
+        false,
+    );
+    let primitive = forward.clone().with_gradients(loss);
+    let compact = forward.with_gradients_with_options(loss, options());
+    assert!(compact.len() < primitive.len());
+    let mut baseline = MixedExecutor::new(&primitive, MatMulPrecision::StrictF32, true).unwrap();
+    let mut candidate = MixedExecutor::new(&compact, MatMulPrecision::StrictF32, true).unwrap();
+    assert!(baseline.info().replay && candidate.info().replay);
+    for phase in 0..3 {
+        if phase > 0 {
+            parameter
+                .set_values(
+                    parameter
+                        .values()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x * 0.7 + 0.03)
+                        .collect(),
+                )
+                .unwrap();
+        }
+        baseline.upload(HashMap::new()).unwrap();
+        candidate.upload(HashMap::new()).unwrap();
+        baseline.run().unwrap();
+        candidate.run().unwrap();
+        let actual = &candidate.gradients(&compact).unwrap()[&parameter.id()];
+        compare(
+            actual,
+            &baseline.gradients(&primitive).unwrap()[&parameter.id()],
+            2e-4,
+        );
+        assert_eq!(candidate.read(loss).unwrap(), baseline.read(loss).unwrap());
+        let probability = candidate.read(probabilities).unwrap();
+        let incoming = weights
+            .iter()
+            .map(|x| bf16::from_f32(x / 6.0).to_f32())
+            .collect::<Vec<_>>();
+        let mut expected = Vec::new();
+        for row in 0..2 {
+            let dot = (0..3)
+                .map(|column| {
+                    f64::from(probability[3 * row + column]) * f64::from(incoming[3 * row + column])
+                })
+                .sum::<f64>();
+            for column in 0..3 {
+                let index = 3 * row + column;
+                let value = f64::from(probability[index]) * (f64::from(incoming[index]) - dot);
+                expected.push(bf16::from_f32(value as f32).to_f32());
+            }
+        }
+        compare(actual, &expected, 2e-4);
+        assert!(
+            actual
+                .iter()
+                .all(|x| bf16::from_f32(*x).to_f32().to_bits() == x.to_bits())
+        );
+    }
 }
 
 #[test]

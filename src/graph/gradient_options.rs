@@ -1,8 +1,8 @@
 //! Optional derivative algebra, independent of backend scheduling.
 use super::{NodeIndex, TensorGraph, TensorGraphNode};
-use crate::tensor::{BinaryOp, ReduceOp, UnaryOp};
+use crate::tensor::{BinaryOp, ReduceOp, UnaryOp, ValueDType};
 use petgraph::Direction;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Explicit numerical choices for automatic differentiation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -16,9 +16,12 @@ pub struct GradientOptions {
     /// and finite scores, optionally masked by negative infinity. Probability
     /// tensors still materialize; this does not provide memory-linear attention.
     ///
-    /// Only homogeneous f32 graphs are eligible. Graphs containing any casts,
-    /// other dtypes, unsupported shapes, or escaping normalization intermediates
-    /// retain primitive derivatives. The original forward graph is unchanged.
+    /// Only locally f32 normalizations are eligible, including within explicitly
+    /// mixed graphs. The score and every normalization intermediate must be
+    /// f32; interior casts, BF16 normalizations, unsupported shapes and escaping
+    /// intermediates retain primitive derivatives. Casts before the score or
+    /// after the probability output keep their ordinary gradient dtype/rounding
+    /// boundaries. The original forward graph is unchanged.
     pub compact_softmax: bool,
 }
 
@@ -27,6 +30,7 @@ pub struct GradientOptions {
 pub(super) fn softmax<D, G>(
     graph: &TensorGraph<D, G>,
     output: NodeIndex,
+    primal_dtypes: &HashMap<NodeIndex, ValueDType>,
 ) -> Option<(NodeIndex, usize)> {
     let [exp, denominator] = binary(graph, output, BinaryOp::Div)?;
     let sum = unbroadcast(graph, denominator)?;
@@ -77,6 +81,16 @@ pub(super) fn softmax<D, G>(
     ]
     .into_iter()
     .collect();
+    // A nonempty map includes every floating primal node, not just BF16 ones.
+    // Missing entries are accepted only for the homogeneous f32 case (the
+    // caller checks the graph's host dtype). Do not cross a storage-rounding
+    // boundary inside the matched arithmetic.
+    if std::iter::once(&score)
+        .chain(&members)
+        .any(|node| !primal_dtypes.is_empty() && primal_dtypes.get(node) != Some(&ValueDType::F32))
+    {
+        return None;
+    }
     if members.iter().any(|&node| {
         node != output
             && graph

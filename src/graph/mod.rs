@@ -413,9 +413,8 @@ where
     ) -> TensorGraph<D, WithGrad> {
         let forward_nodes = self.graph.node_count();
         let primal_dtypes = mixed::value_dtypes(&self);
-        let compact_softmax = options.compact_softmax
-            && std::any::TypeId::of::<D>() == std::any::TypeId::of::<f32>()
-            && primal_dtypes.is_empty();
+        let compact_softmax =
+            options.compact_softmax && std::any::TypeId::of::<D>() == std::any::TypeId::of::<f32>();
         let mut param_to_grad: HashMap<usize, NodeIndex> = HashMap::new();
         let mut gradient_nodes: HashSet<NodeIndex> = HashSet::new();
         let mut node_to_grad: HashMap<NodeIndex, NodeIndex> = HashMap::new();
@@ -468,8 +467,14 @@ where
 
             if compact_softmax
                 && self.graph[grad_output].shape() == self.graph[node_idx].shape()
-                && let Some((score, axis)) = gradient_options::softmax(&self, node_idx)
+                && let Some((score, axis)) =
+                    gradient_options::softmax(&self, node_idx, &primal_dtypes)
             {
+                // Every contribution to this f32 output has already been
+                // promoted by accumulate_gradient (including contributions
+                // through a BF16 consumer). Its incoming sum is therefore f32.
+                // Accumulate at the score itself: an upstream cast still runs
+                // its ordinary reverse rule and retains its narrowing boundary.
                 let shape = self.graph[node_idx].shape().clone();
                 let probabilities = TensorExpr::node_ref(node_idx, shape.clone());
                 let incoming = TensorExpr::node_ref(grad_output, shape.clone());

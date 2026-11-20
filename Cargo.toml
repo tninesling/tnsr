@@ -95,3 +95,16 @@ required-features = ["cuda"]
 [[example]]
 name = "matmul_grid_probe"
 required-features = ["cuda"]
+
+[[example]]
+name = "shared_memory_probe"
+required-features = ["cuda"]
+
+[[example]]
+name = "online_weight_probe"
+required-features = ["cuda"]
+
+[[example]]
+name = "transformer_training_bench"
+required-features = ["cuda"]
+test = true

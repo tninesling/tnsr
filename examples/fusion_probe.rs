@@ -102,6 +102,10 @@ fn feature(f: &FusionFeatures) -> Value {
     value["full_domain_passes"] = json!(f.full_domain_passes);
     value["non_identity_inputs"] = json!(f.non_identity_inputs);
     value["input_index_operations"] = json!(f.input_index_operations);
+    value["unique_input_bytes"] = json!(f.unique_input_bytes);
+    value["output_bytes"] = json!(f.output_bytes);
+    value["matmul_global_load_bytes"] = json!(f.matmul_global_load_bytes);
+    value["matmul_shared_operand_bytes"] = json!(f.matmul_shared_operand_bytes);
     value
 }
 

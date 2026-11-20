@@ -116,6 +116,19 @@ pub(super) fn lower_scalar_stmt<'a>(
                 ctx.index_vars.remove(loop_var);
             }
         }
+        Stmt::WarpBroadcastLeader { dest, src } => {
+            let src = ctx.get_or_alloc_reg(func, *src);
+            let dest = ctx.get_or_alloc_reg(func, *dest);
+            let bits = func.add_b32_register();
+            func.add_inst(Inst::mov_b32(bits.clone(), src));
+            let result = func.add_b32_register();
+            func.add_inst(Inst::ShflSyncIdxB32 {
+                dst: result.clone(),
+                src: bits,
+                lane: 0,
+            });
+            func.add_inst(Inst::mov_f32_b32(dest, result));
+        }
         Stmt::WarpReduce {
             dest,
             src,
@@ -209,6 +222,9 @@ fn expression<'a>(
                 ScalarBinaryOp::Arithmetic(BinaryOp::Mul) => Inst::mul_f32(dest.clone(), lhs, rhs),
                 ScalarBinaryOp::Arithmetic(BinaryOp::Div) => Inst::div_f32(dest.clone(), lhs, rhs),
                 ScalarBinaryOp::Max => Inst::max_f32(dest.clone(), lhs, rhs),
+                ScalarBinaryOp::AddRn => Inst::add_rn_f32(dest.clone(), lhs, rhs),
+                ScalarBinaryOp::SubRn => Inst::sub_rn_f32(dest.clone(), lhs, rhs),
+                ScalarBinaryOp::MulRn => Inst::mul_rn_f32(dest.clone(), lhs, rhs),
             };
             func.add_inst(inst);
             dest
@@ -247,3 +263,6 @@ fn predicate<'a>(
     }
     pred
 }
+
+#[cfg(test)]
+mod warp_broadcast_leader_tests;

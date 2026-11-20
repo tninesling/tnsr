@@ -83,6 +83,25 @@ pub enum MatMulAccumulatorLayout {
     WarpFragment,
 }
 
+/// Shared exchange between opaque F32 accumulators and scalar outputs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MatMulAccumulatorExchange {
+    #[default]
+    FullTile,
+    /// Per-warp fragment counts emitted by each uniform exchange pass.
+    FragmentWindows {
+        fragment_rows: usize,
+        fragment_cols: usize,
+    },
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MatMulFragmentLoad {
+    #[default]
+    PreloadAll,
+    /// Keep the two A fragments live while loading one B fragment at a time.
+    StreamB,
+}
+
 /// Single source of truth for launch geometry, shared layouts, and pipeline stages.
 /// Scheduling stays independent of the logical region and its tensor shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,9 +129,348 @@ pub struct MatMulSchedule {
     /// Storage format at global-memory graph boundaries.
     pub storage_dtype: DType,
     pub accumulator_layout: MatMulAccumulatorLayout,
+    pub accumulator_exchange: MatMulAccumulatorExchange,
+    pub fragment_load: MatMulFragmentLoad,
+    /// Opt-in lifetime overlay of tensor-core operand stages and the F32
+    /// epilogue exchange. Existing executors enable this after selection; an
+    /// explicit experimental candidate can enable it before resource admission.
+    pub reuse_shared_memory: bool,
 }
 
 impl MatMulSchedule {
+    pub(crate) fn accumulator_exchange_shape(&self) -> Option<(usize, usize)> {
+        match self.accumulator_exchange {
+            MatMulAccumulatorExchange::FullTile => Some((self.block_tile.m, self.block_tile.n)),
+            MatMulAccumulatorExchange::FragmentWindows {
+                fragment_rows,
+                fragment_cols,
+            } => {
+                if fragment_rows == 0
+                    || fragment_cols == 0
+                    || !self.warp_fragments.0.is_multiple_of(fragment_rows)
+                    || !self.warp_fragments.1.is_multiple_of(fragment_cols)
+                {
+                    return None;
+                }
+                Some((
+                    16usize
+                        .checked_mul(self.warp_topology.0)?
+                        .checked_mul(fragment_rows)?,
+                    16usize
+                        .checked_mul(self.warp_topology.1)?
+                        .checked_mul(fragment_cols)?,
+                ))
+            }
+        }
+    }
+    pub(crate) fn accumulator_exchange_bytes(&self) -> usize {
+        if self.plan == MatMulPlan::ScalarF32 {
+            return 0;
+        }
+        self.accumulator_exchange_shape()
+            .and_then(|(r, c)| r.checked_mul(c))
+            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_add(31))
+            .map(|n| n / 32 * 32)
+            .unwrap_or(usize::MAX)
+    }
+    /// Exact qualified rectangular lowering; no default policy selects it.
+    /// Mixed separately proves the single admitted logical/storage shape.
+    pub(crate) fn is_nn128x64_ldmatrix_diagnostic(&self) -> bool {
+        let mut old = *self;
+        old.block_tile.n = 128;
+        old.warp_fragments = (2, 4);
+        old.accumulator_exchange = MatMulAccumulatorExchange::FragmentWindows {
+            fragment_rows: 1,
+            fragment_cols: 2,
+        };
+        self.block_tile.n == 64
+            && self.warp_fragments == (2, 2)
+            && self.accumulator_exchange == MatMulAccumulatorExchange::FullTile
+            && self.fragment_load == MatMulFragmentLoad::StreamB
+            && self.pipeline_stages == 2
+            && self.async_operands == (true, true)
+            && self.copy_bytes == 16
+            && self.reuse_shared_memory
+            && self.operand_layouts.0 == SharedLayout::row_major(40)
+            && self.operand_layouts.1 == SharedLayout::row_major(72)
+            && old.is_square128_streamed()
+    }
+    pub(crate) fn is_square128_streamed(&self) -> bool {
+        self.plan == MatMulPlan::TensorCoreBF16
+            && self.storage_dtype == DType::BF16
+            && self.operand_dtype == DType::BF16
+            && self.instruction_tile
+                == (MatMulTile {
+                    m: 16,
+                    n: 16,
+                    k: 16,
+                })
+            && self.accumulator_layout == MatMulAccumulatorLayout::WarpFragment
+            && self.block_tile
+                == (MatMulTile {
+                    m: 128,
+                    n: 128,
+                    k: 32,
+                })
+            && self.block_threads == (32, 8, 1)
+            && self.warp_topology == (4, 2)
+            && self.warp_fragments == (2, 4)
+            && self.accumulator_exchange
+                == (MatMulAccumulatorExchange::FragmentWindows {
+                    fragment_rows: 1,
+                    fragment_cols: 2,
+                })
+            && self.fragment_load == MatMulFragmentLoad::StreamB
+    }
+    /// Lowering-only whitelist. The production policy remains the eight-warp
+    /// geometry recognized by `is_square128_streamed`.
+    pub(crate) fn supports_streamed_fragment_windows(&self) -> bool {
+        if self.is_square128_streamed() {
+            return true;
+        }
+        #[cfg(test)]
+        if self.is_four_warp_wide_exchange_diagnostic() {
+            return true;
+        }
+        let mut old = *self;
+        old.block_threads = (32, 8, 1);
+        old.warp_topology = (4, 2);
+        old.warp_fragments = (2, 4);
+        self.block_threads == (32, 4, 1)
+            && self.warp_topology == (2, 2)
+            && self.warp_fragments == (4, 4)
+            && old.is_square128_streamed()
+    }
+    /// Test-only output-phase probe. No production selector admits this shape.
+    #[cfg(test)]
+    pub(crate) fn is_four_warp_wide_exchange_diagnostic(&self) -> bool {
+        let mut old = *self;
+        old.block_threads = (32, 8, 1);
+        old.warp_topology = (4, 2);
+        old.warp_fragments = (2, 4);
+        old.accumulator_exchange = MatMulAccumulatorExchange::FragmentWindows {
+            fragment_rows: 1,
+            fragment_cols: 2,
+        };
+        self.block_threads == (32, 4, 1)
+            && self.warp_topology == (2, 2)
+            && self.warp_fragments == (4, 4)
+            && self.accumulator_exchange
+                == (MatMulAccumulatorExchange::FragmentWindows {
+                    fragment_rows: 2,
+                    fragment_cols: 4,
+                })
+            && old.is_square128_streamed()
+    }
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn bf16_square128_streamed_geometry(mut self) -> Option<Self> {
+        if self.plan != MatMulPlan::TensorCoreBF16
+            || self.storage_dtype != DType::BF16
+            || self.operand_dtype != DType::BF16
+            || self.instruction_tile
+                != (MatMulTile {
+                    m: 16,
+                    n: 16,
+                    k: 16,
+                })
+        {
+            return None;
+        }
+        self.block_tile = MatMulTile {
+            m: 128,
+            n: 128,
+            k: 32,
+        };
+        self.block_threads = (32, 8, 1);
+        self.warp_topology = (4, 2);
+        self.warp_fragments = (2, 4);
+        self.accumulator_layout = MatMulAccumulatorLayout::WarpFragment;
+        self.accumulator_exchange = MatMulAccumulatorExchange::FragmentWindows {
+            fragment_rows: 1,
+            fragment_cols: 2,
+        };
+        self.fragment_load = MatMulFragmentLoad::StreamB;
+        self.operand_layouts = (SharedLayout::row_major(32), SharedLayout::row_major(128));
+        self.pipeline_stages = 1;
+        self.copy_bytes = 4;
+        self.async_operands = (false, false);
+        self.reuse_shared_memory = true;
+        Some(self)
+    }
+    /// Repartition the ordinary large BF16 tile across all eight block warps.
+    /// Apply after layout/pipeline selection: only accumulator ownership changes.
+    pub fn with_experimental_bf16_eight_compute_warps(mut self) -> Self {
+        if self.plan == MatMulPlan::TensorCoreBF16
+            && self.storage_dtype == DType::BF16
+            && self.logical_shape.m >= 2048
+            && self.logical_shape.n >= 256
+            && self.logical_shape.k >= 64
+            && self.block_tile
+                == (MatMulTile {
+                    m: 64,
+                    n: 64,
+                    k: 32,
+                })
+            && self.block_threads == (32, 8, 1)
+            && self.warp_topology == (2, 2)
+            && self.warp_fragments == (2, 2)
+        {
+            self.warp_topology = (2, 4);
+            self.warp_fragments = (2, 1);
+        }
+        self
+    }
+
+    pub fn with_shared_memory_reuse(mut self, enabled: bool) -> Self {
+        self.reuse_shared_memory = enabled && self.plan != MatMulPlan::ScalarF32;
+        self
+    }
+
+    /// Construct one of the bounded BF16 rectangles, without applying source
+    /// layout/copy proofs. Callers own logical-rank/full-tile/coverage policy and
+    /// MUST configure actual operand layouts/pipeline before final admission.
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn bf16_rectangle_geometry(mut self, m: usize, n: usize) -> Option<Self> {
+        if self.plan != MatMulPlan::TensorCoreBF16
+            || self.storage_dtype != DType::BF16
+            || self.operand_dtype != DType::BF16
+            || self.instruction_tile
+                != (MatMulTile {
+                    m: 16,
+                    n: 16,
+                    k: 16,
+                })
+            || !matches!((m, n), (128, 64) | (64, 128))
+        {
+            return None;
+        }
+        self.accumulator_exchange = MatMulAccumulatorExchange::FullTile;
+        self.fragment_load = MatMulFragmentLoad::PreloadAll;
+        self.block_tile = MatMulTile { m, n, k: 32 };
+        self.block_threads = (32, 8, 1);
+        self.warp_topology = (m / 32, n / 32);
+        self.warp_fragments = (2, 2);
+        self.accumulator_layout = MatMulAccumulatorLayout::WarpFragment;
+        self.operand_layouts = (SharedLayout::row_major(32), SharedLayout::row_major(n));
+        self.pipeline_stages = 1;
+        self.copy_bytes = 4;
+        self.async_operands = (false, false);
+        self.reuse_shared_memory = true;
+        Some(self)
+    }
+
+    /// Source resource admission using actual physical shared bytes and the
+    /// existing conservative128-register/thread reserve. This is not measured
+    /// occupancy; the compiled function's registers/local memory remain evidence
+    /// to collect during qualification.
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn conservative_two_block_fit(&self, resources: MatMulResources) -> bool {
+        let threads = self.thread_count();
+        let shared = self.shared_mem_bytes();
+        let Some(registers) = threads.checked_mul(128) else {
+            return false;
+        };
+        threads != 0
+            && shared != 0
+            && registers != 0
+            && shared <= resources.shared_bytes_per_block
+            && (resources.threads_per_sm / threads)
+                .min(resources.registers_per_sm / registers)
+                .min(resources.shared_bytes_per_sm / shared)
+                >= 2
+    }
+
+    /// Physical lifetime phases are disjoint unless the explicit shared arena
+    /// overlay is already selected. Preserve checked disjoint arithmetic for
+    /// ordinary schedules, including the existing layout fallback behavior.
+    fn shared_phase_bytes(&self, operands: usize, exchange: usize) -> Option<usize> {
+        if self.reuse_shared_memory {
+            Some(operands.max(exchange))
+        } else {
+            operands.checked_add(exchange)
+        }
+    }
+
+    /// Bounded BF16 narrow-output experiment. Keep the original increasing-K
+    /// 16-wide MMA sequence while sharing each operand across four compute warps.
+    /// Apply after ordinary layout/pipeline selection and before scratch reuse.
+    pub fn with_experimental_narrow_bf16_tile(mut self, resources: MatMulResources) -> Self {
+        let shape = self.logical_shape;
+        if self.plan != MatMulPlan::TensorCoreBF16
+            || self.storage_dtype != DType::BF16
+            || shape.n != 64
+            || shape.m < 128
+            || shape.k < 64
+            || !shape.k.is_multiple_of(32)
+            || self.block_tile
+                != (MatMulTile {
+                    m: 16,
+                    n: 16,
+                    k: 16,
+                })
+        {
+            return self;
+        }
+        let shared_bytes = (32 * 32 + 32 * 32) * 2 + 32 * 32 * 4;
+        let resident_blocks = (resources.threads_per_sm / 256)
+            .min(resources.registers_per_sm / (128 * 256))
+            .min(resources.shared_bytes_per_sm / shared_bytes);
+        if shared_bytes > resources.shared_bytes_per_block || resident_blocks < 2 {
+            return self;
+        }
+        self.block_tile = MatMulTile {
+            m: 32,
+            n: 32,
+            k: 32,
+        };
+        self.block_threads = (32, 8, 1);
+        self.warp_topology = (2, 2);
+        self.warp_fragments = (1, 1);
+        self.operand_layouts = (SharedLayout::row_major(32), SharedLayout::row_major(32));
+        self.pipeline_stages = 1;
+        self.copy_bytes = 4;
+        self.async_operands = (false, false);
+        self.reuse_shared_memory = false;
+        self
+    }
+
+    /// Physical storage used by operand staging before fragment conversion.
+    pub(crate) fn shared_operand_dtype(&self) -> DType {
+        if self.plan == MatMulPlan::ScalarF32
+            || self.pipeline_stages == 2
+            || self.plan == MatMulPlan::TensorCoreTf32x3
+        {
+            self.storage_dtype
+        } else {
+            self.operand_dtype
+        }
+    }
+
+    /// Actual static allocation, including padded layouts and all pipeline
+    /// stages. Existing execution paths enable reuse after selection. Explicit
+    /// candidates that enable it beforehand also use this lifetime model in
+    /// layout/pipeline resource guards; hardware limits remain unchanged.
+    pub fn shared_mem_bytes(&self) -> usize {
+        let tile = self.block_tile;
+        let dtype = self.shared_operand_dtype();
+        let operands = self.pipeline_stages
+            * (self
+                .operand_layouts
+                .0
+                .allocation_bytes(tile.m, tile.k, dtype)
+                + self
+                    .operand_layouts
+                    .1
+                    .allocation_bytes(tile.k, tile.n, dtype));
+        let exchange = self.accumulator_exchange_bytes();
+        if self.reuse_shared_memory {
+            operands.max(exchange)
+        } else {
+            operands.saturating_add(exchange)
+        }
+    }
+
     /// Experimental SIMT outer-product tile. Defaults never call this selector.
     /// Small output grids, including PPO weight gradients, retain their schedule.
     /// Apply this before selecting operand layouts and asynchronous staging.
@@ -292,11 +650,7 @@ impl MatMulSchedule {
             SharedLayout::row_major(self.block_tile.k),
             SharedLayout::row_major(self.block_tile.n),
         );
-        let accumulator_bytes = if tensor_core {
-            c.allocation_bytes(self.block_tile.m, self.block_tile.n, DType::F32)
-        } else {
-            0
-        };
+        let accumulator_bytes = self.accumulator_exchange_bytes();
         let shared_bytes = a
             .allocation_bytes(self.block_tile.m, self.block_tile.k, self.operand_dtype)
             .checked_add(b.allocation_bytes(
@@ -304,7 +658,7 @@ impl MatMulSchedule {
                 self.block_tile.n,
                 self.operand_dtype,
             ))
-            .and_then(|bytes| bytes.checked_add(accumulator_bytes))
+            .and_then(|bytes| self.shared_phase_bytes(bytes, accumulator_bytes))
             .ok_or_else(|| anyhow!("matmul shared allocation size overflows usize"))?;
         if shared_bytes <= resources.shared_bytes_per_block
             && resources.shared_bytes_per_sm / shared_bytes >= 2
@@ -373,20 +727,21 @@ impl MatMulSchedule {
                 .operand_layouts
                 .1
                 .allocation_bytes(tile.k, tile.n, self.storage_dtype);
-        let accumulator = if self.plan == MatMulPlan::ScalarF32 {
-            0
-        } else {
-            SharedLayout::row_major(tile.n).allocation_bytes(tile.m, tile.n, DType::F32)
-        };
-        let bytes = 2 * operands + accumulator;
+        let accumulator = self.accumulator_exchange_bytes();
+        let bytes = operands
+            .checked_mul(2)
+            .and_then(|bytes| self.shared_phase_bytes(bytes, accumulator));
         if supports_async
             && active.iter().any(|enabled| *enabled)
             && pairs_aligned
             && policy != MatMulPipeline::Synchronous
             && self.logical_shape.k > tile.k
             && (policy == MatMulPipeline::DoubleBuffered || self.plan != MatMulPlan::ScalarF32)
-            && bytes <= resources.shared_bytes_per_block
-            && resources.shared_bytes_per_sm / bytes >= 2
+            && bytes.is_some_and(|bytes| {
+                bytes != 0
+                    && bytes <= resources.shared_bytes_per_block
+                    && resources.shared_bytes_per_sm / bytes >= 2
+            })
         {
             self.pipeline_stages = 2;
             self.async_operands = async_operands;
@@ -624,6 +979,7 @@ impl MatMulSchedule {
                 SharedLayout::row_major(block_tile.n),
             ),
             pipeline_stages: 1,
+            reuse_shared_memory: false,
             copy_bytes: 4,
             async_operands: (false, false),
             operand_dtype: if matches!(
@@ -635,6 +991,8 @@ impl MatMulSchedule {
                 storage_dtype
             },
             storage_dtype,
+            accumulator_exchange: MatMulAccumulatorExchange::FullTile,
+            fragment_load: MatMulFragmentLoad::PreloadAll,
             accumulator_layout: if tensor_core {
                 MatMulAccumulatorLayout::WarpFragment
             } else if block_tile.m * block_tile.n == 1024 {
@@ -649,6 +1007,195 @@ impl MatMulSchedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bf16_eight_compute_warps_changes_only_supported_ownership() {
+        let resources = MatMulResources {
+            shared_bytes_per_sm: 100 * 1024,
+            ..MatMulResources::default()
+        };
+        let caps = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        for (m, n, k, eligible) in [
+            (2048, 256, 64, true),
+            (4096, 1408, 512, true),
+            (4096, 512, 1408, true),
+            (2049, 257, 65, true),
+            (2047, 256, 64, false),
+            (4096, 255, 512, false),
+            (4096, 512, 63, false),
+            (512, 1408, 4096, false),
+        ] {
+            for dtype in [DType::BF16, DType::F16, DType::F32] {
+                for precision in [MatMulPrecision::NativeHalf, MatMulPrecision::StrictF32] {
+                    for pipeline in [MatMulPipeline::Synchronous, MatMulPipeline::DoubleBuffered] {
+                        let old = MatMulSchedule::select_with_resources(
+                            m, n, k, dtype, caps, precision, resources,
+                        )
+                        .with_shared_layout(MatMulSharedLayout::Padded, resources)
+                        .unwrap()
+                        .with_pipeline(pipeline, true, true, resources)
+                        .with_shared_memory_reuse(true);
+                        let actual = old.with_experimental_bf16_eight_compute_warps();
+                        let mut expected = old;
+                        if eligible
+                            && dtype == DType::BF16
+                            && precision == MatMulPrecision::NativeHalf
+                        {
+                            expected.warp_topology = (2, 4);
+                            expected.warp_fragments = (2, 1);
+                        }
+                        assert_eq!(actual, expected);
+                        assert_eq!(actual.shared_mem_bytes(), old.shared_mem_bytes());
+                        assert_eq!(actual.thread_count(), old.thread_count());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_bf16_experiment_is_bounded_and_resets_physical_policy() {
+        let caps = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        let resources = MatMulResources::default();
+        for (m, n, k, eligible) in [
+            (128, 64, 64, true),
+            (129, 64, 96, true),
+            (512, 64, 512, true),
+            (127, 64, 64, false),
+            (128, 63, 64, false),
+            (128, 65, 64, false),
+            (128, 64, 32, false),
+            (128, 64, 65, false),
+            (128, 64, 80, false),
+            (128, 64, 0, false),
+        ] {
+            for dtype in [DType::BF16, DType::F16, DType::F32] {
+                for precision in [MatMulPrecision::NativeHalf, MatMulPrecision::StrictF32] {
+                    let old = MatMulSchedule::select_with_resources(
+                        m, n, k, dtype, caps, precision, resources,
+                    );
+                    let new = old.with_experimental_narrow_bf16_tile(resources);
+                    if eligible && dtype == DType::BF16 && precision == MatMulPrecision::NativeHalf
+                    {
+                        assert_eq!(
+                            new.block_tile,
+                            MatMulTile {
+                                m: 32,
+                                n: 32,
+                                k: 32
+                            }
+                        );
+                        assert_eq!(new.block_threads, (32, 8, 1));
+                        assert_eq!(new.warp_topology, (2, 2));
+                        assert_eq!(new.warp_fragments, (1, 1));
+                        assert_eq!(new.instruction_tile, old.instruction_tile);
+                        assert_eq!(new.accumulator_layout, old.accumulator_layout);
+                        assert_eq!(new.pipeline_stages, 1);
+                        assert_eq!(new.async_operands, (false, false));
+                        assert_eq!(new.copy_bytes, 4);
+                        assert_eq!(new.shared_mem_bytes(), 8192);
+                        assert_eq!(
+                            new.operand_layouts,
+                            (SharedLayout::row_major(32), SharedLayout::row_major(32))
+                        );
+                        // Each output retains K/16 instructions, with no extra
+                        // padded K group even when M has a tail.
+                        assert_eq!(k / old.block_tile.k, k / new.block_tile.k * 2);
+                        for limits in [
+                            MatMulResources {
+                                shared_bytes_per_block: 8191,
+                                ..resources
+                            },
+                            MatMulResources {
+                                shared_bytes_per_sm: 16383,
+                                ..resources
+                            },
+                            MatMulResources {
+                                registers_per_sm: 65535,
+                                ..resources
+                            },
+                            MatMulResources {
+                                threads_per_sm: 511,
+                                ..resources
+                            },
+                        ] {
+                            assert_eq!(old.with_experimental_narrow_bf16_tile(limits), old);
+                        }
+                    } else {
+                        assert_eq!(new, old);
+                    }
+                }
+            }
+        }
+        let old = MatMulSchedule::select_with_resources(
+            512,
+            64,
+            512,
+            DType::BF16,
+            caps,
+            MatMulPrecision::NativeHalf,
+            resources,
+        )
+        .with_shared_layout(MatMulSharedLayout::Padded, resources)
+        .unwrap()
+        .with_pipeline(MatMulPipeline::DoubleBuffered, true, true, resources)
+        .with_shared_memory_reuse(true);
+        let new = old.with_experimental_narrow_bf16_tile(resources);
+        assert_eq!(new.pipeline_stages, 1);
+        assert_eq!(new.async_operands, (false, false));
+        assert!(!new.reuse_shared_memory);
+        assert_eq!(new.shared_mem_bytes(), 8192);
+    }
+
+    #[test]
+    fn shared_memory_reuse_changes_only_physical_allocation() {
+        let resources = MatMulResources {
+            shared_bytes_per_sm: 100 * 1024,
+            ..MatMulResources::default()
+        };
+        let caps = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        let schedule = MatMulSchedule::select_with_resources(
+            4096,
+            768,
+            256,
+            DType::BF16,
+            caps,
+            MatMulPrecision::NativeHalf,
+            resources,
+        )
+        .with_shared_layout(MatMulSharedLayout::Padded, resources)
+        .unwrap()
+        .with_pipeline(MatMulPipeline::DoubleBuffered, true, true, resources);
+        assert_eq!(schedule.pipeline_stages, 2);
+        assert!(!schedule.reuse_shared_memory);
+        assert_eq!(schedule.shared_mem_bytes(), 35_840);
+        let reused = schedule.with_shared_memory_reuse(true);
+        assert_eq!(reused.shared_mem_bytes(), 19_456);
+        assert_eq!(reused.with_shared_memory_reuse(false), schedule);
+        assert_eq!(reused.block_tile, schedule.block_tile);
+        assert_eq!(reused.operand_layouts, schedule.operand_layouts);
+        assert_eq!(reused.async_operands, schedule.async_operands);
+        assert_eq!(reused.pipeline_stages, schedule.pipeline_stages);
+
+        let scalar = MatMulSchedule::select(4096, 768, 256, caps, MatMulPrecision::StrictF32);
+        assert_eq!(scalar.shared_mem_bytes(), 8192);
+        assert_eq!(scalar.with_shared_memory_reuse(true), scalar);
+        let small = MatMulSchedule::select(16, 16, 0, caps, MatMulPrecision::StrictF32);
+        assert_eq!(small.with_shared_memory_reuse(true), small);
+        assert_eq!(small.shared_mem_bytes(), 2048);
+    }
 
     #[test]
     fn experimental_register_tile_is_opt_in_and_preserves_gradient_fallbacks() {

@@ -12,6 +12,9 @@ type Scope = Vec<usize>;
 
 fn roots(stmt: &mut Stmt) -> Vec<&mut Expr> {
     match stmt {
+        Stmt::LoadGlobalF32x4 { group_index, .. } | Stmt::StoreGlobalF32x4 { group_index, .. } => {
+            vec![group_index]
+        }
         Stmt::LetIndex { value, .. } => vec![value],
         Stmt::LoadIndex { index, .. } => vec![index],
         Stmt::Load {

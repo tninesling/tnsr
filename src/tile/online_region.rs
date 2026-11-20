@@ -25,6 +25,8 @@ pub enum OnlineConsumer {
 /// Compiler analysis metadata, eliminated into ordinary scalar scheduling IR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnlineRegion {
+    /// Experimental cooperative sharing of exponential weights. Defaults off.
+    pub share_weights: bool,
     pub members: Vec<NodeIndex>,
     pub inputs: Vec<RegionInput>,
     pub score: OnlineExpr,

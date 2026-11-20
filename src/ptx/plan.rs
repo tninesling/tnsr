@@ -4,6 +4,7 @@ mod fusion_features;
 mod online;
 mod views;
 pub use fusion::{FusionAlternative, FusionAlternativeKind, FusionDecision, PtxFusionPolicy};
+pub use fusion_features::PtxExecutionFlavor;
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -111,6 +112,16 @@ pub struct PtxExecutionPlan {
     matmul_regions: Vec<MatMulRegion>,
     online_regions: Vec<crate::tile::OnlineRegion>,
     matmul_schedules: HashMap<NodeIndex, MatMulSchedule>,
+    medium_matmul_nodes: HashMap<NodeIndex, usize>,
+    medium_matmul_regions: HashMap<usize, usize>,
+    large_matmul_nodes: HashMap<NodeIndex, usize>,
+    large_matmul_regions: HashMap<usize, usize>,
+    batched_attention_matmul_regions:
+        HashMap<usize, (crate::tile::AttentionTileRole, MatMulSchedule)>,
+    ordinary_four_warp_nodes: HashMap<NodeIndex, (MatMulSchedule, MatMulSchedule)>,
+    ordinary_four_warp_regions: HashMap<usize, (MatMulSchedule, MatMulSchedule)>,
+    square128_streamed_nodes: HashSet<NodeIndex>,
+    square128_streamed_regions: HashSet<usize>,
     graph_output: Option<NodeIndex>,
     fusion_decisions: Vec<FusionDecision>,
 }
@@ -671,7 +682,16 @@ impl PtxExecutionPlan {
             reduction_regions,
             matmul_regions,
             matmul_schedules,
+            medium_matmul_nodes: HashMap::new(),
+            medium_matmul_regions: HashMap::new(),
+            large_matmul_nodes: HashMap::new(),
+            large_matmul_regions: HashMap::new(),
+            batched_attention_matmul_regions: HashMap::new(),
+            ordinary_four_warp_nodes: HashMap::new(),
+            ordinary_four_warp_regions: HashMap::new(),
             online_regions: Vec::new(),
+            square128_streamed_nodes: HashSet::new(),
+            square128_streamed_regions: HashSet::new(),
             graph_output,
             fusion_decisions: Vec::new(),
         };
@@ -687,10 +707,72 @@ impl PtxExecutionPlan {
         &self.regions
     }
 
+    /// Select only proven row-major Block128 regions after graph refinement.
+    pub(crate) fn set_column_reduction_policy(
+        &mut self,
+        policy: crate::tile::ColumnReductionPolicy,
+        shared_bytes: usize,
+    ) {
+        let active: HashSet<_> = self
+            .steps
+            .iter()
+            .filter_map(|step| match step.action {
+                PtxPlanAction::ReductionRegion(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        for (id, region) in self.reduction_regions.iter_mut().enumerate() {
+            region.column_policy = crate::tile::ColumnReductionPolicy::Off;
+            if active.contains(&id)
+                && policy
+                    .select(
+                        region,
+                        crate::tile::ColumnReductionLimits {
+                            max_threads_per_block: 1024,
+                            shared_bytes_per_block: shared_bytes,
+                            max_grid_x: i32::MAX as u32,
+                        },
+                    )
+                    .is_some()
+            {
+                region.column_policy = policy;
+            }
+        }
+    }
+
+    pub(crate) fn retain_column_reductions(
+        &mut self,
+        mut keep: impl FnMut(usize, &ReductionRegion) -> Result<bool>,
+    ) -> Result<()> {
+        for (id, region) in self.reduction_regions.iter_mut().enumerate() {
+            if region.column_tile().is_some() && !keep(id, region)? {
+                region.column_policy = crate::tile::ColumnReductionPolicy::Off;
+            }
+        }
+        Ok(())
+    }
+
+    /// Actual selected column regions, after compiled resource fallback.
+    pub fn column_reduction_counts(&self) -> (usize, usize) {
+        let mut counts = (0, 0);
+        for region in &self.reduction_regions {
+            if region.column_tile().is_none() {
+                continue;
+            }
+            match region.column_policy {
+                crate::tile::ColumnReductionPolicy::Off => {}
+                crate::tile::ColumnReductionPolicy::Four => counts.0 += 1,
+                crate::tile::ColumnReductionPolicy::Eight => counts.1 += 1,
+            }
+        }
+        counts
+    }
+
     pub fn reduction_regions(&self) -> &[ReductionRegion] {
         &self.reduction_regions
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn schedule_matmuls(
         &mut self,
@@ -702,7 +784,69 @@ impl PtxExecutionPlan {
         supports_async: bool,
         experimental_register_tiles: bool,
     ) -> Result<()> {
-        for schedule in self.matmul_schedules.values_mut() {
+        self.schedule_matmuls_with_medium_policy(
+            capabilities,
+            precision,
+            resources,
+            shared_layout,
+            pipeline,
+            supports_async,
+            experimental_register_tiles,
+            crate::tile::MediumBf16TilePolicy::Off,
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn schedule_matmuls_with_medium_policy(
+        &mut self,
+        capabilities: MatMulCapabilities,
+        precision: MatMulPrecision,
+        resources: MatMulResources,
+        shared_layout: MatMulSharedLayout,
+        pipeline: MatMulPipeline,
+        supports_async: bool,
+        experimental_register_tiles: bool,
+        medium_policy: crate::tile::MediumBf16TilePolicy,
+    ) -> Result<()> {
+        self.schedule_matmuls_with_tile_policies(
+            capabilities,
+            precision,
+            resources,
+            shared_layout,
+            pipeline,
+            supports_async,
+            experimental_register_tiles,
+            medium_policy,
+            crate::tile::LargeBf16TilePolicy::Off,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn schedule_matmuls_with_tile_policies(
+        &mut self,
+        capabilities: MatMulCapabilities,
+        precision: MatMulPrecision,
+        resources: MatMulResources,
+        shared_layout: MatMulSharedLayout,
+        pipeline: MatMulPipeline,
+        supports_async: bool,
+        experimental_register_tiles: bool,
+        medium_policy: crate::tile::MediumBf16TilePolicy,
+        large_policy: crate::tile::LargeBf16TilePolicy,
+        shared_memory_reuse: bool,
+    ) -> Result<()> {
+        self.large_matmul_nodes.clear();
+        self.large_matmul_regions.clear();
+        self.medium_matmul_nodes.clear();
+        self.medium_matmul_regions.clear();
+        let shapes: HashMap<_, _> = self
+            .matmul_schedules
+            .keys()
+            .filter_map(|&n| self.value_shape(n).cloned().map(|s| (n, s)))
+            .collect();
+        for (&node, schedule) in &mut self.matmul_schedules {
             let shape = schedule.logical_shape;
             *schedule = MatMulSchedule::select_with_resources(
                 shape.m,
@@ -716,11 +860,41 @@ impl PtxExecutionPlan {
             if experimental_register_tiles {
                 *schedule = schedule.with_experimental_register_tile(resources);
             }
-            *schedule = schedule
+            let ordinary = *schedule;
+            let candidate = medium_policy.select(
+                *schedule,
+                shapes.get(&node).map_or(&[], Vec::as_slice),
+                resources,
+            );
+            if candidate != *schedule {
+                self.medium_matmul_nodes
+                    .insert(node, candidate.block_tile.n);
+            }
+            *schedule = candidate
                 .with_shared_layout(shared_layout, resources)?
                 .with_pipeline(pipeline, supports_async, true, resources);
+            for alternative in large_policy.candidates(
+                ordinary,
+                shapes.get(&node).map_or(&[], Vec::as_slice),
+                shared_memory_reuse,
+            ) {
+                let Ok(configured) = alternative.with_shared_layout(shared_layout, resources)
+                else {
+                    continue;
+                };
+                let configured =
+                    configured.with_pipeline(pipeline, supports_async, true, resources);
+                if crate::tile::LargeBf16TilePolicy::configured_candidate_fits(
+                    configured, resources,
+                ) {
+                    self.large_matmul_nodes
+                        .insert(node, configured.block_tile.m);
+                    *schedule = configured;
+                    break;
+                }
+            }
         }
-        for region in &mut self.matmul_regions {
+        for (index, region) in self.matmul_regions.iter_mut().enumerate() {
             region.schedule = MatMulSchedule::select_with_resources(
                 region.m,
                 region.n,
@@ -733,9 +907,383 @@ impl PtxExecutionPlan {
             if experimental_register_tiles {
                 region.schedule = region.schedule.with_experimental_register_tile(resources);
             }
+            let ordinary = region.schedule;
+            let candidate = medium_policy.select(region.schedule, &region.output_shape, resources);
+            if candidate != region.schedule {
+                self.medium_matmul_regions
+                    .insert(index, candidate.block_tile.n);
+            }
+            region.schedule = candidate;
             region.configure_pipeline(shared_layout, pipeline, supports_async, resources)?;
+            let baseline = region.schedule;
+            for alternative in
+                large_policy.candidates(ordinary, &region.output_shape, shared_memory_reuse)
+            {
+                region.schedule = alternative;
+                if region
+                    .configure_pipeline(shared_layout, pipeline, supports_async, resources)
+                    .is_ok()
+                    && crate::tile::LargeBf16TilePolicy::configured_candidate_fits(
+                        region.schedule,
+                        resources,
+                    )
+                {
+                    self.large_matmul_regions
+                        .insert(index, region.schedule.block_tile.m);
+                    break;
+                }
+                // A resource/orientation/startup rejection retains the complete
+                // original schedule, not a silently synchronous rectangle.
+                region.schedule = baseline;
+            }
         }
         Ok(())
+    }
+
+    /// A late isolated probe: fusion and all other selected policies remain
+    /// baseline. The caller retains this complete plan for JIT fallback.
+    pub(crate) fn configure_square128_streamed(
+        &mut self,
+        shared: MatMulSharedLayout,
+        pipeline: MatMulPipeline,
+        supports_async: bool,
+        resources: MatMulResources,
+    ) {
+        use crate::tile::large_tile_policy::square128_streamed;
+        self.square128_streamed_nodes.clear();
+        self.square128_streamed_regions.clear();
+        let nodes: Vec<_> = self
+            .matmul_schedules
+            .iter()
+            .filter_map(|(&node, &base)| {
+                if self.medium_matmul_nodes.contains_key(&node)
+                    || self.large_matmul_nodes.contains_key(&node)
+                {
+                    return None;
+                }
+                let step = self
+                    .steps
+                    .iter()
+                    .find(|s| s.node == node && s.action == PtxPlanAction::Kernel)?;
+                if step.inputs.len() != 2
+                    || (
+                        base.operand_layouts.0.column_major,
+                        base.operand_layouts.1.column_major,
+                    ) != (false, false)
+                {
+                    return None;
+                }
+                let shape = base.logical_shape;
+                for (&input, expected) in step
+                    .inputs
+                    .iter()
+                    .zip([[shape.m, shape.k], [shape.k, shape.n]])
+                {
+                    let &(producer, output) = self.value_locations.get(&input)?;
+                    let producer = self.steps.get(producer)?;
+                    if producer.action == PtxPlanAction::VirtualView
+                        || !producer.virtual_outputs.is_empty()
+                        || producer.output_shapes.get(output)?.as_slice() != expected
+                    {
+                        return None;
+                    }
+                }
+                let selected = square128_streamed::geometry(base, &step.shape, resources)?
+                    .with_shared_layout(shared, resources)
+                    .ok()?
+                    .with_pipeline(pipeline, supports_async, true, resources);
+                square128_streamed::configured_fits(selected, resources).then_some((node, selected))
+            })
+            .collect();
+        for (node, selected) in nodes {
+            self.matmul_schedules.insert(node, selected);
+            self.square128_streamed_nodes.insert(node);
+        }
+        for (id, region) in self.matmul_regions.iter_mut().enumerate() {
+            if self.medium_matmul_regions.contains_key(&id)
+                || self.large_matmul_regions.contains_key(&id)
+                || self.batched_attention_matmul_regions.contains_key(&id)
+                || !self
+                    .steps
+                    .iter()
+                    .any(|s| s.action == PtxPlanAction::MatMulRegion(id))
+            {
+                continue;
+            }
+            if let Some(selected) = square128_streamed::region_candidate(
+                region,
+                shared,
+                pipeline,
+                supports_async,
+                resources,
+            ) {
+                region.schedule = selected;
+                self.square128_streamed_regions.insert(id);
+            }
+        }
+    }
+    pub(crate) fn square128_streamed_steps(&self) -> Vec<&PtxPlanStep> {
+        self.steps
+            .iter()
+            .filter(|step| match step.action {
+                PtxPlanAction::Kernel => self.square128_streamed_nodes.contains(&step.node),
+                PtxPlanAction::MatMulRegion(id) => self.square128_streamed_regions.contains(&id),
+                _ => false,
+            })
+            .collect()
+    }
+    pub(crate) fn large_square128_streamed_count(&self) -> usize {
+        self.square128_streamed_steps().len()
+    }
+
+    /// Region-only, after final fusion/view resolution and ordinary scheduling.
+    /// Probe on a clone: every rejection retains the complete configured baseline.
+    pub(crate) fn configure_batched_attention_tiles(
+        &mut self,
+        policy: crate::tile::BatchedAttentionBf16TilePolicy,
+        shared: MatMulSharedLayout,
+        pipeline: MatMulPipeline,
+        supports_async: bool,
+        resources: MatMulResources,
+        shared_memory_reuse: bool,
+    ) {
+        self.batched_attention_matmul_regions.clear();
+        for (id, region) in self.matmul_regions.iter_mut().enumerate() {
+            let Some(candidate) = policy.candidate(region, resources, shared_memory_reuse) else {
+                continue;
+            };
+            let Some(configured) =
+                candidate.configure(region, shared, pipeline, supports_async, resources)
+            else {
+                continue;
+            };
+            // No subsequent generic Auto pass may reset this explicit two-stage
+            // choice. Later geometry-specific hooks must leave it unchanged.
+            region.schedule = configured;
+            self.batched_attention_matmul_regions
+                .insert(id, (candidate.role, configured));
+        }
+    }
+
+    /// Count final schedules, not requests or raw geometry candidates. Grid-M
+    /// grouping is an independent traversal choice and may be applied afterward.
+    pub fn batched_attention_bf16_tile_counts(&self) -> crate::tile::BatchedAttentionTileCounts {
+        let mut counts = crate::tile::BatchedAttentionTileCounts::default();
+        for (&id, &(role, expected)) in &self.batched_attention_matmul_regions {
+            let Some(region) = self.matmul_regions.get(id) else {
+                continue;
+            };
+            let mut actual = region.schedule;
+            actual.grid_group_m = expected.grid_group_m;
+            if actual != expected {
+                continue;
+            }
+            match role {
+                crate::tile::AttentionTileRole::Scores => counts.scores += 1,
+                crate::tile::AttentionTileRole::QueryWidth => counts.query_width += 1,
+                crate::tile::AttentionTileRole::WidthQuery => counts.width_query += 1,
+            }
+            if actual.block_tile.m == 128 {
+                counts.tall += 1;
+            } else {
+                counts.wide += 1;
+            }
+        }
+        counts
+    }
+
+    /// Selected ordinary rectangles, checked against the final configured
+    /// dimensions/pipeline/reuse rather than requested policy flags.
+    pub fn large_bf16_tile_counts(&self) -> (usize, usize) {
+        let mut counts = (0, 0);
+        let schedules = self
+            .large_matmul_nodes
+            .iter()
+            .filter_map(|(node, &m)| self.matmul_schedules.get(node).map(|s| (s, m)))
+            .chain(
+                self.large_matmul_regions
+                    .iter()
+                    .filter_map(|(&id, &m)| self.matmul_regions.get(id).map(|r| (&r.schedule, m))),
+            );
+        for (schedule, m) in schedules {
+            if schedule.block_tile.m == m
+                && schedule.block_tile.k == 32
+                && schedule.block_tile.n == if m == 128 { 64 } else { 128 }
+                && schedule.plan == crate::tile::MatMulPlan::TensorCoreBF16
+                && schedule.storage_dtype == crate::tile::DType::BF16
+                && schedule.operand_dtype == crate::tile::DType::BF16
+                && schedule.block_threads == (32, 8, 1)
+                && schedule.warp_fragments == (2, 2)
+                && schedule.warp_topology
+                    == (schedule.block_tile.m / 32, schedule.block_tile.n / 32)
+                && schedule.pipeline_stages == 2
+                && schedule.reuse_shared_memory
+                && schedule.async_operands != (false, false)
+            {
+                if m == 128 {
+                    counts.0 += 1;
+                } else {
+                    counts.1 += 1;
+                }
+            }
+        }
+        counts
+    }
+
+    /// Last ordinary MatMul hook, after all geometry/pipeline/reuse policies.
+    /// Preserve the entire baseline on any proof failure. Regenerating TileIR
+    /// after this is mandatory: changing only CUDA's launch block is incorrect.
+    pub(crate) fn configure_ordinary_bf16_four_warp_block(
+        &mut self,
+        enabled: bool,
+        resources: MatMulResources,
+    ) {
+        // Also make a repeated off/on plan-level application transactional.
+        for (node, (baseline, selected)) in std::mem::take(&mut self.ordinary_four_warp_nodes) {
+            if let Some(actual) = self.matmul_schedules.get_mut(&node) {
+                restore_ordinary_block(actual, baseline, selected);
+            }
+        }
+        for (id, (baseline, selected)) in std::mem::take(&mut self.ordinary_four_warp_regions) {
+            if let Some(region) = self.matmul_regions.get_mut(id) {
+                restore_ordinary_block(&mut region.schedule, baseline, selected);
+            }
+        }
+        if !enabled {
+            return;
+        }
+        // A bare MatMul has canonical materialized matrices. Virtual producers
+        // are rejected here; their composed maps belong to the region proof.
+        let nodes: Vec<_> = self
+            .matmul_schedules
+            .iter()
+            .filter_map(|(&node, &baseline)| {
+                if self.medium_matmul_nodes.contains_key(&node)
+                    || self.large_matmul_nodes.contains_key(&node)
+                {
+                    return None;
+                }
+                let step = self
+                    .steps
+                    .iter()
+                    .find(|step| step.node == node && step.action == PtxPlanAction::Kernel)?;
+                let shape = baseline.logical_shape;
+                if step.inputs.len() != 2
+                    || (
+                        baseline.operand_layouts.0.column_major,
+                        baseline.operand_layouts.1.column_major,
+                    ) != (false, false)
+                {
+                    return None;
+                }
+                for (&input, expected) in step
+                    .inputs
+                    .iter()
+                    .zip([[shape.m, shape.k], [shape.k, shape.n]])
+                {
+                    let &(producer, output) = self.value_locations.get(&input)?;
+                    let producer = self.steps.get(producer)?;
+                    if producer.action == PtxPlanAction::VirtualView
+                        || !producer.virtual_outputs.is_empty()
+                        || producer.output_shapes.get(output)?.as_slice() != expected
+                    {
+                        return None;
+                    }
+                }
+                let selected =
+                    crate::tile::ordinary_bf16_block::candidate(baseline, &step.shape, resources)?;
+                Some((node, baseline, selected))
+            })
+            .collect();
+        for (node, baseline, selected) in nodes {
+            self.matmul_schedules.insert(node, selected);
+            self.ordinary_four_warp_nodes
+                .insert(node, (baseline, selected));
+        }
+        let regions: Vec<_> = self
+            .matmul_regions
+            .iter()
+            .enumerate()
+            .filter_map(|(id, region)| {
+                if self.medium_matmul_regions.contains_key(&id)
+                    || self.large_matmul_regions.contains_key(&id)
+                    || self.batched_attention_matmul_regions.contains_key(&id)
+                    || !self
+                        .steps
+                        .iter()
+                        .any(|step| step.action == PtxPlanAction::MatMulRegion(id))
+                {
+                    return None;
+                }
+                let selected =
+                    crate::tile::ordinary_bf16_block::region_candidate(region, resources)?;
+                Some((id, region.schedule, selected))
+            })
+            .collect();
+        for (id, baseline, selected) in regions {
+            self.matmul_regions[id].schedule = selected;
+            self.ordinary_four_warp_regions
+                .insert(id, (baseline, selected));
+        }
+    }
+
+    /// Actual selected ordinary 128-thread kernels, not requests. Independent
+    /// grid traversal changes do not affect ownership or candidate identity.
+    pub fn ordinary_bf16_four_warp_count(&self) -> usize {
+        let mut count = 0;
+        for (&node, &(_, selected)) in &self.ordinary_four_warp_nodes {
+            if self
+                .matmul_schedules
+                .get(&node)
+                .is_some_and(|actual| same_ordinary_block(*actual, selected))
+            {
+                count += 1;
+            }
+        }
+        for (&id, &(_, selected)) in &self.ordinary_four_warp_regions {
+            if self
+                .matmul_regions
+                .get(id)
+                .is_some_and(|region| same_ordinary_block(region.schedule, selected))
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Actual selected medium square/tall matrices, verified after layout,
+    /// pipeline and later resource-preserving schedule hooks.
+    pub fn medium_bf16_tile_counts(&self) -> (usize, usize) {
+        let schedules = self
+            .medium_matmul_nodes
+            .iter()
+            .filter_map(|(n, &width)| self.matmul_schedules.get(n).map(|s| (s, width)))
+            .chain(
+                self.medium_matmul_regions
+                    .iter()
+                    .filter_map(|(&i, &width)| {
+                        self.matmul_regions.get(i).map(|r| (&r.schedule, width))
+                    }),
+            );
+        let mut counts = (0, 0);
+        for (s, width) in schedules {
+            if s.plan == crate::tile::MatMulPlan::TensorCoreBF16
+                && s.block_tile.m == 64
+                && s.block_tile.n == width
+                && s.block_tile.k == 32
+                && s.block_threads == (32, 8, 1)
+                && s.warp_topology == (2, 2)
+                && s.warp_fragments == (if width == 64 { (2, 2) } else { (2, 1) })
+            {
+                if width == 64 {
+                    counts.0 += 1;
+                } else if width == 32 {
+                    counts.1 += 1;
+                }
+            }
+        }
+        counts
     }
 
     pub fn matmul_schedules(&self) -> &HashMap<NodeIndex, MatMulSchedule> {
@@ -752,6 +1300,45 @@ impl PtxExecutionPlan {
             region.schedule.grid_group_m = group;
         }
         Ok(())
+    }
+
+    /// Repartition only already-selected large BF16 tiles after pipeline selection.
+    pub fn set_bf16_eight_compute_warps(&mut self, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        for schedule in self.matmul_schedules.values_mut() {
+            *schedule = schedule.with_experimental_bf16_eight_compute_warps();
+        }
+        for region in &mut self.matmul_regions {
+            region.schedule = region.schedule.with_experimental_bf16_eight_compute_warps();
+        }
+    }
+
+    /// Select a bounded synchronous BF16 tile after ordinary scheduling.
+    pub fn set_matmul_narrow_bf16_tile(&mut self, enabled: bool, resources: MatMulResources) {
+        if !enabled {
+            return;
+        }
+        for schedule in self.matmul_schedules.values_mut() {
+            *schedule = schedule.with_experimental_narrow_bf16_tile(resources);
+        }
+        for region in &mut self.matmul_regions {
+            region.schedule = region
+                .schedule
+                .with_experimental_narrow_bf16_tile(resources);
+        }
+    }
+
+    /// Toggle only scratch allocation after schedule selection. Tile geometry,
+    /// staging policy, and arithmetic remain fixed for a controlled comparison.
+    pub fn set_matmul_shared_memory_reuse(&mut self, enabled: bool) {
+        for schedule in self.matmul_schedules.values_mut() {
+            *schedule = schedule.with_shared_memory_reuse(enabled);
+        }
+        for region in &mut self.matmul_regions {
+            region.schedule = region.schedule.with_shared_memory_reuse(enabled);
+        }
     }
 
     pub fn matmul_regions(&self) -> &[MatMulRegion] {
@@ -1254,6 +1841,23 @@ fn assign_plan_liveness<D: crate::tile::TileDType, G>(
     }
     for step in steps {
         step.release_after.sort_by_key(|node| node.index());
+    }
+}
+
+fn same_ordinary_block(mut actual: MatMulSchedule, selected: MatMulSchedule) -> bool {
+    actual.grid_group_m = selected.grid_group_m;
+    actual == selected
+}
+
+fn restore_ordinary_block(
+    actual: &mut MatMulSchedule,
+    baseline: MatMulSchedule,
+    selected: MatMulSchedule,
+) {
+    if same_ordinary_block(*actual, selected) {
+        let group = actual.grid_group_m;
+        *actual = baseline;
+        actual.grid_group_m = group;
     }
 }
 

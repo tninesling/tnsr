@@ -3,6 +3,15 @@ use super::*;
 use crate::tensor::{BinaryOp, UnaryOp};
 use crate::tile::{FusionFeatures, MatMulPlan, ReductionInputDomain, TileDType};
 
+/// Dispatch path whose launch geometry the diagnostics describe. This does
+/// not select execution behavior or change fusion profitability decisions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PtxExecutionFlavor {
+    #[default]
+    Homogeneous,
+    FixedBinding,
+}
+
 impl PtxExecutionPlan {
     /// Compiler-visible estimates for each physical step in this plan, in
     /// execution order, without uploading inputs or executing any CUDA work.
@@ -19,9 +28,30 @@ impl PtxExecutionPlan {
         self.fusion_features(graph)
     }
 
+    /// Features for a particular dispatch path. Fixed-binding pointwise and
+    /// materialized-view steps use 256 threads, while legacy homogeneous
+    /// standalone dispatch uses 1,024. Cooperative reduction resources remain
+    /// estimates: launch-time function limits can reduce their packed size.
+    /// This reports a plan; it does not validate fixed-binding support for it.
+    pub fn kernel_features_for_execution<D: TileDType, G>(
+        &self,
+        graph: &TensorGraph<D, G>,
+        flavor: PtxExecutionFlavor,
+    ) -> Vec<FusionFeatures> {
+        self.fusion_features_for_execution(graph, flavor)
+    }
+
     pub(super) fn fusion_features<D: TileDType, G>(
         &self,
         graph: &TensorGraph<D, G>,
+    ) -> Vec<FusionFeatures> {
+        self.fusion_features_for_execution(graph, PtxExecutionFlavor::Homogeneous)
+    }
+
+    fn fusion_features_for_execution<D: TileDType, G>(
+        &self,
+        graph: &TensorGraph<D, G>,
+        flavor: PtxExecutionFlavor,
     ) -> Vec<FusionFeatures> {
         let bytes = D::TILE_DTYPE.size_bytes();
         self.steps
@@ -43,9 +73,10 @@ impl PtxExecutionPlan {
                 // Scalar SSA regions use the 256-thread pointwise helper.
                 // Standalone elementwise and materialized-view dispatch still
                 // use cudarc's 1,024-thread for_num_elems helper.
-                if step.materialized_view.is_some()
-                    || (step.action == PtxPlanAction::Kernel
-                        && standalone_elementwise(&graph[step.node]))
+                if flavor == PtxExecutionFlavor::Homogeneous
+                    && (step.materialized_view.is_some()
+                        || (step.action == PtxPlanAction::Kernel
+                            && standalone_elementwise(&graph[step.node])))
                 {
                     features.threads_per_block = 1024;
                 }
@@ -53,6 +84,19 @@ impl PtxExecutionPlan {
                 features.active_threads = elements;
                 features.estimated_registers_per_thread =
                     16 + live_values(graph, &step.members) * 2;
+                features.unique_input_bytes = step
+                    .inputs
+                    .iter()
+                    .copied()
+                    .collect::<HashSet<_>>()
+                    .iter()
+                    .map(|&node| count(graph[node].shape()).saturating_mul(bytes))
+                    .fold(0usize, usize::saturating_add);
+                features.output_bytes = step
+                    .output_shapes
+                    .iter()
+                    .map(|shape| count(shape).saturating_mul(bytes))
+                    .fold(0usize, usize::saturating_add);
                 features.traffic_bytes = step
                     .inputs
                     .iter()
@@ -139,6 +183,12 @@ impl PtxExecutionPlan {
                         if threads > 32 {
                             features.shared_bytes_per_block = threads.saturating_mul(4);
                         }
+                        if let Some(tile) = region.column_tile() {
+                            features.threads_per_block = tile.threads as usize;
+                            features.shared_bytes_per_block = tile.shared_bytes;
+                            features.active_threads =
+                                (tile.grid_x as usize).saturating_mul(tile.threads as usize);
+                        }
                         if !region.full_epilogue_operations.is_empty() {
                             features.repeated_operations = region
                                 .producer_operations
@@ -205,7 +255,10 @@ impl PtxExecutionPlan {
                         {
                             let input_shape = graph[input].shape();
                             let full = count(input_shape);
-                            features.threads_per_block = 1024;
+                            features.threads_per_block = match flavor {
+                                PtxExecutionFlavor::Homogeneous => 1024,
+                                PtxExecutionFlavor::FixedBinding => 256,
+                            };
                             features.reduction_extent = input_shape[*axis];
                             features.reduction_stride = count(&input_shape[*axis + 1..]);
                             features.reduction_lanes = 1;
@@ -318,27 +371,38 @@ fn matmul_features(
     features.threads_per_block = schedule.thread_count();
     let shape = &features.logical_shape;
     let batch = count(&shape[..shape.len() - 2]);
+    let m = shape[shape.len() - 2];
+    let n = shape[shape.len() - 1];
+    let row_tiles = m.div_ceil(tile.m);
+    let col_tiles = n.div_ceil(tile.n);
+    // Each row of A is staged once per output-column tile; each column of B
+    // once per output-row tile. Independent source predicates may remove
+    // loads. Broadcast batches still execute separate CTAs, even when the
+    // backing tensor was counted only once in unique_input_bytes.
+    features.matmul_global_load_bytes = Some(
+        col_tiles
+            .saturating_mul(m)
+            .saturating_mul(k)
+            .saturating_add(row_tiles.saturating_mul(k).saturating_mul(n))
+            .saturating_mul(batch)
+            .saturating_mul(schedule.storage_dtype.size_bytes()),
+    );
+    features.matmul_shared_operand_bytes = schedule.register_thread_tile().map(|(rows, cols)| {
+        row_tiles
+            .saturating_mul(col_tiles)
+            .saturating_mul(batch)
+            .saturating_mul(schedule.thread_count())
+            .saturating_mul(k.div_ceil(tile.k))
+            .saturating_mul(tile.k)
+            .saturating_mul(rows.saturating_add(cols))
+            .saturating_mul(4)
+    });
     features.active_threads = batch
         .saturating_mul(shape[shape.len() - 2].div_ceil(tile.m))
         .saturating_mul(shape[shape.len() - 1].div_ceil(tile.n))
         .saturating_mul(schedule.thread_count());
     features.estimated_registers_per_thread += 48;
-    features.shared_bytes_per_block = schedule.pipeline_stages.saturating_mul(
-        schedule
-            .operand_layouts
-            .0
-            .allocation_bytes(tile.m, tile.k, schedule.operand_dtype)
-            .saturating_add(schedule.operand_layouts.1.allocation_bytes(
-                tile.k,
-                tile.n,
-                schedule.operand_dtype,
-            )),
-    );
-    if schedule.plan != MatMulPlan::ScalarF32 {
-        features.shared_bytes_per_block = features
-            .shared_bytes_per_block
-            .saturating_add(tile.m.saturating_mul(tile.n).saturating_mul(4));
-    }
+    features.shared_bytes_per_block = schedule.shared_mem_bytes();
     let work = elements.saturating_mul(k).saturating_mul(2);
     features.weighted_operations =
         features
@@ -379,7 +443,7 @@ fn live_values<D: TileDType, G>(graph: &TensorGraph<D, G>, members: &[NodeIndex]
 mod tests {
     use super::*;
     use crate::tensor::TensorExpr;
-    use crate::tile::DType;
+    use crate::tile::{DType, FusionScorer};
 
     #[test]
     fn strict_reduction_features_follow_selected_serial_geometry_without_execution() {
@@ -489,5 +553,183 @@ mod tests {
                 .iter()
                 .all(|f| f.storage_dtype == Some(DType::BF16))
         );
+    }
+
+    fn enumerated_global_operand_bytes(schedule: MatMulSchedule, batch: usize) -> usize {
+        let shape = schedule.logical_shape;
+        let tile = schedule.block_tile;
+        let mut loads = 0usize;
+        for _ in 0..batch {
+            for row in (0..shape.m).step_by(tile.m) {
+                for col in (0..shape.n).step_by(tile.n) {
+                    for reduction in (0..shape.k).step_by(tile.k) {
+                        for i in 0..tile.m {
+                            for k in 0..tile.k {
+                                loads += usize::from(row + i < shape.m && reduction + k < shape.k);
+                            }
+                        }
+                        for k in 0..tile.k {
+                            for j in 0..tile.n {
+                                loads += usize::from(reduction + k < shape.k && col + j < shape.n);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        loads * schedule.storage_dtype.size_bytes()
+    }
+
+    #[test]
+    fn matmul_requests_match_predicated_tile_enumeration_for_tails_and_empty_domains() {
+        let capabilities = MatMulCapabilities {
+            tf32: false,
+            f16: false,
+            bf16: false,
+        };
+        let resources = MatMulResources::default();
+        let baseline = MatMulSchedule::select_with_resources(
+            4096,
+            683,
+            256,
+            DType::F32,
+            capabilities,
+            MatMulPrecision::StrictF32,
+            resources,
+        );
+        let outer = baseline.with_experimental_register_tile(resources);
+        assert_eq!(baseline.register_thread_tile(), Some((4, 1)));
+        assert_eq!(outer.register_thread_tile(), Some((4, 4)));
+        for mut schedule in [baseline, outer] {
+            for (m, n, k, batch) in [
+                (33, 67, 35, 2),
+                (64, 64, 32, 1),
+                (0, 67, 35, 2),
+                (33, 0, 35, 2),
+                (33, 67, 0, 2),
+                (33, 67, 35, 0),
+            ] {
+                schedule.logical_shape = crate::tile::MatMulTile { m, n, k };
+                let mut features = FusionFeatures {
+                    logical_shape: vec![batch, m, n],
+                    ..FusionFeatures::default()
+                };
+                matmul_features(&mut features, schedule, batch * m * n, k);
+                assert_eq!(
+                    features.matmul_global_load_bytes,
+                    Some(enumerated_global_operand_bytes(schedule, batch))
+                );
+
+                // Enumerate each thread's actual unique row/column operands.
+                // The K loop executes the complete padded tile even for tails.
+                let (thread_rows, thread_cols) = schedule.register_thread_tile().unwrap();
+                let tile = schedule.block_tile;
+                let mut per_k = 0usize;
+                for thread in 0..schedule.thread_count() {
+                    let lane_row = thread / (tile.n / thread_cols);
+                    let lane_col = thread % (tile.n / thread_cols);
+                    let mut a_rows = HashSet::new();
+                    let mut b_cols = HashSet::new();
+                    for slot in 0..thread_rows * thread_cols {
+                        a_rows.insert(lane_row + (slot / thread_cols) * (tile.m / thread_rows));
+                        b_cols.insert(lane_col + (slot % thread_cols) * (tile.n / thread_cols));
+                    }
+                    per_k += a_rows.len() + b_cols.len();
+                }
+                let mut enumerated_shared = 0usize;
+                for _ in 0..batch {
+                    for _ in (0..m).step_by(tile.m) {
+                        for _ in (0..n).step_by(tile.n) {
+                            for _ in (0..k).step_by(tile.k) {
+                                enumerated_shared += per_k * tile.k * 4;
+                            }
+                        }
+                    }
+                }
+                assert_eq!(
+                    features.matmul_shared_operand_bytes,
+                    Some(enumerated_shared)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn batched_transposed_broadcast_gemm_distinguishes_storage_and_tile_requests() {
+        let graph: TensorGraph<f32> = TensorExpr::input("a", vec![2, 33, 35])
+            .matmul(TensorExpr::input("b", vec![67, 35]).transpose())
+            .into();
+        let plan = PtxExecutionPlan::build(&graph).unwrap();
+        let features = plan.kernel_features(&graph);
+        let gemm = features
+            .iter()
+            .find(|f| f.matmul_global_load_bytes.is_some())
+            .unwrap();
+        assert_eq!(gemm.unique_input_bytes, (2 * 33 * 35 + 67 * 35) * 4);
+        assert_eq!(gemm.output_bytes, 2 * 33 * 67 * 4);
+        let schedule = plan.matmul_regions()[0].schedule;
+        assert_eq!(
+            gemm.matmul_global_load_bytes,
+            Some(enumerated_global_operand_bytes(schedule, 2))
+        );
+        assert!(gemm.matmul_global_load_bytes.unwrap() > gemm.unique_input_bytes);
+    }
+
+    #[test]
+    fn explicit_execution_flavor_changes_diagnostics_without_changing_default_score() {
+        let graph: TensorGraph<f32> = TensorExpr::input("x", vec![8, 16]).relu().into();
+        let plan = PtxExecutionPlan::build(&graph).unwrap();
+        let legacy = plan.kernel_features(&graph);
+        let explicit = plan.kernel_features_for_execution(&graph, PtxExecutionFlavor::Homogeneous);
+        assert_eq!(legacy, explicit);
+        let fixed = plan.kernel_features_for_execution(&graph, PtxExecutionFlavor::FixedBinding);
+        assert_eq!(legacy[0].threads_per_block, 1024);
+        assert_eq!(fixed[0].threads_per_block, 256);
+        assert_eq!(legacy[0].traffic_bytes, fixed[0].traffic_bytes);
+        assert_eq!(plan.kernel_features(&graph), legacy);
+        assert!(legacy[0].matmul_global_load_bytes.is_none());
+        assert!(legacy[0].matmul_shared_operand_bytes.is_none());
+    }
+
+    #[test]
+    fn diagnostic_traffic_does_not_recalibrate_the_analytical_scorer() {
+        let scorer = crate::tile::AnalyticalFusionScorer::default();
+        let baseline = FusionFeatures {
+            traffic_bytes: 1024,
+            threads_per_block: 256,
+            active_threads: 256,
+            ..FusionFeatures::default()
+        };
+        let mut diagnostic = baseline.clone();
+        diagnostic.unique_input_bytes = 128;
+        diagnostic.output_bytes = 256;
+        diagnostic.matmul_global_load_bytes = Some(usize::MAX);
+        diagnostic.matmul_shared_operand_bytes = Some(usize::MAX);
+        assert_eq!(scorer.score(&[baseline]), scorer.score(&[diagnostic]));
+    }
+
+    #[test]
+    fn tensor_core_shared_operand_requests_remain_explicitly_unmodeled() {
+        let schedule = MatMulSchedule::select_for_dtype(
+            64,
+            64,
+            64,
+            DType::BF16,
+            MatMulCapabilities {
+                tf32: true,
+                f16: true,
+                bf16: true,
+            },
+            MatMulPrecision::NativeHalf,
+        );
+        assert_eq!(schedule.plan, MatMulPlan::TensorCoreBF16);
+        let mut features = FusionFeatures {
+            logical_shape: vec![64, 64],
+            ..FusionFeatures::default()
+        };
+        matmul_features(&mut features, schedule, 64 * 64, 64);
+        assert!(features.matmul_global_load_bytes.is_some());
+        assert!(features.matmul_shared_operand_bytes.is_none());
+        assert_eq!(features.shared_bytes_per_block, schedule.shared_mem_bytes());
     }
 }

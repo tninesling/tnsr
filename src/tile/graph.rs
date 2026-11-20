@@ -759,14 +759,7 @@ impl TileGraph {
         );
         let threads = schedule.thread_count();
         let plan = schedule.plan;
-        let operand_dtype = if schedule.plan == MatMulPlan::ScalarF32
-            || schedule.pipeline_stages == 2
-            || schedule.plan == MatMulPlan::TensorCoreTf32x3
-        {
-            dtype
-        } else {
-            schedule.operand_dtype
-        };
+        let operand_dtype = schedule.shared_operand_dtype();
         let a_batch = region
             .map(|(region, _)| batch_element_offset(&region.batch_shape, &region.lhs_shape))
             .unwrap_or(Expr::Const(0));
@@ -779,28 +772,46 @@ impl TileGraph {
             Expr::Const(0)
         };
 
-        let a_smem =
-            builder.alloc_shared_layout(operand_dtype, tile_m, tile_k, schedule.operand_layouts.0);
-        let b_smem =
-            builder.alloc_shared_layout(operand_dtype, tile_k, tile_n, schedule.operand_layouts.1);
+        let arena = (schedule.reuse_shared_memory && plan != MatMulPlan::ScalarF32)
+            .then(|| builder.alloc_shared_arena(schedule.shared_mem_bytes()));
+        let a_bytes = schedule
+            .operand_layouts
+            .0
+            .allocation_bytes(tile_m, tile_k, operand_dtype);
+        let b_bytes = schedule
+            .operand_layouts
+            .1
+            .allocation_bytes(tile_k, tile_n, operand_dtype);
+        let allocate_operand = |builder: &mut TileIRBuilder, lhs, stage| {
+            let (rows, cols, layout, within_stage) = if lhs {
+                (tile_m, tile_k, schedule.operand_layouts.0, 0)
+            } else {
+                (tile_k, tile_n, schedule.operand_layouts.1, a_bytes)
+            };
+            if let Some(arena) = arena {
+                builder.view_shared_arena(
+                    arena,
+                    stage * (a_bytes + b_bytes) + within_stage,
+                    operand_dtype,
+                    rows,
+                    cols,
+                    layout,
+                )
+            } else {
+                builder.alloc_shared_layout(operand_dtype, rows, cols, layout)
+            }
+        };
+        let a_smem = allocate_operand(&mut builder, true, 0);
+        let b_smem = allocate_operand(&mut builder, false, 0);
         let next_buffers = (schedule.pipeline_stages == 2).then(|| {
             (
-                builder.alloc_shared_layout(
-                    operand_dtype,
-                    tile_m,
-                    tile_k,
-                    schedule.operand_layouts.0,
-                ),
-                builder.alloc_shared_layout(
-                    operand_dtype,
-                    tile_k,
-                    tile_n,
-                    schedule.operand_layouts.1,
-                ),
+                allocate_operand(&mut builder, true, 1),
+                allocate_operand(&mut builder, false, 1),
             )
         });
         let c_smem = match plan {
             MatMulPlan::ScalarF32 => None,
+            _ if arena.is_some() => None,
             MatMulPlan::TensorCoreTf32
             | MatMulPlan::TensorCoreTf32x3
             | MatMulPlan::TensorCoreF16
@@ -968,6 +979,162 @@ impl TileGraph {
             });
         }
 
+        // Both paths retire every operand reader before this phase transition:
+        // synchronous iterations end with a block barrier; the asynchronous
+        // path additionally drains its final speculative prefetch. Zero K has
+        // no live operand reads; any speculative shared writes are drained
+        // above. Only now may F32 exchange overwrite their bytes.
+        if let Some(arena) = arena.filter(|_| schedule.supports_streamed_fragment_windows()) {
+            // The policy admits one plain matmul output only. Other epilogues
+            // use the existing full-tile path, whose bounds validation rejects
+            // an invalid manually-forged streamed schedule instead of dropping SSA.
+            let plain = region.is_none_or(|(r, _)| {
+                r.epilogue_operations.is_empty()
+                    && r.outputs.len() == 1
+                    && r.outputs[0].value == r.matmul_value
+            });
+            if plain {
+                #[cfg(test)]
+                if schedule.is_four_warp_wide_exchange_diagnostic() {
+                    let scratch = builder.view_shared_arena(
+                        arena,
+                        0,
+                        DType::F32,
+                        64,
+                        128,
+                        super::SharedLayout::row_major(128),
+                    );
+                    for (pass, origin) in [(0usize, 0usize), (2, 0)].into_iter().enumerate() {
+                        builder.store_accumulator_window(scratch, c_reg, origin, (2, 4));
+                        builder.barrier();
+                        builder.for_loop(
+                            &format!("square_output_round_{pass}"),
+                            0,
+                            64,
+                            |builder, round| {
+                                let index = Expr::Var(round) * schedule.thread_count()
+                                    + Expr::ThreadIdx(Dim::Y) * schedule.block_threads.0 as usize
+                                    + Expr::ThreadIdx(Dim::X);
+                                let sr = Expr::FloorDiv(Box::new(index.clone()), 128);
+                                let sc = Expr::Mod(Box::new(index), 128);
+                                let lr = Expr::FloorDiv(Box::new(sr.clone()), 32) * 64usize
+                                    + Expr::Const((origin.0 * 16) as i64)
+                                    + Expr::Mod(Box::new(sr.clone()), 32);
+                                let lc = Expr::FloorDiv(Box::new(sc.clone()), 64) * 64usize
+                                    + Expr::Mod(Box::new(sc.clone()), 64);
+                                let scalar = builder.alloc_register(DType::F32, 1, 1);
+                                builder.extract_scalar(scalar, scratch, (sr, sc));
+                                let (br, bc) = matmul_block_coordinates(schedule);
+                                let row = br * tile_m + lr;
+                                let col = bc * tile_n + lc;
+                                let layout = MatrixLayout {
+                                    rows: m,
+                                    cols: n,
+                                    row_stride: n,
+                                };
+                                if region.is_some() {
+                                    let index =
+                                        output_batch.clone() + row.clone() * n + col.clone();
+                                    builder.store_global_indexed(
+                                        "output_0",
+                                        scalar,
+                                        index,
+                                        (row, col),
+                                        layout,
+                                    );
+                                } else {
+                                    builder.store_global_predicated("C", scalar, row, col, layout);
+                                }
+                            },
+                        );
+                        // All readers retire before the second window overwrites.
+                        if pass == 0 {
+                            builder.barrier();
+                        }
+                    }
+                    return builder.finish();
+                }
+                let window_rows = 16 * schedule.warp_topology.0;
+                let scratch = builder.view_shared_arena(
+                    arena,
+                    0,
+                    DType::F32,
+                    window_rows,
+                    64,
+                    super::SharedLayout::row_major(64),
+                );
+                let origins = (0..schedule.warp_fragments.0)
+                    .flat_map(|m| [0, 2].map(|n| (m, n)))
+                    .collect::<Vec<_>>();
+                let windows = origins.len();
+                for (pass, origin) in origins.into_iter().enumerate() {
+                    builder.store_accumulator_window(scratch, c_reg, origin, (1, 2));
+                    builder.barrier();
+                    // A counted loop bounds scalar/address live ranges within
+                    // this window. Its iteration/store order is the original
+                    // increasing 0..16 thread-local ownership sequence.
+                    builder.for_loop(
+                        &format!("square_output_round_{pass}"),
+                        0,
+                        16,
+                        |builder, round| {
+                            let index = Expr::Var(round) * schedule.thread_count()
+                                + Expr::ThreadIdx(Dim::Y) * schedule.block_threads.0 as usize
+                                + Expr::ThreadIdx(Dim::X);
+                            let sr = Expr::FloorDiv(Box::new(index.clone()), 64);
+                            let sc = Expr::Mod(Box::new(index), 64);
+                            let lr = Expr::FloorDiv(Box::new(sr.clone()), 16)
+                                * (16 * schedule.warp_fragments.0)
+                                + Expr::Const((origin.0 * 16) as i64)
+                                + Expr::Mod(Box::new(sr.clone()), 16);
+                            let lc = Expr::FloorDiv(Box::new(sc.clone()), 32) * 64usize
+                                + Expr::Const((origin.1 * 16) as i64)
+                                + Expr::Mod(Box::new(sc.clone()), 32);
+                            let scalar = builder.alloc_register(DType::F32, 1, 1);
+                            builder.extract_scalar(scalar, scratch, (sr, sc));
+                            let (br, bc) = matmul_block_coordinates(schedule);
+                            let row = br * tile_m + lr;
+                            let col = bc * tile_n + lc;
+                            let layout = MatrixLayout {
+                                rows: m,
+                                cols: n,
+                                row_stride: n,
+                            };
+                            if region.is_some() {
+                                let index = output_batch.clone() + row.clone() * n + col.clone();
+                                builder.store_global_indexed(
+                                    "output_0",
+                                    scalar,
+                                    index,
+                                    (row, col),
+                                    layout,
+                                );
+                            } else {
+                                builder.store_global_predicated("C", scalar, row, col, layout);
+                            }
+                        },
+                    );
+                    // Every last shared reader retires before the next window.
+                    // The final window needs no barrier because the kernel ends.
+                    if pass + 1 != windows {
+                        builder.barrier();
+                    }
+                }
+                return builder.finish();
+            }
+        }
+        let c_smem = if let Some(arena) = arena {
+            Some(builder.view_shared_arena(
+                arena,
+                0,
+                DType::F32,
+                tile_m,
+                tile_n,
+                super::SharedLayout::row_major(tile_n),
+            ))
+        } else {
+            c_smem
+        };
         if let Some(c_smem) = c_smem {
             builder.convert_layout(c_smem, c_reg);
             builder.barrier();
@@ -1625,6 +1792,153 @@ fn batch_element_offset(output_batch: &[usize], input_shape: &[usize]) -> Expr {
         output_stride *= output_batch[dimension];
     }
     offset
+}
+
+#[cfg(test)]
+mod matmul_shared_reuse_tests {
+    use super::*;
+    use crate::tile::{MatMulPipeline, MatMulResources, MatMulSharedLayout, SharedLayout, Stmt};
+
+    #[test]
+    fn gemm_shared_arena_views_follow_mainloop_retirement() {
+        let caps = MatMulCapabilities {
+            tf32: true,
+            f16: true,
+            bf16: true,
+        };
+        let resources = MatMulResources {
+            shared_bytes_per_sm: 100 * 1024,
+            ..MatMulResources::default()
+        };
+        for (dtype, precision, m) in [
+            (DType::BF16, MatMulPrecision::NativeHalf, 2049),
+            (DType::F16, MatMulPrecision::NativeHalf, 257),
+            (DType::F32, MatMulPrecision::Tf32x3, 257),
+            (DType::F32, MatMulPrecision::StrictF32, 257),
+        ] {
+            for k in [0, 65, 128] {
+                for column_major in [(false, false), (true, false), (false, true), (true, true)] {
+                    for layout in [
+                        MatMulSharedLayout::Contiguous,
+                        MatMulSharedLayout::Padded,
+                        MatMulSharedLayout::Swizzled,
+                    ] {
+                        for pipeline in
+                            [MatMulPipeline::Synchronous, MatMulPipeline::DoubleBuffered]
+                        {
+                            let base = MatMulSchedule::select_with_resources(
+                                m, 259, k, dtype, caps, precision, resources,
+                            )
+                            .with_operand_orientations(layout, column_major, resources)
+                            .unwrap()
+                            .with_pipeline(pipeline, true, true, resources);
+                            let reused = base.with_shared_memory_reuse(true);
+                            for schedule in [base, reused] {
+                                let ir = TileGraph::lower_matmul_impl(
+                                    m,
+                                    259,
+                                    k,
+                                    schedule,
+                                    None,
+                                    None,
+                                    (false, false),
+                                );
+                                ir.validate_layouts().unwrap();
+                                assert_eq!(ir.shared_mem_bytes, schedule.shared_mem_bytes());
+                                if !schedule.reuse_shared_memory {
+                                    assert!(
+                                        !ir.body
+                                            .stmts
+                                            .iter()
+                                            .any(|s| matches!(s, Stmt::AllocSharedArena { .. }))
+                                    );
+                                    continue;
+                                }
+                                assert!(ir.shared_mem_bytes < base.shared_mem_bytes());
+                                let loop_index = ir
+                                    .body
+                                    .stmts
+                                    .iter()
+                                    .position(|s| matches!(s, Stmt::ForLoop { .. }))
+                                    .unwrap();
+                                let exchange_index = ir
+                                    .body
+                                    .stmts
+                                    .iter()
+                                    .position(|s| matches!(s, Stmt::ConvertLayout { .. }))
+                                    .unwrap();
+                                assert!(exchange_index > loop_index);
+                                // The F32 view is declared only after the phase boundary.
+                                let Stmt::ViewSharedArena {
+                                    dtype: DType::F32,
+                                    byte_offset: 0,
+                                    ..
+                                } = ir.body.stmts[exchange_index - 1]
+                                else {
+                                    panic!("exchange must use the delayed F32 arena view");
+                                };
+                                if schedule.pipeline_stages == 2 {
+                                    assert!(matches!(
+                                        ir.body.stmts[exchange_index - 2],
+                                        Stmt::Barrier
+                                    ));
+                                    assert!(matches!(
+                                        ir.body.stmts[exchange_index - 3],
+                                        Stmt::AsyncWait
+                                    ));
+                                } else {
+                                    let Stmt::ForLoop { body, .. } = &ir.body.stmts[loop_index]
+                                    else {
+                                        unreachable!()
+                                    };
+                                    assert!(matches!(body.stmts.last(), Some(Stmt::Barrier)));
+                                }
+                                let mut ranges = ir.body.stmts[..loop_index]
+                                    .iter()
+                                    .filter_map(|s| {
+                                        if let Stmt::ViewSharedArena {
+                                            byte_offset,
+                                            dtype,
+                                            layout,
+                                            rows,
+                                            cols,
+                                            ..
+                                        } = s
+                                        {
+                                            Some((
+                                                *byte_offset,
+                                                byte_offset
+                                                    + layout.allocation_bytes(*rows, *cols, *dtype),
+                                            ))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect::<Vec<_>>();
+                                ranges.sort_unstable();
+                                assert!(ranges.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+                                assert!(ranges.iter().all(|range| range.1 <= ir.shared_mem_bytes));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // A forced tensor-core zero-K schedule has no operand accesses, even
+        // though ordinary dispatch correctly chooses scalar for this case.
+        let mut schedule = MatMulSchedule::select(32, 32, 128, caps, MatMulPrecision::AllowTf32)
+            .with_shared_memory_reuse(true);
+        schedule.logical_shape.k = 0;
+        let ir = TileGraph::lower_matmul_impl(32, 32, 0, schedule, None, None, (false, false));
+        ir.validate_layouts().unwrap();
+        let tile = schedule.block_tile;
+        assert_eq!(
+            ir.shared_mem_bytes,
+            SharedLayout::row_major(tile.n)
+                .allocation_bytes(tile.m, tile.n, DType::F32)
+                .max(2048)
+        );
+    }
 }
 
 #[cfg(test)]

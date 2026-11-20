@@ -11,8 +11,30 @@ pub mod ir;
 mod layout;
 pub mod shared_layout;
 pub use shared_layout::SharedLayout;
+mod column_reduction_policy;
 pub mod matmul_region;
 pub mod matmul_schedule;
+pub use column_reduction_policy::ColumnReductionPolicy;
+#[cfg(any(feature = "cuda", test))]
+pub(crate) use column_reduction_policy::{ColumnReductionLimits, ColumnReductionTile};
+mod batched_attention_tile_policy;
+#[cfg(feature = "cuda")]
+pub(crate) use batched_attention_tile_policy::AttentionTileRole;
+pub use batched_attention_tile_policy::{
+    BatchedAttentionBf16TilePolicy, BatchedAttentionTileCounts,
+};
+pub(crate) mod large_tile_policy;
+#[cfg(any(feature = "cuda", test))]
+mod small_grid_split_k;
+#[cfg(feature = "cuda")]
+pub(crate) use small_grid_split_k::SmallGridCandidate;
+#[cfg(any(feature = "cuda", test))]
+pub(crate) mod ordinary_bf16_block;
+pub use large_tile_policy::LargeBf16TilePolicy;
+mod split_k_tile_policy;
+pub use split_k_tile_policy::SplitKBf16TilePolicy;
+mod medium_tile_policy;
+pub use medium_tile_policy::MediumBf16TilePolicy;
 pub mod online_region;
 pub mod reduction_region;
 pub use online_region::{OnlineConsumer, OnlineExpr, OnlineRegion};

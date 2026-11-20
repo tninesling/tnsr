@@ -224,10 +224,12 @@ fn exact_cuda_replay_stages_changed_ids_and_constants_for_both_shapes() {
                 executor.clear_pool();
             }
         }
-        owner.begin_step().unwrap();
-        let mut expected = vec![0.0f32; 683];
-        for ((graph, executor), n) in graphs.iter().zip(&mut executors).zip([3, 1]) {
-            if step == 2 {
+        if step == 2 {
+            // Any failed accumulation invalidates its whole interval. Probe
+            // both executors in separate intervals, then restart before the
+            // valid two-microbatch update below.
+            for ((graph, executor), n) in graphs.iter().zip(&mut executors).zip([3, 1]) {
+                owner.begin_step().unwrap();
                 let before = executor.replay_metrics().graph_launches;
                 let error = owner
                     .accumulate_with_indices(
@@ -239,7 +241,18 @@ fn exact_cuda_replay_stages_changed_ids_and_constants_for_both_shapes() {
                     .unwrap_err();
                 assert!(error.to_string().contains("4294967295"));
                 assert_eq!(executor.replay_metrics().graph_launches, before);
+                assert!(
+                    owner
+                        .step(0.5)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("failed accumulation interval")
+                );
             }
+        }
+        owner.begin_step().unwrap();
+        let mut expected = vec![0.0f32; 683];
+        for ((graph, executor), n) in graphs.iter().zip(&mut executors).zip([3, 1]) {
             let ids = if step % 2 == 0 {
                 [257, 365, 682]
             } else {

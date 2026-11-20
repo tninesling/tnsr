@@ -64,6 +64,41 @@ impl TileIRBuilder {
         var
     }
 
+    /// Declare byte storage; malformed sizes are reported by layout validation.
+    pub(crate) fn alloc_shared_arena(&mut self, bytes: usize) -> TileVar {
+        let arena = TileVar(self.next_var);
+        self.next_var += 1;
+        self.stmts.push(Stmt::AllocSharedArena { arena, bytes });
+        // Keep IR construction total; validation rejects overflowing totals.
+        self.shared_mem_bytes = self.shared_mem_bytes.saturating_add(bytes);
+        arena
+    }
+
+    /// Declare a view without allocating storage or asserting a live interval.
+    /// Bounds and alignment are checked by `TileIR::validate_layouts`.
+    pub(crate) fn view_shared_arena(
+        &mut self,
+        arena: TileVar,
+        byte_offset: usize,
+        dtype: DType,
+        rows: usize,
+        cols: usize,
+        layout: SharedLayout,
+    ) -> TileVar {
+        let dest = TileVar(self.next_var);
+        self.next_var += 1;
+        self.stmts.push(Stmt::ViewSharedArena {
+            dest,
+            arena,
+            byte_offset,
+            dtype,
+            layout,
+            rows,
+            cols,
+        });
+        dest
+    }
+
     #[allow(dead_code)]
     pub fn alloc_register(&mut self, dtype: DType, rows: usize, cols: usize) -> TileVar {
         let var = TileVar(self.next_var);
@@ -139,6 +174,21 @@ impl TileIRBuilder {
             b,
             layout,
             schedule,
+        });
+    }
+
+    pub fn store_accumulator_window(
+        &mut self,
+        dest: TileVar,
+        src: TileVar,
+        fragment_origin: (usize, usize),
+        fragment_shape: (usize, usize),
+    ) {
+        self.stmts.push(Stmt::StoreAccumulatorWindow {
+            dest,
+            src,
+            fragment_origin,
+            fragment_shape,
         });
     }
 

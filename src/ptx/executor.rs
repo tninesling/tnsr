@@ -1,5 +1,7 @@
 mod indices;
+mod plain_bf16_output;
 mod replay;
+mod square128_streamed;
 use indices::{IndexArgument, IndexBuffers};
 pub use replay::PtxReplayMetrics;
 use replay::{IndexRequirement, ReplayState};
@@ -31,7 +33,7 @@ type RegionValues<T> = Vec<(petgraph::graph::NodeIndex, Arc<CudaSlice<T>>)>;
 // This versions the in-memory compilation-key schema, not the crate release.
 // Bump it whenever signature encoding or generated-code-affecting inputs change.
 const PTX_GRAPH_SIGNATURE_MAGIC: &[u8] = b"tnsr-ptx-graph";
-const PTX_GRAPH_SIGNATURE_VERSION: u8 = 37;
+const PTX_GRAPH_SIGNATURE_VERSION: u8 = 50;
 
 /// Measurements from the most recent successful PTX compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -70,6 +72,23 @@ impl PtxExecutionMetrics {
     }
 }
 
+/// Unmeasured kernel alternatives; each option participates in compiled identity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ExperimentalKernelOptions {
+    indexed_loss_cooperative_ordered_backward: bool,
+    indexed_loss_cooperative_ordered_forward: bool,
+    shared_memory_reuse: bool,
+    online_weight_sharing: bool,
+    narrow_bf16_tile: bool,
+    bf16_eight_compute_warps: bool,
+    ordinary_bf16_four_warp_block: bool,
+    plain_bf16_output: bool,
+    medium_bf16_tile_policy: crate::tile::MediumBf16TilePolicy,
+    column_reduction_policy: crate::tile::ColumnReductionPolicy,
+    large_bf16_tile_policy: crate::tile::LargeBf16TilePolicy,
+    batched_attention_bf16_tile_policy: crate::tile::BatchedAttentionBf16TilePolicy,
+}
+
 /// PTX executor that compiles TensorGraph → TileGraph → PtxGraph → PTX string
 /// and executes kernels via cudarc
 pub struct PtxExecutor<D: CudaDType = F32> {
@@ -101,6 +120,7 @@ pub struct PtxExecutor<D: CudaDType = F32> {
     execution_plan: Option<Arc<PtxExecutionPlan>>,
     compilation_signature: Option<Vec<u8>>,
     compilation_count: usize,
+    square128_streamed_fallbacks: usize,
     compile_metrics: PtxCompileMetrics,
     execution_metrics: PtxExecutionMetrics,
     kernel_launches: Cell<usize>,
@@ -113,6 +133,7 @@ pub struct PtxExecutor<D: CudaDType = F32> {
     matmul_pipeline: MatMulPipeline,
     matmul_grid_group_m: usize,
     experimental_register_tiles: bool,
+    experimental_kernel_options: ExperimentalKernelOptions,
 }
 
 impl<D: CudaDType> Default for PtxExecutor<D> {
@@ -207,6 +228,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             execution_plan: None,
             compilation_signature: None,
             compilation_count: 0,
+            square128_streamed_fallbacks: 0,
             compile_metrics: PtxCompileMetrics::default(),
             execution_metrics: PtxExecutionMetrics::default(),
             kernel_launches: Cell::new(0),
@@ -219,6 +241,7 @@ impl<D: CudaDType> PtxExecutor<D> {
             matmul_pipeline: MatMulPipeline::Auto,
             matmul_grid_group_m: 1,
             experimental_register_tiles: false,
+            experimental_kernel_options: ExperimentalKernelOptions::default(),
         })
     }
 
@@ -263,6 +286,219 @@ impl<D: CudaDType> PtxExecutor<D> {
         if self.experimental_register_tiles != enabled {
             self.invalidate_replay();
             self.experimental_register_tiles = enabled;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Experimentally reuse dead operand shared storage for the GEMM epilogue.
+    /// Disabled by default pending device correctness and performance qualification.
+    pub fn set_experimental_shared_memory_reuse(&mut self, enabled: bool) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.experimental_kernel_options.shared_memory_reuse != enabled {
+            self.invalidate_replay();
+            self.experimental_kernel_options.shared_memory_reuse = enabled;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Opt into a synchronous 32x32x32 tile for eligible narrow BF16 GEMMs.
+    pub fn set_experimental_narrow_bf16_tile(&mut self, enabled: bool) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.experimental_kernel_options.narrow_bf16_tile != enabled {
+            self.invalidate_replay();
+            self.experimental_kernel_options.narrow_bf16_tile = enabled;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Select bounded rank-two BF16 reuse tiles before ordinary layout/pipeline policy.
+    pub fn set_experimental_medium_bf16_tile_policy(
+        &mut self,
+        policy: crate::tile::MediumBf16TilePolicy,
+    ) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.experimental_kernel_options.medium_bf16_tile_policy != policy {
+            self.invalidate_replay();
+            self.experimental_kernel_options.medium_bf16_tile_policy = policy;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Select ordinary BF16 rectangles only with explicit physical scratch reuse.
+    pub fn set_experimental_large_bf16_tile_policy(
+        &mut self,
+        policy: crate::tile::LargeBf16TilePolicy,
+    ) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.experimental_kernel_options.large_bf16_tile_policy != policy {
+            self.invalidate_replay();
+            self.experimental_kernel_options.large_bf16_tile_policy = policy;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Select exact S512/D64 batched BF16 rectangles after complete view/copy
+    /// and explicit two-stage resource proofs. Defaults to Off.
+    pub fn set_experimental_batched_attention_bf16_tile_policy(
+        &mut self,
+        policy: crate::tile::BatchedAttentionBf16TilePolicy,
+    ) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self
+            .experimental_kernel_options
+            .batched_attention_bf16_tile_policy
+            != policy
+        {
+            self.invalidate_replay();
+            self.experimental_kernel_options
+                .batched_attention_bf16_tile_policy = policy;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Tile independent columns without changing the Block128 reduction tree.
+    pub fn set_experimental_column_reduction_policy(
+        &mut self,
+        policy: crate::tile::ColumnReductionPolicy,
+    ) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.experimental_kernel_options.column_reduction_policy != policy {
+            self.invalidate_replay();
+            self.experimental_kernel_options.column_reduction_policy = policy;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Repartition eligible BF16 64x64x32 tiles across all eight compute warps.
+    pub fn set_experimental_bf16_eight_compute_warps(&mut self, enabled: bool) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.experimental_kernel_options.bf16_eight_compute_warps != enabled {
+            self.invalidate_replay();
+            self.experimental_kernel_options.bf16_eight_compute_warps = enabled;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Remove scalar output bounds only after an exact full-MN BF16 proof.
+    /// Storage rounding, input staging, arithmetic and launch geometry stay unchanged.
+    pub fn set_experimental_plain_bf16_output(&mut self, enabled: bool) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.experimental_kernel_options.plain_bf16_output != enabled {
+            self.invalidate_replay();
+            self.experimental_kernel_options.plain_bf16_output = enabled;
+            self.compilation_signature = None;
+        }
+    }
+    pub(crate) fn plain_bf16_output_counts(&self) -> (usize, usize) {
+        self.ptx_graph
+            .as_ref()
+            .map(|g| g.plain_bf16_output_counts())
+            .unwrap_or_default()
+    }
+    pub(crate) fn plain_bf16_output_selected(&self, id: usize) -> bool {
+        self.ptx_graph
+            .as_ref()
+            .is_some_and(|g| g.plain_bf16_output_selected(id))
+    }
+    /// Keep an eligible ordinary BF16 64x64 tile on four declared block warps.
+    /// The increasing-K16 ownership and fragment ILP remain unchanged.
+    pub fn set_experimental_ordinary_bf16_four_warp_block(&mut self, enabled: bool) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self
+            .experimental_kernel_options
+            .ordinary_bf16_four_warp_block
+            != enabled
+        {
+            self.invalidate_replay();
+            self.experimental_kernel_options
+                .ordinary_bf16_four_warp_block = enabled;
+            self.compilation_signature = None;
+        }
+    }
+
+    /// Cooperatively compute V4096 backward CE maxima/exponentials while
+    /// retaining the original increasing-column F32 sum and gradient arithmetic.
+    pub fn set_experimental_indexed_loss_cooperative_ordered_backward(&mut self, enabled: bool) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self
+            .experimental_kernel_options
+            .indexed_loss_cooperative_ordered_backward
+            != enabled
+        {
+            self.invalidate_replay();
+            self.experimental_kernel_options
+                .indexed_loss_cooperative_ordered_backward = enabled;
+            self.compilation_signature = None;
+        }
+    }
+
+    pub(crate) fn indexed_loss_cooperative_ordered_backward_selected(
+        &self,
+        node: crate::graph::NodeIndex,
+    ) -> bool {
+        self.ptx_graph.as_ref().is_some_and(|g| {
+            g.indexed_loss_cooperative_ordered_backward_nodes()
+                .contains(&node)
+        })
+    }
+
+    pub(crate) fn indexed_loss_cooperative_ordered_backward_programs(&self) -> usize {
+        self.ptx_graph.as_ref().map_or(0, |g| {
+            g.indexed_loss_cooperative_ordered_backward_programs()
+        })
+    }
+
+    /// Cooperatively compute V4096 forward CE maxima/exponentials while
+    /// retaining the original increasing-column F32 sum and gradient arithmetic.
+    pub fn set_experimental_indexed_loss_cooperative_ordered_forward(&mut self, enabled: bool) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self
+            .experimental_kernel_options
+            .indexed_loss_cooperative_ordered_forward
+            != enabled
+        {
+            self.invalidate_replay();
+            self.experimental_kernel_options
+                .indexed_loss_cooperative_ordered_forward = enabled;
+            self.compilation_signature = None;
+        }
+    }
+
+    pub(crate) fn indexed_loss_cooperative_ordered_forward_selected(
+        &self,
+        node: crate::graph::NodeIndex,
+    ) -> bool {
+        self.ptx_graph.as_ref().is_some_and(|g| {
+            g.indexed_loss_cooperative_ordered_forward_nodes()
+                .contains(&node)
+        })
+    }
+
+    pub(crate) fn indexed_loss_cooperative_ordered_forward_programs(&self) -> usize {
+        self.ptx_graph
+            .as_ref()
+            .map_or(0, |g| g.indexed_loss_cooperative_ordered_forward_programs())
+    }
+
+    /// Experimentally share exponential weights between Online output lanes.
+    /// Applies only to recognized cooperative online regions, not cached decoding.
+    pub fn set_experimental_online_weight_sharing(&mut self, enabled: bool) {
+        let gate = self.stream_gate.clone();
+        let _guard = lock_stream(&gate);
+        if self.experimental_kernel_options.online_weight_sharing != enabled {
+            self.invalidate_replay();
+            self.experimental_kernel_options.online_weight_sharing = enabled;
             self.compilation_signature = None;
         }
     }
@@ -394,6 +630,15 @@ impl<D: CudaDType> PtxExecutor<D> {
         self.stream.clone()
     }
 
+    pub(crate) fn large_square128_streamed_counts(&self) -> (usize, usize) {
+        (
+            self.execution_plan
+                .as_ref()
+                .map_or(0, |p| p.large_square128_streamed_count()),
+            self.square128_streamed_fallbacks,
+        )
+    }
+
     pub fn execution_plan(&self) -> Option<&PtxExecutionPlan> {
         self.execution_plan.as_deref()
     }
@@ -470,6 +715,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                 self.serial_reduction_block_threads,
                 self.matmul_grid_group_m,
                 self.experimental_register_tiles,
+                self.experimental_kernel_options,
             ),
         );
         let compiled_signature = self
@@ -527,7 +773,12 @@ impl<D: CudaDType> PtxExecutor<D> {
                         .get(region_id)
                         .context("Missing reduction region schedule")?;
                     let schedule = region.schedule;
-                    let geometry = if schedule == crate::tile::ReductionSchedule::Serial {
+                    let geometry = if let Some(tile) = region.column_tile() {
+                        format!(
+                            " column_tile={} column_threads={}",
+                            tile.columns_per_block, tile.threads
+                        )
+                    } else if schedule == crate::tile::ReductionSchedule::Serial {
                         format!(" serial_block_threads={}", region.serial_block_threads)
                     } else {
                         String::new()
@@ -676,6 +927,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                 self.serial_reduction_block_threads,
                 self.matmul_grid_group_m,
                 self.experimental_register_tiles,
+                self.experimental_kernel_options,
             ),
         );
         if !storage.is_empty() {
@@ -689,7 +941,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         }
         let mut execution_plan =
             PtxExecutionPlan::build_with_reduction_mode(graph, self.reduction_mode)?;
-        execution_plan.schedule_matmuls(
+        execution_plan.schedule_matmuls_with_tile_policies(
             self.target.matmul_capabilities(),
             self.matmul_precision,
             self.target.matmul_resources,
@@ -697,6 +949,9 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_pipeline,
             self.target.supports_async_copy(),
             self.experimental_register_tiles,
+            self.experimental_kernel_options.medium_bf16_tile_policy,
+            self.experimental_kernel_options.large_bf16_tile_policy,
+            self.experimental_kernel_options.shared_memory_reuse,
         )?;
         let fusion_started = Instant::now();
         if self.fusion_policy == PtxFusionPolicy::CostAware {
@@ -719,7 +974,7 @@ impl<D: CudaDType> PtxExecutor<D> {
         }
         // Candidate repartitioning can change virtual operand bindings. Recompute
         // copy/layout eligibility with the final plan and the selected precision.
-        execution_plan.schedule_matmuls(
+        execution_plan.schedule_matmuls_with_tile_policies(
             self.target.matmul_capabilities(),
             self.matmul_precision,
             self.target.matmul_resources,
@@ -727,112 +982,84 @@ impl<D: CudaDType> PtxExecutor<D> {
             self.matmul_pipeline,
             self.target.supports_async_copy(),
             self.experimental_register_tiles,
+            self.experimental_kernel_options.medium_bf16_tile_policy,
+            self.experimental_kernel_options.large_bf16_tile_policy,
+            self.experimental_kernel_options.shared_memory_reuse,
         )?;
+        execution_plan.configure_batched_attention_tiles(
+            self.experimental_kernel_options
+                .batched_attention_bf16_tile_policy,
+            self.matmul_shared_layout,
+            self.matmul_pipeline,
+            self.target.supports_async_copy(),
+            self.target.matmul_resources,
+            self.experimental_kernel_options.shared_memory_reuse,
+        );
         execution_plan.set_matmul_grid_group_m(self.matmul_grid_group_m)?;
+        execution_plan.set_matmul_narrow_bf16_tile(
+            self.experimental_kernel_options.narrow_bf16_tile,
+            self.target.matmul_resources,
+        );
+        execution_plan.set_bf16_eight_compute_warps(
+            self.experimental_kernel_options.bf16_eight_compute_warps,
+        );
+        execution_plan
+            .set_matmul_shared_memory_reuse(self.experimental_kernel_options.shared_memory_reuse);
+        execution_plan.configure_ordinary_bf16_four_warp_block(
+            self.experimental_kernel_options
+                .ordinary_bf16_four_warp_block,
+            self.target.matmul_resources,
+        );
+        execution_plan
+            .set_online_weight_sharing(self.experimental_kernel_options.online_weight_sharing);
         let fusion_selection_time = fusion_started.elapsed();
-        let mut tile_graph = TileGraph::from_with_matmul_schedules(
-            graph,
-            self.target.supports_tf32()
-                && matches!(
-                    self.matmul_precision,
-                    crate::tile::MatMulPrecision::AllowTf32 | crate::tile::MatMulPrecision::Tf32x3
-                ),
-            execution_plan.matmul_schedules(),
-        );
-        tile_graph.add_fusion_regions(execution_plan.regions())?;
-        tile_graph.add_reduction_regions(execution_plan.reduction_regions())?;
-        tile_graph.add_matmul_regions(execution_plan.matmul_regions())?;
-        // Only emit kernels selected by the final plan; fused-away regions retain
-        // diagnostic metadata but must not bloat the loaded module.
-        tile_graph.region_kernels.retain(|k| {
-            execution_plan
-                .steps()
-                .iter()
-                .any(|s| s.action == PtxPlanAction::PointwiseRegion(k.region_id))
-        });
-        tile_graph.reduction_region_kernels.retain(|k| {
-            execution_plan
-                .steps()
-                .iter()
-                .any(|s| s.action == PtxPlanAction::ReductionRegion(k.region_id))
-        });
-        tile_graph.matmul_region_kernels.retain(|k| {
-            execution_plan
-                .steps()
-                .iter()
-                .any(|s| s.action == PtxPlanAction::MatMulRegion(k.region_id))
-        });
-        for (id, region) in execution_plan.online_regions().iter().enumerate() {
-            tile_graph
-                .region_kernels
-                .push(crate::tile::graph::TileRegionKernel {
-                    region_id: execution_plan.regions().len() + id,
-                    ir: region.lower_to_tile_ir(id)?,
-                });
-        }
-        for step in execution_plan.steps() {
-            if let Some(view) = &step.materialized_view {
-                tile_graph.set_materialized_view(step.node, view, graph[view.source].shape())?;
-            }
-        }
-        tile_graph.set_physical_nodes(
-            execution_plan
-                .steps()
-                .iter()
-                .filter_map(|step| (step.action == PtxPlanAction::Kernel).then_some(step.node))
-                .collect(),
-        );
-        if !storage.is_empty() {
-            let mut dtypes = storage.clone();
-            for step in execution_plan.steps() {
-                if step.action == PtxPlanAction::VirtualView {
-                    for (&output, view) in step.outputs.iter().zip(&step.virtual_outputs) {
-                        if let Some(&dtype) = dtypes.get(&view.source) {
-                            dtypes.insert(output, dtype);
-                        }
-                    }
-                    continue;
+        let square_baseline = if self.experimental_kernel_options.large_bf16_tile_policy
+            == crate::tile::LargeBf16TilePolicy::Square128Streamed
+        {
+            let baseline = execution_plan.clone();
+            execution_plan.configure_square128_streamed(
+                self.matmul_shared_layout,
+                self.matmul_pipeline,
+                self.target.supports_async_copy(),
+                self.target.matmul_resources,
+            );
+            (execution_plan.large_square128_streamed_count() > 0).then_some(baseline)
+        } else {
+            None
+        };
+        let square_attempts = execution_plan.large_square128_streamed_count();
+        let mut index_optimization_time = Duration::ZERO;
+        let mut module_load_time = Duration::ZERO;
+        let mut compile = |plan: &mut PtxExecutionPlan| -> Result<_> {
+            let (tiles, index_time) = self.lower_planned_tiles(graph, storage, plan)?;
+            index_optimization_time += index_time;
+            let began = Instant::now();
+            let result = self.compile_tile_variant_with_plan(tiles, plan);
+            module_load_time += began.elapsed();
+            result
+        };
+        let candidate = compile(&mut execution_plan);
+        let (ptx_graph, cuda_module, square_fallbacks) = if let Some(mut baseline) = square_baseline
+        {
+            match candidate {
+                Ok((graph, module))
+                    if self
+                        .square128_resources_fit(&execution_plan, &graph, &module)
+                        .unwrap_or(false) =>
+                {
+                    (graph, module, 0)
                 }
-                let ir = match step.action {
-                    PtxPlanAction::Kernel => tile_graph.graph.node_weight_mut(step.node),
-                    PtxPlanAction::PointwiseRegion(id) => tile_graph
-                        .region_kernels
-                        .iter_mut()
-                        .find(|k| k.region_id == id)
-                        .map(|k| &mut k.ir),
-                    PtxPlanAction::ReductionRegion(id) => tile_graph
-                        .reduction_region_kernels
-                        .iter_mut()
-                        .find(|k| k.region_id == id)
-                        .map(|k| &mut k.ir),
-                    PtxPlanAction::MatMulRegion(id) => tile_graph
-                        .matmul_region_kernels
-                        .iter_mut()
-                        .find(|k| k.region_id == id)
-                        .map(|k| &mut k.ir),
-                    _ => None,
-                };
-                if let Some(ir) = ir {
-                    for (param, node) in ir
-                        .params
-                        .iter_mut()
-                        .zip(step.inputs.iter().chain(&step.outputs))
-                    {
-                        if let Some(&dtype) = dtypes.get(node) {
-                            param.dtype = dtype;
-                        }
-                    }
+                _ => {
+                    let (graph, module) = compile(&mut baseline)
+                        .context("Square128 complete baseline fallback failed")?;
+                    execution_plan = baseline;
+                    (graph, module, square_attempts)
                 }
             }
-        }
-        if self.reduction_mode != PtxReductionMode::Strict {
-            tile_graph.schedule_conv_weight_reductions();
-        }
-        let index_started = Instant::now();
-        tile_graph.optimize_indices()?;
-        let index_optimization_time = index_started.elapsed();
-        let ptx_graph = PtxGraph::from(tile_graph).with_target(self.target);
-        let ptx_src = ptx_graph.module_source();
+        } else {
+            let (graph, module) = candidate?;
+            (graph, module, 0)
+        };
         let generated_kernels = execution_plan
             .steps()
             .iter()
@@ -847,15 +1074,18 @@ impl<D: CudaDType> PtxExecutor<D> {
                 )
             })
             .count();
-        let ptx_source_bytes = ptx_src.len();
-
-        let module_started = Instant::now();
-        let cuda_module = self
-            .device
-            .load_module(Ptx::from_src(&ptx_src))
-            .context("Failed to load PTX module with cudarc")?;
-        let module_load_time = module_started.elapsed();
+        let ptx_source_bytes = ptx_graph.module_source().len();
+        execution_plan.retain_column_reductions(|id, region| {
+            let name = ptx_graph
+                .reduction_region_kernel_name(id)
+                .context("Column reduction function absent")?;
+            let function = cuda_module
+                .load_function(name)
+                .context("Column reduction function load failed")?;
+            super::target::column_reduction_fits(region, &function)
+        })?;
         let unique_kernels = ptx_graph.unique_kernel_count();
+        self.square128_streamed_fallbacks = square_fallbacks;
         self.module = Some(cuda_module);
         self.functions.get_mut().clear();
         self.ptx_graph = Some(Box::new(ptx_graph));
@@ -1241,12 +1471,8 @@ impl<D: CudaDType> PtxExecutor<D> {
                 launcher.arg(output);
             }
             self.record_kernel_launch();
-            let config = super::target::reduction_launch_config(
-                region.schedule,
-                region.serial_block_threads,
-                launch_len,
-                &function,
-            )?;
+            let config =
+                super::target::region_reduction_launch_config(region, launch_len, &function)?;
             unsafe { launcher.launch(config) }
                 .with_context(|| format!("CUDA {kernel_name} kernel launch failed"))?;
         }
@@ -1315,6 +1541,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                 self.serial_reduction_block_threads,
                 self.matmul_grid_group_m,
                 self.experimental_register_tiles,
+                self.experimental_kernel_options,
             ),
         );
         let compiled_signature = self
@@ -2434,6 +2661,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                 self.serial_reduction_block_threads,
                 self.matmul_grid_group_m,
                 self.experimental_register_tiles,
+                self.experimental_kernel_options,
             ),
         );
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
@@ -2490,6 +2718,7 @@ impl<D: CudaDType> PtxExecutor<D> {
                 self.serial_reduction_block_threads,
                 self.matmul_grid_group_m,
                 self.experimental_register_tiles,
+                self.experimental_kernel_options,
             ),
         );
         if self.module.is_none() || self.compilation_signature.as_deref() != Some(&signature) {
@@ -2547,13 +2776,20 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     matmul_precision: crate::tile::MatMulPrecision,
     matmul_shared_layout: MatMulSharedLayout,
     matmul_pipeline: MatMulPipeline,
-    fusion_options: (PtxFusionPolicy, Option<u32>, usize, bool),
+    fusion_options: (
+        PtxFusionPolicy,
+        Option<u32>,
+        usize,
+        bool,
+        ExperimentalKernelOptions,
+    ),
 ) -> Vec<u8> {
     let (
         fusion_policy,
         serial_reduction_block_threads,
         matmul_grid_group_m,
         experimental_register_tiles,
+        experimental_kernel_options,
     ) = fusion_options;
     let mut signature = Vec::new();
     signature.extend_from_slice(PTX_GRAPH_SIGNATURE_MAGIC);
@@ -2593,6 +2829,47 @@ fn graph_compilation_signature<D: crate::tile::TileDType, G>(
     signature.extend_from_slice(&serial_reduction_block_threads.unwrap_or(0).to_le_bytes());
     signature.extend_from_slice(&matmul_grid_group_m.to_le_bytes());
     signature.push(u8::from(experimental_register_tiles));
+    signature.push(u8::from(experimental_kernel_options.plain_bf16_output));
+    signature.push(u8::from(experimental_kernel_options.shared_memory_reuse));
+    signature.push(u8::from(experimental_kernel_options.online_weight_sharing));
+    signature.push(u8::from(experimental_kernel_options.narrow_bf16_tile));
+    signature.push(u8::from(
+        experimental_kernel_options.bf16_eight_compute_warps,
+    ));
+    signature.push(match experimental_kernel_options.medium_bf16_tile_policy {
+        crate::tile::MediumBf16TilePolicy::Off => 0,
+        crate::tile::MediumBf16TilePolicy::SquareOnly => 1,
+        crate::tile::MediumBf16TilePolicy::SquareThenTall => 2,
+    });
+    signature.push(match experimental_kernel_options.column_reduction_policy {
+        crate::tile::ColumnReductionPolicy::Off => 0,
+        crate::tile::ColumnReductionPolicy::Four => 1,
+        crate::tile::ColumnReductionPolicy::Eight => 2,
+    });
+    signature.push(match experimental_kernel_options.large_bf16_tile_policy {
+        crate::tile::LargeBf16TilePolicy::Off => 0,
+        crate::tile::LargeBf16TilePolicy::Tall => 1,
+        crate::tile::LargeBf16TilePolicy::Wide => 2,
+        crate::tile::LargeBf16TilePolicy::TallThenWide => 3,
+        crate::tile::LargeBf16TilePolicy::Square128Streamed => 4,
+    });
+    signature.push(
+        match experimental_kernel_options.batched_attention_bf16_tile_policy {
+            crate::tile::BatchedAttentionBf16TilePolicy::Off => 0,
+            crate::tile::BatchedAttentionBf16TilePolicy::TallScores => 1,
+            crate::tile::BatchedAttentionBf16TilePolicy::WideScores => 2,
+            crate::tile::BatchedAttentionBf16TilePolicy::TallScoresByGrid => 3,
+        },
+    );
+    signature.push(u8::from(
+        experimental_kernel_options.ordinary_bf16_four_warp_block,
+    ));
+    signature.push(u8::from(
+        experimental_kernel_options.indexed_loss_cooperative_ordered_backward,
+    ));
+    signature.push(u8::from(
+        experimental_kernel_options.indexed_loss_cooperative_ordered_forward,
+    ));
     signature.extend_from_slice(&target.compute_capability.0.to_le_bytes());
     signature.extend_from_slice(&target.compute_capability.1.to_le_bytes());
     signature_usize(&mut signature, target.multiprocessor_count);
@@ -2806,6 +3083,7 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
                 self.serial_reduction_block_threads,
                 self.matmul_grid_group_m,
                 self.experimental_register_tiles,
+                self.experimental_kernel_options,
             ),
         );
         let needs_compilation = self.module.is_none()
@@ -2839,6 +3117,7 @@ impl<D: CudaDType> Executor<D::HostType> for PtxExecutor<D> {
                 self.serial_reduction_block_threads,
                 self.matmul_grid_group_m,
                 self.experimental_register_tiles,
+                self.experimental_kernel_options,
             ),
         );
         if self.module.is_none()
@@ -2886,5 +3165,1086 @@ impl<D: CudaDType> Drop for PtxExecutor<D> {
         self.pool.get_mut().clear();
         self.functions.get_mut().clear();
         self.module = None;
+    }
+}
+
+#[cfg(test)]
+mod experiment_signature_tests {
+    use super::*;
+    use crate::tensor::TensorExpr;
+
+    #[test]
+    fn online_weight_sharing_codegen_is_available_without_a_device() {
+        let graph: TensorGraph<f32> =
+            crate::nn::softmax(TensorExpr::input("scores", vec![2, 33]), 1)
+                .matmul(TensorExpr::input("values", vec![33, 64]))
+                .into();
+        let mut plan =
+            PtxExecutionPlan::build_with_reduction_mode(&graph, PtxReductionMode::Online).unwrap();
+        plan.fuse_online(&graph).unwrap();
+        assert_eq!(plan.online_regions().len(), 1);
+        let mut barriers = Vec::new();
+        for enabled in [false, true] {
+            plan.set_online_weight_sharing(enabled);
+            let ir = plan.online_regions()[0].lower_to_tile_ir(0).unwrap();
+            ir.validate_layouts().unwrap();
+            assert_eq!(ir.shared_mem_bytes, 33 * 4);
+            let mut tiles = TileGraph::from(graph.clone());
+            tiles.graph.clear();
+            tiles.graph.add_node(ir);
+            let ptx = PtxGraph::from(tiles).to_ptx();
+            barriers.push(ptx.matches("bar.sync").count());
+            if let Some(directory) = std::env::var_os("TNSR_PAPER_PTX_DIR") {
+                let directory = std::path::PathBuf::from(directory);
+                std::fs::create_dir_all(&directory).unwrap();
+                let mode = if enabled { "shared" } else { "baseline" };
+                std::fs::write(directory.join(format!("online-{mode}.ptx")), ptx).unwrap();
+            }
+        }
+        assert_eq!(barriers[1], barriers[0] + 1);
+    }
+
+    #[test]
+    fn narrow_bf16_override_codegen_without_device() -> anyhow::Result<()> {
+        let target = PtxTarget::sm80();
+        for m in [128, 129, 512] {
+            let graph: TensorGraph<half::bf16> = TensorExpr::input("a", vec![2, m, 64])
+                .matmul(TensorExpr::input("b", vec![64, 64]))
+                .into();
+            let mut plan = PtxExecutionPlan::build(&graph)?;
+            plan.schedule_matmuls(
+                target.matmul_capabilities(),
+                crate::tile::MatMulPrecision::NativeHalf,
+                target.matmul_resources,
+                MatMulSharedLayout::Auto,
+                MatMulPipeline::Auto,
+                true,
+                false,
+            )?;
+            plan.set_matmul_narrow_bf16_tile(false, target.matmul_resources);
+            assert!(
+                plan.matmul_regions()
+                    .iter()
+                    .all(|r| r.schedule.block_tile.m == 16)
+            );
+            plan.set_matmul_narrow_bf16_tile(true, target.matmul_resources);
+            assert!(!plan.matmul_regions().is_empty());
+            for region in plan.matmul_regions() {
+                let schedule = region.schedule;
+                assert_eq!(
+                    schedule.block_tile,
+                    crate::tile::MatMulTile {
+                        m: 32,
+                        n: 32,
+                        k: 32
+                    }
+                );
+                assert_eq!(schedule.warp_topology, (2, 2));
+                assert_eq!(schedule.block_threads, (32, 8, 1));
+                assert_eq!(schedule.thread_count(), 256);
+                let mut tiles = TileGraph::from_graph(&TensorGraph::<f32>::new());
+                tiles.add_matmul_regions(std::slice::from_ref(region))?;
+                tiles.optimize_indices()?;
+                for ir in tiles.graph.node_weights() {
+                    ir.validate_layouts()?;
+                }
+                let ptx = PtxGraph::from(tiles).with_target(target).module_source();
+                assert!(ptx.contains(".shared .align 32 .b8 shared[8192];"));
+                assert_eq!(ptx.matches("wmma.mma.sync").count(), 2);
+                assert!(!ptx.contains("cp.async"));
+            }
+            plan.set_matmul_shared_memory_reuse(true);
+            assert!(
+                plan.matmul_regions()
+                    .iter()
+                    .all(|r| r.schedule.shared_mem_bytes() == 4096)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn narrow_bf16_tile_preserves_forward_backward_and_replay() -> anyhow::Result<()> {
+        use crate::ptx::BF16;
+        use crate::tensor::Parameter;
+        use half::bf16;
+        if let Err(error) = CudaContext::new(0) {
+            assert!(
+                std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1"),
+                "{error:#}"
+            );
+            return Ok(());
+        }
+        let bits = |values: Vec<bf16>| values.into_iter().map(bf16::to_bits).collect::<Vec<_>>();
+        for m in [128, 129] {
+            let a = Parameter::new(vec![bf16::from_f32(0.125); m * 64], vec![m, 64]);
+            let b = Parameter::new(
+                (0..4096)
+                    .map(|i| bf16::from_f32((i % 13) as f32 / 64. - 0.0625))
+                    .collect(),
+                vec![64, 64],
+            );
+            let output = TensorExpr::from(a.clone()).matmul(TensorExpr::from(b.clone()));
+            let mut graph = TensorGraph::new();
+            let forward = graph.add_expr(&output, false);
+            let loss = graph.add_expr(&output.mean_all(), false);
+            let graph = graph.with_gradients(loss);
+            for replay in [false, true] {
+                // Production resident replay owns a private capture-capable
+                // stream; the default executor uses the legacy default stream.
+                let make_executor = || {
+                    let context = CudaContext::new(0)?;
+                    // SAFETY: as in ResidentAdam replay, every allocation,
+                    // upload, kernel and readback for this executor uses its
+                    // sole private ordered stream. No buffers cross executors;
+                    // executor Drop synchronizes before releasing storage.
+                    // Disable cudarc events before any buffers are allocated,
+                    // since event dependencies are not capture-compatible.
+                    unsafe { context.disable_event_tracking() };
+                    PtxExecutor::<BF16>::with_stream(
+                        context.new_stream()?,
+                        PtxReductionMode::Strict,
+                        Arc::new(Mutex::new(())),
+                    )
+                };
+                let mut baseline = make_executor()?;
+                let mut candidate = make_executor()?;
+                for executor in [&mut baseline, &mut candidate] {
+                    executor.set_matmul_precision(crate::tile::MatMulPrecision::NativeHalf);
+                    executor.enable_graph_replay(replay);
+                }
+                candidate.set_experimental_narrow_bf16_tile(true);
+                for phase in 0..3 {
+                    a.set_values(
+                        (0..m * 64)
+                            .map(|i| bf16::from_f32(((i + phase) % 17) as f32 / 32. - 0.125))
+                            .collect(),
+                    )?;
+                    // Replay requires device bindings for every parameter.
+                    // Fresh per-executor allocations also exercise stable
+                    // replay-source refresh when parameter contents change.
+                    for executor in [&mut baseline, &mut candidate] {
+                        let mut bindings = HashMap::new();
+                        for node in graph.graph.node_indices() {
+                            if let TensorGraphNode::Parameter { data, .. } = &graph[node] {
+                                let values = data
+                                    .lock()
+                                    .map_err(|e| anyhow::anyhow!("test parameter lock: {e}"))?;
+                                let mut device_values =
+                                    executor.stream.alloc_zeros(values.len())?;
+                                executor
+                                    .stream
+                                    .memcpy_htod(values.as_slice(), &mut device_values)?;
+                                bindings.insert(node, Arc::new(device_values));
+                            }
+                        }
+                        executor.run_device(&graph, HashMap::new(), bindings)?;
+                    }
+                    let plan = candidate.execution_plan().unwrap();
+                    assert!(
+                        plan.matmul_regions()
+                            .iter()
+                            .any(|r| r.schedule.logical_shape.m == m
+                                && r.schedule.logical_shape.n == 64
+                                && r.schedule.block_tile.m == 32)
+                    );
+                    for node in [forward, loss] {
+                        let old = baseline.get_value(node).unwrap();
+                        assert!(old.iter().all(|v| v.is_finite()));
+                        assert_eq!(bits(old), bits(candidate.get_value(node).unwrap()));
+                    }
+                    let old = baseline.get_gradients(&graph);
+                    let new = candidate.get_gradients(&graph);
+                    for id in [a.id(), b.id()] {
+                        assert!(old[&id].iter().all(|v| v.is_finite()));
+                        assert_eq!(bits(old[&id].clone()), bits(new[&id].clone()));
+                    }
+                }
+                if replay {
+                    assert!(
+                        candidate.replay_metrics().graph_launches > 0,
+                        "candidate replay metrics: {:?}",
+                        candidate.replay_metrics()
+                    );
+                    assert_eq!(
+                        candidate.replay_metrics().fallbacks,
+                        0,
+                        "candidate replay metrics: {:?}",
+                        candidate.replay_metrics()
+                    );
+                    assert!(
+                        baseline.replay_metrics().graph_launches > 0,
+                        "baseline replay metrics: {:?}",
+                        baseline.replay_metrics()
+                    );
+                    assert_eq!(
+                        baseline.replay_metrics().fallbacks,
+                        0,
+                        "baseline replay metrics: {:?}",
+                        baseline.replay_metrics()
+                    );
+                }
+                candidate.set_experimental_narrow_bf16_tile(false);
+                let error = candidate
+                    .execute_compiled(&graph, HashMap::new())
+                    .unwrap_err();
+                assert!(error.to_string().contains("No compiled graph signature"));
+                candidate.execute(&graph, HashMap::new())?;
+                assert_eq!(
+                    bits(baseline.get_value(loss).unwrap()),
+                    bits(candidate.get_value(loss).unwrap())
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bf16_eight_compute_warps_codegen_preserves_geometry_and_memory() -> anyhow::Result<()> {
+        let mut target = PtxTarget::sm80();
+        target.matmul_resources.shared_bytes_per_sm = 100 * 1024;
+        for (m, n, k, transpose_b) in [
+            (2048, 256, 64, false),
+            (4096, 1408, 512, false),
+            (4096, 1408, 512, true),
+            (4096, 512, 1408, true),
+            (2049, 257, 65, true),
+        ] {
+            let b = TensorExpr::input("b", if transpose_b { vec![n, k] } else { vec![k, n] });
+            let b = if transpose_b { b.transpose() } else { b };
+            let graph: TensorGraph<half::bf16> =
+                TensorExpr::input("a", vec![m, k]).matmul(b).into();
+            let mut plan = PtxExecutionPlan::build(&graph)?;
+            plan.schedule_matmuls(
+                target.matmul_capabilities(),
+                crate::tile::MatMulPrecision::NativeHalf,
+                target.matmul_resources,
+                MatMulSharedLayout::Auto,
+                MatMulPipeline::Auto,
+                true,
+                false,
+            )?;
+            let old = plan.matmul_regions().to_vec();
+            plan.set_bf16_eight_compute_warps(false);
+            assert_eq!(plan.matmul_regions()[0].schedule, old[0].schedule);
+            plan.set_bf16_eight_compute_warps(true);
+            for (before, after) in old.iter().zip(plan.matmul_regions()) {
+                let mut expected = before.schedule;
+                expected.warp_topology = (2, 4);
+                expected.warp_fragments = (2, 1);
+                assert_eq!(after.schedule, expected);
+                let emit = |r: &crate::tile::MatMulRegion| -> anyhow::Result<String> {
+                    let mut tiles = TileGraph::from_graph(&TensorGraph::<f32>::new());
+                    tiles.add_matmul_regions(std::slice::from_ref(r))?;
+                    tiles.optimize_indices()?;
+                    for ir in tiles.graph.node_weights() {
+                        ir.validate_layouts()?;
+                    }
+                    Ok(PtxGraph::from(tiles).with_target(target).module_source())
+                };
+                let a = emit(before)?;
+                let b = emit(after)?;
+                for (opcode, old_count, new_count) in [
+                    ("wmma.load.a", 4, 4),
+                    ("wmma.load.b", 4, 2),
+                    ("wmma.mma", 8, 4),
+                    ("wmma.store.d", 4, 2),
+                ] {
+                    assert_eq!(a.matches(opcode).count(), old_count);
+                    assert_eq!(b.matches(opcode).count(), new_count);
+                }
+                for opcode in ["cp.async", "bar.sync"] {
+                    assert_eq!(a.matches(opcode).count(), b.matches(opcode).count());
+                }
+                let shared = format!(
+                    ".shared .align 32 .b8 shared[{}];",
+                    before.schedule.shared_mem_bytes()
+                );
+                assert!(a.contains(&shared) && b.contains(&shared));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bf16_eight_compute_warps_toggle_invalidates_compilation_and_matches_bits()
+    -> anyhow::Result<()> {
+        use crate::ptx::BF16;
+        use half::bf16;
+        if let Err(error) = CudaContext::new(0) {
+            assert!(
+                std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1"),
+                "{error:#}"
+            );
+            return Ok(());
+        }
+        let graph: TensorGraph<bf16> = TensorExpr::input("a", vec![2048, 64])
+            .matmul(TensorExpr::input("b", vec![64, 256]))
+            .into();
+        let mut executor = PtxExecutor::<BF16>::try_new_for_dtype()?;
+        executor.set_matmul_precision(crate::tile::MatMulPrecision::NativeHalf);
+        let mut expected = vec![];
+        for (iteration, enabled) in [false, true, false].into_iter().enumerate() {
+            executor.set_experimental_bf16_eight_compute_warps(enabled);
+            if iteration > 0 {
+                let error = executor
+                    .execute_compiled(&graph, HashMap::new())
+                    .unwrap_err();
+                assert!(error.to_string().contains("No compiled graph signature"));
+            }
+            executor.compile(&graph)?;
+            let schedule = executor.execution_plan().unwrap().matmul_regions()[0].schedule;
+            assert_eq!(
+                schedule.warp_topology,
+                if enabled { (2, 4) } else { (2, 2) }
+            );
+            assert_eq!(
+                schedule.warp_fragments,
+                if enabled { (2, 1) } else { (2, 2) }
+            );
+            let mut actual = vec![];
+            for phase in 0..2 {
+                let feed = HashMap::from([
+                    (
+                        "a".into(),
+                        (0..2048 * 64)
+                            .map(|i| bf16::from_f32(((i + phase) % 17) as f32 / 32. - 0.125))
+                            .collect(),
+                    ),
+                    (
+                        "b".into(),
+                        (0..64 * 256)
+                            .map(|i| bf16::from_f32((i % 13) as f32 / 64. - 0.0625))
+                            .collect(),
+                    ),
+                ]);
+                let values = executor.execute_compiled(&graph, feed)?;
+                assert!(values.iter().all(|v| v.is_finite()));
+                actual.push(values.into_iter().map(bf16::to_bits).collect::<Vec<_>>());
+            }
+            if iteration == 0 {
+                expected = actual;
+            } else {
+                assert_eq!(actual, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn medium_bf16_plan_counts_exclude_legacy_and_batch_fallback() -> anyhow::Result<()> {
+        use crate::tile::MediumBf16TilePolicy as Policy;
+        let target = PtxTarget::sm80();
+        for (m, n, batch, policy, expected) in [
+            (128, 4096, false, Policy::SquareOnly, (1, 0)),
+            (128, 2048, false, Policy::SquareThenTall, (0, 1)),
+            (128, 2048, false, Policy::SquareOnly, (0, 0)),
+            (128, 4096, true, Policy::SquareThenTall, (0, 0)),
+            (4096, 1408, false, Policy::SquareThenTall, (0, 0)),
+        ] {
+            let a_shape = if batch { vec![2, m, 128] } else { vec![m, 128] };
+            let graph: TensorGraph<half::bf16> = TensorExpr::input("a", a_shape)
+                .matmul(TensorExpr::input("b", vec![128, n]))
+                .into();
+            let mut plan = PtxExecutionPlan::build(&graph)?;
+            plan.schedule_matmuls_with_medium_policy(
+                target.matmul_capabilities(),
+                crate::tile::MatMulPrecision::NativeHalf,
+                target.matmul_resources,
+                MatMulSharedLayout::Auto,
+                MatMulPipeline::Auto,
+                true,
+                false,
+                policy,
+            )?;
+            assert_eq!(plan.medium_bf16_tile_counts(), expected);
+            for r in plan.matmul_regions() {
+                let mut tiles = TileGraph::from_graph(&TensorGraph::<f32>::new());
+                tiles.add_matmul_regions(std::slice::from_ref(r))?;
+                tiles.optimize_indices()?;
+                for ir in tiles.graph.node_weights() {
+                    ir.validate_layouts()?;
+                }
+            }
+            plan.schedule_matmuls(
+                target.matmul_capabilities(),
+                crate::tile::MatMulPrecision::NativeHalf,
+                target.matmul_resources,
+                MatMulSharedLayout::Auto,
+                MatMulPipeline::Auto,
+                true,
+                false,
+            )?;
+            assert_eq!(plan.medium_bf16_tile_counts(), (0, 0));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn medium_bf16_policy_toggle_invalidates_identity_and_matches_bits() -> anyhow::Result<()> {
+        use crate::{ptx::BF16, tile::MediumBf16TilePolicy as Policy};
+        use half::bf16;
+        if let Err(error) = CudaContext::new(0) {
+            assert!(
+                std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1"),
+                "{error:#}"
+            );
+            return Ok(());
+        }
+        let graph: TensorGraph<bf16> = TensorExpr::input("a", vec![128, 128])
+            .matmul(TensorExpr::input("b", vec![128, 2048]))
+            .into();
+        let mut executor = PtxExecutor::<BF16>::try_new_for_dtype()?;
+        executor.set_matmul_precision(crate::tile::MatMulPrecision::NativeHalf);
+        let mut expected = vec![];
+        for (i, policy) in [
+            Policy::Off,
+            Policy::SquareOnly,
+            Policy::SquareThenTall,
+            Policy::Off,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            executor.set_experimental_medium_bf16_tile_policy(policy);
+            if i > 0 {
+                let error = executor
+                    .execute_compiled(&graph, HashMap::new())
+                    .unwrap_err();
+                assert!(error.to_string().contains("No compiled graph signature"));
+            }
+            executor.compile(&graph)?;
+            assert_eq!(
+                executor.execution_plan().unwrap().medium_bf16_tile_counts(),
+                if policy == Policy::SquareThenTall {
+                    (0, 1)
+                } else {
+                    (0, 0)
+                }
+            );
+            let mut actual = vec![];
+            for phase in 0..2 {
+                let feeds = HashMap::from([
+                    (
+                        "a".into(),
+                        (0..128 * 128)
+                            .map(|j| bf16::from_f32(((j + phase) % 17) as f32 / 32. - 0.125))
+                            .collect(),
+                    ),
+                    (
+                        "b".into(),
+                        (0..128 * 2048)
+                            .map(|j| bf16::from_f32((j % 13) as f32 / 64. - 0.0625))
+                            .collect(),
+                    ),
+                ]);
+                let output = executor.execute_compiled(&graph, feeds)?;
+                assert!(output.iter().all(|v| v.is_finite()));
+                actual.push(output.into_iter().map(bf16::to_bits).collect::<Vec<_>>());
+            }
+            if i == 0 {
+                expected = actual;
+            } else {
+                assert_eq!(actual, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn column_policy_toggle_invalidates_cache_and_preserves_bf16_reduction_bits()
+    -> anyhow::Result<()> {
+        use crate::{ptx::BF16, tile::ColumnReductionPolicy as Policy};
+        use half::bf16;
+        if let Err(error) = CudaContext::new(0) {
+            assert!(
+                std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1"),
+                "{error:#}"
+            );
+            return Ok(());
+        }
+        let graph: TensorGraph<bf16> = TensorExpr::input("x", vec![513, 9]).reduce_sum(0).into();
+        let mut executor =
+            PtxExecutor::<BF16>::try_new_with_reduction_mode(PtxReductionMode::DeterministicTree)?;
+        let mut expected = Vec::new();
+        for (iteration, policy) in [Policy::Off, Policy::Four, Policy::Eight, Policy::Off]
+            .into_iter()
+            .enumerate()
+        {
+            executor.set_experimental_column_reduction_policy(policy);
+            if iteration > 0 {
+                let error = executor
+                    .execute_compiled(&graph, HashMap::new())
+                    .unwrap_err();
+                assert!(error.to_string().contains("No compiled graph signature"));
+            }
+            executor.compile(&graph)?;
+            assert_eq!(
+                executor
+                    .execution_plan()
+                    .expect("compiled plan")
+                    .column_reduction_counts(),
+                match policy {
+                    Policy::Off => (0, 0),
+                    Policy::Four => (1, 0),
+                    Policy::Eight => (0, 1),
+                }
+            );
+            let mut observations = Vec::new();
+            for phase in 0..3 {
+                let values: Vec<_> = (0..513 * 9)
+                    .map(|i| bf16::from_f32(((i + phase) % 31) as f32 / 16. - 0.75))
+                    .collect();
+                let actual =
+                    executor.execute_compiled(&graph, HashMap::from([("x".into(), values)]))?;
+                observations.push(actual.into_iter().map(bf16::to_bits).collect::<Vec<_>>());
+            }
+            if iteration == 0 {
+                expected = observations;
+            } else {
+                assert_eq!(observations, expected);
+            }
+            for value in [-0.0f32, f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+                let actual = executor.execute_compiled(
+                    &graph,
+                    HashMap::from([("x".into(), vec![bf16::from_f32(value); 513 * 9])]),
+                )?;
+                for actual in actual {
+                    if value.is_nan() {
+                        assert!(actual.is_nan());
+                    } else if value.is_infinite() {
+                        assert_eq!(actual.to_f32(), value);
+                    } else {
+                        assert_eq!(actual.to_bits(), bf16::from_f32(0.0).to_bits());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn large_bf16_policy_cache_toggle_exact_output_and_nonfinite_classes() -> anyhow::Result<()> {
+        use crate::{ptx::BF16, tile::LargeBf16TilePolicy as Policy};
+        use half::bf16;
+        if let Err(error) = CudaContext::new(0) {
+            assert!(
+                std::env::var("TNSR_REQUIRE_CUDA").as_deref() != Ok("1"),
+                "{error:#}"
+            );
+            return Ok(());
+        }
+        let graph: TensorGraph<bf16> = TensorExpr::input("a", vec![2048, 128])
+            .matmul(TensorExpr::input("b", vec![128, 512]))
+            .into();
+        let mut executor = PtxExecutor::<BF16>::try_new_for_dtype()?;
+        executor.set_matmul_precision(crate::tile::MatMulPrecision::NativeHalf);
+        executor.set_experimental_shared_memory_reuse(true);
+        let mut expected = Vec::new();
+        for (iteration, policy) in [
+            Policy::Off,
+            Policy::Tall,
+            Policy::Wide,
+            Policy::TallThenWide,
+            Policy::Off,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            executor.set_experimental_large_bf16_tile_policy(policy);
+            if iteration > 0 {
+                assert!(
+                    executor
+                        .execute_compiled(&graph, HashMap::new())
+                        .unwrap_err()
+                        .to_string()
+                        .contains("No compiled graph signature")
+                );
+            }
+            executor.compile(&graph)?;
+            assert_eq!(
+                executor.execution_plan().unwrap().large_bf16_tile_counts(),
+                match policy {
+                    Policy::Off => (0, 0),
+                    Policy::Wide => (0, 1),
+                    _ => (1, 0),
+                }
+            );
+            let mut phases = Vec::new();
+            for phase in 0..2 {
+                let feeds = HashMap::from([
+                    (
+                        "a".into(),
+                        (0..2048 * 128)
+                            .map(|i| bf16::from_f32(((i + phase) % 17) as f32 / 64. - 0.125))
+                            .collect(),
+                    ),
+                    (
+                        "b".into(),
+                        (0..128 * 512)
+                            .map(|i| bf16::from_f32((i % 13) as f32 / 32. - 0.0625))
+                            .collect(),
+                    ),
+                ]);
+                let actual = executor.execute_compiled(&graph, feeds)?;
+                assert!(actual.iter().all(|v| v.is_finite()));
+                phases.push(actual.into_iter().map(bf16::to_bits).collect::<Vec<_>>());
+            }
+            if iteration == 0 {
+                expected = phases;
+            } else {
+                assert_eq!(phases, expected);
+            }
+            for (left, right, expected_nan) in [
+                (1.0f32, f32::INFINITY, false),
+                (1., f32::NEG_INFINITY, false),
+                (0., f32::INFINITY, true),
+                (-0., 1., false),
+            ] {
+                let actual = executor.execute_compiled(
+                    &graph,
+                    HashMap::from([
+                        ("a".into(), vec![bf16::from_f32(left); 2048 * 128]),
+                        ("b".into(), vec![bf16::from_f32(right); 128 * 512]),
+                    ]),
+                )?;
+                for value in actual {
+                    if expected_nan {
+                        assert!(value.is_nan());
+                    } else if right.is_infinite() {
+                        assert_eq!(value.to_f32(), right);
+                    } else {
+                        assert_eq!(value.to_bits(), bf16::from_f32(0.0).to_bits());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn batched_attention_policies_have_distinct_compilation_identity() {
+        let graph: TensorGraph<f32> = TensorExpr::input("a", vec![8, 8, 512, 64])
+            .matmul(TensorExpr::input("b", vec![8, 8, 64, 512]))
+            .into();
+        let mut seen = std::collections::HashSet::new();
+        for policy in [
+            crate::tile::BatchedAttentionBf16TilePolicy::Off,
+            crate::tile::BatchedAttentionBf16TilePolicy::TallScores,
+            crate::tile::BatchedAttentionBf16TilePolicy::WideScores,
+            crate::tile::BatchedAttentionBf16TilePolicy::TallScoresByGrid,
+        ] {
+            let signature = graph_compilation_signature(
+                &graph,
+                PtxReductionMode::DeterministicTree,
+                PtxTarget::sm80(),
+                crate::tile::MatMulPrecision::NativeHalf,
+                MatMulSharedLayout::Auto,
+                MatMulPipeline::Auto,
+                (
+                    PtxFusionPolicy::CostAware,
+                    None,
+                    1,
+                    false,
+                    ExperimentalKernelOptions {
+                        batched_attention_bf16_tile_policy: policy,
+                        ..ExperimentalKernelOptions::default()
+                    },
+                ),
+            );
+            assert!(seen.insert(signature));
+        }
+        assert_eq!(seen.len(), 4);
+        assert_eq!(
+            ExperimentalKernelOptions::default().batched_attention_bf16_tile_policy,
+            crate::tile::BatchedAttentionBf16TilePolicy::Off
+        );
+    }
+
+    #[test]
+    fn batched_attention_policy_cache_toggle_uses_actual_regions_and_changed_feeds()
+    -> anyhow::Result<()> {
+        use crate::{
+            ptx::BF16,
+            tile::{BatchedAttentionBf16TilePolicy as Policy, BatchedAttentionTileCounts},
+        };
+        use half::bf16;
+        if let Err(error) = CudaContext::new(0) {
+            assert_ne!(
+                std::env::var("TNSR_REQUIRE_CUDA").as_deref(),
+                Ok("1"),
+                "{error:#}"
+            );
+            return Ok(());
+        }
+        let graph: TensorGraph<bf16> = TensorExpr::input("a", vec![8, 8, 512, 64])
+            .matmul(TensorExpr::input("b", vec![8, 8, 64, 512]))
+            .into();
+        let mut executor = PtxExecutor::<BF16>::try_new_for_dtype()?;
+        executor.set_matmul_precision(crate::tile::MatMulPrecision::NativeHalf);
+        executor.set_experimental_shared_memory_reuse(true);
+        let mut expected: Vec<Vec<u16>> = Vec::new();
+        for (iteration, policy) in [
+            Policy::Off,
+            Policy::TallScores,
+            Policy::WideScores,
+            Policy::TallScoresByGrid,
+            Policy::Off,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            executor.set_experimental_batched_attention_bf16_tile_policy(policy);
+            if iteration > 0 {
+                assert!(
+                    executor
+                        .execute_compiled(&graph, HashMap::new())
+                        .unwrap_err()
+                        .to_string()
+                        .contains("No compiled graph signature")
+                );
+            }
+            executor.compile(&graph)?;
+            let counts = executor
+                .execution_plan()
+                .unwrap()
+                .batched_attention_bf16_tile_counts();
+            assert_eq!(
+                counts,
+                match policy {
+                    Policy::Off => BatchedAttentionTileCounts::default(),
+                    Policy::TallScores | Policy::TallScoresByGrid => BatchedAttentionTileCounts {
+                        scores: 1,
+                        tall: 1,
+                        ..Default::default()
+                    },
+                    Policy::WideScores => BatchedAttentionTileCounts {
+                        scores: 1,
+                        wide: 1,
+                        ..Default::default()
+                    },
+                }
+            );
+            if let Ok(directory) = std::env::var("TNSR_BATCHED_ATTENTION_AUDIT") {
+                let directory = std::path::Path::new(&directory);
+                std::fs::create_dir_all(directory)?;
+                std::fs::write(
+                    directory.join(format!("actual-{iteration}-{policy:?}.ptx")),
+                    executor.module_source().unwrap(),
+                )?;
+            }
+            let mut phases = Vec::new();
+            for phase in 0..2 {
+                let feeds = HashMap::from([
+                    (
+                        "a".into(),
+                        (0..64 * 512 * 64)
+                            .map(|i| bf16::from_f32(((i + phase * 13) % 17) as f32 / 64. - 0.125))
+                            .collect(),
+                    ),
+                    (
+                        "b".into(),
+                        (0..64 * 64 * 512)
+                            .map(|i| bf16::from_f32(((i + phase * 7) % 13) as f32 / 32. - 0.0625))
+                            .collect(),
+                    ),
+                ]);
+                let values = executor.execute_compiled(&graph, feeds)?;
+                assert!(values.iter().all(|v| v.is_finite()));
+                let bits: Vec<_> = values.into_iter().map(bf16::to_bits).collect();
+                if iteration > 0 {
+                    let reference = expected.get(phase).expect("baseline phase recorded");
+                    assert_eq!(bits.len(), reference.len());
+                    for (i, (&actual, &old)) in bits.iter().zip(reference).enumerate() {
+                        assert_eq!(actual, old, "policy{policy:?} phase{phase} index{i}");
+                    }
+                }
+                phases.push(bits);
+            }
+            if iteration == 0 {
+                expected = phases;
+            }
+            for (left, right, nan) in [
+                (1.0f32, f32::INFINITY, false),
+                (1., f32::NEG_INFINITY, false),
+                (0., f32::INFINITY, true),
+                (-0., 1., false),
+            ] {
+                let output = executor.execute_compiled(
+                    &graph,
+                    HashMap::from([
+                        ("a".into(), vec![bf16::from_f32(left); 64 * 512 * 64]),
+                        ("b".into(), vec![bf16::from_f32(right); 64 * 64 * 512]),
+                    ]),
+                )?;
+                for (i, value) in output.into_iter().enumerate() {
+                    if nan {
+                        assert!(value.is_nan(), "{policy:?} index{i}");
+                    } else if right.is_infinite() {
+                        assert_eq!(value.to_f32(), right, "{policy:?} index{i}");
+                    } else {
+                        assert_eq!(value.to_bits(), 0, "{policy:?} signedzero index{i}");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_four_warp_plan_admission_and_toggle_without_device() -> anyhow::Result<()> {
+        let resources = crate::tile::MatMulResources {
+            shared_bytes_per_sm: 100 * 1024,
+            threads_per_sm: 1536,
+            ..crate::tile::MatMulResources::default()
+        };
+        for (m, n, k, expected) in [
+            (2048, 256, 64, 1),
+            (2049, 256, 64, 0),
+            (2048, 255, 64, 0),
+            (2048, 256, 65, 0),
+            (512, 512, 64, 0),
+        ] {
+            let graph: TensorGraph<half::bf16> = TensorExpr::input("a", vec![m, k])
+                .matmul(TensorExpr::input("b", vec![k, n]))
+                .into();
+            let mut plan = PtxExecutionPlan::build(&graph)?;
+            plan.schedule_matmuls(
+                PtxTarget::sm80().matmul_capabilities(),
+                crate::tile::MatMulPrecision::NativeHalf,
+                resources,
+                MatMulSharedLayout::Auto,
+                MatMulPipeline::Auto,
+                true,
+                false,
+            )?;
+            plan.set_matmul_shared_memory_reuse(true);
+            let baseline = plan.clone();
+            plan.configure_ordinary_bf16_four_warp_block(false, resources);
+            assert_eq!(plan, baseline);
+            plan.configure_ordinary_bf16_four_warp_block(true, resources);
+            assert_eq!(plan.ordinary_bf16_four_warp_count(), expected);
+            if expected == 0 {
+                assert_eq!(plan, baseline, "whole-kernel guard fallback");
+            }
+            plan.configure_ordinary_bf16_four_warp_block(true, resources);
+            assert_eq!(plan.ordinary_bf16_four_warp_count(), expected);
+            plan.configure_ordinary_bf16_four_warp_block(false, resources);
+            assert_eq!(plan, baseline, "complete baseline restored");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_four_warp_cache_feeds_all_orientations_and_nonfinite_bits() -> anyhow::Result<()> {
+        use crate::{ptx::BF16, tensor::TensorExpr};
+        use half::bf16;
+        if let Err(e) = CudaContext::new(0) {
+            assert_ne!(
+                std::env::var("TNSR_REQUIRE_CUDA").as_deref(),
+                Ok("1"),
+                "{e:#}"
+            );
+            return Ok(());
+        }
+        for (left, right) in [(false, false), (false, true), (true, false), (true, true)] {
+            let a = TensorExpr::input("a", if left { vec![64, 2048] } else { vec![2048, 64] });
+            let b = TensorExpr::input("b", if right { vec![256, 64] } else { vec![64, 256] });
+            let graph: TensorGraph<bf16> = (if left { a.transpose() } else { a })
+                .matmul(if right { b.transpose() } else { b })
+                .into();
+            let mut executor = PtxExecutor::<BF16>::try_new_for_dtype()?;
+            executor.set_matmul_precision(crate::tile::MatMulPrecision::NativeHalf);
+            executor.set_experimental_shared_memory_reuse(true);
+            let mut expected: Vec<Vec<u16>> = Vec::new();
+            let mut baseline_source = String::new();
+            for (iteration, enabled) in [false, true, false].into_iter().enumerate() {
+                executor.set_experimental_ordinary_bf16_four_warp_block(enabled);
+                if iteration > 0 {
+                    assert!(
+                        executor
+                            .execute_compiled(&graph, HashMap::new())
+                            .unwrap_err()
+                            .to_string()
+                            .contains("No compiled graph signature")
+                    );
+                }
+                executor.compile(&graph)?;
+                if iteration == 0 {
+                    baseline_source = executor.module_source().unwrap().to_string();
+                }
+                if iteration == 2 {
+                    assert_eq!(
+                        executor.module_source().unwrap(),
+                        baseline_source.as_str(),
+                        "default-Off whole module source restored"
+                    );
+                }
+                assert_eq!(
+                    executor
+                        .execution_plan()
+                        .unwrap()
+                        .ordinary_bf16_four_warp_count(),
+                    usize::from(enabled)
+                );
+                if let Ok(path) = std::env::var("TNSR_ORDINARY_FOUR_WARP_AUDIT") {
+                    let path = std::path::Path::new(&path);
+                    std::fs::create_dir_all(path)?;
+                    std::fs::write(
+                        path.join(format!("matrix-{left}-{right}-{iteration}-{enabled}.ptx")),
+                        executor.module_source().unwrap(),
+                    )?;
+                }
+                for revision in 0..3 {
+                    let feed = |len: usize, operand: usize| {
+                        (0..len)
+                            .map(|i| {
+                                if revision == 2 && i % 4093 == 0 {
+                                    return bf16::from_bits(
+                                        [
+                                            0, 0x8000, 1, 0x8001, 0x7f7f, 0xff7f, 0x7f80, 0xff80,
+                                            0x7fc1, 0x7f81,
+                                        ][(i / 4093 + operand) % 10],
+                                    );
+                                }
+                                bf16::from_f32(if revision == 0 {
+                                    ((i * 7 + operand * 3) % 17) as f32 / 32. - 0.25
+                                } else {
+                                    ((i * 131 + operand * 19) % 257) as f32 / 97. - 1.23
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let out = executor.execute_compiled(
+                        &graph,
+                        HashMap::from([
+                            ("a".into(), feed(2048 * 64, 0)),
+                            ("b".into(), feed(64 * 256, 1)),
+                        ]),
+                    )?;
+                    let bits = out.into_iter().map(bf16::to_bits).collect::<Vec<_>>();
+                    if iteration == 0 {
+                        expected.push(bits);
+                    } else {
+                        for (i, (&x, &y)) in bits.iter().zip(&expected[revision]).enumerate() {
+                            assert!(
+                                (bf16::from_bits(x).is_nan() && bf16::from_bits(y).is_nan())
+                                    || x == y,
+                                "orientation{left}/{right} revision{revision} index{i}: {x:04x}/{y:04x}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn kernel_experiments_have_distinct_compilation_signatures() {
+        let graph: TensorGraph<f32> = TensorExpr::input("a", vec![32, 64])
+            .matmul(TensorExpr::input("b", vec![64, 32]))
+            .into();
+        let signature = |shared_memory_reuse,
+                         online_weight_sharing,
+                         narrow_bf16_tile,
+                         bf16_eight_compute_warps,
+                         medium_bf16_tile_policy,
+                         column_reduction_policy,
+                         large_bf16_tile_policy,
+                         batched_attention_bf16_tile_policy,
+                         ordinary_bf16_four_warp_block,
+                         indexed_loss_cooperative_ordered_backward,
+                         indexed_loss_cooperative_ordered_forward,
+                         plain_bf16_output| {
+            graph_compilation_signature(
+                &graph,
+                PtxReductionMode::Online,
+                PtxTarget::sm80(),
+                crate::tile::MatMulPrecision::NativeHalf,
+                MatMulSharedLayout::Auto,
+                MatMulPipeline::Auto,
+                (
+                    PtxFusionPolicy::CostAware,
+                    None,
+                    1,
+                    false,
+                    ExperimentalKernelOptions {
+                        shared_memory_reuse,
+                        online_weight_sharing,
+                        narrow_bf16_tile,
+                        bf16_eight_compute_warps,
+                        medium_bf16_tile_policy,
+                        column_reduction_policy,
+                        large_bf16_tile_policy,
+                        batched_attention_bf16_tile_policy,
+                        ordinary_bf16_four_warp_block,
+                        indexed_loss_cooperative_ordered_backward,
+                        indexed_loss_cooperative_ordered_forward,
+                        plain_bf16_output,
+                    },
+                ),
+            )
+        };
+        let mut seen = std::collections::HashSet::new();
+        for reuse in [false, true] {
+            for weights in [false, true] {
+                for narrow in [false, true] {
+                    for eight in [false, true] {
+                        for policy in [
+                            crate::tile::MediumBf16TilePolicy::Off,
+                            crate::tile::MediumBf16TilePolicy::SquareOnly,
+                            crate::tile::MediumBf16TilePolicy::SquareThenTall,
+                        ] {
+                            for columns in [
+                                crate::tile::ColumnReductionPolicy::Off,
+                                crate::tile::ColumnReductionPolicy::Four,
+                                crate::tile::ColumnReductionPolicy::Eight,
+                            ] {
+                                for large in [
+                                    crate::tile::LargeBf16TilePolicy::Off,
+                                    crate::tile::LargeBf16TilePolicy::Tall,
+                                    crate::tile::LargeBf16TilePolicy::Wide,
+                                    crate::tile::LargeBf16TilePolicy::TallThenWide,
+                                    crate::tile::LargeBf16TilePolicy::Square128Streamed,
+                                ] {
+                                    for batched in [
+                                        crate::tile::BatchedAttentionBf16TilePolicy::Off,
+                                        crate::tile::BatchedAttentionBf16TilePolicy::TallScores,
+                                        crate::tile::BatchedAttentionBf16TilePolicy::WideScores,
+                                        crate::tile::BatchedAttentionBf16TilePolicy::TallScoresByGrid,
+                                    ] {
+                                        for four in [false, true] {
+                                            for cooperative in [false,true] {
+                                                for forward in [false,true] {for plain in [false,true] {assert!(seen.insert(signature(reuse, weights, narrow, eight, policy, columns, large, batched, four, cooperative, forward, plain)));}}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(seen.len(), 46080);
+        assert_eq!(
+            ExperimentalKernelOptions::default(),
+            ExperimentalKernelOptions {
+                indexed_loss_cooperative_ordered_backward: false,
+                indexed_loss_cooperative_ordered_forward: false,
+                shared_memory_reuse: false,
+                online_weight_sharing: false,
+                narrow_bf16_tile: false,
+                bf16_eight_compute_warps: false,
+                ordinary_bf16_four_warp_block: false,
+                plain_bf16_output: false,
+                medium_bf16_tile_policy: crate::tile::MediumBf16TilePolicy::Off,
+                column_reduction_policy: crate::tile::ColumnReductionPolicy::Off,
+                large_bf16_tile_policy: crate::tile::LargeBf16TilePolicy::Off,
+                batched_attention_bf16_tile_policy:
+                    crate::tile::BatchedAttentionBf16TilePolicy::Off,
+            }
+        );
     }
 }

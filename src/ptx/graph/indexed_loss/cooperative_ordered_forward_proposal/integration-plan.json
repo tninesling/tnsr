@@ -1,0 +1,58 @@
+{
+  "status": "UNDECLARED_SOURCE_ONLY_UNCOMPILED_UNRUN",
+  "scope": "Forward only, exact cooperative max/exp plus original increasing-column +0 ordered sum; no numerical parallel tree and no current production edits.",
+  "files": {
+    "helper": "src/ptx/graph/indexed_loss/cooperative_ordered_forward_proposal.rs",
+    "offline_and_direct_tests": "src/ptx/graph/indexed_loss/cooperative_ordered_forward_proposal/tests.rs",
+    "direct_cuda_test": "src/ptx/graph/indexed_loss/cooperative_ordered_forward_proposal/tests/gpu.rs",
+    "future_mixed_test_sketch": "src/ptx/graph/indexed_loss/cooperative_ordered_forward_proposal/future_integration_tests.rs"
+  },
+  "future_api": {
+    "bool": "indexed_loss_cooperative_ordered_forward",
+    "setter": "set_experimental_indexed_loss_cooperative_ordered_forward",
+    "actual_selected_counter": "indexed_loss_cooperative_ordered_forward_programs",
+    "default": false,
+    "headers": [
+      "MixedOptions",
+      "ProgramKernelOptions",
+      "ExperimentalKernelOptions"
+    ],
+    "signature": "Coordinate the next unreleased version/bit with current Square128 and SmallSplit owners; no number reserved here."
+  },
+  "future_integration_files": [
+    "src/tile/ir.rs (distinct forward statement)",
+    "src/ptx/graph/indexed_loss.rs (schedule/eligibility/dispatch)",
+    "src/ptx/graph.rs (whole-original snapshot/fallback and actual metadata)",
+    "src/ptx/executor.rs (option/cache identity)",
+    "src/ptx/linear/program.rs (bound option propagation)",
+    "src/ptx/mixed.rs (option and actual selected counter)"
+  ],
+  "eligibility": [
+    "Original standalone forward IR only, vocab4096, positive checked rows and rows*4096 <= u32::MAX.",
+    "Original forward threads32/output_len=rows, exact three-parameter ABI: F32/BF16 logits, validated F32 or U32 targets, F32 output.",
+    "Require target shared limit >=17412, actual JIT shared/capacity/local-memory guards; unsupported case restores original kernel."
+  ],
+  "lowering": [
+    "Block256 owns one full row. All lanes enter statistics before any return; never call old forward_row() first.",
+    "Distinct MAX[256], EXP[4096], SUM[1] F32 shared, total17412bytes. Eleven uniform barriers complete before followers exit.",
+    "Lane0 then loads the same validated target/logit and emits original (maximum-target_logit)+existing_log(sum), same operation order.",
+    "Cooperative exp uses existing typed loads/emit_exp; original +0 increasing-column sum with sixteen prefetched terms followed by sixteen dependent adds; no sum tree."
+  ],
+  "visibility": "Existing cooperative_ordered::row_stats_ordered_sum and data fields are pub(super) and accessible from indexed_loss descendants; no current backward visibility changes required. At future integration update its backward-only explanatory comment.",
+  "fallback_contract": [
+    "Snapshot ORIGINAL complete optimized TileGraph before either forward/backward transform.",
+    "Whole-module optional failure restores ORIGINAL IR and recomputes launch metadata from actual final graph; forward fallback MUST be32threads/output_len=rows, not candidate256.",
+    "Define/test combined flags atomically: suggested any optional-module failure -> all-original module and both actual counters reflect selected old kernels.",
+    "Selected new forward has256threads/output_len=rows. Counters derive final selected graph, never requested flags."
+  ],
+  "qualification_required": [
+    "Compile and review all disconnected source before declaring it.",
+    "Stats max/EXP/SUM and scalar loss exact non-NaN bits/NaN classes versus original; near-zero, signedzero, subnormals, infinities, all65536physicalBF16 patterns. Existing backward stats diagnostic may be reused, but forward direct test alone does not prove stats bits.",
+    "F32/U32 target typed tests and invalid target prevalidation; changed feeds/targets; all four forward/backward bool combinations and Off/On/Off cache identity.",
+    "Forced descriptor and actual JIT rejection checks restored PtxGraph32-thread launch and actual zero counters, including both flags.",
+    "Resident evolving[1,2,1] state/moments, replay/direct bindings, invalid-update rollback/recovery, fixed full-model numerical gates.",
+    "Actual driver resources and assembly auditing; no inferred occupancy or speedup."
+  ],
+  "test_sketch_placement": "future_integration_tests.rs intentionally references future API and private MixedExecutor fields. Move into a mixed child module at integration; do not register under indexed_loss.",
+  "tradeoff": "Old32-thread no-shared forward becomes256threads/17412Bshared; no global payload reduction and no performance claim. Current backward and forward remain unchanged by these undeclared files."
+}

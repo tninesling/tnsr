@@ -2,20 +2,24 @@
 use super::*;
 use std::collections::HashSet;
 
-struct Allocation {
-    binding: Binding,
-    first: usize,
-    last: usize,
-    pinned: bool,
-}
-struct Slot {
-    original: usize,
-    binding: Binding,
-    last: usize,
-    pinned: bool,
-}
+mod plan;
+use plan::{Allocation, plan_slots};
+
 impl MixedExecutor {
-    pub(super) fn reuse_intermediates<G>(&mut self, graph: &TensorGraph<f32, G>) -> Result<()> {
+    pub(super) fn reuse_intermediates<G>(
+        &mut self,
+        graph: &TensorGraph<f32, G>,
+        future: &HashSet<NodeIndex>,
+        previous_retained_bytes: usize,
+    ) -> Result<usize> {
+        self.freshness.dirty();
+        self.borrowed_prefixes.clear();
+        if let Some(preparation) = &mut self.attention_training_preparation {
+            preparation.capture(&self.values, &self.kernels);
+        }
+        if let Some(preparation) = &mut self.online_attention_pair_preparation {
+            preparation.capture_before_reuse(&self.values, &self.kernels);
+        }
         // Resident consumers read graph sinks after execution. Sources retain
         // stable addresses for feed uploads and immutable constant caching.
         let retained: HashSet<_> = graph
@@ -34,6 +38,10 @@ impl MixedExecutor {
             .iter()
             .filter_map(|n| self.values.get(n).map(|v| v.binding.pointer))
             .collect();
+        let live: HashSet<_> = future
+            .iter()
+            .filter_map(|node| self.values.get(node).map(|v| v.binding.pointer))
+            .collect();
         for program in &mut self.programs {
             if let Some(p) = program.downcast_mut::<Program<F32>>() {
                 self.buffers.extend(p.drain_storage());
@@ -43,87 +51,68 @@ impl MixedExecutor {
             }
         }
         let end = self.kernels.len();
-        let mut allocations: Vec<_> = self
+        let allocations: Vec<_> = self
             .buffers
             .iter()
             .map(|buffer| {
                 let binding = binding(buffer, &self.stream);
                 Allocation {
                     binding,
-                    first: end,
-                    last: 0,
                     pinned: pinned.contains(&binding.pointer),
+                    future_live: live.contains(&binding.pointer),
                 }
             })
             .collect();
-        let indices: HashMap<_, _> = allocations
-            .iter()
-            .enumerate()
-            .map(|(i, a)| (a.binding.pointer, i))
-            .collect();
-        for (step, kernel) in self.kernels.iter().enumerate() {
-            for pointer in kernel
+        let uses = self.kernels.iter().enumerate().flat_map(|(step, kernel)| {
+            kernel
                 .pointers
                 .iter()
                 .copied()
                 .chain(kernel.zero_before.map(|b| b.pointer))
-            {
-                if let Some(&index) = indices.get(&pointer) {
-                    let a = &mut allocations[index];
-                    a.first = a.first.min(step);
-                    a.last = step;
-                }
-            }
+                .map(move |pointer| (step, pointer))
+        });
+        // Prospective LN reads are reserved at their ORIGINAL target kernel
+        // positions before any prefix can recycle an early-dead saved buffer.
+        let prospective = self
+            .layer_norm_preparation
+            .as_ref()
+            .map(|p| p.prospective_uses())
+            .unwrap_or_default();
+        let attention_uses = self
+            .attention_training_preparation
+            .as_ref()
+            .map(|p| p.prospective_uses(&self.kernels))
+            .unwrap_or_default();
+        let online_uses = self
+            .online_attention_pair_preparation
+            .as_ref()
+            .map(|p| p.prospective_uses(&self.kernels))
+            .unwrap_or_default();
+        let (slots, remap) = plan_slots(
+            &allocations,
+            uses.chain(prospective)
+                .chain(attention_uses)
+                .chain(online_uses),
+            end,
+        )?;
+        if let Some(preparation) = &mut self.attention_training_preparation {
+            preparation.remap(&remap);
         }
-        for a in &mut allocations {
-            if a.pinned {
-                a.first = 0;
-                a.last = end;
-            }
+
+        if let Some(preparation) = &mut self.layer_norm_preparation {
+            preparation.remap(&remap);
         }
-        let mut order: Vec<_> = (0..allocations.len()).collect();
-        order.sort_by_key(|&i| allocations[i].first);
-        let mut slots: Vec<Slot> = Vec::new();
-        let mut remap = HashMap::new();
-        for index in order {
-            let a = &allocations[index];
-            // Match the smallest available allocation. A kernel's inputs and
-            // outputs overlap at that step, so only strictly earlier deaths
-            // can be reused. Dtypes never share a slot.
-            let available = (!a.pinned)
-                .then(|| {
-                    slots
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, s)| {
-                            !s.pinned
-                                && s.last < a.first
-                                && s.binding.dtype == a.binding.dtype
-                                && s.binding.len >= a.binding.len
-                        })
-                        .min_by_key(|(_, s)| s.binding.len)
-                        .map(|(i, _)| i)
-                })
-                .flatten();
-            let slot = if let Some(i) = available {
-                self.info.reused_allocations += 1;
-                slots[i].last = a.last;
-                i
-            } else {
-                slots.push(Slot {
-                    original: index,
-                    binding: a.binding,
-                    last: a.last,
-                    pinned: a.pinned,
-                });
-                slots.len() - 1
-            };
-            remap.insert(a.binding.pointer, slots[slot].binding.pointer);
+        if let Some(preparation) = &mut self.online_attention_pair_preparation {
+            preparation.remap(&remap);
         }
+        self.info.reused_allocations += allocations.len() - slots.len();
         let old_sources: Vec<_> = self
             .sources
             .iter()
-            .map(|(&node, &index)| (node, allocations[index].binding.pointer))
+            .filter_map(|(&node, &storage)| match storage {
+                SourceStorage::Owned(index) => Some((node, allocations[index].binding.pointer)),
+                SourceStorage::External => None,
+            })
             .collect();
         let mut buffers: Vec<_> = std::mem::take(&mut self.buffers)
             .into_iter()
@@ -145,9 +134,11 @@ impl MixedExecutor {
         for (node, pointer) in old_sources {
             self.sources.insert(
                 node,
-                *source_slots
-                    .get(&remap[&pointer])
-                    .context("source slot missing")?,
+                SourceStorage::Owned(
+                    *source_slots
+                        .get(&remap[&pointer])
+                        .context("source slot missing")?,
+                ),
             );
         }
         for kernel in &mut self.kernels {
@@ -160,13 +151,26 @@ impl MixedExecutor {
                 b.pointer = *remap.get(&b.pointer).unwrap_or(&b.pointer);
             }
         }
-        self.values.retain(|node, _| retained.contains(node));
+        self.values
+            .retain(|node, _| retained.contains(node) || future.contains(node));
         for value in self.values.values_mut() {
             value.binding.pointer = *remap
                 .get(&value.binding.pointer)
                 .unwrap_or(&value.binding.pointer);
         }
-        self.info.unpooled_bytes = self.info.f32_bytes + self.info.bf16_bytes;
+        let allocated_bytes = self
+            .info
+            .f32_bytes
+            .checked_add(self.info.bf16_bytes)
+            .context("mixed allocation byte count overflow")?;
+        let newly_allocated = allocated_bytes
+            .checked_sub(previous_retained_bytes)
+            .context("mixed retained allocation accounting decreased")?;
+        self.info.unpooled_bytes = self
+            .info
+            .unpooled_bytes
+            .checked_add(newly_allocated)
+            .context("mixed unpooled byte count overflow")?;
         self.info.f32_bytes = 0;
         self.info.bf16_bytes = 0;
         for buffer in &self.buffers {
@@ -180,6 +184,6 @@ impl MixedExecutor {
         // Original alloc_zeros may still be queued. Fence before dropping any
         // discarded owner; the remapped program has not launched or captured.
         self.stream.synchronize()?;
-        Ok(())
+        Ok(self.info.f32_bytes + self.info.bf16_bytes)
     }
 }

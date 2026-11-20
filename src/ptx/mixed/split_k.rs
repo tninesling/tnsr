@@ -1,4 +1,5 @@
 //! Long BF16 contractions use f32 partials and exactly one BF16 output store.
+mod rectangle;
 use super::*;
 use crate::tile::{Dim, Expr, MatMulRegion, MatMulSchedule, ir::MatrixLayout};
 
@@ -173,31 +174,132 @@ impl MixedExecutor {
                 region = wider;
             }
         }
-        let mut tiles = TileGraph::from_graph(&TensorGraph::<f32>::new());
-        tiles.add_matmul_regions(&[region.clone()])?;
-        // The MMA accumulator and epilogue registers are already f32. Only the
-        // destination storage changes; input addressing/loads remain BF16.
-        for param in &mut tiles.matmul_region_kernels[0].ir.params {
-            if !param.is_input {
-                param.dtype = DType::F32;
+        // Keep all original packing and wider fallback decisions above. The
+        // experiment may replace only this finalized, already-bound partial.
+        let rectangle_requested =
+            self.split_k_bf16_tile_policy == crate::tile::SplitKBf16TilePolicy::Rectangle128x64;
+        let original_region = rectangle_requested.then(|| region.clone());
+        let canonical_policy = if rectangle_requested {
+            crate::tile::SplitKBf16TilePolicy::Square64
+        } else {
+            self.split_k_bf16_tile_policy
+        };
+        let candidate = canonical_policy
+            .candidate(
+                &region,
+                4,
+                k,
+                target.matmul_resources,
+                self.split_k_shared_memory_reuse,
+            )
+            .and_then(|c| {
+                c.partial_ir(
+                    &region,
+                    target.matmul_resources,
+                    target.supports_async_copy(),
+                )
+            });
+        let mut selected = false;
+        let mut function = None;
+        if let Some((schedule, ir)) = candidate {
+            let mut probe = region.clone();
+            probe.schedule = schedule;
+            // The full generated source is the driver module identity. Include
+            // the policy ABI, target, precision, exact input maps/dtypes and
+            // chosen schedule as explicit diagnostics in that same source.
+            let identity = format!(
+                "policy={} target={target:?} precision={precision:?} region={probe:?} output=F32 reducer=left4-bf16rn-v1",
+                String::from_utf8_lossy(canonical_policy.codegen_tag()),
+            );
+            if let Ok(proposed) =
+                compile_partial(&self.stream, target, &probe, Some(ir), Some(&identity))
+            {
+                let resources_fit = (|| -> Result<bool> {
+                    Ok(proposed.num_regs()? <= 128
+                        && proposed.shared_size_bytes()? == 18432
+                        && proposed.local_size_bytes()? == 0
+                        && proposed.max_threads_per_block()? >= 256
+                        && proposed.occupancy_max_active_blocks_per_multiprocessor(256, 0, None)?
+                            >= 2)
+                })()
+                .unwrap_or(false);
+                if resources_fit {
+                    region = probe;
+                    function = Some(proposed);
+                    selected = true;
+                }
             }
         }
-        tiles.optimize_indices()?;
-        let ptx = PtxGraph::from(tiles).with_target(target);
-        let module = self
-            .stream
-            .context()
-            .load_module(Ptx::from_src(ptx.to_ptx()))?;
-        let name = ptx
-            .matmul_region_kernel_name(0)
-            .context("split matmul kernel missing")?;
+        // The existing region/function is an immutable complete fallback until
+        // every late rectangle check succeeds; no old-function/new-grid mix.
+        let mut rectangle_selected = false;
+        if rectangle_requested {
+            let diagnostic = format!("node={} [{m},{k}]x[{k},{n}]", node.index());
+            let proposal = if selected {
+                rectangle::propose(
+                    &self.stream,
+                    target,
+                    precision,
+                    original_region
+                        .as_ref()
+                        .context("rectangle source snapshot missing")?,
+                    #[cfg(test)]
+                    self.split_k_rectangle_test_resource_rejection,
+                )
+            } else {
+                Err(anyhow::anyhow!(
+                    "current Square64 fallback unavailable or outside exact physical family"
+                ))
+            };
+            match proposal {
+                Ok((proposed_region, proposed_function, resources)) => {
+                    region = proposed_region;
+                    function = Some(proposed_function);
+                    rectangle_selected = true;
+                    self.info.split_k_rectangle128x64_programs += 1;
+                    self.info
+                        .split_k_rectangle128x64_selections
+                        .push(format!("{diagnostic} {resources}"));
+                }
+                Err(error) => {
+                    self.info.split_k_rectangle128x64_fallback_programs += 1;
+                    self.info
+                        .split_k_rectangle128x64_rejections
+                        .push(format!("{diagnostic}: {error:#}"));
+                }
+            }
+        }
+        let function = match function {
+            Some(function) => function,
+            None => compile_partial(&self.stream, target, &region, None, None)?,
+        };
+        if selected && !rectangle_selected {
+            self.info.split_k_square64_programs += 1;
+        } else if !selected
+            && self.split_k_bf16_tile_policy != crate::tile::SplitKBf16TilePolicy::Off
+        {
+            self.info.split_k_square64_fallback_programs += 1;
+        }
         let (_, partial) = self.alloc(node, vec![4, m, n], DType::F32)?;
         self.kernels.push(Kernel {
-            label: format!(
-                "node={} BF16 split-K partial [{m},{k}]x[{k},{n}]",
-                node.index()
-            ),
-            function: module.load_function(name)?,
+            owner: None,
+            label: if rectangle_selected {
+                format!(
+                    "node={} BF16 split-K partial [{m},{k}]x[{k},{n}] rectangle128x64=true",
+                    node.index()
+                )
+            } else if selected {
+                format!(
+                    "node={} BF16 split-K partial [{m},{k}]x[{k},{n}] square64=true",
+                    node.index()
+                )
+            } else {
+                format!(
+                    "node={} BF16 split-K partial [{m},{k}]x[{k},{n}]",
+                    node.index()
+                )
+            },
+            function,
             config: LaunchConfig {
                 grid_dim: (
                     u32::try_from(n.div_ceil(region.schedule.block_tile.n))?,
@@ -264,11 +366,24 @@ impl MixedExecutor {
             });
         tiles.optimize_indices()?;
         let ptx = PtxGraph::from(tiles).with_target(target);
-        let module = self
-            .stream
-            .context()
-            .load_module(Ptx::from_src(ptx.to_ptx()))?;
+        let source = ptx.to_ptx();
+        #[cfg(test)]
+        if let Some(directory) = std::env::var_os("TNSR_SPLIT_K_SQUARE_PTX_DIR") {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory)?;
+            let path = directory.join(format!("reducer-{m}-{n}.ptx"));
+            if path.exists() {
+                ensure!(
+                    std::fs::read(&path)? == source.as_bytes(),
+                    "preserve differing reducer PTX export"
+                );
+            } else {
+                std::fs::write(&path, &source)?;
+            }
+        }
+        let module = self.stream.context().load_module(Ptx::from_src(source))?;
         self.kernels.push(Kernel {
+            owner: None,
             label: format!("node={} f32 split-K sum to BF16 [{m},{n}]", node.index()),
             function: module.load_function(
                 ptx.region_kernel_name(0)
@@ -281,4 +396,77 @@ impl MixedExecutor {
         self.info.bf16_tensor_core_programs += 1;
         Ok(Some(output))
     }
+}
+
+/// Compile an immutable partial with the same typed operands and F32 output.
+/// A failed opt-in compilation/resource query is discarded before installing
+/// its schedule or function; the caller compiles the complete baseline instead.
+fn compile_partial(
+    stream: &Arc<CudaStream>,
+    target: PtxTarget,
+    region: &MatMulRegion,
+    replacement: Option<crate::tile::TileIR>,
+    identity: Option<&str>,
+) -> Result<cudarc::driver::CudaFunction> {
+    let mut tiles = TileGraph::from_graph(&TensorGraph::<f32>::new());
+    tiles.add_matmul_regions(std::slice::from_ref(region))?;
+    if let Some(ir) = replacement {
+        tiles.matmul_region_kernels[0].ir = ir;
+    }
+    // The MMA accumulator and epilogue registers are already F32. Only the
+    // destination storage changes; input addressing and loads remain BF16.
+    for param in &mut tiles.matmul_region_kernels[0].ir.params {
+        if !param.is_input {
+            param.dtype = DType::F32;
+        }
+    }
+    tiles.optimize_indices()?;
+    let ptx = PtxGraph::from(tiles).with_target(target);
+    let mut source = ptx.to_ptx();
+    if let Some(identity) = identity {
+        // Debug metadata is single-line and trusted internal Rust descriptors.
+        source.push_str("\n// ");
+        source.push_str(identity);
+        source.push('\n');
+    }
+    #[cfg(test)]
+    let artifact = if let Some(directory) = std::env::var_os("TNSR_SPLIT_K_SQUARE_PTX_DIR") {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory)?;
+        let prefix = directory.join(format!(
+            "compiled-{}-{}-{}-{}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+            region.m,
+            region.n,
+            region.k,
+            if region.schedule.block_tile.m == 128 && identity.is_some() {
+                "rectangle128x64"
+            } else if identity.is_some() {
+                "square64"
+            } else {
+                "baseline"
+            }
+        ));
+        std::fs::write(prefix.with_extension("ptx"), &source)?;
+        Some(prefix)
+    } else {
+        None
+    };
+    let module = stream.context().load_module(Ptx::from_src(source))?;
+    let function = module.load_function(
+        ptx.matmul_region_kernel_name(0)
+            .context("split matmul kernel missing")?,
+    )?;
+    #[cfg(test)]
+    if let Some(prefix) = artifact {
+        let resources = serde_json::json!({"policy_identity":identity,"m":region.m,"n":region.n,"part_k":region.k,"registers":function.num_regs()?,"shared":function.shared_size_bytes()?,"local":function.local_size_bytes()?,"block":region.schedule.block_threads,"api_max_active_blocks_per_sm":function.occupancy_max_active_blocks_per_multiprocessor(256,0,None)?,"scope":"actual driver JIT resources; capacity is not achieved occupancy"});
+        std::fs::write(
+            prefix.with_extension("resources.json"),
+            serde_json::to_vec_pretty(&resources)?,
+        )?;
+    }
+    Ok(function)
 }

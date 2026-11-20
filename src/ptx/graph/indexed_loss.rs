@@ -1,5 +1,7 @@
 //! Schedule ordered f32 indexed losses by row, including promoted BF16 logits.
 use super::*;
+mod cooperative_ordered;
+mod cooperative_ordered_forward;
 
 pub(super) const ROW_THREADS: u32 = 256;
 
@@ -9,6 +11,8 @@ pub(super) struct RowSchedule {
     pub vocabulary: usize,
     pub output_len: usize,
     pub threads: u32,
+    pub cooperative_ordered_backward: bool,
+    pub cooperative_ordered_forward: bool,
 }
 
 pub(super) fn schedule<'a>(
@@ -32,6 +36,8 @@ pub(super) fn schedule<'a>(
         vocabulary,
         output_len: rows * vocabulary,
         threads: ROW_THREADS,
+        cooperative_ordered_backward: false,
+        cooperative_ordered_forward: false,
     })
 }
 
@@ -47,6 +53,37 @@ pub(super) fn schedule_for_ir(ir: &TileIR) -> Option<RowSchedule> {
         return None;
     }
     ir.body.stmts.iter().find_map(|s| match s {
+        Stmt::IndexedCrossEntropyCooperativeOrdered {
+            vocabulary,
+            row_count,
+        } => {
+            let mut row = schedule(
+                *vocabulary,
+                *row_count,
+                ir.params.iter().map(|p| (p.name.as_str(), p.dtype)),
+            )?;
+            if *vocabulary != 4096 || !forward_parameters(ir) {
+                return None;
+            }
+            row.output_len = *row_count;
+            row.cooperative_ordered_forward = true;
+            Some(row)
+        }
+        Stmt::IndexedCrossEntropyBackwardCooperativeOrdered {
+            vocabulary,
+            row_count,
+        } => {
+            let mut schedule = schedule(
+                *vocabulary,
+                *row_count,
+                ir.params.iter().map(|p| (p.name.as_str(), p.dtype)),
+            )?;
+            if *vocabulary != 4096 || !cooperative_parameters(ir) {
+                return None;
+            }
+            schedule.cooperative_ordered_backward = true;
+            Some(schedule)
+        }
         Stmt::IndexedCrossEntropyBackward {
             vocabulary,
             row_count,
@@ -148,6 +185,42 @@ pub(super) fn lower_backward<'a>(
         addr: sum_address,
         vec: super::super::instructions::VecWidth::Scalar,
     });
+    lower_backward_columns(func, ctx, vocabulary, row, lane, row_start, maximum, sum);
+}
+
+pub(super) fn lower_cooperative_ordered_backward<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    vocabulary: usize,
+) {
+    debug_assert_eq!(vocabulary, 4096);
+    let row = lower_expr(func, ctx, &Expr::BlockIdx(Dim::X));
+    let lane = lower_expr(func, ctx, &Expr::ThreadIdx(Dim::X));
+    let row_start = multiply_u64(func, row.clone(), vocabulary);
+    let stats = cooperative_ordered::row_stats_ordered_sum(func, ctx, row_start.clone());
+    lower_backward_columns(
+        func,
+        ctx,
+        vocabulary,
+        row,
+        lane,
+        row_start,
+        stats.maximum,
+        stats.sum,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_backward_columns<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    vocabulary: usize,
+    row: Operand<'a, U64>,
+    lane: Operand<'a, U64>,
+    row_start: Operand<'a, U64>,
+    maximum: Operand<'a, F32>,
+    sum: Operand<'a, F32>,
+) {
     let target = load_index_at(func, ctx, "targets", row.clone());
     let upstream = load_param_f32_at(func, ctx, "grad_output", row);
     let columns = begin_strided_counted_loop(
@@ -194,3 +267,144 @@ pub(super) fn lower_backward<'a>(
 #[cfg(test)]
 #[path = "indexed_loss_tests.rs"]
 mod tests;
+
+fn cooperative_parameters(ir: &TileIR) -> bool {
+    ir.shared_mem_bytes == 0
+        && ir.params.len() == 4
+        && [
+            ("logits", true),
+            ("targets", true),
+            ("grad_output", true),
+            ("output", false),
+        ]
+        .iter()
+        .all(|(name, input)| {
+            ir.params
+                .iter()
+                .filter(|p| {
+                    p.name == *name
+                        && p.is_input == *input
+                        && match *name {
+                            "logits" => matches!(p.dtype, DType::F32 | DType::BF16),
+                            "targets" => matches!(p.dtype, DType::F32 | DType::U32),
+                            _ => p.dtype == DType::F32,
+                        }
+                })
+                .count()
+                == 1
+        })
+}
+
+pub(super) fn cooperative_ordered_eligible(ir: &TileIR, shared_limit: usize) -> bool {
+    let Some(schedule) = schedule_for_ir(ir) else {
+        return false;
+    };
+    schedule.vocabulary == 4096
+        && shared_limit >= cooperative_ordered::SHARED_BYTES
+        && cooperative_parameters(ir)
+        && ir
+            .body
+            .stmts
+            .iter()
+            .any(|s| matches!(s, Stmt::IndexedCrossEntropyBackward { .. }))
+}
+
+pub(super) fn enable_cooperative_ordered_backward(ir: &mut TileIR, shared_limit: usize) -> bool {
+    if !cooperative_ordered_eligible(ir, shared_limit) {
+        return false;
+    }
+    let Some(stmt) = ir
+        .body
+        .stmts
+        .iter_mut()
+        .find(|s| matches!(s, Stmt::IndexedCrossEntropyBackward { .. }))
+    else {
+        return false;
+    };
+    let (vocabulary, row_count) = match stmt {
+        Stmt::IndexedCrossEntropyBackward {
+            vocabulary,
+            row_count,
+        } => (*vocabulary, *row_count),
+        _ => return false,
+    };
+    *stmt = Stmt::IndexedCrossEntropyBackwardCooperativeOrdered {
+        vocabulary,
+        row_count,
+    };
+    ir.kernel_name.push_str("_cooperative_ordered_backward");
+    true
+}
+
+pub(super) fn cooperative_ordered_resources_fit(
+    shared: usize,
+    local: usize,
+    max_threads: i32,
+    active_blocks: u32,
+    shared_limit: usize,
+) -> bool {
+    shared >= cooperative_ordered::SHARED_BYTES
+        && shared <= shared_limit
+        && local == 0
+        && max_threads >= 256
+        && active_blocks >= 1
+}
+
+#[cfg(test)]
+mod cooperative_tests;
+
+pub(super) fn forward_parameters(ir: &TileIR) -> bool {
+    ir.params.len() == 3
+        && [("logits", true), ("targets", true), ("output", false)]
+            .iter()
+            .all(|(name, input)| {
+                ir.params
+                    .iter()
+                    .filter(|p| {
+                        p.name == *name
+                            && p.is_input == *input
+                            && match *name {
+                                "logits" => matches!(p.dtype, DType::F32 | DType::BF16),
+                                "targets" => matches!(p.dtype, DType::F32 | DType::U32),
+                                _ => p.dtype == DType::F32,
+                            }
+                    })
+                    .count()
+                    == 1
+            })
+}
+pub(super) fn forward_eligible(ir: &TileIR, limit: usize) -> bool {
+    schedule_for_ir(ir).is_some_and(|s| s.vocabulary == 4096 && s.threads == 32 && s.rows > 0)
+        && ir.shared_mem_bytes == 0
+        && limit >= cooperative_ordered::SHARED_BYTES
+        && forward_parameters(ir)
+        && ir
+            .body
+            .stmts
+            .iter()
+            .any(|s| matches!(s, Stmt::IndexedCrossEntropy { .. }))
+}
+pub(super) fn enable_cooperative_ordered_forward(ir: &mut TileIR, limit: usize) -> bool {
+    if !forward_eligible(ir, limit) {
+        return false;
+    }
+    for stmt in &mut ir.body.stmts {
+        if let Stmt::IndexedCrossEntropy {
+            vocabulary,
+            row_count,
+        } = stmt
+        {
+            *stmt = Stmt::IndexedCrossEntropyCooperativeOrdered {
+                vocabulary: *vocabulary,
+                row_count: *row_count,
+            };
+            ir.kernel_name.push_str("_cooperative_ordered_forward");
+            return true;
+        }
+    }
+    false
+}
+pub(super) use cooperative_ordered_forward::lower_forward as lower_cooperative_ordered_forward;
+
+#[cfg(test)]
+mod forward_tests;

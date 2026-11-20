@@ -49,15 +49,23 @@ impl Updates {
                     .iter()
                     .map(|&i| {
                         let range = &owner.parameters[i].range;
-                        (range.start, range.len())
+                        (
+                            range.start,
+                            range.len(),
+                            owner.parameters[i].health_range.start,
+                        )
                     })
                     .collect();
                 let max_len = descriptors
                     .iter()
-                    .map(|&(_, len)| len)
+                    .map(|&(_, len, _)| len)
                     .max()
                     .context("empty resident update batch")?;
-                ir.push(kernels::adam_batch(&descriptors, owner.padded_len)?);
+                ir.push(kernels::adam_batch(
+                    &descriptors,
+                    owner.padded_len,
+                    owner.staging.health.len(),
+                )?);
                 covered.extend(chunk.iter().copied());
                 batches.push(Batch {
                     parameters: chunk.to_vec(),

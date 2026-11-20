@@ -519,11 +519,14 @@ pub enum Inst<'a> {
     AddI64(AddInst<'a, I64>),
     AddU64(AddInst<'a, U64>),
     AddF32(AddInst<'a, F32>),
+    AddRnF32(AddInst<'a, F32>),
     SubU64(SubInst<'a, U64>),
     SubF32(SubInst<'a, F32>),
+    SubRnF32(SubInst<'a, F32>),
     MulI32(MulInst<'a, I32>),
     MulU64(MulInst<'a, U64>),
     MulF32(MulInst<'a, F32>),
+    MulRnF32(MulInst<'a, F32>),
     DivU64(DivInst<'a, U64>),
     DivF32(DivInst<'a, F32>),
     MaxF32(MaxInst<'a, F32>),
@@ -547,6 +550,16 @@ pub enum Inst<'a> {
     SetpU64(SetpInst<'a, U64>),
     SetpI32(SetpInst<'a, I32>),
     SetpF32(SetpInst<'a, F32>),
+    PackBf16Pair {
+        dst: Operand<'a, B32>,
+        lo: Operand<'a, BF16>,
+        hi: Operand<'a, BF16>,
+    },
+    StGlobalB32 {
+        addr: Operand<'a, U64>,
+        src: Operand<'a, B32>,
+    },
+    SelpB32(SelpInst<'a, B32>),
     SelpF32(SelpInst<'a, F32>),
     SelpU64(SelpInst<'a, U64>),
     ShflSyncIdxB32 {
@@ -654,6 +667,25 @@ pub enum Inst<'a> {
         a_frags: Vec<Operand<'a, B32>>,
         b_frags: Vec<Operand<'a, B32>>,
         c_frags: Vec<Operand<'a, F32>>,
+    },
+    LdMatrixX4TransB16 {
+        frags: Vec<Operand<'a, B32>>,
+        addr: Operand<'a, U64>,
+    },
+    LdMatrixX4B16 {
+        frags: Vec<Operand<'a, B32>>,
+        addr: Operand<'a, U64>,
+    },
+    MmaBf16M16N8K16 {
+        d_frags: Vec<Operand<'a, F32>>,
+        a_frags: Vec<Operand<'a, B32>>,
+        b_frags: Vec<Operand<'a, B32>>,
+        c_frags: Vec<Operand<'a, F32>>,
+    },
+    #[cfg(test)]
+    LdSharedB32 {
+        dst: Operand<'a, B32>,
+        addr: Operand<'a, U64>,
     },
     MmaM16N8K16 {
         d_frags: Vec<Operand<'a, F32>>,
@@ -784,6 +816,16 @@ impl<'a> Inst<'a> {
 
     pub fn add_f32(dst: Operand<'a, F32>, a: Operand<'a, F32>, b: Operand<'a, F32>) -> Self {
         Inst::AddF32(AddInst::new(dst, a, b))
+    }
+
+    pub fn add_rn_f32(dst: Operand<'a, F32>, a: Operand<'a, F32>, b: Operand<'a, F32>) -> Self {
+        Inst::AddRnF32(AddInst::new(dst, a, b))
+    }
+    pub fn sub_rn_f32(dst: Operand<'a, F32>, a: Operand<'a, F32>, b: Operand<'a, F32>) -> Self {
+        Inst::SubRnF32(SubInst::new(dst, a, b))
+    }
+    pub fn mul_rn_f32(dst: Operand<'a, F32>, a: Operand<'a, F32>, b: Operand<'a, F32>) -> Self {
+        Inst::MulRnF32(MulInst::new(dst, a, b))
     }
 
     pub fn sub_u64(dst: Operand<'a, U64>, a: Operand<'a, U64>, b: Operand<'a, U64>) -> Self {

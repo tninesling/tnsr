@@ -19,10 +19,39 @@ struct Tile {
 impl TileIR {
     /// Reject incompatible physical layouts instead of inferring conversions in PTX.
     pub fn validate_layouts(&self) -> Result<()> {
+        {
+            fn inspect(b: &Block) -> (usize, bool) {
+                b.stmts
+                    .iter()
+                    .fold((0, false), |(count, bounds), s| match s {
+                        Stmt::StoreBf16MmaCoalesced { .. } => (count + 1, bounds),
+                        Stmt::BoundsCheck { .. } => (count, true),
+                        Stmt::If { body, .. } | Stmt::ForLoop { body, .. } => {
+                            let (c, r) = inspect(body);
+                            (count + c, bounds || r)
+                        }
+                        _ => (count, bounds),
+                    })
+            }
+            let (all, bounds) = inspect(&self.body);
+            let top = self
+                .body
+                .stmts
+                .iter()
+                .filter(|s| matches!(s, Stmt::StoreBf16MmaCoalesced { .. }))
+                .count();
+            anyhow::ensure!(
+                all == top && top <= 1 && (all == 0 || !bounds),
+                "coalesced MMA output must be unique/top-level with no returning lanes"
+            );
+        }
         for param in self.params.iter().filter(|param| param.dtype == DType::U32) {
             let indexed_slot = self.body.stmts.iter().any(|stmt| match stmt {
                 Stmt::Embedding { .. } | Stmt::EmbeddingBackward { .. } => param.name == "indices",
-                Stmt::IndexedCrossEntropy { .. } | Stmt::IndexedCrossEntropyBackward { .. } => {
+                Stmt::IndexedCrossEntropyCooperativeOrdered { .. }
+                | Stmt::IndexedCrossEntropy { .. }
+                | Stmt::IndexedCrossEntropyBackward { .. }
+                | Stmt::IndexedCrossEntropyBackwardCooperativeOrdered { .. } => {
                     param.name == "targets"
                 }
                 Stmt::LoadIndex { source, .. } => source == &param.name,
@@ -33,14 +62,133 @@ impl TileIR {
                 "integer storage is only supported for indexed arguments"
             );
         }
-        validate(&self.body, &mut HashMap::new(), &self.params)
-            .with_context(|| format!("invalid layouts in {}", self.kernel_name))
+        for stmt in &self.body.stmts {
+            if let Stmt::IndexedCrossEntropyCooperativeOrdered {
+                vocabulary,
+                row_count,
+            } = stmt
+            {
+                anyhow::ensure!(
+                    *vocabulary == 4096
+                        && *row_count > 0
+                        && row_count
+                            .checked_mul(*vocabulary)
+                            .is_some_and(|n| n <= u32::MAX as usize),
+                    "cooperative forward requires full positive V4096 rows"
+                );
+                anyhow::ensure!(
+                    self.shared_mem_bytes == 0
+                        && self
+                            .body
+                            .stmts
+                            .iter()
+                            .filter(|s| !matches!(s, Stmt::BoundsCheck { .. }))
+                            .count()
+                            == 1,
+                    "cooperative forward requires standalone IR"
+                );
+                anyhow::ensure!(
+                    self.params.len() == 3
+                        && [("logits", true), ("targets", true), ("output", false)]
+                            .iter()
+                            .all(|(name, input)| self
+                                .params
+                                .iter()
+                                .filter(|p| p.name == *name
+                                    && p.is_input == *input
+                                    && match *name {
+                                        "logits" => matches!(p.dtype, DType::F32 | DType::BF16),
+                                        "targets" => matches!(p.dtype, DType::F32 | DType::U32),
+                                        _ => p.dtype == DType::F32,
+                                    })
+                                .count()
+                                == 1),
+                    "cooperative forward requires typed three-parameter ABI"
+                );
+            }
+            if let Stmt::IndexedCrossEntropyBackwardCooperativeOrdered {
+                vocabulary,
+                row_count,
+            } = stmt
+            {
+                anyhow::ensure!(
+                    *vocabulary == 4096
+                        && *row_count > 0
+                        && row_count
+                            .checked_mul(*vocabulary)
+                            .is_some_and(|n| n <= u32::MAX as usize),
+                    "cooperative ordered CE requires positive full V4096 rows"
+                );
+                anyhow::ensure!(
+                    self.shared_mem_bytes == 0
+                        && self
+                            .body
+                            .stmts
+                            .iter()
+                            .filter(|s| !matches!(s, Stmt::BoundsCheck { .. }))
+                            .count()
+                            == 1,
+                    "cooperative ordered CE must be a standalone kernel"
+                );
+                anyhow::ensure!(
+                    self.params.len() == 4
+                        && [
+                            ("logits", true),
+                            ("targets", true),
+                            ("grad_output", true),
+                            ("output", false)
+                        ]
+                        .iter()
+                        .all(|(name, input)| self
+                            .params
+                            .iter()
+                            .filter(|p| p.name == *name
+                                && p.is_input == *input
+                                && match *name {
+                                    "logits" => matches!(p.dtype, DType::F32 | DType::BF16),
+                                    "targets" => matches!(p.dtype, DType::F32 | DType::U32),
+                                    _ => p.dtype == DType::F32,
+                                })
+                            .count()
+                            == 1),
+                    "cooperative ordered CE storage/ABI mismatch"
+                );
+            }
+        }
+        // Legacy scalar kernels can declare just their accessed byte extent
+        // rather than the allocator's terminal 32-byte padding. Arena views
+        // require the full allocation contract; leave legacy validation intact.
+        let shared_limit = if contains_shared_arena(&self.body) {
+            self.shared_mem_bytes
+        } else {
+            usize::MAX
+        };
+        validate(
+            &self.body,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+            &mut 0,
+            shared_limit,
+            &self.params,
+        )
+        .with_context(|| format!("invalid layouts in {}", self.kernel_name))
     }
+}
+
+fn contains_shared_arena(block: &Block) -> bool {
+    block.stmts.iter().any(|stmt| match stmt {
+        Stmt::AllocSharedArena { .. } => true,
+        Stmt::If { body, .. } | Stmt::ForLoop { body, .. } => contains_shared_arena(body),
+        _ => false,
+    })
 }
 
 fn validate(
     block: &Block,
     tiles: &mut HashMap<TileVar, Tile>,
+    arenas: &mut HashMap<TileVar, usize>,
+    allocated_bytes: &mut usize,
+    shared_limit: usize,
     params: &[super::KernelParam],
 ) -> Result<()> {
     let get = |tiles: &HashMap<TileVar, Tile>, var: &TileVar| {
@@ -51,6 +199,57 @@ fn validate(
     };
     for stmt in &block.stmts {
         match stmt {
+            Stmt::AllocSharedArena { arena, bytes } => {
+                anyhow::ensure!(
+                    !tiles.contains_key(arena) && !arenas.contains_key(arena),
+                    "shared arena {} is already defined",
+                    arena.0
+                );
+                anyhow::ensure!(
+                    *bytes > 0 && bytes.is_multiple_of(32),
+                    "shared arena size must be a positive multiple of 32 bytes"
+                );
+                reserve_shared(allocated_bytes, *bytes, shared_limit)?;
+                arenas.insert(*arena, *bytes);
+            }
+            Stmt::ViewSharedArena {
+                dest,
+                arena,
+                byte_offset,
+                dtype,
+                layout,
+                rows,
+                cols,
+            } => {
+                let bytes = arenas.get(arena).context("shared arena is missing")?;
+                anyhow::ensure!(
+                    !tiles.contains_key(dest) && !arenas.contains_key(dest),
+                    "shared arena view {} is already defined",
+                    dest.0
+                );
+                anyhow::ensure!(
+                    *dtype != DType::U32 && *rows > 0 && *cols > 0,
+                    "shared arena view requires nonempty floating-point storage"
+                );
+                anyhow::ensure!(
+                    byte_offset.is_multiple_of(32),
+                    "shared arena view must start at a 32-byte boundary"
+                );
+                layout.validate(*rows, *cols, *dtype)?;
+                let end = byte_offset
+                    .checked_add(layout.allocation_bytes(*rows, *cols, *dtype))
+                    .context("shared arena view extent overflows usize")?;
+                anyhow::ensure!(end <= *bytes, "shared arena view exceeds its arena");
+                tiles.insert(
+                    *dest,
+                    Tile {
+                        layout: TileLayout::Shared(*layout),
+                        dtype: *dtype,
+                        rows: *rows,
+                        cols: *cols,
+                    },
+                );
+            }
             Stmt::AllocTile {
                 var,
                 space,
@@ -59,6 +258,10 @@ fn validate(
                 rows,
                 cols,
             } => {
+                anyhow::ensure!(
+                    !arenas.contains_key(var),
+                    "tile allocation cannot redefine a shared arena"
+                );
                 anyhow::ensure!(
                     *dtype != DType::U32,
                     "integer indices cannot be floating computation tiles"
@@ -69,8 +272,18 @@ fn validate(
                         *dtype == DType::F32
                             && matches!((*rows, *cols, *elements), (32, 32, 4) | (64, 64, 16))
                     }
+                    (MemorySpace::Fragment, layout) if layout.is_explicit_bf16_mma() => {
+                        *dtype == DType::F32
+                            && *rows == 128
+                            && *cols * 128 == layout.explicit_bf16_mma_elements() * 256
+                    }
                     (MemorySpace::Shared, TileLayout::Shared(layout)) => {
                         layout.validate(*rows, *cols, *dtype)?;
+                        reserve_shared(
+                            allocated_bytes,
+                            layout.allocation_bytes(*rows, *cols, *dtype),
+                            shared_limit,
+                        )?;
                         true
                     }
                     (
@@ -231,6 +444,21 @@ fn validate(
                         "matmul layout is incompatible with WMMA fragments"
                     );
                 }
+                let rectangular_explicit = get(tiles, dest)?.layout
+                    == TileLayout::Bf16MmaAccumulator128x64LdmatrixNn
+                    && schedule.is_nn128x64_ldmatrix_diagnostic();
+                anyhow::ensure!(
+                    rectangular_explicit
+                        || (schedule.fragment_load == super::MatMulFragmentLoad::PreloadAll
+                            && schedule.accumulator_exchange
+                                == super::MatMulAccumulatorExchange::FullTile)
+                        || (schedule.supports_streamed_fragment_windows()
+                            && schedule.pipeline_stages == 2
+                            && schedule.async_operands == (true, true)
+                            && schedule.copy_bytes == 16
+                            && schedule.reuse_shared_memory),
+                    "unsupported matmul accumulator exchange/fragment loading combination"
+                );
                 let dest = get(tiles, dest)?;
                 let expected = schedule.accumulator_tile_layout();
                 if let TileLayout::ThreadArray { .. } = expected {
@@ -247,6 +475,24 @@ fn validate(
                         ),
                     "matmul arithmetic and accumulator layout are incompatible"
                 );
+                let expected = if dest.layout.is_explicit_bf16_mma() {
+                    let b_column_major = match dest.layout {
+                        TileLayout::Bf16MmaAccumulator128x64LdmatrixNn => false,
+                        #[cfg(test)]
+                        TileLayout::Bf16MmaAccumulator128LdmatrixNn => false,
+                        _ => true,
+                    };
+                    anyhow::ensure!(
+                        (schedule.is_square128_streamed() || rectangular_explicit)
+                            && schedule.operand_dtype == DType::BF16
+                            && !schedule.operand_layouts.0.column_major
+                            && schedule.operand_layouts.1.column_major == b_column_major,
+                        "explicit BF16 MMA requires unchanged Square8 schedule and exact typed orientation"
+                    );
+                    dest.layout
+                } else {
+                    expected
+                };
                 anyhow::ensure!(
                     dest.layout == expected
                         && dest.dtype == DType::F32
@@ -255,10 +501,61 @@ fn validate(
                     "matmul accumulator layout does not match its schedule"
                 );
             }
+            Stmt::StoreBf16MmaCoalesced {
+                src,
+                output_param,
+                bias_param,
+                m,
+                n,
+            } => {
+                let src = get(tiles, src)?;
+                anyhow::ensure!(
+                    src.layout.is_explicit_bf16_mma()
+                        && src.dtype == DType::F32
+                        && src.rows == 128
+                        && src.cols * 128 == src.layout.explicit_bf16_mma_elements() * 256
+                        && *m >= 2048
+                        && *n >= 256
+                        && m.is_multiple_of(128)
+                        && n.is_multiple_of(128)
+                        && m.checked_mul(*n).and_then(|v| v.checked_mul(2)).is_some(),
+                    "coalesced output requires full explicit BF16 MMA tiles"
+                );
+                anyhow::ensure!(
+                    params
+                        .iter()
+                        .filter(|p| p.name == *output_param
+                            && !p.is_input
+                            && p.dtype == DType::BF16)
+                        .count()
+                        == 1,
+                    "coalesced output ABI mismatch"
+                );
+                if src.layout == TileLayout::Bf16MmaAccumulator128x64LdmatrixNn {
+                    anyhow::ensure!(
+                        bias_param.is_none(),
+                        "rectangular NN is strictly plain/no bias"
+                    );
+                }
+                if let Some(bias) = bias_param {
+                    anyhow::ensure!(
+                        params
+                            .iter()
+                            .filter(|p| p.name == *bias && p.is_input && p.dtype == DType::BF16)
+                            .count()
+                            == 1,
+                        "coalesced bias ABI mismatch"
+                    );
+                }
+            }
             Stmt::ExtractRegister { dest, src, index } => {
                 let (dest, src) = (get(tiles, dest)?, get(tiles, src)?);
-                let TileLayout::ThreadArray { elements } = src.layout else {
-                    anyhow::bail!("register extraction requires a thread array");
+                let elements = match src.layout {
+                    TileLayout::ThreadArray { elements } => elements,
+                    layout if layout.is_explicit_bf16_mma() => layout.explicit_bf16_mma_elements(),
+                    _ => anyhow::bail!(
+                        "register extraction requires a thread array or explicit MMA mapping"
+                    ),
                 };
                 anyhow::ensure!(
                     *index < elements
@@ -267,6 +564,60 @@ fn validate(
                         && dest.rows == 1
                         && dest.cols == 1,
                     "invalid register array extraction"
+                );
+            }
+            Stmt::StoreAccumulatorWindow {
+                dest,
+                src,
+                fragment_origin,
+                fragment_shape,
+            } => {
+                let (source, target) = (get(tiles, src)?, get(tiles, dest)?);
+                anyhow::ensure!(
+                    source.dtype == DType::F32 && target.dtype == DType::F32,
+                    "accumulator window requires F32 storage"
+                );
+                let TileLayout::WarpAccumulator {
+                    operand_dtype,
+                    block_width,
+                    warp_topology,
+                    warp_fragments,
+                } = source.layout
+                else {
+                    anyhow::bail!("accumulator window source must be a warp accumulator");
+                };
+                anyhow::ensure!(
+                    operand_dtype == DType::BF16
+                        && block_width == 32
+                        && matches!(
+                            (warp_topology, warp_fragments),
+                            ((4, 2), (2, 4)) | ((2, 2), (4, 4))
+                        )
+                        && (source.rows, source.cols) == (128, 128),
+                    "unsupported accumulator window source geometry"
+                );
+                let old_window = *fragment_shape == (1, 2)
+                    && fragment_origin.0 < warp_fragments.0
+                    && matches!(fragment_origin.1, 0 | 2);
+                let wide_diagnostic = cfg!(test)
+                    && warp_topology == (2, 2)
+                    && warp_fragments == (4, 4)
+                    && *fragment_shape == (2, 4)
+                    && matches!(fragment_origin.0, 0 | 2)
+                    && fragment_origin.1 == 0;
+                anyhow::ensure!(
+                    old_window || wide_diagnostic,
+                    "invalid accumulator fragment window"
+                );
+                let (rows, cols) = if wide_diagnostic {
+                    (64, 128)
+                } else {
+                    (16 * warp_topology.0, 64)
+                };
+                anyhow::ensure!(
+                    target.layout == TileLayout::Shared(super::SharedLayout::row_major(cols))
+                        && (target.rows, target.cols) == (rows, cols),
+                    "accumulator window requires aligned compact warp-window shared storage"
                 );
             }
             Stmt::ConvertLayout {
@@ -377,6 +728,39 @@ fn validate(
                     "staged operand load requires a shared tile"
                 );
             }
+            Stmt::LoadGlobalF32x4 {
+                dests,
+                param,
+                extent,
+                ..
+            }
+            | Stmt::StoreGlobalF32x4 {
+                values: dests,
+                param,
+                extent,
+                ..
+            } => {
+                let input = matches!(stmt, Stmt::LoadGlobalF32x4 { .. });
+                anyhow::ensure!(
+                    *extent > 0
+                        && extent.is_multiple_of(4)
+                        && params.iter().any(|p| p.name == *param
+                            && p.dtype == DType::F32
+                            && p.is_input == input),
+                    "four-F32 memory requires typed full groups and matching parameter direction"
+                );
+                for var in dests {
+                    let tile = get(tiles, var)?;
+                    anyhow::ensure!(
+                        tile.layout == TileLayout::ThreadScalar && tile.dtype == DType::F32,
+                        "four-F32 memory requires F32 thread scalar registers"
+                    );
+                }
+                anyhow::ensure!(
+                    dests.iter().collect::<std::collections::HashSet<_>>().len() == 4,
+                    "four-F32 operands must be distinct"
+                );
+            }
             Stmt::LoadGlobalPredicated {
                 dest, src_param, ..
             } => {
@@ -418,13 +802,20 @@ fn validate(
                 validate_scalar(&super::ScalarExpr::Var(*value), tiles)?;
                 validate_memory(target, tiles, params, true)?;
             }
-            Stmt::WarpReduce { dest, src, .. } => {
+            Stmt::WarpReduce { dest, src, .. } | Stmt::WarpBroadcastLeader { dest, src } => {
                 validate_scalar(&super::ScalarExpr::Var(*src), tiles)?;
                 define_scalar(*dest, tiles)?;
             }
             Stmt::If { condition, body } => {
                 validate_predicate(condition, tiles)?;
-                validate(body, &mut tiles.clone(), params)?;
+                validate(
+                    body,
+                    &mut tiles.clone(),
+                    &mut arenas.clone(),
+                    allocated_bytes,
+                    shared_limit,
+                    params,
+                )?;
             }
             Stmt::ForLoop { carries, body, .. } => {
                 let mut carries_seen = std::collections::HashSet::new();
@@ -437,11 +828,36 @@ fn validate(
                     validate_scalar(&carry.initial, tiles)?;
                     define_scalar(carry.var, tiles)?;
                 }
-                validate(body, &mut tiles.clone(), params)?;
+                validate(
+                    body,
+                    &mut tiles.clone(),
+                    &mut arenas.clone(),
+                    allocated_bytes,
+                    shared_limit,
+                    params,
+                )?;
             }
             _ => {}
         }
+        // Arena identifiers are immutable allocation bases. A tile/alias or
+        // scalar binding must never replace the pointer whose extent was
+        // validated when the arena was declared.
+        anyhow::ensure!(
+            arenas.keys().all(|arena| !tiles.contains_key(arena)),
+            "shared arena identifier cannot be rebound as a tile"
+        );
     }
+    Ok(())
+}
+
+fn reserve_shared(allocated: &mut usize, bytes: usize, limit: usize) -> Result<()> {
+    *allocated = allocated
+        .checked_add(bytes)
+        .context("shared allocation total overflows usize")?;
+    anyhow::ensure!(
+        *allocated <= limit,
+        "shared allocations exceed the declared shared-memory size"
+    );
     Ok(())
 }
 
@@ -553,6 +969,146 @@ fn validate_memory(
 mod tests {
     use super::*;
     use crate::{graph::TensorGraph, tensor::TensorExpr, tile::TileGraph};
+
+    fn shared_arena_ir() -> TileIR {
+        use crate::tile::{SharedLayout, TileIRBuilder};
+        let mut builder = TileIRBuilder::new();
+        let arena = builder.alloc_shared_arena(256);
+        builder.view_shared_arena(arena, 0, DType::BF16, 4, 16, SharedLayout::row_major(16));
+        builder.barrier();
+        builder.view_shared_arena(arena, 0, DType::F32, 4, 16, SharedLayout::row_major(16));
+        builder.finish()
+    }
+
+    #[test]
+    fn typed_shared_arena_checks_extents_alignment_and_allocation_totals() {
+        let mut ir = shared_arena_ir();
+        ir.validate_layouts().unwrap();
+        assert_eq!(ir.shared_mem_bytes, 256);
+
+        // Views have their own dtype and may exactly cover the arena, including
+        // after a nonzero aligned offset. They do not allocate additional bytes.
+        if let Stmt::ViewSharedArena {
+            byte_offset, rows, ..
+        } = &mut ir.body.stmts[3]
+        {
+            *byte_offset = 64;
+            *rows = 3;
+        }
+        ir.validate_layouts().unwrap();
+        if let Stmt::ViewSharedArena { byte_offset, .. } = &mut ir.body.stmts[3] {
+            *byte_offset = 96;
+        }
+        assert!(ir.validate_layouts().is_err());
+
+        for offset in [1, 16, usize::MAX - 31] {
+            let mut ir = shared_arena_ir();
+            if let Stmt::ViewSharedArena { byte_offset, .. } = &mut ir.body.stmts[3] {
+                *byte_offset = offset;
+            }
+            assert!(ir.validate_layouts().is_err(), "offset {offset}");
+        }
+        for bytes in [0, 31, 257, usize::MAX - 31] {
+            let mut ir = shared_arena_ir();
+            if let Stmt::AllocSharedArena { bytes: size, .. } = &mut ir.body.stmts[0] {
+                *size = bytes;
+            }
+            assert!(ir.validate_layouts().is_err(), "arena size {bytes}");
+        }
+        let mut ir = shared_arena_ir();
+        ir.shared_mem_bytes = 128;
+        assert!(ir.validate_layouts().is_err());
+    }
+
+    #[test]
+    fn typed_shared_arena_rejects_missing_sources_redefinitions_and_bad_layouts() {
+        use crate::tile::SharedLayout;
+        for case in 0..7 {
+            let mut ir = shared_arena_ir();
+            if let Stmt::ViewSharedArena {
+                arena,
+                dest,
+                dtype,
+                rows,
+                layout,
+                ..
+            } = &mut ir.body.stmts[3]
+            {
+                match case {
+                    0 => *arena = TileVar(999),
+                    1 => *dest = TileVar(0),
+                    2 => *dest = TileVar(1),
+                    3 => *dtype = DType::U32,
+                    4 => *rows = 0,
+                    5 => *layout = SharedLayout::row_major(usize::MAX),
+                    6 => *layout = SharedLayout::padded(16, 8).unwrap(),
+                    _ => unreachable!(),
+                }
+            }
+            assert!(ir.validate_layouts().is_err(), "case {case}");
+        }
+        let mut ir = shared_arena_ir();
+        ir.body.stmts.push(Stmt::AllocSharedArena {
+            arena: TileVar(0),
+            bytes: 32,
+        });
+        assert!(ir.validate_layouts().is_err());
+    }
+
+    #[test]
+    fn typed_shared_arena_base_cannot_be_redirected_by_an_alias() {
+        use crate::tile::{SharedLayout, TileIRBuilder};
+        let mut builder = TileIRBuilder::new();
+        let arena = builder.alloc_shared_arena(256);
+        let small = builder.alloc_shared(DType::F32, 1, 8);
+        let mut ir = builder.finish();
+        ir.body.stmts.push(Stmt::AliasShared {
+            dest: arena,
+            src: small,
+            layout: SharedLayout::row_major(8),
+            rows: 1,
+            cols: 8,
+        });
+        ir.body.stmts.push(Stmt::ViewSharedArena {
+            dest: TileVar(99),
+            arena,
+            byte_offset: 128,
+            dtype: DType::F32,
+            layout: SharedLayout::row_major(8),
+            rows: 1,
+            cols: 8,
+        });
+        assert!(
+            ir.validate_layouts()
+                .unwrap_err()
+                .root_cause()
+                .to_string()
+                .contains("cannot be rebound")
+        );
+    }
+
+    #[test]
+    fn shared_arena_allocation_contract_preserves_legacy_terminal_padding() {
+        use crate::tile::TileIRBuilder;
+        let mut builder = TileIRBuilder::new();
+        builder.alloc_shared(DType::F32, 1, 33);
+        let mut ir = builder.finish();
+        assert_eq!(ir.shared_mem_bytes, 160);
+        ir.shared_mem_bytes = 132;
+        ir.validate_layouts().unwrap();
+
+        // The arena path validates all preceding allocations too, including
+        // their physical padding, so its base cannot extend past the declaration.
+        ir.body.stmts.push(Stmt::AllocSharedArena {
+            arena: TileVar(1),
+            bytes: 32,
+        });
+        assert!(ir.validate_layouts().is_err());
+        ir.shared_mem_bytes = 192;
+        ir.validate_layouts().unwrap();
+        ir.shared_mem_bytes = 160;
+        assert!(ir.validate_layouts().is_err());
+    }
 
     #[test]
     fn exact_integer_storage_rejects_floating_loads_and_tiles() {

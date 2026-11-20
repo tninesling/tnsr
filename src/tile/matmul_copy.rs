@@ -7,6 +7,32 @@ use super::{IndexExpr, IndexMap, RegionInput};
 pub(super) fn copy_orientation(input: &RegionInput, group: usize) -> Result<Option<bool>> {
     ensure!(group > 0, "matrix copy group must be positive");
     let group_i64 = i64::try_from(group).context("matrix copy group exceeds i64")?;
+    let Some((constant, strides)) = physical_affine(input)? else {
+        return Ok(None);
+    };
+    let shape = &input.tensor.shape;
+    let aligned = |axis: usize| {
+        strides[axis] == 1
+            && shape[axis].is_multiple_of(group)
+            && constant.rem_euclid(group_i64) == 0
+            && strides
+                .iter()
+                .enumerate()
+                .all(|(i, stride)| i == axis || (*stride >= 0 && stride.rem_euclid(group_i64) == 0))
+    };
+    Ok(if aligned(shape.len() - 1) {
+        Some(false)
+    } else if aligned(shape.len() - 2) {
+        Some(true)
+    } else {
+        None
+    })
+}
+
+/// Complete flattened physical address function over the logical domain. Used
+/// both for copy alignment and exact equality with known bijective view chains.
+/// This is symbolic reconstruction, not coordinate sampling.
+pub(super) fn physical_affine(input: &RegionInput) -> Result<Option<(i64, Vec<i64>)>> {
     ensure!(
         input.tensor.access.results.len() == input.source_shape.len(),
         "matrix access map rank mismatch"
@@ -34,25 +60,7 @@ pub(super) fn copy_orientation(input: &RegionInput, group: usize) -> Result<Opti
     let Some(linear) = reconstruct(&map.results[0]) else {
         return Ok(None);
     };
-    let Some((constant, strides)) = affine(&linear, shape) else {
-        return Ok(None);
-    };
-    let aligned = |axis: usize| {
-        strides[axis] == 1
-            && shape[axis].is_multiple_of(group)
-            && constant.rem_euclid(group_i64) == 0
-            && strides
-                .iter()
-                .enumerate()
-                .all(|(i, stride)| i == axis || (*stride >= 0 && stride.rem_euclid(group_i64) == 0))
-    };
-    Ok(if aligned(shape.len() - 1) {
-        Some(false)
-    } else if aligned(shape.len() - 2) {
-        Some(true)
-    } else {
-        None
-    })
+    Ok(affine(&linear, shape))
 }
 
 // Flatten physical row-major coordinates before checking strides. Real model

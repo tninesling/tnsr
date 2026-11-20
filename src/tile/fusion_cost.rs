@@ -10,7 +10,25 @@ pub struct FusionFeatures {
     pub storage_dtype: Option<DType>,
     pub logical_shape: Vec<usize>,
     pub launches: usize,
+    /// Historical traffic estimate used by the analytical scorer. New tile
+    /// request diagnostics below do not change this score without calibration.
     pub traffic_bytes: usize,
+    /// Sum of storage sizes of distinct physical-step input nodes. Aliasing
+    /// allocations and overlapping virtual maps are not deduplicated.
+    pub unique_input_bytes: usize,
+    /// Sum of this step's logical output storage sizes.
+    pub output_bytes: usize,
+    /// Valid logical A/B bytes requested across all GEMM CTAs, including batch
+    /// broadcast reuse. Excludes outputs/epilogues and cache or sector effects;
+    /// independent source predicates may suppress requests. Not DRAM traffic.
+    /// None means this step is not modeled as a GEMM.
+    pub matmul_global_load_bytes: Option<usize>,
+    /// Logical shared operand bytes consumed by supported SIMT register tiles,
+    /// including padded K and output-tail computation. Counts reused operands
+    /// once per thread tile, not per output. Excludes staging/exchange traffic,
+    /// broadcasts, vector instruction widths, and physical bank transactions.
+    /// None means that the step's shared-to-register schedule is not modeled.
+    pub matmul_shared_operand_bytes: Option<usize>,
     pub intermediate_bytes: usize,
     /// Simple operation equivalents; transcendental/division operations carry
     /// more weight. Includes repeated work rather than adding it twice.

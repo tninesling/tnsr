@@ -10,6 +10,13 @@ use contraction::{apply_view, contraction, view_root};
 use normalization::{Normalization, match_normalization};
 
 impl PtxExecutionPlan {
+    /// Opt into sharing one computed exponential per cooperative score lane.
+    pub fn set_online_weight_sharing(&mut self, enabled: bool) {
+        for region in &mut self.online_regions {
+            region.share_weights = enabled;
+        }
+    }
+
     pub fn online_regions(&self) -> &[OnlineRegion] {
         &self.online_regions
     }
@@ -222,6 +229,7 @@ fn recognize<D: TileDType, G>(
     members.sort_by_key(|n| n.index());
     members.dedup();
     Some(OnlineRegion {
+        share_weights: false,
         members,
         inputs,
         score: score_expr,

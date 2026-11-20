@@ -634,11 +634,14 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::AddI64(inst) => write!(f, "{inst}"),
             Inst::AddU64(inst) => write!(f, "{inst}"),
             Inst::AddF32(inst) => write!(f, "{inst}"),
+            Inst::AddRnF32(inst) => write!(f, "add.rn.f32 {}, {}, {};", inst.dst, inst.a, inst.b),
             Inst::SubU64(inst) => write!(f, "{inst}"),
             Inst::SubF32(inst) => write!(f, "{inst}"),
+            Inst::SubRnF32(inst) => write!(f, "sub.rn.f32 {}, {}, {};", inst.dst, inst.a, inst.b),
             Inst::MulI32(inst) => write!(f, "{inst}"),
             Inst::MulU64(inst) => write!(f, "{inst}"),
             Inst::MulF32(inst) => write!(f, "{inst}"),
+            Inst::MulRnF32(inst) => write!(f, "mul.rn.f32 {}, {}, {};", inst.dst, inst.a, inst.b),
             Inst::DivU64(inst) => write!(f, "{inst}"),
             Inst::DivF32(inst) => write!(f, "{inst}"),
             Inst::MaxF32(inst) => write!(f, "{inst}"),
@@ -658,6 +661,13 @@ impl<'a> fmt::Display for Inst<'a> {
             Inst::SetpU64(inst) => write!(f, "{inst}"),
             Inst::SetpI32(inst) => write!(f, "{inst}"),
             Inst::SetpF32(inst) => write!(f, "{inst}"),
+            Inst::PackBf16Pair { dst, lo, hi } => write!(f, "mov.b32 {dst}, {{{lo}, {hi}}};"),
+            Inst::StGlobalB32 { addr, src } => write!(f, "st.global.b32 [{addr}], {src};"),
+            Inst::SelpB32(inst) => write!(
+                f,
+                "selp.b32 {}, {}, {}, {};",
+                inst.dst, inst.a, inst.b, inst.pred
+            ),
             Inst::SelpF32(inst) => write!(f, "{inst}"),
             Inst::SelpU64(inst) => write!(f, "{inst}"),
             Inst::ShflSyncIdxB32 { dst, src, lane } => write!(
@@ -803,6 +813,33 @@ impl<'a> fmt::Display for Inst<'a> {
                     c_frags.iter().join(", ")
                 )
             }
+            #[cfg(test)]
+            Inst::LdSharedB32 { dst, addr } => write!(f, "ld.shared.b32 {dst}, [{addr}];"),
+            Inst::LdMatrixX4TransB16 { frags, addr } => write!(
+                f,
+                "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {{{}}}, [{}];",
+                frags.iter().join(", "),
+                addr
+            ),
+            Inst::LdMatrixX4B16 { frags, addr } => write!(
+                f,
+                "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {{{}}}, [{}];",
+                frags.iter().join(", "),
+                addr
+            ),
+            Inst::MmaBf16M16N8K16 {
+                d_frags,
+                a_frags,
+                b_frags,
+                c_frags,
+            } => write!(
+                f,
+                "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {{{}}}, {{{}}}, {{{}}}, {{{}}};",
+                d_frags.iter().join(", "),
+                a_frags.iter().join(", "),
+                b_frags.iter().join(", "),
+                c_frags.iter().join(", ")
+            ),
             Inst::MmaM16N8K16 {
                 d_frags,
                 a_frags,

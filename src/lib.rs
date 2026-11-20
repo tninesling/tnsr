@@ -1,3 +1,6 @@
+#[cfg(test)]
+extern crate self as tnsr;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

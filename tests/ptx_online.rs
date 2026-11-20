@@ -327,3 +327,64 @@ fn online_indexed_consumer_requires_an_invariant_normalizer() {
         .into();
     check(&mut online, &graph, 0);
 }
+
+#[test]
+fn online_weight_sharing_is_opt_in_and_preserves_changed_feeds() {
+    let Some(mut online) = executor(PtxReductionMode::Online) else {
+        return;
+    };
+    for columns in [1, 16, 31, 32, 33, 64, 128, 129] {
+        let keys = 65;
+        let graph: TensorGraph<f32> = softmax(TensorExpr::input("scores", vec![2, keys]), 1)
+            .matmul(TensorExpr::input("weights", vec![keys, columns]))
+            .into();
+        let feeds: Vec<_> = (0..6)
+            .map(|case| {
+                let mut scores: Vec<f32> = (0..2 * keys)
+                    .map(|i| ((i % 17) as f32 - 8.) * 0.7)
+                    .collect();
+                let mut weights: Vec<f32> = (0..keys * columns)
+                    .map(|i| ((i % 19) as f32 - 9.) * 0.13)
+                    .collect();
+                match case {
+                    1 => scores[..32].fill(f32::NEG_INFINITY),
+                    2 => scores[keys - 1] = 1000.,
+                    3 => scores[keys - 1] = f32::NAN,
+                    4 => scores[keys - 1] = f32::INFINITY,
+                    5 => {
+                        scores[..keys].fill(f32::NEG_INFINITY);
+                        weights[0] = f32::INFINITY;
+                    }
+                    _ => {}
+                }
+                scores[keys..].fill(f32::NEG_INFINITY);
+                HashMap::from([("scores".into(), scores), ("weights".into(), weights)])
+            })
+            .collect();
+        let mut baseline: Vec<Vec<f32>> = Vec::new();
+        online.set_experimental_online_weight_sharing(false);
+        for (round, enabled) in [false, true, false].into_iter().enumerate() {
+            online.set_experimental_online_weight_sharing(enabled);
+            if round != 0 {
+                assert!(online.execute_compiled(&graph, feeds[0].clone()).is_err());
+            }
+            online.compile(&graph).unwrap();
+            let regions = online.execution_plan().unwrap().online_regions();
+            assert_eq!(regions.len(), 1);
+            assert_eq!(regions[0].share_weights, enabled);
+            for (case, inputs) in feeds.iter().enumerate() {
+                let actual = online.execute_compiled(&graph, inputs.clone()).unwrap();
+                if round == 0 {
+                    baseline.push(actual);
+                } else {
+                    for (index, (&a, &b)) in actual.iter().zip(&baseline[case]).enumerate() {
+                        assert!(
+                            a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
+                            "columns={columns}, case={case}, index={index}: {a:?} != {b:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

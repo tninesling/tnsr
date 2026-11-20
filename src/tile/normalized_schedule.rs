@@ -1,4 +1,6 @@
 //! Build normalized reductions from explicit scalar arithmetic and loop state.
+#[cfg(test)]
+mod tests;
 use super::indexed_sum::SumAccumulator;
 use super::region::input_element_index;
 use super::*;
@@ -155,7 +157,7 @@ pub(crate) enum ScanOutput {
 }
 
 pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usize)> {
-    lower_scan(
+    lower_scan_with_weight_sharing(
         region,
         extent,
         *region
@@ -167,16 +169,29 @@ pub(super) fn lower(region: &OnlineRegion, extent: usize) -> Result<(Block, usiz
         } else {
             ScanOutput::Normalized
         },
+        region.share_weights,
     )
 }
 
+#[cfg(any(feature = "cuda", test))]
 pub(crate) fn lower_scan(
     scan: &impl NormalizedScan,
     extent: usize,
     columns: usize,
     mode: ScanOutput,
 ) -> Result<(Block, usize)> {
+    lower_scan_with_weight_sharing(scan, extent, columns, mode, false)
+}
+
+fn lower_scan_with_weight_sharing(
+    scan: &impl NormalizedScan,
+    extent: usize,
+    columns: usize,
+    mode: ScanOutput,
+    share_weights: bool,
+) -> Result<(Block, usize)> {
     let cooperative = columns <= 128;
+    let share_weights = cooperative && share_weights;
     let lane = Expr::ThreadIdx(Dim::X);
     let tid = Expr::Mul(
         Box::new(Expr::BlockIdx(Dim::X)),
@@ -262,6 +277,26 @@ pub(crate) fn lower_scan(
                 let reference = builder.load(ScalarMemory::Shared(shared), Expr::Const(32));
                 let alpha = merge(builder, maximum, denominator, reference);
                 numerator.rescale(builder, alpha);
+                if share_weights {
+                    // All lanes initialize and merge the carried maximum, even
+                    // when fewer than 32 output columns are useful. Producers
+                    // therefore use the same updated running maximum as each
+                    // consumer, without a different reduction/broadcast tree.
+                    builder.when(less(lane.clone(), 32)?, |builder| {
+                        let value = builder.load(ScalarMemory::Shared(shared), lane.clone());
+                        let probability = builder.value(ScalarExpr::select(
+                            equal(value, f32::NEG_INFINITY),
+                            ScalarExpr::Constant(0.0),
+                            exp_difference(value, maximum),
+                        ));
+                        builder.store(ScalarMemory::Shared(shared), lane.clone(), probability);
+                        Ok(())
+                    })?;
+                    // Every output lane must see the weights before consuming
+                    // them. The existing final barrier still protects reuse by
+                    // the next score tile.
+                    builder.barrier();
+                }
             }
             let name = builder.loop_name("consume");
             builder.fold(name, constant(tile_size)?, Vec::new(), |builder, local| {
@@ -281,11 +316,15 @@ pub(crate) fn lower_scan(
                             let alpha = merge(builder, maximum, denominator, value);
                             numerator.rescale(builder, alpha);
                         }
-                        let probability = builder.value(ScalarExpr::select(
-                            equal(value, f32::NEG_INFINITY),
-                            ScalarExpr::Constant(0.0),
-                            exp_difference(value, maximum),
-                        ));
+                        let probability = if share_weights {
+                            value
+                        } else {
+                            builder.value(ScalarExpr::select(
+                                equal(value, f32::NEG_INFINITY),
+                                ScalarExpr::Constant(0.0),
+                                exp_difference(value, maximum),
+                            ))
+                        };
                         builder.set(
                             denominator,
                             arithmetic(BinaryOp::Add, denominator, probability),

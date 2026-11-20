@@ -66,6 +66,8 @@ pub struct ReductionRegion {
     pub axis: usize,
     pub op: ReduceOp,
     pub schedule: ReductionSchedule,
+    /// Independent adjacent columns sharing a CTA; arithmetic remains Block128.
+    pub column_policy: super::ColumnReductionPolicy,
     /// Desired serial launch block size. Changing the number of independent
     /// fibers per block preserves each fiber's exact accumulation sequence.
     pub serial_block_threads: u32,
@@ -330,8 +332,21 @@ impl ReductionRegion {
             axis,
             op,
             schedule: ReductionSchedule::Serial,
+            column_policy: super::ColumnReductionPolicy::Off,
             serial_block_threads: Self::DEFAULT_SERIAL_BLOCK_THREADS,
         })
+    }
+
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn column_tile(&self) -> Option<super::ColumnReductionTile> {
+        self.column_policy.select(
+            self,
+            super::ColumnReductionLimits {
+                max_threads_per_block: 1024,
+                shared_bytes_per_block: usize::MAX,
+                max_grid_x: i32::MAX as u32,
+            },
+        )
     }
 
     pub fn lower_to_tile_ir(&self, region_id: usize) -> Result<TileIR> {

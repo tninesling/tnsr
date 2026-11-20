@@ -85,8 +85,41 @@ impl MixedExecutor {
                 plain.graph.add_edge(mapped[&node], sink, 0);
             }
         }
-        let program =
-            Program::<F32>::new_bound(&self.stream, plain.clone(), bindings, None, precision)?;
+        let kernel_options = ProgramKernelOptions {
+            indexed_loss_cooperative_ordered_backward: self
+                .indexed_loss_cooperative_ordered_backward,
+            indexed_loss_cooperative_ordered_forward: self.indexed_loss_cooperative_ordered_forward,
+            column_reduction_policy: self.column_reduction_policy,
+            ..ProgramKernelOptions::default()
+        };
+        let mut program = if self.layer_norm_preparation.is_some()
+            || self.online_attention_pair_preparation.is_some()
+        {
+            Program::<F32>::new_bound_with_plan_metadata(
+                &self.stream,
+                plain.clone(),
+                bindings,
+                None,
+                precision,
+                kernel_options,
+            )?
+        } else {
+            Program::<F32>::new_bound_with_kernel_options(
+                &self.stream,
+                plain.clone(),
+                bindings,
+                None,
+                precision,
+                kernel_options,
+            )?
+        };
+        let kernel_start = self.kernels.len();
+        self.info.indexed_loss_cooperative_ordered_backward_programs +=
+            program.indexed_loss_cooperative_ordered_backward_programs;
+        self.info.indexed_loss_cooperative_ordered_forward_programs +=
+            program.indexed_loss_cooperative_ordered_forward_programs;
+        self.info.column_reduction_four_regions += program.column_reduction_counts.0;
+        self.info.column_reduction_eight_regions += program.column_reduction_counts.1;
         self.info.f32_bytes += program.bytes();
         self.kernels.extend(program.kernels.clone());
         for &original in nodes {
@@ -131,6 +164,12 @@ impl MixedExecutor {
                 }
             };
             self.values.insert(original, value);
+        }
+        if let Some(preparation) = &mut self.online_attention_pair_preparation {
+            preparation.record_f32(&program, &mapped, &self.values)?;
+        }
+        if let Some(preparation) = &mut self.layer_norm_preparation {
+            preparation.record(&mut program, &mapped, kernel_start, &self.values)?;
         }
         self.programs.push(Box::new(program));
         Ok(())

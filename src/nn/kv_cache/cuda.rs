@@ -511,6 +511,7 @@ impl CudaDecoder {
             .context()
             .load_module(Ptx::from_src(ptx.to_ptx()))?;
         Ok(Kernel {
+            owner: None,
             label: label.into(),
             function: module.load_function(
                 ptx.region_kernel_name(0)

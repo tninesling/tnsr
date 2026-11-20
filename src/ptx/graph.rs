@@ -1,10 +1,20 @@
 #[cfg(test)]
 mod bf16_tuning;
+mod column_reduction;
 mod convolution;
 mod indexed_loss;
+#[cfg(test)]
+mod large_tiles;
+#[cfg(test)]
+mod shared_reuse;
+#[cfg(test)]
+mod square128_streamed;
 use convolution::{lower_conv_transpose2d, lower_conv2d};
 mod matmul;
 mod scalar;
+#[cfg(test)]
+pub(crate) mod scoped_parameters;
+mod vector_scalar_test;
 use std::collections::{HashMap, HashSet};
 
 use super::instructions::{AndInst, Inst, Operand};
@@ -15,6 +25,22 @@ use crate::tile::{
     DType, Dim, Expr, MemorySpace, SharedLayout, Stmt, TileGraph, TileIR, TileLayout, TileVar,
 };
 use petgraph::{Graph, graph::NodeIndex};
+
+#[cfg(test)]
+thread_local! {static FORCE_ORDERED_CE_REJECTION:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(test)]
+pub(crate) fn with_forced_ordered_ce_resource_rejection<T>(run: impl FnOnce() -> T) -> T {
+    FORCE_ORDERED_CE_REJECTION.with(|flag| {
+        struct Restore<'a>(&'a std::cell::Cell<bool>, bool);
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.1);
+            }
+        }
+        let _restore = Restore(flag, flag.replace(true));
+        run()
+    })
+}
 
 pub struct PtxGraph {
     // SAFETY INVARIANT: Functions contain references into `arena` whose lifetimes are
@@ -30,11 +56,30 @@ pub struct PtxGraph {
     indexed_loss_rows: HashMap<NodeIndex, indexed_loss::RowSchedule>,
     // Only entry names differ between these otherwise identical PTX functions.
     kernel_aliases: HashMap<String, String>,
+    plain_bf16_output_regions: HashSet<usize>,
+    plain_bf16_output_fallbacks: usize,
     #[allow(dead_code)]
     arena: Box<bumpalo::Bump>,
 }
 
 impl PtxGraph {
+    pub(crate) fn set_plain_bf16_output_selection(
+        &mut self,
+        selected: HashSet<usize>,
+        fallbacks: usize,
+    ) {
+        self.plain_bf16_output_regions = selected;
+        self.plain_bf16_output_fallbacks = fallbacks;
+    }
+    pub(crate) fn plain_bf16_output_selected(&self, id: usize) -> bool {
+        self.plain_bf16_output_regions.contains(&id)
+    }
+    pub(crate) fn plain_bf16_output_counts(&self) -> (usize, usize) {
+        (
+            self.plain_bf16_output_regions.len(),
+            self.plain_bf16_output_fallbacks,
+        )
+    }
     pub(crate) fn module_source(&self) -> String {
         let mut module = Module::new_with_target(self.target.compute_capability);
         for function in self.emitted_functions() {
@@ -112,6 +157,132 @@ impl PtxGraph {
 
     pub(crate) fn conv_weight_threads(&self, node: NodeIndex) -> u32 {
         self.conv_weight_threads.get(&node).copied().unwrap_or(1)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn enable_indexed_loss_cooperative_ordered_backward(
+        tiles: &mut TileGraph,
+        limit: usize,
+    ) -> Option<TileGraph> {
+        Self::enable_indexed_loss_cooperative_ordered(tiles, limit, false, true)
+    }
+    /// Retain a pointer-free optimized baseline only when a standalone physical
+    /// CE variant is eligible. Failed JIT/resource proof restores this whole IR.
+    pub(crate) fn enable_indexed_loss_cooperative_ordered(
+        tiles: &mut TileGraph,
+        shared_limit: usize,
+        forward: bool,
+        backward: bool,
+    ) -> Option<TileGraph> {
+        let physical = |node| {
+            tiles
+                .physical_nodes
+                .as_ref()
+                .is_none_or(|nodes| nodes.contains(&node))
+        };
+        if !tiles.graph.node_indices().any(|node| {
+            physical(node)
+                && ((backward
+                    && indexed_loss::cooperative_ordered_eligible(
+                        &tiles.graph[node],
+                        shared_limit,
+                    ))
+                    || (forward
+                        && indexed_loss::forward_eligible(&tiles.graph[node], shared_limit)))
+        }) {
+            return None;
+        }
+        let clone_regions = |regions: &[crate::tile::graph::TileRegionKernel]| {
+            regions
+                .iter()
+                .map(|k| crate::tile::graph::TileRegionKernel {
+                    region_id: k.region_id,
+                    ir: k.ir.clone(),
+                })
+                .collect()
+        };
+        let baseline = TileGraph {
+            graph: tiles.graph.clone(),
+            region_kernels: clone_regions(&tiles.region_kernels),
+            reduction_region_kernels: clone_regions(&tiles.reduction_region_kernels),
+            matmul_region_kernels: clone_regions(&tiles.matmul_region_kernels),
+            physical_nodes: tiles.physical_nodes.clone(),
+        };
+        for node in tiles.graph.node_indices().collect::<Vec<_>>() {
+            if tiles
+                .physical_nodes
+                .as_ref()
+                .is_some_and(|nodes| !nodes.contains(&node))
+            {
+                continue;
+            }
+            if backward {
+                indexed_loss::enable_cooperative_ordered_backward(
+                    &mut tiles.graph[node],
+                    shared_limit,
+                );
+            }
+            if forward {
+                indexed_loss::enable_cooperative_ordered_forward(
+                    &mut tiles.graph[node],
+                    shared_limit,
+                );
+            }
+        }
+        Some(baseline)
+    }
+
+    pub(crate) fn indexed_loss_cooperative_ordered_backward_resources_fit(
+        function: &cudarc::driver::CudaFunction,
+        shared_limit: usize,
+    ) -> anyhow::Result<bool> {
+        #[cfg(test)]
+        if FORCE_ORDERED_CE_REJECTION.with(|flag| flag.get()) {
+            return Ok(false);
+        }
+        Ok(indexed_loss::cooperative_ordered_resources_fit(
+            usize::try_from(function.shared_size_bytes()?)?,
+            usize::try_from(function.local_size_bytes()?)?,
+            function.max_threads_per_block()?,
+            function.occupancy_max_active_blocks_per_multiprocessor(256, 0, None)?,
+            shared_limit,
+        ))
+    }
+
+    pub(crate) fn indexed_loss_cooperative_ordered_backward_nodes(&self) -> Vec<NodeIndex> {
+        self.indexed_loss_rows
+            .iter()
+            .filter_map(|(&node, s)| {
+                (s.cooperative_ordered_backward
+                    && self
+                        .physical_nodes
+                        .as_ref()
+                        .is_none_or(|nodes| nodes.contains(&node)))
+                .then_some(node)
+            })
+            .collect()
+    }
+
+    pub(crate) fn indexed_loss_cooperative_ordered_backward_programs(&self) -> usize {
+        self.indexed_loss_cooperative_ordered_backward_nodes().len()
+    }
+
+    pub(crate) fn indexed_loss_cooperative_ordered_forward_nodes(&self) -> Vec<NodeIndex> {
+        self.indexed_loss_rows
+            .iter()
+            .filter_map(|(&node, s)| {
+                (s.cooperative_ordered_forward
+                    && self
+                        .physical_nodes
+                        .as_ref()
+                        .is_none_or(|nodes| nodes.contains(&node)))
+                .then_some(node)
+            })
+            .collect()
+    }
+
+    pub(crate) fn indexed_loss_cooperative_ordered_forward_programs(&self) -> usize {
+        self.indexed_loss_cooperative_ordered_forward_nodes().len()
     }
 
     pub(crate) fn indexed_loss_row_launch(
@@ -262,6 +433,8 @@ impl From<TileGraph> for PtxGraph {
             conv_weight_threads,
             indexed_loss_rows,
             kernel_aliases: HashMap::new(),
+            plain_bf16_output_regions: HashSet::new(),
+            plain_bf16_output_fallbacks: 0,
             arena,
         };
         result.intern_kernels();
@@ -344,6 +517,7 @@ struct LoweringContext<'a> {
     /// Counter for generating unique labels
     label_counter: usize,
     indexed_loss_rows: Option<indexed_loss::RowSchedule>,
+    column_reduction_shared_bytes: Option<usize>,
     return_label: &'a str,
 }
 
@@ -365,6 +539,7 @@ impl<'a> LoweringContext<'a> {
             reg_to_shared: HashMap::new(),
             label_counter: 0,
             indexed_loss_rows: None,
+            column_reduction_shared_bytes: None,
             return_label,
         }
     }
@@ -515,6 +690,26 @@ fn lower_block<'a>(
     ctx.index_vars = outer_bindings;
 }
 
+fn allocate_shared_pointer<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    bytes: usize,
+) -> Operand<'a, U64> {
+    let base = func.add_u64_register();
+    func.add_inst(Inst::MovU64 {
+        dst: base.clone(),
+        src: Operand::symbol("shared"),
+    });
+    let address = func.add_u64_register();
+    func.add_inst(Inst::add_u64(
+        address.clone(),
+        base,
+        Operand::imm_u64(ctx.shared_mem_offset as u64),
+    ));
+    ctx.shared_mem_offset += bytes;
+    address
+}
+
 fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: &Stmt) {
     match stmt {
         Stmt::LetIndex { name, value } => {
@@ -556,6 +751,30 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             ctx.shared_mem_ptrs
                 .insert(*dest, ctx.shared_mem_ptrs[src].clone());
         }
+        Stmt::AllocSharedArena { arena, bytes } => {
+            let address = allocate_shared_pointer(func, ctx, *bytes);
+            ctx.shared_mem_ptrs.insert(*arena, address);
+        }
+        Stmt::ViewSharedArena {
+            dest,
+            arena,
+            byte_offset,
+            dtype,
+            layout,
+            rows,
+            cols,
+        } => {
+            ctx.tile_layouts.insert(*dest, TileLayout::Shared(*layout));
+            ctx.tile_dims.insert(*dest, (*rows, *cols));
+            ctx.tile_dtypes.insert(*dest, *dtype);
+            let address = func.add_u64_register();
+            func.add_inst(Inst::add_u64(
+                address.clone(),
+                ctx.shared_mem_ptrs[arena].clone(),
+                Operand::imm_u64(*byte_offset as u64),
+            ));
+            ctx.shared_mem_ptrs.insert(*dest, address);
+        }
         Stmt::AllocTile {
             var,
             space,
@@ -579,10 +798,16 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                     }
                 }
                 MemorySpace::Fragment => {
-                    let count = if let TileLayout::WarpAccumulator { warp_fragments, .. } = layout {
-                        8 * warp_fragments.0 * warp_fragments.1
-                    } else {
-                        unreachable!("validated fragment allocation requires a warp layout")
+                    let count = match layout {
+                        TileLayout::WarpAccumulator { warp_fragments, .. } => {
+                            8 * warp_fragments.0 * warp_fragments.1
+                        }
+                        layout if layout.is_explicit_bf16_mma() => {
+                            layout.explicit_bf16_mma_elements()
+                        }
+                        _ => unreachable!(
+                            "validated fragment allocation requires an explicit fragment layout"
+                        ),
                     };
                     let registers = (0..count).map(|_| func.add_f32_register()).collect();
                     ctx.fragment_regs.insert(*var, registers);
@@ -592,24 +817,8 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                     let tile_size_bytes =
                         shared_layout(ctx, *var).allocation_bytes(*rows, *cols, *dtype);
 
-                    // Get base address of shared memory array
-                    let base_ptr = func.add_u64_register();
-                    func.add_inst(Inst::MovU64 {
-                        dst: base_ptr.clone(),
-                        src: Operand::symbol("shared"),
-                    });
-
-                    // Add current offset to get this tile's pointer
-                    let tile_ptr = func.add_u64_register();
-                    func.add_inst(Inst::AddU64(super::instructions::AddInst::new(
-                        tile_ptr.clone(),
-                        base_ptr,
-                        Operand::imm_u64(ctx.shared_mem_offset as u64),
-                    )));
-
-                    // Store the pointer and update offset
+                    let tile_ptr = allocate_shared_pointer(func, ctx, tile_size_bytes);
                     ctx.shared_mem_ptrs.insert(*var, tile_ptr);
-                    ctx.shared_mem_offset += tile_size_bytes;
                 }
                 MemorySpace::Global => {
                     // Global memory is parameter-based, not allocated
@@ -864,6 +1073,9 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
         }
         Stmt::AsyncCommit => func.add_inst(Inst::AsyncCommit),
         Stmt::AsyncWait => func.add_inst(Inst::AsyncWait),
+        Stmt::LoadGlobalF32x4 { .. } | Stmt::StoreGlobalF32x4 { .. } => {
+            vector_scalar_test::lower(func, ctx, stmt);
+        }
         Stmt::LoadGlobalPredicated {
             dest,
             src_param,
@@ -1229,10 +1441,41 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             // Loop end label
             func.add_inst(Inst::Label(loop_end));
         }
+        Stmt::StoreBf16MmaCoalesced {
+            src,
+            output_param,
+            bias_param,
+            n,
+            ..
+        } => {
+            matmul::store_bf16_mma_coalesced(
+                func,
+                ctx,
+                *src,
+                output_param,
+                bias_param.as_deref(),
+                *n,
+            );
+        }
         Stmt::ExtractRegister { dest, src, index } => {
             let value = ctx.fragment_regs[src][*index].clone();
             let output = ctx.get_or_alloc_reg(func, *dest);
             func.add_inst(Inst::mov_f32(output, value));
+        }
+        Stmt::StoreAccumulatorWindow {
+            dest,
+            src,
+            fragment_origin,
+            fragment_shape,
+        } => {
+            matmul::store_accumulator_window(
+                func,
+                ctx,
+                *dest,
+                *src,
+                *fragment_origin,
+                *fragment_shape,
+            );
         }
         Stmt::ConvertLayout {
             dest,
@@ -1408,6 +1651,9 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
                 gradient,
             ));
         }
+        Stmt::IndexedCrossEntropyCooperativeOrdered { .. } => {
+            indexed_loss::lower_cooperative_ordered_forward(func, ctx)
+        }
         Stmt::IndexedCrossEntropy {
             vocabulary,
             row_count: _,
@@ -1436,6 +1682,16 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
             let loss = func.add_f32_register();
             func.add_inst(Inst::add_f32(loss.clone(), shifted, log_sum));
             store_param_f32_at(func, ctx, "output", row, loss);
+        }
+        Stmt::IndexedCrossEntropyBackwardCooperativeOrdered {
+            vocabulary,
+            row_count,
+        } => {
+            debug_assert_eq!(
+                ctx.indexed_loss_rows.map(|s| s.rows as usize),
+                Some(*row_count)
+            );
+            indexed_loss::lower_cooperative_ordered_backward(func, ctx, *vocabulary);
         }
         Stmt::IndexedCrossEntropyBackward {
             vocabulary,
@@ -1794,6 +2050,7 @@ fn lower_stmt<'a>(func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, stmt: 
         | Stmt::LoadScalar { .. }
         | Stmt::StoreScalar { .. }
         | Stmt::WarpReduce { .. }
+        | Stmt::WarpBroadcastLeader { .. }
         | Stmt::If { .. }
         | Stmt::ForLoop { .. } => scalar::lower_scalar_stmt(func, ctx, stmt),
         Stmt::ReductionRegion { region } => {
@@ -2458,6 +2715,10 @@ fn lower_reduction_region<'a>(
     ctx: &mut LoweringContext<'a>,
     region: &crate::tile::ReductionRegion,
 ) {
+    if let Some(tile) = region.column_tile() {
+        column_reduction::lower(func, ctx, region, tile);
+        return;
+    }
     match region.schedule {
         crate::tile::ReductionSchedule::Serial => lower_serial_reduction_region(func, ctx, region),
         crate::tile::ReductionSchedule::Subgroup { width } => {
@@ -2698,7 +2959,8 @@ fn block_reduce_f32<'a>(
     let shared_name = ctx.arena.alloc_str("reduction_partials");
     func.add_shared_memory(
         shared_name,
-        thread_count as usize * std::mem::size_of::<f32>(),
+        ctx.column_reduction_shared_bytes
+            .unwrap_or(thread_count as usize * std::mem::size_of::<f32>()),
     );
     let shared_base = func.add_u64_register();
     func.add_inst(Inst::mov_u64(
@@ -4279,6 +4541,77 @@ fn emit_region_op<'a>(
         }
     }
     values.insert(operation.output, output);
+}
+
+/// Only called by the separate normalized explicit-MMA test mode, after IR
+/// optimization. Keep add/multiply trees and non-power-of-two semantics intact.
+pub(crate) fn normalized_mma_backend_expr(e: &Expr) -> Expr {
+    let nested = |e: &Expr| Box::new(normalized_mma_backend_expr(e));
+    match e {
+        Expr::FloorDiv(v, d) if matches!(*d, 2 | 4) => {
+            Expr::ShiftRight(nested(v), u64::from(d.trailing_zeros()))
+        }
+        Expr::Mod(v, d) if matches!(*d, 2 | 4) => {
+            Expr::BitAnd(nested(v), u64::try_from(d - 1).expect("bounded modulus"))
+        }
+        Expr::FloorDiv(v, d) => Expr::FloorDiv(nested(v), *d),
+        Expr::Mod(v, d) => Expr::Mod(nested(v), *d),
+        Expr::ShiftRight(v, d) => Expr::ShiftRight(nested(v), *d),
+        Expr::BitAnd(v, d) => Expr::BitAnd(nested(v), *d),
+        Expr::Add(a, b) => Expr::Add(nested(a), nested(b)),
+        Expr::Sub(a, b) => Expr::Sub(nested(a), nested(b)),
+        Expr::Mul(a, b) => Expr::Mul(nested(a), nested(b)),
+        _ => e.clone(),
+    }
+}
+
+/// Row-start providers for documented non-transposed x4 BF16 matrices.
+/// A quadrant order is MloKlo,MhiKlo,MloKhi,MhiKhi; physical-COL NT B
+/// quadrant order is NloKlo,NloKhi,NhiKlo,NhiKhi.
+pub(crate) fn bf16_ldmatrix_provider_expr(lhs: bool, fragment: usize, k: usize) -> (Expr, Expr) {
+    let (wr, wc) = warp_coordinates(32, (4, 2));
+    let lane = Expr::ThreadIdx(Dim::X);
+    let r = Expr::BitAnd(Box::new(lane.clone()), 7);
+    let u = Expr::ShiftRight(Box::new(lane), 3);
+    let low = Expr::BitAnd(Box::new(u.clone()), 1) * 8usize;
+    let high = Expr::ShiftRight(Box::new(u), 1) * 8usize;
+    let c = |v: usize| Expr::Const(i64::try_from(v).expect("bounded ldmatrix provider"));
+    if lhs {
+        (wr * 2usize + c(fragment * 16) + low + r, c(k) + high)
+    } else {
+        (c(k) + low, wc * 4usize + c(fragment * 16) + high + r)
+    }
+}
+
+/// Test-only physical-row B providers for x4.trans. Matrix order is
+/// NloKlo,NloKhi,NhiKlo,NhiKhi; the transpose gives adjacent K pairs.
+#[cfg(test)]
+pub(crate) fn bf16_ldmatrix_nn_provider_expr(fragment: usize, k: usize) -> (Expr, Expr) {
+    let (_, wc) = warp_coordinates(32, (4, 2));
+    let lane = Expr::ThreadIdx(Dim::X);
+    let r = Expr::BitAnd(Box::new(lane.clone()), 7);
+    let u = Expr::ShiftRight(Box::new(lane), 3);
+    let low = Expr::BitAnd(Box::new(u.clone()), 1) * 8usize;
+    let high = Expr::ShiftRight(Box::new(u), 1) * 8usize;
+    let c = |v: usize| Expr::Const(i64::try_from(v).expect("bounded NN fragment coordinate"));
+    (c(k) + low + r, wc * 4usize + c(fragment * 16) + high)
+}
+
+/// Shared host-side schedule used by the test lowering and its network oracle.
+pub(crate) fn explicit_bf16_mma_transpose_pairs() -> Vec<(u32, usize, usize)> {
+    (0..3)
+        .flat_map(|bit| {
+            let q = 1usize << bit;
+            (0..8)
+                .filter(move |j| j & q == 0)
+                .map(move |j| (4u32 << bit, j, j ^ q))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn bf16_ldmatrix_nn_rect_provider_expr(fragment: usize, k: usize) -> (Expr, Expr) {
+    matmul::nn_rect_provider(fragment, k)
 }
 
 #[cfg(test)]

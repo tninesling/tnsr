@@ -1,5 +1,6 @@
 use super::SharedLayout;
 
+#[derive(Clone, Debug)]
 pub struct TileIR {
     pub kernel_name: String,
     pub params: Vec<KernelParam>,
@@ -7,17 +8,34 @@ pub struct TileIR {
     pub shared_mem_bytes: usize,
 }
 
+#[derive(Clone, Debug)]
 pub struct KernelParam {
     pub name: String,
     pub dtype: DType,
     pub is_input: bool,
 }
 
+#[derive(Clone, Debug)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
 }
 
+#[derive(Clone, Debug)]
 pub enum Stmt {
+    /// Aligned four-F32 memory operation. Group indices address
+    /// contiguous groups, so host-proved 16-byte parameter alignment suffices.
+    LoadGlobalF32x4 {
+        dests: [TileVar; 4],
+        param: String,
+        group_index: Expr,
+        extent: usize,
+    },
+    StoreGlobalF32x4 {
+        values: [TileVar; 4],
+        param: String,
+        group_index: Expr,
+        extent: usize,
+    },
     /// Return threads whose global linear index is outside the logical extent.
     BoundsCheck {
         extent: usize,
@@ -42,6 +60,26 @@ pub enum Stmt {
         space: MemorySpace,
         layout: TileLayout,
         dtype: DType,
+        rows: usize,
+        cols: usize,
+    },
+
+    /// Reserve an untyped, 32-byte-aligned shared allocation. The arena itself
+    /// cannot be loaded; typed views describe its separately scheduled uses.
+    AllocSharedArena {
+        arena: TileVar,
+        bytes: usize,
+    },
+
+    /// Bind a typed view into a shared byte arena. Validation checks alignment
+    /// and the full padded extent. The caller must retire overlapping accesses
+    /// (including outstanding asynchronous copies) before reusing these bytes.
+    ViewSharedArena {
+        dest: TileVar,
+        arena: TileVar,
+        byte_offset: usize,
+        dtype: DType,
+        layout: SharedLayout,
         rows: usize,
         cols: usize,
     },
@@ -159,6 +197,25 @@ pub enum Stmt {
         coordinates: Option<(Expr, Expr)>,
     },
 
+    /// Store a bounded per-warp accumulator fragment window to a compact F32
+    /// shared tile. All computing warps participate. Barriers are explicit.
+    StoreAccumulatorWindow {
+        dest: TileVar,
+        src: TileVar,
+        fragment_origin: (usize, usize),
+        fragment_shape: (usize, usize),
+    },
+
+    /// Explicit documented MMA epilogue. Full tiles/all warp lanes only;
+    /// the caller must prove a128-byte-aligned whole output allocation.
+    StoreBf16MmaCoalesced {
+        src: TileVar,
+        output_param: String,
+        bias_param: Option<String>,
+        m: usize,
+        n: usize,
+    },
+
     /// Extract one thread-owned register-array element into a scalar.
     ExtractRegister {
         dest: TileVar,
@@ -188,6 +245,18 @@ pub enum Stmt {
 
     /// Gradient of indexed cross entropy with respect to contiguous logits rows.
     IndexedCrossEntropyBackward {
+        vocabulary: usize,
+        row_count: usize,
+    },
+
+    /// V4096 CE backward: cooperative max/exp, original ordered F32 sum.
+    /// Requires one complete 256-thread CTA per row; forward is unchanged.
+    /// Cooperative V4096 forward statistics with original ordered sum and loss.
+    IndexedCrossEntropyCooperativeOrdered {
+        vocabulary: usize,
+        row_count: usize,
+    },
+    IndexedCrossEntropyBackwardCooperativeOrdered {
         vocabulary: usize,
         row_count: usize,
     },
@@ -301,6 +370,13 @@ pub enum Stmt {
         index: Expr,
         value: TileVar,
     },
+    /// Copy the raw F32 bits held by lane zero to every lane of a full active
+    /// warp. All 32 lanes must execute this statement together; no arithmetic,
+    /// reduction or block synchronization is performed.
+    WarpBroadcastLeader {
+        dest: TileVar,
+        src: TileVar,
+    },
     /// Reduce each full active warp, optionally returning the result in every lane.
     WarpReduce {
         dest: TileVar,
@@ -353,6 +429,19 @@ pub struct TileVar(pub usize);
 /// Physical tile representation, independent of the logical tensor's index map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TileLayout {
+    /// Test-only documented mma.sync BF16 m16n8k16 fragments; never WMMA.
+    #[cfg(test)]
+    Bf16MmaAccumulator128,
+    /// Separate test mode: canonicalize only backend-created integer addresses.
+    #[cfg(test)]
+    Bf16MmaAccumulator128Normalized,
+    /// Documented ldmatrix operand transport, separate from opaque WMMA.
+    Bf16MmaAccumulator128Ldmatrix,
+    /// Test-only plain NN collective transport; never a production selector.
+    #[cfg(test)]
+    Bf16MmaAccumulator128LdmatrixNn,
+    /// Explicit qualified128x64 NN fragment mapping; selected only by default-off Mixed stage.
+    Bf16MmaAccumulator128x64LdmatrixNn,
     ThreadScalar,
     /// Independent scalar accumulators owned by each thread.
     ThreadArray {
@@ -551,4 +640,32 @@ pub enum Dim {
     X,
     Y,
     Z,
+}
+
+impl TileLayout {
+    pub(crate) fn explicit_bf16_mma_elements(self) -> usize {
+        if self == Self::Bf16MmaAccumulator128x64LdmatrixNn {
+            return 32;
+        }
+        64
+    }
+    pub(crate) fn is_explicit_bf16_mma(self) -> bool {
+        match self {
+            Self::Bf16MmaAccumulator128Ldmatrix | Self::Bf16MmaAccumulator128x64LdmatrixNn => true,
+            #[cfg(test)]
+            Self::Bf16MmaAccumulator128
+            | Self::Bf16MmaAccumulator128Normalized
+            | Self::Bf16MmaAccumulator128LdmatrixNn => true,
+            _ => false,
+        }
+    }
+    #[cfg(feature = "cuda")]
+    pub(crate) fn normalizes_bf16_mma_addresses(self) -> bool {
+        match self {
+            Self::Bf16MmaAccumulator128Ldmatrix | Self::Bf16MmaAccumulator128x64LdmatrixNn => true,
+            #[cfg(test)]
+            Self::Bf16MmaAccumulator128Normalized | Self::Bf16MmaAccumulator128LdmatrixNn => true,
+            _ => false,
+        }
+    }
 }

@@ -7,6 +7,10 @@ use crate::tensor::{BinaryOp, ReduceOp, UnaryOp};
 pub enum ScalarBinaryOp {
     Arithmetic(BinaryOp),
     Max,
+    /// Explicit round-to-nearest operations prohibit cross-edge contraction.
+    AddRn,
+    SubRn,
+    MulRn,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -197,6 +201,14 @@ impl ScalarBuilder {
         });
         Ok(())
     }
+    /// Broadcast lane zero's raw F32 bits over a full active warp. All 32 lanes
+    /// must participate under identical control; this is not an all-reduction.
+    pub fn warp_broadcast_leader(&mut self, src: TileVar) -> TileVar {
+        let dest = self.var();
+        self.stmts
+            .push(super::Stmt::WarpBroadcastLeader { dest, src });
+        dest
+    }
     pub fn warp_reduce(&mut self, src: TileVar, op: ReduceOp) -> TileVar {
         let dest = self.var();
         self.stmts.push(super::Stmt::WarpReduce {
@@ -305,3 +317,6 @@ mod tests {
         assert!(ir(builder).validate_layouts().is_err());
     }
 }
+
+#[cfg(test)]
+mod warp_broadcast_leader_tests;

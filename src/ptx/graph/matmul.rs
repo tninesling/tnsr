@@ -1,5 +1,6 @@
 //! Register-tiled Tensor Core lowering with operand-fragment reuse.
 use super::*;
+mod direct_bf16_mma;
 
 pub(super) fn lower_tiled_tensor_core_matmul<'a>(
     func: &mut Function<'a>,
@@ -9,6 +10,14 @@ pub(super) fn lower_tiled_tensor_core_matmul<'a>(
     b: TileVar,
     schedule: &crate::tile::MatMulSchedule,
 ) {
+    if ctx.tile_layouts[&dest].is_explicit_bf16_mma() {
+        direct_bf16_mma::lower(func, ctx, dest, a, b, schedule);
+        return;
+    }
+    if schedule.fragment_load == crate::tile::MatMulFragmentLoad::StreamB {
+        lower_streamed_bf16_matmul(func, ctx, dest, a, b, schedule);
+        return;
+    }
     let accumulators = ctx.fragment_regs[&dest].clone();
     let a_shared = ctx.reg_to_shared.get(&a).copied().unwrap_or(a);
     let b_shared = ctx.reg_to_shared.get(&b).copied().unwrap_or(b);
@@ -312,4 +321,135 @@ fn lower_outer_product_scalar_matmul<'a>(
         }
     }
     end_counted_loop(func, reduction);
+}
+
+/// Only the isolated BF16 square strategy uses this loop order. Each output
+/// still sees exactly one MMA per increasing K16; independent outputs interleave.
+fn lower_streamed_bf16_matmul<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    dest: TileVar,
+    a: TileVar,
+    b: TileVar,
+    schedule: &crate::tile::MatMulSchedule,
+) {
+    let accumulators = ctx.fragment_regs[&dest].clone();
+    let a = ctx.reg_to_shared.get(&a).copied().unwrap_or(a);
+    let b = ctx.reg_to_shared.get(&b).copied().unwrap_or(b);
+    let (wr, wc) = warp_coordinates(schedule.block_threads.0, schedule.warp_topology);
+    for k in (0..schedule.block_tile.k).step_by(16) {
+        let load =
+            |func: &mut Function<'a>, ctx: &mut LoweringContext<'a>, lhs: bool, index: usize| {
+                let (tile, row, col) = if lhs {
+                    (
+                        a,
+                        wr.clone() * schedule.warp_fragments.0 + Expr::Const((index * 16) as i64),
+                        Expr::Const(k as i64),
+                    )
+                } else {
+                    (
+                        b,
+                        Expr::Const(k as i64),
+                        wc.clone() * schedule.warp_fragments.1 + Expr::Const((index * 16) as i64),
+                    )
+                };
+                let addr = shared_coordinate_address(func, ctx, tile, &row, &col);
+                let frags = (0..4).map(|_| func.add_b32_register()).collect::<Vec<_>>();
+                let stride = Operand::imm_i32(shared_row_stride(ctx, tile) as i32);
+                func.add_inst(if lhs {
+                    Inst::WmmaLoadA {
+                        column_major: shared_layout(ctx, tile).column_major,
+                        dtype: DType::BF16,
+                        frags: frags.clone(),
+                        addr,
+                        stride,
+                    }
+                } else {
+                    Inst::WmmaLoadB {
+                        column_major: shared_layout(ctx, tile).column_major,
+                        dtype: DType::BF16,
+                        frags: frags.clone(),
+                        addr,
+                        stride,
+                    }
+                });
+                frags
+            };
+        let left = (0..schedule.warp_fragments.0)
+            .map(|m| load(func, ctx, true, m))
+            .collect::<Vec<_>>();
+        for n in 0..schedule.warp_fragments.1 {
+            let right = load(func, ctx, false, n);
+            for (m, a_fragments) in left.iter().enumerate() {
+                let offset = 8 * (m * schedule.warp_fragments.1 + n);
+                let accum = accumulators[offset..offset + 8].to_vec();
+                func.add_inst(Inst::WmmaMma {
+                    column_major: (
+                        schedule.operand_layouts.0.column_major,
+                        schedule.operand_layouts.1.column_major,
+                    ),
+                    dtype: DType::BF16,
+                    d_frags: accum.clone(),
+                    a_frags: a_fragments.clone(),
+                    b_frags: right.clone(),
+                    c_frags: accum,
+                });
+            }
+        }
+    }
+}
+
+pub(super) fn store_accumulator_window<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    dest: TileVar,
+    src: TileVar,
+    origin: (usize, usize),
+    shape: (usize, usize),
+) {
+    let TileLayout::WarpAccumulator {
+        block_width,
+        warp_topology,
+        warp_fragments,
+        ..
+    } = ctx.tile_layouts[&src]
+    else {
+        unreachable!("validated accumulator window");
+    };
+    let (wr, wc) = warp_coordinates(block_width, warp_topology);
+    for m in 0..shape.0 {
+        for n in 0..shape.1 {
+            let row = wr.clone() * shape.0 + Expr::Const((m * 16) as i64);
+            let col = wc.clone() * shape.1 + Expr::Const((n * 16) as i64);
+            let address = shared_coordinate_address(func, ctx, dest, &row, &col);
+            let offset = 8 * ((origin.0 + m) * warp_fragments.1 + origin.1 + n);
+            func.add_inst(Inst::WmmaStore {
+                dtype: DType::BF16,
+                addr: address,
+                frags: ctx.fragment_regs[&src][offset..offset + 8].to_vec(),
+                stride: Operand::imm_i32(shared_row_stride(ctx, dest) as i32),
+            });
+        }
+    }
+}
+
+pub(super) fn store_bf16_mma_coalesced<'a>(
+    func: &mut Function<'a>,
+    ctx: &mut LoweringContext<'a>,
+    src: TileVar,
+    output: &str,
+    bias: Option<&str>,
+    n: usize,
+) {
+    if ctx.tile_layouts[&src] == TileLayout::Bf16MmaAccumulator128x64LdmatrixNn {
+        debug_assert!(bias.is_none());
+        direct_bf16_mma::coalesced_nn_rectangular::lower_store(func, ctx, src, output, n);
+        return;
+    }
+    direct_bf16_mma::coalesced::lower_store(func, ctx, src, output, bias, n);
+}
+
+#[cfg(test)]
+pub(super) fn nn_rect_provider(fragment: usize, k: usize) -> (Expr, Expr) {
+    direct_bf16_mma::ldmatrix_nn_rectangular::provider(fragment, k)
 }

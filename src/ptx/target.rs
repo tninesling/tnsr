@@ -69,6 +69,39 @@ pub(crate) fn reduction_launch_config(
     }
 }
 
+/// Runtime hard-resource guard for the compiled column body. The generated
+/// function also contains the original128-thread path, selected uniformly by
+/// blockDim. Static scratch is descriptor-checked before either body is emitted.
+pub(crate) fn column_reduction_fits(
+    region: &crate::tile::ReductionRegion,
+    function: &CudaFunction,
+) -> Result<bool> {
+    let Some(tile) = region.column_tile() else {
+        return Ok(false);
+    };
+    let limit = u32::try_from(function.max_threads_per_block()?)
+        .context("Column function thread limit is negative")?;
+    Ok(tile.threads <= limit
+        && function.occupancy_max_active_blocks_per_multiprocessor(tile.threads, 0, None)? > 0)
+}
+
+pub(crate) fn region_reduction_launch_config(
+    region: &crate::tile::ReductionRegion,
+    rows: u32,
+    function: &CudaFunction,
+) -> Result<LaunchConfig> {
+    if let Some(tile) = region.column_tile()
+        && column_reduction_fits(region, function)?
+    {
+        return Ok(LaunchConfig {
+            grid_dim: (tile.grid_x, 1, 1),
+            block_dim: (tile.threads, 1, 1),
+            shared_mem_bytes: 0,
+        });
+    }
+    reduction_launch_config(region.schedule, region.serial_block_threads, rows, function)
+}
+
 /// CUDA target properties that affect generated PTX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PtxTarget {

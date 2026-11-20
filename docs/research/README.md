@@ -1,5 +1,23 @@
 # PPO kernel research: findings and next experiments
 
+## Paper review against the current implementation
+
+The [six-paper review](paper-review.md) compares ROLLER, Triton, Welder, Ansor,
+ThunderKittens, and FlashAttention-2 with the current code and retained
+experiments. Its next experiments include shared-memory lifetime overlay,
+shared online exponential weights, and bounded joint schedule/fusion search.
+It distinguishes existing opt-in implementations from new proposals; in
+particular, the larger SIMT tile and packed FFNs described below now have
+[implemented prototypes and qualification results](../ppo-parallel-prototypes.md).
+The older proposal sections retain their original evidence and context.
+
+The [first implementation pass](../kernel-paper-prototypes.md) adds opt-in
+shared-memory reuse and online weight sharing, plus schedule-traffic diagnostics.
+Targeted GPU correctness tests pass when run outside the sandbox. Performance
+screens and fresh-process confirmation are recorded in the
+[resident benchmark report](../kernel-paper-performance.md). Complete-workload
+qualification remains pending; defaults are unchanged.
+
 ## Architectural program: larger end-to-end opportunities
 
 The later research pass targets work removal and a new GEMM architecture,

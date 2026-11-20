@@ -1,0 +1,17 @@
+{
+  "final": {
+    "path": "target/paired-vector-batch-build-v3/retained/tests-retained",
+    "sha256": "e70155f9dd8f0900e078b7cc2aca54fc350284b57f9602ba12acec53f8636234",
+    "source_before_after_equal": true,
+    "bytes": 223207792
+  },
+  "preformat": {
+    "path": "target/paired-vector-batch-build-v3/retained/tests-retained",
+    "sha256": "e70155f9dd8f0900e078b7cc2aca54fc350284b57f9602ba12acec53f8636234",
+    "source_before_after_equal": true,
+    "bytes": 223207792,
+    "actual_retained_path": "target/paired-vector-batch-build-v3-preformat/retained/tests-retained",
+    "original_recorded_path_is_pre_rename": true
+  },
+  "binary_payload_included": false
+}

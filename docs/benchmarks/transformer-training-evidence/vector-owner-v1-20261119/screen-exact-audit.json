@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "exact_snapshot_pairs": [
+    {
+      "name": "qual_gradients.f32",
+      "bytes": 219920384,
+      "sha256": "aec3de835dd5dd858f1e84144b697377ddc265f363d884d18225742239f077dd"
+    },
+    {
+      "name": "qual_weights.f32",
+      "bytes": 219920384,
+      "sha256": "5e230f7b9f7f3c4e334b86866578325d7f591e426175782344a7c6650a24aef7"
+    }
+  ],
+  "exact_qualification_scalar_triples": 1,
+  "reads_closed": true,
+  "performance_claim": false
+}

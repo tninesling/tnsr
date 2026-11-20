@@ -1,0 +1,165 @@
+{
+  "files": {
+    "target/shadow-live-census-v1/raw-round0.json": {
+      "bytes": 126005,
+      "sha256": "74fdc461f1d92e1f5be497a76744256d626479df220e5f2442e8746de2461ae9"
+    },
+    "target/shadow-live-census-v1/test.log": {
+      "bytes": 402,
+      "sha256": "c770db7a717f04e4515491dc27c0808ce008250ffc4977e523f33138c02a5941"
+    },
+    "target/shadow-live-census-v2/live-weight-cast-census.json": {
+      "bytes": 487476,
+      "sha256": "619082301375dc7f974729535b39873f0da132653bfc1ba47b4e9bceb9b913bb"
+    },
+    "target/shadow-live-census-v2/qualification.json": {
+      "bytes": 1479,
+      "sha256": "c6a13d52912406907f1eb57053908bba68648bd39a82379c6ac197f17a5e3dcf"
+    },
+    "target/shadow-live-census-v2/raw-round0.json": {
+      "bytes": 185164,
+      "sha256": "27b8bd1ad73a92ba8ed0637f7ec4a1c24e136f3b7204b01808eac1231944f151"
+    },
+    "target/shadow-live-census-v2/raw-round1.json": {
+      "bytes": 185164,
+      "sha256": "c3ad627649829f401d81e61a2d73e22a8f4c6d5c05703db999cd16c8b232f5b5"
+    },
+    "target/shadow-live-census-v2/test.log": {
+      "bytes": 228,
+      "sha256": "3ae77d0e20b94f1719bd884604ae7539540621e6d27d360cef5c10f509470279"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Bf16First-len1.ptx": {
+      "bytes": 24794,
+      "sha256": "4db1cdc75a143bd5ad75abfadec7c8b720529d44acd864e78947a9e9a610aa37"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Bf16First-len1023.ptx": {
+      "bytes": 24854,
+      "sha256": "0a0b115b5d09720713bbf67a7f15261d2bf29d67319ef80896a51449cd6fe23e"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Bf16First-len1024.ptx": {
+      "bytes": 24854,
+      "sha256": "899cf4edd83270a28e5501ca2b9b333740ba7fb626043c29e5fcaf3e9ad4b270"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Bf16First-len2818048.ptx": {
+      "bytes": 24930,
+      "sha256": "faa6b6432d973a4f51730f6242fa092bd95f3da7d9b7da3f40d8729861e1deaf"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Bf16First-len65536.ptx": {
+      "bytes": 24882,
+      "sha256": "332285665de5c96533b2f7593dfc3fa45acf027f59afa0583fcc9d08736f8cac"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Bf16First-len66560.ptx": {
+      "bytes": 24882,
+      "sha256": "1908a3b24d8a97adda83a74403f6dd26d3b21b71348daa7c9602191c6de9ed09"
+    },
+    "target/shadow-paired-leaf-v1/loaded-F32-len1.ptx": {
+      "bytes": 24575,
+      "sha256": "88125085dc8951649b44519e26c4665205d0d928715f126afa5cbfce88c61f51"
+    },
+    "target/shadow-paired-leaf-v1/loaded-F32-len1023.ptx": {
+      "bytes": 24635,
+      "sha256": "baf69812990fa3b2fec9edb602b6c3aff17a883a0f6b598b5703cff0581fb169"
+    },
+    "target/shadow-paired-leaf-v1/loaded-F32-len1024.ptx": {
+      "bytes": 24635,
+      "sha256": "08d6266301a501e30f52808a06b1e9605761add8b1c8f4a48f1da167adf3c334"
+    },
+    "target/shadow-paired-leaf-v1/loaded-F32-len2818048.ptx": {
+      "bytes": 24711,
+      "sha256": "666e803b036079e1a8f26105fc81600ab3a8a75c943845e82704c3cf9eddc16c"
+    },
+    "target/shadow-paired-leaf-v1/loaded-F32-len65536.ptx": {
+      "bytes": 24663,
+      "sha256": "2f3664cb9ce58b195099b92584a95cfdfa04482c16a3e64db52e496fc9bcaa67"
+    },
+    "target/shadow-paired-leaf-v1/loaded-F32-len66560.ptx": {
+      "bytes": 24663,
+      "sha256": "b421c2e1b41c3f2a2d1ff3c130afeb7c9ea6691f75da3f46ad8b322a23c73bb6"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Vector4-len1024.ptx": {
+      "bytes": 53008,
+      "sha256": "9e756759586c3e7a3a2fe60ddfaf03257a7e3eadb0de945a6ed164941131e703"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Vector4-len2818048.ptx": {
+      "bytes": 53097,
+      "sha256": "898fd921436a72ccad1d5c5510b9b2eaa77f7092fbbafccd69c1496e22ca03ec"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Vector4-len65536.ptx": {
+      "bytes": 53051,
+      "sha256": "d58bec0e5e60d93baa3383393d86a34a1daa7524033492b1e3aca2ad6f6da5b1"
+    },
+    "target/shadow-paired-leaf-v1/loaded-Vector4-len66560.ptx": {
+      "bytes": 53051,
+      "sha256": "5a965382d7f0e1c518bf71c49fe118ba9d90cc4f3fdb1fdafa98695d31fd69c5"
+    },
+    "target/shadow-paired-leaf-v1/provenance.json": {
+      "bytes": 4150,
+      "sha256": "5f3fb7d32abd48b260a86eeaaba3e20e4bc1be2d1358a11b2c94e7fe24ca2150"
+    },
+    "target/shadow-paired-leaf-v1/qualification.json": {
+      "bytes": 8919,
+      "sha256": "6b75faba1bd308f0b7c093b2af2e721bac16501170b59f394e774fc03b968a3d"
+    },
+    "target/shadow-paired-leaf-v1/test.log": {
+      "bytes": 1055,
+      "sha256": "dad203be48397b89251a90223988b70c4f60447f026d62937275d9d56bd3dd42"
+    },
+    "target/shadow-proof-build-v1/binary.json": {
+      "bytes": 186,
+      "sha256": "706276cd84fef1fdf9a7052de492aead69ac4f692c37a6c6d267c00b70baee20"
+    },
+    "target/shadow-proof-build-v1/clippy.log": {
+      "bytes": 123,
+      "sha256": "4acb3b675a8184aed728750cc2057d38da3de366b475999c19ac3b79c380ce9d"
+    },
+    "target/shadow-proof-build-v1/cpu-tests.log": {
+      "bytes": 978,
+      "sha256": "7411d7c16886ac4c38e8b734d7fa4b2b49b994fc92c8d354ee4e66cd9635ef07"
+    },
+    "target/shadow-proof-build-v1/fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "target/shadow-proof-build-v1/source-after.json": {
+      "bytes": 55828,
+      "sha256": "02d54e1b242b778e8cfc3b9a28487cf3bcb2e29c1fec6d7030923cbab6dd628a"
+    },
+    "target/shadow-proof-build-v1/source-archive.json": {
+      "bytes": 292,
+      "sha256": "5c3fd58592cc787ad1c0ffd95b2659a208bd5f0f35d5f3c65f267c85e20ce126"
+    },
+    "target/shadow-proof-build-v1/source-before.json": {
+      "bytes": 55828,
+      "sha256": "02d54e1b242b778e8cfc3b9a28487cf3bcb2e29c1fec6d7030923cbab6dd628a"
+    },
+    "target/shadow-proof-build-v2/binary.json": {
+      "bytes": 186,
+      "sha256": "fa5280e85ac93e738bbd1c572970eb3f39b21d864fe866196dba01ec6eaa7608"
+    },
+    "target/shadow-proof-build-v2/clippy.log": {
+      "bytes": 123,
+      "sha256": "d1d265a813a8a433b8509243268e84e0339f1005e172db9c5d5b7e9ae3a457f2"
+    },
+    "target/shadow-proof-build-v2/cpu-tests.log": {
+      "bytes": 978,
+      "sha256": "de62ea197b39f976d9c3c92bd0f3cf9bebf79d548a7465dc5d89f583a9545f31"
+    },
+    "target/shadow-proof-build-v2/fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "target/shadow-proof-build-v2/source-after.json": {
+      "bytes": 55828,
+      "sha256": "0e96b6b23f25be68b46968a1cb282f6b405778c94dc84d02fa64f0e76f87f9f1"
+    },
+    "target/shadow-proof-build-v2/source-archive.json": {
+      "bytes": 276,
+      "sha256": "427df4c5e0a5fe4989f8b383ac90518d56b90cd04d497084a9b6aeb46765251f"
+    },
+    "target/shadow-proof-build-v2/source-before.json": {
+      "bytes": 55828,
+      "sha256": "0e96b6b23f25be68b46968a1cb282f6b405778c94dc84d02fa64f0e76f87f9f1"
+    }
+  },
+  "archive_sha256": "e9bd87726f2e60fe8d5b562a0c4f7c397bc2ef1a6ec0dda8f84de86c88bea2ec"
+}

@@ -1,0 +1,877 @@
+{
+  "status": "PASS_ELIGIBLE_B32_ONLY_EXPERIMENTAL_OPTIN_PENDING_ROOT_REVIEW",
+  "phases": {
+    "screen": {
+      "workers": 3,
+      "timed_updates": 0,
+      "fixed_comparisons": 2,
+      "native_state_rows": 4,
+      "exact_F64_scalars": 6
+    },
+    "timing": {
+      "workers": 6,
+      "timed_updates": 384,
+      "fixed_comparisons": 4,
+      "native_state_rows": 1284,
+      "exact_F64_scalars": 1926
+    }
+  },
+  "source400_archive_reopened_all_hashes_verified": true,
+  "build_source_before_after_and_release_equal": true,
+  "source_archive": {
+    "path": "docs/benchmarks/transformer-training-sources/split128-live-v1-20261119.tar.gz",
+    "sha256": "8b02d6e3560aa6565e811fa2d533451f8b893b9b92a6ae0595c083dfd4b9b1f6",
+    "files": 400,
+    "base_manifest": "target/attention-forward-register-stats-build-v1/source-before.json",
+    "scope": "Experimental complete-model split128x64 option with wholeSquare64fallback; defaultOff unchanged; inheritedsealedattentionCFGTEST prototype included but not enabled by flag.",
+    "reopened_all_members_verified": true
+  },
+  "binary": {
+    "path": "target/split128-live-build-v1/retained/transformer-training-bench",
+    "sha256": "718f7f2c94b2452e4c4c3f11336ca58eb51eb158ed0a88b3d34a41c0d0fb467b",
+    "bytes": 8323096,
+    "profile": "release",
+    "source_before_after_equal": true,
+    "source_manifest": "target/split128-live-build-v1/source-archive.json"
+  },
+  "test_binary": {
+    "path": "target/split128-live-build-v1/retained/tests-retained",
+    "sha256": "fcf5353f8ec58c9fd4367c2a74ebc0359a9385cf36d4bb68d7e4b207c1887e95",
+    "bytes": 226016928,
+    "source_before_after_equal": true
+  },
+  "current_live_sources_not_compared": true,
+  "default_and_forced_fallback_selected_grid_pointer_label_resource_records_exact": true,
+  "function_fallback_proof": "Raw records do not persist CUDA function-handle identities. Sealed split_k.rs lines233-275 retain the original complete region/function tuple on proposal Err (only diagnostic counters change), and lines302-315 build grid and pointers from that retained tuple. Loaded canonical Square64 PTX is byte-exact against the isolated predecessor. Constructor records for default/forced fallback match exactly.",
+  "V4096_actual_rectangles": 17,
+  "V16384_unique_state_rectangles": 16,
+  "scope_separation_preserved": true,
+  "canonical_isolated_promoted_PTX": [
+    {
+      "filename": "m512-n4096-k4096-canonical.ptx",
+      "sha256": "8ba92ade1dc0c04f98a6ee5c1673ed550c10377c4ecd55a2872b0776cbe540c9",
+      "isolated_promoted_byte_exact": true
+    },
+    {
+      "filename": "m1408-n512-k4096-canonical.ptx",
+      "sha256": "c038512d694750ccde3de4287e3e03d7a9de7b86ab06a6c7826377ee20186e8c",
+      "isolated_promoted_byte_exact": true
+    },
+    {
+      "filename": "m512-n1408-k4096-canonical.ptx",
+      "sha256": "eb14623dd13b47a5190370b421b4c34eb267b61225a4642f762a7563bbf90520",
+      "isolated_promoted_byte_exact": true
+    }
+  ],
+  "six_fixed_comparisons_independently_revalidated": true,
+  "all_native_snapshots": [
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853"
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853"
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0"
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0"
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853"
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853"
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0"
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0"
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853"
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853"
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0"
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0"
+    }
+  ],
+  "old_accepted_raw_snapshot_matches": [
+    {
+      "path": "target/packed-b32-profile-v1/run-v1/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "every_new_native_snapshot_exact": true
+    },
+    {
+      "path": "target/packed-b32-profile-v1/run-v1/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "every_new_native_snapshot_exact": true
+    }
+  ],
+  "medians_ms": {
+    "baseline": 51.754815,
+    "candidate": 51.26829125,
+    "fresh_pytorch_cudagraph": 30.190971247066045
+  },
+  "trial_latency_reduction_percent": [
+    1.2339772609155402,
+    0.6449903028627668
+  ],
+  "aggregate_latency_reduction_percent": 0.9400550460860568,
+  "strongest_historical_target_retained_ms": 29.49940098915249,
+  "guard_workers": [
+    {
+      "phase": "screen",
+      "trial": 0,
+      "mode": "native_baseline",
+      "worker_pid": 573953,
+      "native_memory_samples": 85,
+      "desktop_utilization_rows": 6,
+      "desktop_max_observed_gap_s": 1.07997956800682,
+      "desktop_first_s": 0.05400838299829047,
+      "desktop_tail_s": 0.7019407679908909,
+      "query_errors": 0,
+      "foreign_or_activity_errors": 0
+    },
+    {
+      "phase": "screen",
+      "trial": 0,
+      "mode": "native",
+      "worker_pid": 574037,
+      "native_memory_samples": 119,
+      "desktop_utilization_rows": 8,
+      "desktop_max_observed_gap_s": 1.0790320840023924,
+      "desktop_first_s": 0.05300262800301425,
+      "desktop_tail_s": 0.6139928049960872,
+      "query_errors": 0,
+      "foreign_or_activity_errors": 0
+    },
+    {
+      "phase": "screen",
+      "trial": 0,
+      "mode": "pytorch_cudagraph_sdpa",
+      "worker_pid": 574145,
+      "native_memory_samples": 122,
+      "desktop_utilization_rows": 9,
+      "desktop_max_observed_gap_s": 1.0846448130032513,
+      "desktop_first_s": 0.05341132200555876,
+      "desktop_tail_s": 0.49466553100501187,
+      "query_errors": 0,
+      "foreign_or_activity_errors": 0
+    },
+    {
+      "phase": "timing",
+      "trial": 0,
+      "mode": "native_baseline",
+      "worker_pid": 574838,
+      "native_memory_samples": 411,
+      "desktop_utilization_rows": 20,
+      "desktop_max_observed_gap_s": 1.0865697380068013,
+      "desktop_first_s": 0.05284725400269963,
+      "desktop_tail_s": 0.7346254410076654,
+      "query_errors": 0,
+      "foreign_or_activity_errors": 0
+    },
+    {
+      "phase": "timing",
+      "trial": 1,
+      "mode": "native_baseline",
+      "worker_pid": 575751,
+      "native_memory_samples": 410,
+      "desktop_utilization_rows": 20,
+      "desktop_max_observed_gap_s": 1.0814707760000601,
+      "desktop_first_s": 0.053432954009622335,
+      "desktop_tail_s": 0.7387649949960178,
+      "query_errors": 0,
+      "foreign_or_activity_errors": 0
+    },
+    {
+      "phase": "timing",
+      "trial": 0,
+      "mode": "native",
+      "worker_pid": 575017,
+      "native_memory_samples": 413,
+      "desktop_utilization_rows": 21,
+      "desktop_max_observed_gap_s": 1.0800476870062994,
+      "desktop_first_s": 0.05415241498849355,
+      "desktop_tail_s": 0.6643468480178853,
+      "query_errors": 0,
+      "foreign_or_activity_errors": 0
+    },
+    {
+      "phase": "timing",
+      "trial": 1,
+      "mode": "native",
+      "worker_pid": 575561,
+      "native_memory_samples": 411,
+      "desktop_utilization_rows": 21,
+      "desktop_max_observed_gap_s": 1.080263626005035,
+      "desktop_first_s": 0.05203318200074136,
+      "desktop_tail_s": 0.710783012007596,
+      "query_errors": 0,
+      "foreign_or_activity_errors": 0
+    },
+    {
+      "phase": "timing",
+      "trial": 0,
+      "mode": "pytorch_cudagraph_sdpa",
+      "worker_pid": 575199,
+      "native_memory_samples": 275,
+      "desktop_utilization_rows": 15,
+      "desktop_max_observed_gap_s": 1.0977727730059996,
+      "desktop_first_s": 0.054807506006909534,
+      "desktop_tail_s": 1.062291723981616,
+      "query_errors": 0,
+      "foreign_or_activity_errors": 0
+    },
+    {
+      "phase": "timing",
+      "trial": 1,
+      "mode": "pytorch_cudagraph_sdpa",
+      "worker_pid": 575370,
+      "native_memory_samples": 274,
+      "desktop_utilization_rows": 16,
+      "desktop_max_observed_gap_s": 1.1023616919992492,
+      "desktop_first_s": 0.05253847999847494,
+      "desktop_tail_s": 1.0335015450109495,
+      "query_errors": 0,
+      "foreign_or_activity_errors": 0
+    }
+  ],
+  "memory": [
+    {
+      "phase": "screen",
+      "trial": 0,
+      "all_six_stages_both_pools_all_four_fields_delta_zero": true,
+      "payload_byte_deltas": {
+        "bf16_bytes": 0,
+        "bf16_master_shadow_alias_bytes": 0,
+        "contiguous_bias_reshape_avoided_bytes": 0,
+        "direct_master_bytes": 0,
+        "exact_index_bytes": 0,
+        "f32_bytes": 0,
+        "immutable_source_bytes": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 0,
+        "unpooled_bytes": 0
+      },
+      "sampled_NVML_mib": [
+        6288,
+        6288
+      ],
+      "sampled_NVML_delta_mib": 0
+    },
+    {
+      "phase": "timing",
+      "trial": 0,
+      "all_six_stages_both_pools_all_four_fields_delta_zero": true,
+      "payload_byte_deltas": {
+        "bf16_bytes": 0,
+        "bf16_master_shadow_alias_bytes": 0,
+        "contiguous_bias_reshape_avoided_bytes": 0,
+        "direct_master_bytes": 0,
+        "exact_index_bytes": 0,
+        "f32_bytes": 0,
+        "immutable_source_bytes": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 0,
+        "unpooled_bytes": 0
+      },
+      "sampled_NVML_mib": [
+        6288,
+        6224
+      ],
+      "sampled_NVML_delta_mib": -64
+    },
+    {
+      "phase": "timing",
+      "trial": 1,
+      "all_six_stages_both_pools_all_four_fields_delta_zero": true,
+      "payload_byte_deltas": {
+        "bf16_bytes": 0,
+        "bf16_master_shadow_alias_bytes": 0,
+        "contiguous_bias_reshape_avoided_bytes": 0,
+        "direct_master_bytes": 0,
+        "exact_index_bytes": 0,
+        "f32_bytes": 0,
+        "immutable_source_bytes": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 0,
+        "unpooled_bytes": 0
+      },
+      "sampled_NVML_mib": [
+        6224,
+        6290
+      ],
+      "sampled_NVML_delta_mib": 66
+    }
+  ],
+  "raw_bindings": [
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-before.xml",
+      "sha256": "79ec08e3fb627385b338fb1f116adde418b8561c9fe2dfd74b462b0fb18d2d19",
+      "bytes": 67767
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-after.xml",
+      "sha256": "8a9954a8f015694ee1a35cd5fe5ae7fb6505c9556069b1beb2a6f76596b3ba03",
+      "bytes": 67774
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-pmon.txt",
+      "sha256": "c6e0575f30d65d5921cfd114adadffe12bdee78b5fc66af0f4e24bc0563ab119",
+      "bytes": 4103
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-baseline-pmon.txt",
+      "sha256": "071100f0fc8e9f02d773a0fb33d190a05224d3a54d965ed5bb497a5684115410",
+      "bytes": 1359
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/nvml-raw.csv",
+      "sha256": "f30e2bdfa351038dc72d98c4f5d3af426becb7953397b43620a6ee5a0db8a90d",
+      "bytes": 2095
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/process.json",
+      "sha256": "df09ccd3e2e5aacef8bc002e22ce9a7f2253a61f7630bec1550b630f3b1d5851",
+      "bytes": 58916
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/stdout.log",
+      "sha256": "15091e40ceffa17348d896d09154da9ecbddfaf2a0786289545e6f907ba063ab",
+      "bytes": 30539
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/heartbeat.json",
+      "sha256": "3d70ade18e5f3a07cddc8548aae316cc2c7fc3ccf7baaae634adca7e8c401f3f",
+      "bytes": 186
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-before.xml",
+      "sha256": "f2357eff46e1e41c6d2f1c61b0144b13ce9fbd9b224d31b2bd455b04983e19af",
+      "bytes": 67773
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-after.xml",
+      "sha256": "e87e8693233a9595a90b170c2a120f140d720d5ba7656d8b198e29ad714a54cf",
+      "bytes": 67770
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-pmon.txt",
+      "sha256": "541f84e1b16893019c7058f0befc74e91e99b4673fb0e5cbf4b84b2e5fb4cdae",
+      "bytes": 5560
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-baseline-pmon.txt",
+      "sha256": "d4817b5b92e2580df4eaeb63176a52c601519a7300d778d6be79d0003d1bd17c",
+      "bytes": 1359
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/nvml-raw.csv",
+      "sha256": "f606ac0818b77182c69d2e4fe5dfc6de6f4f33d6d289cb2bbde06da2ab518c6a",
+      "bytes": 2849
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/process.json",
+      "sha256": "2cf49382fdbb6d61cb18039c4615a526fe2ee81daefa64bcd37682b1c924203f",
+      "bytes": 71704
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/stdout.log",
+      "sha256": "59b9a49f662e9aa5c873deb5e53c08ca2e646204bda5fb3787b99b6a7f29d79b",
+      "bytes": 37993
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-native/heartbeat.json",
+      "sha256": "249a46c46fd729105502b9646e9cb7aae097be4c53c34df15b94ab11e75572aa",
+      "bytes": 186
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "2090822604f3452cb2a9797509849f5684edaf03f37fdac9ec8cbf5ffe92f5e8",
+      "bytes": 67766
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "c10dbcd0ca215b6170d5b0cb2467db3e3e02473ecb3145180444a97dd8731777",
+      "bytes": 67774
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "a09c8944dea23a8db224f0b8fc2b030cb2fee6707fd36229cee974aee8d630f5",
+      "bytes": 6246
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-baseline-pmon.txt",
+      "sha256": "5d4861b8e2439863a70b59e341b8c5cdd855093b3a2607418e3b3d8989e4e241",
+      "bytes": 1359
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "02427012754baaf26ef076b0200e791513054135bfea51bc6b13a678335f16a7",
+      "bytes": 2996
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "8f515c4e9df62974c541d33d0991c00db90c22029f64015dfcb8046fc1b30b99",
+      "bytes": 24362
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "a638a3312ccfdb2a35168fb8460992afb432a688136214c13e6cfb28ac2b68b6",
+      "bytes": 4440
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    },
+    {
+      "path": "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/heartbeat.json",
+      "sha256": "c4b1ec5ef93d032330e6ff6b72b731cc9eed2fdcbf5cb941f28c716d3b146fee",
+      "bytes": 187
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-before.xml",
+      "sha256": "21bb67970ee529132db46219893e99cfd38e4183ca429362c61f2c162d06fbd9",
+      "bytes": 67766
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-after.xml",
+      "sha256": "2b9e62632ef3de40c3f4a4f2d61177e1533380e0cb21f00678a49d73a252a272",
+      "bytes": 67778
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-pmon.txt",
+      "sha256": "42757fd24fa4004e57b7afdfa69fe70e1497db856b204c0bd6ecc3eff867572e",
+      "bytes": 14354
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-baseline-pmon.txt",
+      "sha256": "760ed796ed1cd13897a7b4cb33e31aa965cbd1c7e3f60abc4f77ff9f821dfb41",
+      "bytes": 1359
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/nvml-raw.csv",
+      "sha256": "70bab8280c299137f95418c1db7fad16502e5118caf79eb8b00229ba2274ee2b",
+      "bytes": 8861
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/process.json",
+      "sha256": "da623fc6855d90f7f8b48bbc0edc6700fec24d59895bbf28f62a4e47c2414eef",
+      "bytes": 3107635
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/stdout.log",
+      "sha256": "405b88e6c6a8fcd68c894f4fbb2c8062b8fee4426abbc7871acefc47d1c0c10e",
+      "bytes": 2293748
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/heartbeat.json",
+      "sha256": "c94ab9e2d292e44dcc343901467e8715b81e223a2c77729635662d8310d8540f",
+      "bytes": 186
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-before.xml",
+      "sha256": "e375253b2ca9f38a4762a7c012a141dacc1783da5459b9e69ac695e442d112aa",
+      "bytes": 67774
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-after.xml",
+      "sha256": "05bc3f32ff993a8727edaacc2497ce9610c560247b658f3aa95a6f7cbb22a05c",
+      "bytes": 67778
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-pmon.txt",
+      "sha256": "9030da256c09a5b0725b8db92278f82066e34dad7bec0f2dff4abdebf6c8d650",
+      "bytes": 14354
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-baseline-pmon.txt",
+      "sha256": "f690c1ccfc351c1f7a302f20ebea3b9ba815184c10612e542c2e3a0067ad092b",
+      "bytes": 1359
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/nvml-raw.csv",
+      "sha256": "2bed83356a1198eba61ce0bb1c2c919c223a53db794232782d03381dba593d65",
+      "bytes": 8839
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/process.json",
+      "sha256": "5ced6a6a02cf084efc86614040f1ac39972ebe36da45f839732e7caa3c6ca879",
+      "bytes": 3107410
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/stdout.log",
+      "sha256": "959dbead4e4e1af55e34b4e69d14674cf87e6c7ef97d625abf923600a65f5a67",
+      "bytes": 2293686
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/heartbeat.json",
+      "sha256": "e8bf621858e1add80b6854aacfb5cd3e8e20701d3a7952c30e8dc5b65c1bb6a2",
+      "bytes": 188
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-before.xml",
+      "sha256": "7cf37207502e76762ec0c419a4d571f1d05a634379d37d0bb1c0460357f27924",
+      "bytes": 67776
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-after.xml",
+      "sha256": "fb8f4b6aa3e59ee7d2b67b28e057e9e01225ffb9e626b37d9d2610185675254c",
+      "bytes": 67776
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-pmon.txt",
+      "sha256": "7ecf9d85b7bbc7a07cbf6c45c11a2558fc128323a75696ee26939c5249244428",
+      "bytes": 14942
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-baseline-pmon.txt",
+      "sha256": "265bc480f3e91109c4c537875dbe7db44ed3403a067100e6f1ed84325493c0c1",
+      "bytes": 1359
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/nvml-raw.csv",
+      "sha256": "4240f84fe391fe529ca4adef473016ed8b12768d77c81602c8ba78dc86212782",
+      "bytes": 9045
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/process.json",
+      "sha256": "d6f3705e8d15638b5a683a69620352d1b783c5f06166e0f1088fae681089111c",
+      "bytes": 4002693
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/stdout.log",
+      "sha256": "8586506527b1c472652518045394dad537c418ef901c4fbf57b25897d09a0d51",
+      "bytes": 3093288
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/heartbeat.json",
+      "sha256": "1ed9d41d97fc5000caa05dd3d961a6a9c37347c3bf89e657dc1dd1d8a630b492",
+      "bytes": 186
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-before.xml",
+      "sha256": "303bb0161ceb577045311dac50f2630a8c1af4afb72202fff957691db61b784f",
+      "bytes": 67767
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-after.xml",
+      "sha256": "3ae72681c732434d2d66fba54dffe8c7d19ec2652f1015570435e7c00f22f054",
+      "bytes": 67776
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-pmon.txt",
+      "sha256": "f4153c00850c1b0470f7efaf6bd788e8b47470fa6a43abfdbc73b7ed302b6b58",
+      "bytes": 14942
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-baseline-pmon.txt",
+      "sha256": "ad117e326b8790d57195c9ded4f252475bc4847774ac26ed1ab6950d010f8cde",
+      "bytes": 1359
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/nvml-raw.csv",
+      "sha256": "f683de1d18c2065dc7b68452aabb36b6f75b3c587eb745161ae121fa1f82fd9c",
+      "bytes": 9013
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/process.json",
+      "sha256": "2fdd74e0f7b2e251d9ca96c27ca8a9b2169c61d3089db8fe3e6fb3417eab2d9b",
+      "bytes": 4002210
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/stdout.log",
+      "sha256": "bc4a16d5000257ab6466c830a7541aa5137c8c4165abf089229c15f1db3053bf",
+      "bytes": 3093093
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/heartbeat.json",
+      "sha256": "d1c353bf80e9fc8df6ed2413e19d8760982a51a10432e4fcb63bcc2e3d9a51ca",
+      "bytes": 186
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "5c384d756e61df21d711eae804f554cd33a8791e3cddae5044a6d5103a90f177",
+      "bytes": 67774
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "477afe335cf72a3fbba497d101d6fdf07ff603617d98d69a046e843f305d3920",
+      "bytes": 67776
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "ee841232183e102fa5d5cc49289e7cabd121b394c3a732c8917101abee373c0e",
+      "bytes": 10643
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-baseline-pmon.txt",
+      "sha256": "1c4b43716049badfd5db16508b1d8ce5648bfce93c44e508effea64a37a1f5d2",
+      "bytes": 1359
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "7f2008562aa6783f378bd3d29f57a2bfd1426ca040bb54883f15678ed8845c25",
+      "bytes": 6263
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "905cc084b52b717693b2c1904210e1a5782be515d382f3917c3f98998fd59b7f",
+      "bytes": 95581
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "1da6b763665effb7af7e0432b6ca110abc77ae2b71403a01fbe6331cdcce3865",
+      "bytes": 42777
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/heartbeat.json",
+      "sha256": "0cc19af2ab92aa2f6e7433d8a5530e211cc8957b277356668add68cdfef9d7ab",
+      "bytes": 187
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "c23bad9aeaf001201db90f4ec536bb1d407da4863a57768bfc5619b3e3b018e1",
+      "bytes": 67769
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "2aee83c185125ab27573f52b022eb23b5ab1f6a0c455db6e9b14aa11ca012ab7",
+      "bytes": 67769
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "79fe925f53b831c7feaaf4da80cfdb0a661475a74aeebc3fb33bec357278ddbf",
+      "bytes": 11231
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-baseline-pmon.txt",
+      "sha256": "2034523728c50e9a81976be056026a0ad89d3c4618f29b0176ced2530f78d9dc",
+      "bytes": 1359
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "f6447c7400caed6d3314aefb66ab416a33a68eda09b85d73f3ac4134684c4b17",
+      "bytes": 6249
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "273004a1d62c41cdf02bb6b996c8c015759842d23d3f366bfee4b54030108270",
+      "bytes": 95804
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "3e4f2b4491ae387626b96d98bc64ff12ddda0c6a5fd1d668b6a2d321c438e605",
+      "bytes": 42826
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/heartbeat.json",
+      "sha256": "1fcb5d5bf8d7cdf69e6b2c000834466479777422878d797ed0c3f4f66485424f",
+      "bytes": 188
+    }
+  ],
+  "guard_scope": "Source-bound sampled desktop policy: fixed PID6181 start-ticks1997/name/type/6MiB ceiling; all before/after XML, raw inventory and pmon rows checked, normalized reader timestamps ordered and <=3s coverage. Raw CSV/pmon contain no per-query start/end timestamps; elapsed receipt times are normalized metadata. This is not an empty GPU inventory or proof against sub-sample activity/PID reuse. Actual sampler queries validate desktop generation through /proc; per-query generation-success values are not individually persisted.",
+  "memory_scope": "All six allocator stages both physical pool views and payload byte deltas exactly zero. Timing sampled whole-process NVML differences -64/+66MiB are mixed and include modules/context; no memory savings or capacity claim.",
+  "decision": "Eligible only for closest B32 experimental opt-in. Default remains unchanged, other seven cases unchanged, parity remains2/8, historical stronger target retained. No promotion without root review.",
+  "revalidation_attempt1": "Missing PYTHONPATH prevented NumPy import before numerical work; corrected exact campaign environment, all6 revalidation PASS. Original log retained.",
+  "no_GPU_build_or_source_edits": true,
+  "worker_execution_order": {
+    "screen": {
+      "worker_start_order": [
+        [
+          0,
+          "native_baseline"
+        ],
+        [
+          0,
+          "native"
+        ],
+        [
+          0,
+          "pytorch_cudagraph_sdpa"
+        ]
+      ],
+      "log_sha256": "46843dfd013f639faf264f0f1f30bdf6ff5270db57c0074671effcbf0db40ca8",
+      "protocol_order_exact": true
+    },
+    "timing": {
+      "worker_start_order": [
+        [
+          0,
+          "native_baseline"
+        ],
+        [
+          0,
+          "native"
+        ],
+        [
+          0,
+          "pytorch_cudagraph_sdpa"
+        ],
+        [
+          1,
+          "pytorch_cudagraph_sdpa"
+        ],
+        [
+          1,
+          "native"
+        ],
+        [
+          1,
+          "native_baseline"
+        ]
+      ],
+      "log_sha256": "0fadb69e25a0f2499a9193f71088a66086a72b0efa5f4c83dd87f7f13592172f",
+      "protocol_order_exact": true
+    }
+  },
+  "execution_order_check_source": "target/split128-model-audit-v1/execution-order.json"
+}

@@ -1,0 +1,82 @@
+{
+  "build_ready": true,
+  "source_closed": true,
+  "source": {
+    "path": "docs/benchmarks/transformer-training-sources/split128-live-v1-20261119.tar.gz",
+    "sha256": "8b02d6e3560aa6565e811fa2d533451f8b893b9b92a6ae0595c083dfd4b9b1f6",
+    "files": 400,
+    "base_manifest": "target/attention-forward-register-stats-build-v1/source-before.json",
+    "scope": "Experimental complete-model split128x64 option with wholeSquare64fallback; defaultOff unchanged; inheritedsealedattentionCFGTEST prototype included but not enabled by flag.",
+    "reopened_all_members_verified": true
+  },
+  "test_binary": {
+    "path": "target/split128-live-build-v1/retained/tests-retained",
+    "sha256": "fcf5353f8ec58c9fd4367c2a74ebc0359a9385cf36d4bb68d7e4b207c1887e95",
+    "bytes": 226016928,
+    "source_before_after_equal": true
+  },
+  "CPU_whitelist_passed": 9,
+  "CPU_cuda_context_calls": 0,
+  "checks": {
+    "cargo_check_CPU": "PASS1.98s",
+    "cargo_check_all_targets_CUDA": "PASS11.46s",
+    "strict_Clippy_alltargets_allfeatures": "PASS10.58s",
+    "cargo_fmt_all_check": "PASS",
+    "full_state_exact": true,
+    "forced_resource_fallback": true,
+    "ordinary_Square64_PTX_matches_isolated": true,
+    "constructor_tensor_payload_unchanged": true,
+    "release_source_matches_test_source": true,
+    "cli_option_present": true
+  },
+  "source_before_after_equal": true,
+  "manual_GPU_tests": "target/split128-live-build-v1/manual-tests.json",
+  "promoted_GPU_qualification_pending": false,
+  "actual_census_pending": false,
+  "actual_state_pending": false,
+  "isolated_GPU_prerequisite": "target/split128-isolated-leaf-v1/qualification.json",
+  "no_production_default_adoption": true,
+  "no_performance_claim": true,
+  "prior_failed_logs": "CPU syntheticdescriptor test initially21/0 because fixtureforcedold32allshapes; correctedexplicit4already64outofscope descriptors andretainedCPU9passed. Original logs preserved. AllGPU17/4 claims awaitactualconstructorproof.",
+  "status": "PASS_CORRECTNESS_NO_PERFORMANCE_ADOPTION",
+  "binary": {
+    "path": "target/split128-live-build-v1/retained/transformer-training-bench",
+    "sha256": "718f7f2c94b2452e4c4c3f11336ca58eb51eb158ed0a88b3d34a41c0d0fb467b",
+    "bytes": 8323096,
+    "profile": "release",
+    "source_before_after_equal": true,
+    "source_manifest": "target/split128-live-build-v1/source-archive.json"
+  },
+  "source_archive": {
+    "path": "docs/benchmarks/transformer-training-sources/split128-live-v1-20261119.tar.gz",
+    "sha256": "8b02d6e3560aa6565e811fa2d533451f8b893b9b92a6ae0595c083dfd4b9b1f6",
+    "files": 400,
+    "base_manifest": "target/attention-forward-register-stats-build-v1/source-before.json",
+    "scope": "Experimental complete-model split128x64 option with wholeSquare64fallback; defaultOff unchanged; inheritedsealedattentionCFGTEST prototype included but not enabled by flag.",
+    "reopened_all_members_verified": true
+  },
+  "actual_census": {
+    "path": "target/split128-live-model-proof-v1/actual-b32-v4096-census.json",
+    "sha256": "89dd0a297a7dc52d7aec9c4d02ba39cee8da09a994a2317b2e642f485665fca4",
+    "vocab": 4096,
+    "selected_rectangles": 17
+  },
+  "actual_state": {
+    "path": "target/split128-live-model-proof-v1/actual-b32-v16384-unique-state.json",
+    "sha256": "3508cba4abbd0b9bdfd26e72f511137bddedc379aadb0bc60dfc91617f0afb41",
+    "vocab": 16384,
+    "selected_rectangles": 16
+  },
+  "promoted_leaf": {
+    "path": "target/split128-live-leaf-v1/qualification.json",
+    "sha256": "4a5608fff458582a068696af5aae2211a782b58a9a30de5bc44ae323a68c915f",
+    "full_array_comparisons": 162,
+    "readonly_arrays": 18,
+    "independent_F64_samples": 324
+  },
+  "manual_gpu_execution": {
+    "path": "target/split128-live-gpu-v1/launch.json",
+    "sha256": "d0eea9cabf971df892c24993ddf475bf470cc53765cbeb92beaf7afa8fd7b538"
+  },
+  "measured_V4096_fixed_gates_scope": "Separate full-model screen still required; synthetic V16384 state and V4096 dispatch are separate qualifications."
+}

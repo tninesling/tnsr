@@ -1,0 +1,142 @@
+{
+  "scope": "Five unique F32 byte objects: native gradients/weights, qualified PyTorch gradients/weights, fixture weights. Nine original path aliases deduplicated by SHA256.",
+  "objects": {
+    "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853": {
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32",
+      "bytes": 60940288,
+      "canonical_source": "target/packed-b32-profile-v1/run-v1/artifacts/qual_gradients.f32"
+    },
+    "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0": {
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32",
+      "bytes": 60940288,
+      "canonical_source": "target/packed-b32-profile-v1/run-v1/artifacts/qual_weights.f32"
+    },
+    "358c63f1da99fde7617b88b5f8de210ae28760c85e2ce82c42c5c283e31f2b02": {
+      "member": "objects/sha256/358c63f1da99fde7617b88b5f8de210ae28760c85e2ce82c42c5c283e31f2b02.f32",
+      "bytes": 60940288,
+      "canonical_source": "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_gradients.f32"
+    },
+    "0c5e49559867551a0c7f8ac061120f444df9af55ed355343f1aa42e231905a6c": {
+      "member": "objects/sha256/0c5e49559867551a0c7f8ac061120f444df9af55ed355343f1aa42e231905a6c.f32",
+      "bytes": 60940288,
+      "canonical_source": "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_weights.f32"
+    },
+    "317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6": {
+      "member": "objects/sha256/317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6.f32",
+      "bytes": 60940288,
+      "canonical_source": "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/archive/weights.f32"
+    }
+  },
+  "aliases": {
+    "target/packed-b32-profile-v1/run-v1/artifacts/qual_gradients.f32": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+    "target/packed-b32-profile-v1/run-v1/artifacts/qual_weights.f32": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-native/artifacts/qual_weights.f32": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial1-native/artifacts/qual_gradients.f32": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial1-native/artifacts/qual_weights.f32": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_gradients.f32": "358c63f1da99fde7617b88b5f8de210ae28760c85e2ce82c42c5c283e31f2b02",
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_weights.f32": "0c5e49559867551a0c7f8ac061120f444df9af55ed355343f1aa42e231905a6c",
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/archive/weights.f32": "317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6"
+  },
+  "source_bindings": {
+    "target/packed-b32-profile-v1/run-v1/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33969826,
+        60940288,
+        1795146432589629300,
+        1795146432589629300
+      ]
+    },
+    "target/packed-b32-profile-v1/run-v1/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33969827,
+        60940288,
+        1795146432690631050,
+        1795146432690631050
+      ]
+    },
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        30412066,
+        60940288,
+        1794289310214950514,
+        1794503489833903677
+      ]
+    },
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-native/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        30412067,
+        60940288,
+        1794289310307952656,
+        1794503489947504612
+      ]
+    },
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial1-native/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        30539871,
+        60940288,
+        1794289371354342540,
+        1794503490652264236
+      ]
+    },
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial1-native/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        30539872,
+        60940288,
+        1794289371446344611,
+        1794503490772419752
+      ]
+    },
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_gradients.f32": {
+      "sha256": "358c63f1da99fde7617b88b5f8de210ae28760c85e2ce82c42c5c283e31f2b02",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        30539856,
+        60940288,
+        1794289333901493555,
+        1794503490356103265
+      ]
+    },
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_weights.f32": {
+      "sha256": "0c5e49559867551a0c7f8ac061120f444df9af55ed355343f1aa42e231905a6c",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        30539857,
+        60940288,
+        1794289333914493851,
+        1794503490488095544
+      ]
+    },
+    "target/recovery-packed-performance-v1/campaign-w512_s512_b32/w512_s512_b32/archive/weights.f32": {
+      "sha256": "317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        30412054,
+        60940288,
+        1794289280811269415,
+        1794503489689374871
+      ]
+    }
+  }
+}

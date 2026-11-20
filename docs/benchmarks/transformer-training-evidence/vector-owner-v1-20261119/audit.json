@@ -1,0 +1,987 @@
+{
+  "status": "PASS_AUDIT_NO_ADOPTION",
+  "scope": "Read-only audit of vector-owner screen and complete-update experiment.",
+  "phases": [
+    {
+      "phase": "screen",
+      "report_sha256": "991095334490a27887f2b4dab54164c42ac76ce910757df55a0434a3c846d182",
+      "plan_sha256": "1f5b8c6ec7e49747ad02ca38b2490f07d712c59ee6e469595b94e81bbfbc662b",
+      "counts": {
+        "workers": 3,
+        "measured_updates": 3,
+        "native_state_rows": 4,
+        "f64_exact_values": 6,
+        "native_snapshot_pairs": 2
+      },
+      "fixed_comparisons": 2,
+      "trials": [
+        {
+          "trial": 0,
+          "baseline_ms": 8.670677,
+          "candidate_ms": 8.591156000000002,
+          "reduction_percent": 0.9171256177573903,
+          "NVML_baseline_mib": 2004,
+          "NVML_candidate_mib": 2004,
+          "NVML_delta_mib": 0,
+          "allocator_stages_identical": {
+            "initial": {
+              "current_pool": {
+                "reserved_current": 0,
+                "reserved_high": 0,
+                "used_current": 0,
+                "used_high": 0
+              },
+              "default_pool": {
+                "reserved_current": 0,
+                "reserved_high": 0,
+                "used_current": 0,
+                "used_high": 0
+              },
+              "same_pool": true
+            },
+            "after_setup": {
+              "current_pool": {
+                "reserved_current": 1644167168,
+                "reserved_high": 1644167168,
+                "used_current": 1588779828,
+                "used_high": 1612393268
+              },
+              "default_pool": {
+                "reserved_current": 1644167168,
+                "reserved_high": 1644167168,
+                "used_current": 1588779828,
+                "used_high": 1612393268
+              },
+              "same_pool": true
+            },
+            "after_qualification": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            },
+            "lifetime_peak_before_reset": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            },
+            "steady_initial_after_reset": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            },
+            "steady_after_timing": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            }
+          },
+          "payload_bytes_identical": true
+        }
+      ],
+      "summaries": {
+        "native_baseline": {
+          "successful_processes": 1,
+          "median_complete_update_ms": 8.670677,
+          "tokens_per_second": 29524.79950527508,
+          "process_medians_ms": [
+            8.670677
+          ],
+          "nvml_observed_process_peak_mib": 2004
+        },
+        "native": {
+          "successful_processes": 1,
+          "median_complete_update_ms": 8.591156000000002,
+          "tokens_per_second": 29798.08537989532,
+          "process_medians_ms": [
+            8.591156000000002
+          ],
+          "nvml_observed_process_peak_mib": 2004
+        },
+        "pytorch_cudagraph_sdpa": {
+          "successful_processes": 1,
+          "median_complete_update_ms": 44.630903998040594,
+          "tokens_per_second": 5735.935799356406,
+          "process_medians_ms": [
+            44.630903998040594
+          ],
+          "nvml_observed_process_peak_mib": 1384
+        }
+      },
+      "performance_scope": "Untimed first-update screen; one sample not a performance observation."
+    },
+    {
+      "phase": "timing",
+      "report_sha256": "b3b219eb3599f1e69d9928ee08aac85ec81d07977933a6c6b8396caf986b5093",
+      "plan_sha256": "cc9f6ecfb6061338fc8e6fab3872ba7b2519b7f916b1ea6df7aa331ec84f8a1d",
+      "counts": {
+        "workers": 6,
+        "measured_updates": 384,
+        "native_state_rows": 1284,
+        "f64_exact_values": 1926,
+        "native_snapshot_pairs": 4
+      },
+      "fixed_comparisons": 4,
+      "trials": [
+        {
+          "trial": 0,
+          "baseline_ms": 6.9659345,
+          "candidate_ms": 7.1845775000000005,
+          "reduction_percent": -3.1387461366454152,
+          "NVML_baseline_mib": 2008,
+          "NVML_candidate_mib": 2008,
+          "NVML_delta_mib": 0,
+          "allocator_stages_identical": {
+            "initial": {
+              "current_pool": {
+                "reserved_current": 0,
+                "reserved_high": 0,
+                "used_current": 0,
+                "used_high": 0
+              },
+              "default_pool": {
+                "reserved_current": 0,
+                "reserved_high": 0,
+                "used_current": 0,
+                "used_high": 0
+              },
+              "same_pool": true
+            },
+            "after_setup": {
+              "current_pool": {
+                "reserved_current": 1644167168,
+                "reserved_high": 1644167168,
+                "used_current": 1588779828,
+                "used_high": 1612393268
+              },
+              "default_pool": {
+                "reserved_current": 1644167168,
+                "reserved_high": 1644167168,
+                "used_current": 1588779828,
+                "used_high": 1612393268
+              },
+              "same_pool": true
+            },
+            "after_qualification": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            },
+            "lifetime_peak_before_reset": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            },
+            "steady_initial_after_reset": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            },
+            "steady_after_timing": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            }
+          },
+          "payload_bytes_identical": true
+        },
+        {
+          "trial": 1,
+          "baseline_ms": 7.298895,
+          "candidate_ms": 6.965218,
+          "reduction_percent": 4.571609812170196,
+          "NVML_baseline_mib": 2008,
+          "NVML_candidate_mib": 2008,
+          "NVML_delta_mib": 0,
+          "allocator_stages_identical": {
+            "initial": {
+              "current_pool": {
+                "reserved_current": 0,
+                "reserved_high": 0,
+                "used_current": 0,
+                "used_high": 0
+              },
+              "default_pool": {
+                "reserved_current": 0,
+                "reserved_high": 0,
+                "used_current": 0,
+                "used_high": 0
+              },
+              "same_pool": true
+            },
+            "after_setup": {
+              "current_pool": {
+                "reserved_current": 1644167168,
+                "reserved_high": 1644167168,
+                "used_current": 1588779828,
+                "used_high": 1612393268
+              },
+              "default_pool": {
+                "reserved_current": 1644167168,
+                "reserved_high": 1644167168,
+                "used_current": 1588779828,
+                "used_high": 1612393268
+              },
+              "same_pool": true
+            },
+            "after_qualification": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            },
+            "lifetime_peak_before_reset": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            },
+            "steady_initial_after_reset": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            },
+            "steady_after_timing": {
+              "current_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "default_pool": {
+                "reserved_current": 1845493760,
+                "reserved_high": 1845493760,
+                "used_current": 1808701064,
+                "used_high": 1808701064
+              },
+              "same_pool": true
+            }
+          },
+          "payload_bytes_identical": true
+        }
+      ],
+      "summaries": {
+        "native_baseline": {
+          "successful_processes": 2,
+          "median_complete_update_ms": 7.132414750000001,
+          "tokens_per_second": 35892.472461728335,
+          "process_medians_ms": [
+            6.9659345,
+            7.298895
+          ],
+          "nvml_observed_process_peak_mib": 2008
+        },
+        "native": {
+          "successful_processes": 2,
+          "median_complete_update_ms": 7.07489775,
+          "tokens_per_second": 36184.26852882786,
+          "process_medians_ms": [
+            7.1845775000000005,
+            6.965218
+          ],
+          "nvml_observed_process_peak_mib": 2008
+        },
+        "pytorch_cudagraph_sdpa": {
+          "successful_processes": 2,
+          "median_complete_update_ms": 6.835767748270882,
+          "tokens_per_second": 37450.07282682411,
+          "process_medians_ms": [
+            6.8937975011067465,
+            6.777737995435018
+          ],
+          "nvml_observed_process_peak_mib": 1340
+        }
+      },
+      "performance_scope": "Unprofiled synchronized complete updates, reversed two-fresh-process trials."
+    }
+  ],
+  "guard": {
+    "contexts": [
+      {
+        "pid": 6181,
+        "name": "/snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration",
+        "type": "C+G",
+        "baseline_mib": 6,
+        "process_start_ticks": 1997
+      }
+    ],
+    "normalized_NVML_rows_checked": 972,
+    "desktop_pmon_rows_checked": 66,
+    "activity_violations": 0,
+    "monitor_errors": 0,
+    "foreign_contexts": 0,
+    "sub_sample_idle_proof": false,
+    "terminal_tail_limitation": "Existing source asserts terminal inventory/tail coverage; exact final gap cannot be independently recomputed from untimestamped raw NVML."
+  },
+  "snapshots": [
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/artifacts/qual_gradients.f32",
+      "bytes": 219920384,
+      "sha256": "aec3de835dd5dd858f1e84144b697377ddc265f363d884d18225742239f077dd",
+      "stable_fingerprint": [
+        66311,
+        32899628,
+        219920384,
+        1795137426492053102,
+        1795137426492053102
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/artifacts/qual_gradients.f32",
+      "bytes": 219920384,
+      "sha256": "aec3de835dd5dd858f1e84144b697377ddc265f363d884d18225742239f077dd",
+      "stable_fingerprint": [
+        66311,
+        32899645,
+        219920384,
+        1795137432476156695,
+        1795137432476156695
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/artifacts/qual_weights.f32",
+      "bytes": 219920384,
+      "sha256": "5e230f7b9f7f3c4e334b86866578325d7f591e426175782344a7c6650a24aef7",
+      "stable_fingerprint": [
+        66311,
+        32899629,
+        219920384,
+        1795137426809058590,
+        1795137426809058590
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/artifacts/qual_weights.f32",
+      "bytes": 219920384,
+      "sha256": "5e230f7b9f7f3c4e334b86866578325d7f591e426175782344a7c6650a24aef7",
+      "stable_fingerprint": [
+        66311,
+        32899646,
+        219920384,
+        1795137432791162149,
+        1795137432791162149
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/artifacts/qual_gradients.f32",
+      "bytes": 219920384,
+      "sha256": "aec3de835dd5dd858f1e84144b697377ddc265f363d884d18225742239f077dd",
+      "stable_fingerprint": [
+        66311,
+        32899695,
+        219920384,
+        1795137499145310837,
+        1795137499145310837
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/artifacts/qual_gradients.f32",
+      "bytes": 219920384,
+      "sha256": "aec3de835dd5dd858f1e84144b697377ddc265f363d884d18225742239f077dd",
+      "stable_fingerprint": [
+        66311,
+        32899712,
+        219920384,
+        1795137506885444830,
+        1795137506885444830
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/artifacts/qual_weights.f32",
+      "bytes": 219920384,
+      "sha256": "5e230f7b9f7f3c4e334b86866578325d7f591e426175782344a7c6650a24aef7",
+      "stable_fingerprint": [
+        66311,
+        32899696,
+        219920384,
+        1795137499463316343,
+        1795137499463316343
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/artifacts/qual_weights.f32",
+      "bytes": 219920384,
+      "sha256": "5e230f7b9f7f3c4e334b86866578325d7f591e426175782344a7c6650a24aef7",
+      "stable_fingerprint": [
+        66311,
+        32899713,
+        219920384,
+        1795137507203450336,
+        1795137507203450336
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/artifacts/qual_gradients.f32",
+      "bytes": 219920384,
+      "sha256": "aec3de835dd5dd858f1e84144b697377ddc265f363d884d18225742239f077dd",
+      "stable_fingerprint": [
+        66311,
+        32899782,
+        219920384,
+        1795137548341162490,
+        1795137548341162490
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/artifacts/qual_gradients.f32",
+      "bytes": 219920384,
+      "sha256": "aec3de835dd5dd858f1e84144b697377ddc265f363d884d18225742239f077dd",
+      "stable_fingerprint": [
+        66311,
+        32899765,
+        219920384,
+        1795137540486026506,
+        1795137540486026506
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/artifacts/qual_weights.f32",
+      "bytes": 219920384,
+      "sha256": "5e230f7b9f7f3c4e334b86866578325d7f591e426175782344a7c6650a24aef7",
+      "stable_fingerprint": [
+        66311,
+        32899783,
+        219920384,
+        1795137548690168532,
+        1795137548690168532
+      ]
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/artifacts/qual_weights.f32",
+      "bytes": 219920384,
+      "sha256": "5e230f7b9f7f3c4e334b86866578325d7f591e426175782344a7c6650a24aef7",
+      "stable_fingerprint": [
+        66311,
+        32899766,
+        219920384,
+        1795137540801031960,
+        1795137540801031960
+      ]
+    }
+  ],
+  "raw_files": [
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/desktop-context-before.xml",
+      "sha256": "bb8515293a5d7ae09add1fc0b82906ca453ac1fb82bb85814364c2f23f281ffd",
+      "bytes": 67507
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/desktop-context-after.xml",
+      "sha256": "e4b0c0bde832d76848976b44cf38fd064f6bfdfdf7dca1327ef4924d53484294",
+      "bytes": 67507
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/desktop-context-pmon.txt",
+      "sha256": "69cc36fabcd4ee177cace9f2db7d66221ab779c0af1d9421269bec89cb890344",
+      "bytes": 2829
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/nvml-raw.csv",
+      "sha256": "8a102f1325809c2a0b0adcfb7e71bc4be74fbb39710cbd593fc6660eba63ab33",
+      "bytes": 1534
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/process.json",
+      "sha256": "efc344b96d3f09e1f6158bfe4a80302cd3740f8d834748ccc92f55588cc3e1f0",
+      "bytes": 45292
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/stdout.log",
+      "sha256": "24ec77ba81303d82fc74dd114c41ae90d584a6d77a2ad20b4bd95333625c36de",
+      "bytes": 22157
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/desktop-context-before.xml",
+      "sha256": "d971694a52fd17598d81aa1f0f1e5398ff137cfc560f9c7cc38cff1fd263a563",
+      "bytes": 67507
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/desktop-context-after.xml",
+      "sha256": "4016257ca49e2720dc72ed25d140fbd161b1910bf2ba5129e6e45450fa48ec57",
+      "bytes": 67515
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/desktop-context-pmon.txt",
+      "sha256": "ae4873cce3ef8755d9bf7097710e0592ffebc1839920df6b618d4ea63d8b8a38",
+      "bytes": 2339
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/nvml-raw.csv",
+      "sha256": "10988618d67a7536e30ac11b075b3d04d255b288d10748746330ef0dc52d0425",
+      "bytes": 1232
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/process.json",
+      "sha256": "12556e43077dfed439a04980815913ddc305b6577a0e4ca2031e9e5f66d9d574",
+      "bytes": 45166
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/stdout.log",
+      "sha256": "97e8c97c1be667e7a90ff4a281ce7263f4ab92126dacf588c75a4961f70aa40c",
+      "bytes": 22933
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "234831faa5afecf21e71f362ad3993c97e215c267b4d78649d3a0220fad757a4",
+      "bytes": 67511
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "23c6e72af2923d353ef650fad8a2dd8b82fa3f77eedfa163a17b8cb4440d8ebb",
+      "bytes": 67515
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "9b0afdbd9c3280f1ca79f8200f7b356f8a249c1d548113d31a4fd9e39be48de2",
+      "bytes": 8304
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "e49d9aa22e2f1d4062e49f6c94605fa07a5ffa0f19294b47bcaeee5fa12a115c",
+      "bytes": 4837
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "7950b7f66596fe05a4df0526744ad1c198f837fb110a8a586cc6992307e65ac8",
+      "bytes": 38152
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "039c04728a159b62fb833af0829098281ef897e13c89f8896fb1159f596fab53",
+      "bytes": 4441
+    },
+    {
+      "path": "target/vector-owner-model-v1/screen/w1024_s128/trial0-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/desktop-context-before.xml",
+      "sha256": "db6d84701e61822aff8f6c62d02e433c2503b402691068cca196e95f41d1ea0c",
+      "bytes": 67507
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/desktop-context-after.xml",
+      "sha256": "70b80f3a413243ce9e48ead562d04c29a161b9ca7531d68827c66c17428cb58b",
+      "bytes": 67516
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/desktop-context-pmon.txt",
+      "sha256": "5a69053a59dde86f59839d7797c90dd3c965d203290b3ab38825dc287caf2483",
+      "bytes": 3515
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/nvml-raw.csv",
+      "sha256": "bbd2b5852f43d47c24493572819646bfd7e2f2c598442e9f536c654dfcbf21e4",
+      "bytes": 2091
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/process.json",
+      "sha256": "17976e9f0de53b0bf7c62a07b0e3f054dc19bd19866b9b2fa32b41e108a0acc6",
+      "bytes": 1844942
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/stdout.log",
+      "sha256": "4cee9899420ccf3fb8990081d0bfe6694fd2eaec11939542073455ef84e00543",
+      "bytes": 1320252
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/desktop-context-before.xml",
+      "sha256": "e0ba253e2f98e8e8fa52f3bb5a0e187c1f5b536a97e7a628bc0d0d016c0c016d",
+      "bytes": 67517
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/desktop-context-after.xml",
+      "sha256": "436001c75bb4b39f8428302a2cf2de50da359bb894523a70fd0b6be1746bbbfb",
+      "bytes": 67510
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/desktop-context-pmon.txt",
+      "sha256": "88b9451381a8197fefc4ced2bd76c8cdc6812af39f2a01156a8a881d2c8bc585",
+      "bytes": 4005
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/nvml-raw.csv",
+      "sha256": "46de6492ae519687f528e0056aecce3c539aa4b9009061c00ab1e1a366434fa0",
+      "bytes": 2288
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/process.json",
+      "sha256": "f9ea78a61563d4a77ee7fb08ca57c073bebece6328d36282d8e8e551707aef2a",
+      "bytes": 1845702
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/stdout.log",
+      "sha256": "0a600cc43191395a9df7ce0136cdc03f1d4db43918d34614c93354cf9afe30a8",
+      "bytes": 1320218
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/desktop-context-before.xml",
+      "sha256": "56d6763fae8e1f6a5abbd43a1f62bc3b54b20d1a7e378b359361973972e32882",
+      "bytes": 67516
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/desktop-context-after.xml",
+      "sha256": "7dd886f3e270cc5a58e5b6a157e4678fae5035880544202f5f652700fd21cae4",
+      "bytes": 67516
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/desktop-context-pmon.txt",
+      "sha256": "23512c4266d4f15e7af01217352d2bcc649c2e4af40907717e84fe04f09c3660",
+      "bytes": 3515
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/nvml-raw.csv",
+      "sha256": "73713fbce6b82c591d2c7bf064b0a3d011f441ad511c71f2bf9031157590abb6",
+      "bytes": 2103
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/process.json",
+      "sha256": "35768bf06e80785f236b2383640df6a4ef14dfd9fe8ff3af113b6b0f8855617d",
+      "bytes": 2094249
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/stdout.log",
+      "sha256": "d4d2919b1189dccfa1df2ba695924513d5fecde1b7dea88ba66fc1eb7f20b908",
+      "bytes": 1440425
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/desktop-context-before.xml",
+      "sha256": "dbecc24783c6ebf8b1ad83be473586ddc93b24973f5a6cbc514b1bdaa9d81c3d",
+      "bytes": 67516
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/desktop-context-after.xml",
+      "sha256": "2e59c0f1e2ce85588e3d89721dd07c00da8676949901cdf6667502b1fdb0a9fb",
+      "bytes": 67516
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/desktop-context-pmon.txt",
+      "sha256": "eb5109a16c8abc31147a8f17c344eaf446fb7893ea1ea534cb5bf5278c16a1cf",
+      "bytes": 3515
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/nvml-raw.csv",
+      "sha256": "265cb9bf5455fe56e5f50962356280e6b04032d54f74d43083f3e4d3802cdfeb",
+      "bytes": 2084
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/process.json",
+      "sha256": "c4f6ef05e4a065a7a6fbcc5f8b7f8463e3545f10a3121b28ea01848161100db4",
+      "bytes": 2094260
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/stdout.log",
+      "sha256": "5288b6da77359b931fc62be0431f1cc54e0f36650e020833f9fff28a56130588",
+      "bytes": 1440556
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "84eb382941e1a46b34303210c6b8aae1cf752cf3a7ae5ea5508aa4e5123a8302",
+      "bytes": 67516
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "5b7f7e9f401abb4d3e159d1bc23a457f6edf2c2375b5cc6459217bd8ca0098ef",
+      "bytes": 67516
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "ff744e0745a7c148bf183200d9ffdbf92d49d1c9247ef2f0f5a0785fd0aada92",
+      "bytes": 5462
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "e66ca282b82c2917a75631fde24acff716df91bac06dd4151b9c9836c62be8cf",
+      "bytes": 3011
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "da03a86ef0bd576e8f2985a62de7398f29e598ddf161828b6757721e5b23e901",
+      "bytes": 76652
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "6fc65f7459e91c7f26b0f4b3af95e7b9f8a525d52ad18c67d701a17690c31dca",
+      "bytes": 42409
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial0-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "b6b4393ee0695f8f381d5f9e0282fcf17099cf911334f8a101f8c22d8de913c0",
+      "bytes": 67508
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "e3ae5b4594c406cb914320548def976b12b8091816fd095b4f7581fa01df7932",
+      "bytes": 67516
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "fef2f5d9b362c607a9c52ce9143319b5af16157f9b3f9da9a9eac5bd929044d8",
+      "bytes": 5364
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "00d21fae91d6dd9d89ffac35038813431da8fe0cbb648f3a6d2d35a95c546748",
+      "bytes": 2986
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "49cd74fa60eb19d1d17f6961abf2e5f5101db57d684bf2c9a566c51c056a8e30",
+      "bytes": 76416
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "d1308e209acb6ca5263bf6f2f803ea70d00d029d7853051c32eba80d6dc0f97d",
+      "bytes": 42408
+    },
+    {
+      "path": "target/vector-owner-model-v1/timing/w1024_s128/trial1-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    }
+  ],
+  "sealed_build": {
+    "path": "target/vector-owner-build-v1/qualification.json",
+    "sha256": "df5d79fe17e6f9e0ba97c0eed733e03e0b855b5f619c8f14456cb8cac12978c4"
+  },
+  "state_evidence": {
+    "path": "target/vector-owner-state-v1/smallnorm-vector-actual-w1024-s128-b2.json",
+    "sha256": "48a789055109b470fcf44929ade1da79032698f185f2a1c17024a77840e4682d"
+  },
+  "memory_scope": "Six CUDA allocator stages and owned payload bytes match per native pair. NVML whole-process peaks are sampled lower bounds and are separately reported; no capacity or memory-saving claim.",
+  "disposition": "No adoption or parity claim: complete-update timing direction reverses. Experimental code remains default off. Accepted policy and 2/8 parity count unchanged.",
+  "reads_closed": true
+}

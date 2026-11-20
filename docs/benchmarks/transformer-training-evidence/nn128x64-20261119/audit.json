@@ -1,0 +1,675 @@
+{
+  "status": "PASS_AUDIT_NO_ADOPTION",
+  "scope": "Read-only completed NN experiment audit. No policy promotion.",
+  "report_sha256": "ada51bdb311e8be7d857eba5cdb099424df92e7f68d5d2d406cc437e8baf15e9",
+  "plan_sha256": "87a6c74c35bab08825fdd1b47c5db6310afe1ae28224b85a5d856ba211d4cf0a",
+  "workers": 6,
+  "timed_updates": 384,
+  "fixed_comparisons": 4,
+  "f64_scalar_triples": 642,
+  "f64_exact_values": 1926,
+  "native_snapshot_pairs": 4,
+  "trials": [
+    {
+      "trial": 0,
+      "baseline_ms": 50.833699499999994,
+      "candidate_ms": 50.417336,
+      "reduction_percent": 0.8190698377166031,
+      "nvml_baseline_mib": 6224,
+      "nvml_candidate_mib": 6224,
+      "nvml_delta_mib": 0,
+      "allocator_stages_identical": {
+        "initial": {
+          "current_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "default_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "same_pool": true
+        },
+        "after_setup": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "after_qualification": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "lifetime_peak_before_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "steady_initial_after_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        },
+        "steady_after_timing": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        }
+      },
+      "payload_byte_deltas": {
+        "bf16_bytes": 0,
+        "contiguous_bias_reshape_avoided_bytes": 0,
+        "direct_master_bytes": 0,
+        "exact_index_bytes": 0,
+        "f32_bytes": 0,
+        "immutable_source_bytes": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 0,
+        "unpooled_bytes": 0
+      }
+    },
+    {
+      "trial": 1,
+      "baseline_ms": 50.6380385,
+      "candidate_ms": 50.975959,
+      "reduction_percent": -0.6673254138783491,
+      "nvml_baseline_mib": 6222,
+      "nvml_candidate_mib": 6288,
+      "nvml_delta_mib": 66,
+      "allocator_stages_identical": {
+        "initial": {
+          "current_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "default_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "same_pool": true
+        },
+        "after_setup": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "after_qualification": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "lifetime_peak_before_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "steady_initial_after_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        },
+        "steady_after_timing": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        }
+      },
+      "payload_byte_deltas": {
+        "bf16_bytes": 0,
+        "contiguous_bias_reshape_avoided_bytes": 0,
+        "direct_master_bytes": 0,
+        "exact_index_bytes": 0,
+        "f32_bytes": 0,
+        "immutable_source_bytes": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 0,
+        "unpooled_bytes": 0
+      }
+    }
+  ],
+  "summaries": {
+    "native_baseline": {
+      "successful_processes": 2,
+      "median_complete_update_ms": 50.735868999999994,
+      "tokens_per_second": 322927.35539820953,
+      "process_medians_ms": [
+        50.833699499999994,
+        50.6380385
+      ],
+      "nvml_observed_process_peak_mib": 6224
+    },
+    "native": {
+      "successful_processes": 2,
+      "median_complete_update_ms": 50.6966475,
+      "tokens_per_second": 323177.18839298,
+      "process_medians_ms": [
+        50.417336,
+        50.975959
+      ],
+      "nvml_observed_process_peak_mib": 6288
+    },
+    "pytorch_cudagraph_sdpa": {
+      "successful_processes": 2,
+      "median_complete_update_ms": 29.686764253710862,
+      "tokens_per_second": 551895.7829145017,
+      "process_medians_ms": [
+        29.43077449890552,
+        29.942754008516204
+      ],
+      "nvml_observed_process_peak_mib": 2076
+    }
+  },
+  "whole_process_NVML_scope": "Sampled process peaks are lower bounds and include setup. Allocator stages/owned payload bytes are separate and unchanged; no memory saving or capacity claim.",
+  "guard": {
+    "contexts": [
+      {
+        "pid": 6181,
+        "name": "/snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration",
+        "type": "C+G",
+        "baseline_mib": 6,
+        "process_start_ticks": 1997
+      }
+    ],
+    "activity_violations": 0,
+    "monitor_errors": 0,
+    "unknown_cuda_contexts": 0,
+    "normalized_worker_nvml_rows": 2363,
+    "desktop_pmon_rows": 120,
+    "raw_rows_checked": true,
+    "sub_sample_idle_proof": false,
+    "terminal_tail_limitation": "Measured monitor source asserts tail/inventory closure; raw untimestamped NVML does not independently prove exact terminal-tail gap."
+  },
+  "native_f32_files": [
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        32788705,
+        60940288,
+        1795136226081254714,
+        1795136226081254714
+      ]
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        32788722,
+        60940288,
+        1795136248883650109,
+        1795136248883650109
+      ]
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        32788706,
+        60940288,
+        1795136226169256240,
+        1795136226169256240
+      ]
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        32788723,
+        60940288,
+        1795136248971651635,
+        1795136248971651635
+      ]
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        32788792,
+        60940288,
+        1795136340926246132,
+        1795136340926246132
+      ]
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        32788778,
+        60940288,
+        1795136317481839604,
+        1795136317481839604
+      ]
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        32788793,
+        60940288,
+        1795136341016247692,
+        1795136341016247692
+      ]
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        32788779,
+        60940288,
+        1795136317592841530,
+        1795136317592841530
+      ]
+    }
+  ],
+  "raw_files": [
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/desktop-context-before.xml",
+      "sha256": "8612af3906b823fdd1d2dd4949879c817c481789f15b0b5c90afa543bcc42ab3",
+      "bytes": 67509
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/desktop-context-after.xml",
+      "sha256": "f1c6d5d743f2bff1f3eef9b96b8066462339a4db6271c2b953b66624cc7e07c8",
+      "bytes": 67519
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/desktop-context-pmon.txt",
+      "sha256": "34fb0022804990237daba935f6efb866714aedb0fda97bf15d372177a89e9bfe",
+      "bytes": 12211
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/nvml-raw.csv",
+      "sha256": "8588f8854cfeac0d4ea1a158fc0fca8597530247c3167d519475e00719dd7fde",
+      "bytes": 8386
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/process.json",
+      "sha256": "e8311e7acdb19c2904a6074002beed7d356f1b5e89c5f66bbde2ac8a9456edc7",
+      "bytes": 2458509
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/stdout.log",
+      "sha256": "5af274fb18fbdc5f1cc554795968f8174f08f10832f8b0e681a5ac081943a6ee",
+      "bytes": 1842735
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/desktop-context-before.xml",
+      "sha256": "203e55fb7a4bb4acc586a69f851d0d10e1674908d8bdf071981e6c5045f00ede",
+      "bytes": 67521
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/desktop-context-after.xml",
+      "sha256": "9d6e3e3e76de7e9557ebf8605b7b26374a0b8aace2544910f73f6a6bc3a03099",
+      "bytes": 67519
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/desktop-context-pmon.txt",
+      "sha256": "f5e09a6b2eca0b090f78a7bdad13f2f3f073722946217a2faf139899f359311c",
+      "bytes": 12211
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/nvml-raw.csv",
+      "sha256": "ad43c599801af63c849972a6b81f20f9d8dda89fc4d3824bc5be96bd14ee2357",
+      "bytes": 8392
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/process.json",
+      "sha256": "8b355c470f6efe798c2695a7244a7f92095d83cc8dad601740cec6cdcaddbe02",
+      "bytes": 2458662
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/stdout.log",
+      "sha256": "4f3bc3d5d6998e7edcf992c30c7cb60b0be90f1bbac8d8924d1d75b35564a09b",
+      "bytes": 1842708
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/desktop-context-before.xml",
+      "sha256": "cb72158ce2b0d63fb451911f35594436eece9ccf4665bc51c2cfbbd763677598",
+      "bytes": 67518
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/desktop-context-after.xml",
+      "sha256": "95e6107fd14e5d053364d3534d0bc7576144b58b6d55bbd5b387322a61f0804a",
+      "bytes": 67523
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/desktop-context-pmon.txt",
+      "sha256": "5eaa7e5ddb8882a76808d8269c67b0f932b1fd59e0590058034279617488ec2e",
+      "bytes": 12211
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/nvml-raw.csv",
+      "sha256": "739bd2b505e709a4ecf99b00a7cae0f3a4caab485e83427353d113298ed34651",
+      "bytes": 8401
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/process.json",
+      "sha256": "e89c4a69f60a7af2d8a7f9bd253b8225f7a0593e6d1fdc897deb55a1a3d6df11",
+      "bytes": 2767803
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/stdout.log",
+      "sha256": "95ceb09c42e6e3fd6cbebc0388811dc144a73a93881c295300bd248a7d640656",
+      "bytes": 2114826
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/desktop-context-before.xml",
+      "sha256": "d42bcbf5892e4644caeb43b3533940e5750d7aead71e6c5ed77bbd8a0bc7d077",
+      "bytes": 67520
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/desktop-context-after.xml",
+      "sha256": "e3eeaa2a811dea6f05b3fd8b03e6514468eb7d0f548c31cfc5eeecef2a61c41e",
+      "bytes": 67522
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/desktop-context-pmon.txt",
+      "sha256": "66ac859fd0768ddacee92be6565c0100c7284965e040659dec4feb877176b10d",
+      "bytes": 12701
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/nvml-raw.csv",
+      "sha256": "7d65d86c5e23f5dbf8010e6f81476d10d1ab4433bbbf98f15b09f33864904b6f",
+      "bytes": 8677
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/process.json",
+      "sha256": "f695b804dfa0ee53b08f915d3ffcca2f687c8b5e8fb3518517c8e091fe55af44",
+      "bytes": 2769503
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/stdout.log",
+      "sha256": "a03d33aa0d1c3cca7c321d746b3b0fbb622f0bd6e58d96952f617ffcc1284a13",
+      "bytes": 2114875
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "247c6ee847fd6350dc76afd1abacda30582e5344cec1e4387fe610ae085441d7",
+      "bytes": 67521
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "9327d03394c9f27e6588a973c51be91b9512bda2e7596b4093b0c5b40503a1e6",
+      "bytes": 67518
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "f8f54704f0edbcefb076f86a6d1a1539df214b2e48729946b89d7dc2224f2855",
+      "bytes": 14550
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "59bef42845c843fba01e9f88b4bff38662cc7ba9ea12504e46200635a78eea8f",
+      "bytes": 9425
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "21c47906c9fce70a4d828f9ea68b2a13c40cb45097470ab938ca3d8aba8b82e7",
+      "bytes": 118525
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "5ec17fb42363dd86f03a1fcc0e9551ec296478b8bd954e57d2cb795c805c9aa6",
+      "bytes": 42706
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "2786674e69ab65af29ff1e4f7fa88e557ee87fad132cb73eeb7877fbaf9b62d1",
+      "bytes": 67511
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "8b05bfa6c62d7eca5a743517c19127e4301d6f17e6d80e796863fc8c43d24926",
+      "bytes": 67519
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "98f071308171f64ca6c041af41ff17000bbff0edc828f7762d58e769bd037ea9",
+      "bytes": 8892
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "40e0265479c2c70bfdca83f21f54db67d2cacd23f879ee9bcc30d7ca32c12d4e",
+      "bytes": 5802
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "0449164b72c3bf11e368934a56ef6ef6bd2a234abf4e40589a5330a68456a165",
+      "bytes": 95063
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "2c3b2301d3e9f618bfeeacc8f126167d65fd6df81caf3bb08e40aafbd3c31eed",
+      "bytes": 42725
+    },
+    {
+      "path": "target/recovery-nn-performance-v2/campaign-w512_s512_b32/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    }
+  ],
+  "environment": {
+    "python": "/tmp/tnsr-python312-runtime/python/bin/python3.12",
+    "driver": "595.99.02",
+    "CC": "/home/taylor/code/tnsr/target/recovery-environment-20261119/build-tools/cc",
+    "CXX": "/home/taylor/code/tnsr/target/recovery-environment-20261119/build-tools/cxx",
+    "torch": "2.11.0+cu130",
+    "numpy": "2.4.3",
+    "prior_attempt": "target/recovery-nn-performance-v1/campaign-w512_s512_b32/report.json",
+    "prior_disposition": "Two PyTorch workers failed missing C compiler, one baseline contended by transient nautilus; no adoption."
+  },
+  "prior_failed_attempt": {
+    "path": "target/recovery-nn-performance-v1/campaign-w512_s512_b32/report.json",
+    "sha256": "1398ecb69e509b1342d72411dd207aba59ca1452e3b617c93f8dfd5c645ff6c3",
+    "disposition": "Preserved, excluded from promotion: two compiled PyTorch controls failed missing compiler, one native baseline contended by transient nautilus."
+  },
+  "disposition": "Do not adopt: trial direction reverses. Complete-update parity remains unachieved for this case and goal remains 2/8. No component or profiled timing used.",
+  "reads_closed": true
+}

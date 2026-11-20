@@ -1,0 +1,1272 @@
+{
+  "scope": "Durable component/leaf evidence only; no complete-update/profile or parity accounting changes.",
+  "archive": {
+    "path": "raw-evidence.tar.gz",
+    "sha256": "b81f64ec634dfafc9645cc19593de1805e9b2e3d9a827a6f1c6b2eab2630d134",
+    "bytes": 1308661,
+    "deterministic_gzip_mtime": 0,
+    "all_members_reopened_and_sha256_verified": true
+  },
+  "files": [
+    {
+      "path": "target/paired-vector-batch-build-v1/binary.json",
+      "sha256": "d6d35544c0d699ccc15d173503f88fd4a3268caada7c9556ba1c03d0771dab5e",
+      "bytes": 193
+    },
+    {
+      "path": "target/paired-vector-batch-build-v1/source-after.json",
+      "sha256": "76c85bf19917df5fa6b6ca1b2381b9725098ccfead9ee64b2dbad6beae76cee2",
+      "bytes": 56751
+    },
+    {
+      "path": "target/paired-vector-batch-build-v1/source-archive.json",
+      "sha256": "816a59240d07e81544de77451ef73b127617fdc4519b87dc62eb65c813921c21",
+      "bytes": 303
+    },
+    {
+      "path": "target/paired-vector-batch-build-v1/source-before.json",
+      "sha256": "76c85bf19917df5fa6b6ca1b2381b9725098ccfead9ee64b2dbad6beae76cee2",
+      "bytes": 56751
+    },
+    {
+      "path": "target/paired-vector-batch-build-v1/test-build.log",
+      "sha256": "dd26a9247df0495b1da3ab1e29e3bc6bba94cf4ae403fe076d94c4cd13b8a7bf",
+      "bytes": 73
+    },
+    {
+      "path": "target/paired-vector-batch-build-v2/binary.json",
+      "sha256": "1e7b45be07ebf8fb99b05991ca2626d8f3c291216df7f523f1150c9f4774676a",
+      "bytes": 193
+    },
+    {
+      "path": "target/paired-vector-batch-build-v2/source-after.json",
+      "sha256": "6bbcf96c8ad8f8a8ea48e6ee3feb43054196e6d3a1bea5bfd9cd31823465e678",
+      "bytes": 56915
+    },
+    {
+      "path": "target/paired-vector-batch-build-v2/source-archive.json",
+      "sha256": "fd81141cc703cc52ec87de337d94d0f2b9f2241250138c563605404df5d401ea",
+      "bytes": 316
+    },
+    {
+      "path": "target/paired-vector-batch-build-v2/source-before.json",
+      "sha256": "6bbcf96c8ad8f8a8ea48e6ee3feb43054196e6d3a1bea5bfd9cd31823465e678",
+      "bytes": 56915
+    },
+    {
+      "path": "target/paired-vector-batch-build-v2/source-delta-proof.json",
+      "sha256": "2a51e4f4ee13613d8d553a279cb3372700b3fb7e272b4bee9b2669c8e965689f",
+      "bytes": 1120
+    },
+    {
+      "path": "target/paired-vector-batch-build-v2/test-build.log",
+      "sha256": "4c24e740046e197be3cec085a7b44f923806b171fe1e57ccbf5d5d1f9d3c8cf4",
+      "bytes": 124
+    },
+    {
+      "path": "target/paired-vector-batch-clippy-v1.log",
+      "sha256": "df5922c578308159f1247e6d3f74bacbf72078b61a6fd9e8dbbf9057d1929863",
+      "bytes": 1347
+    },
+    {
+      "path": "target/paired-vector-batch-clippy-v2.log",
+      "sha256": "ffd365310e70c02bdf9c780430c703098765043acff00683a7b4bf37a5341888",
+      "bytes": 123
+    },
+    {
+      "path": "target/paired-vector-batch-clippy-v3.log",
+      "sha256": "bee455ed7091e263cbf7b90565f6689ac4005b9581cdab157c61db4ff0336c81",
+      "bytes": 123
+    },
+    {
+      "path": "target/paired-vector-batch-component-audit-v1/audit.json",
+      "sha256": "99115940326c253ff5e37b6e631bee30983321f16d54028b03bafe0df1e9c73f",
+      "bytes": 36807
+    },
+    {
+      "path": "target/paired-vector-batch-component-audit-v1/audit.py",
+      "sha256": "40da79fda02c2277de432452aab9df465a64580459ce9fc24a0fc5a6e94d26c0",
+      "bytes": 14768
+    },
+    {
+      "path": "target/paired-vector-batch-component-audit-v2/audit.json",
+      "sha256": "1f57b02450c742ac612d2c3c602029395471ce619a1237f313caa8967e842bc9",
+      "bytes": 27356
+    },
+    {
+      "path": "target/paired-vector-batch-component-audit-v2/audit.log",
+      "sha256": "b6e4d271910c157fda99b50f132a2b27366c76af6c38010bfb8bf0dfffa4d71c",
+      "bytes": 2894
+    },
+    {
+      "path": "target/paired-vector-batch-component-audit-v2/audit.py",
+      "sha256": "8b7e599075e254a8f03dbe320ba1b7cefdac50795139f63582bc7224c2200a92",
+      "bytes": 15539
+    },
+    {
+      "path": "target/paired-vector-batch-component-audit-v2/package.py",
+      "sha256": "3bcc258ab30ef9a7a4421ec3fa13cc4f208a0adbe186ba787c6c5450184f4f51",
+      "bytes": 4908
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/README.md",
+      "sha256": "6de5d9984dbaf423128855f7b899aed7ded0155b657206600133efc8389d83aa",
+      "bytes": 2401
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/launch-commands.json",
+      "sha256": "f79e0d41abe9a3bcb2822a4a99a3e8ec7a72218a8344c3481fb7a4c117c296f0",
+      "bytes": 688
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/plan.json",
+      "sha256": "dcf463bc97a1dc712355ab29449c543a60c70a83a89f7f1178aabaa35a30b1b7",
+      "bytes": 4055
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/preparation.json",
+      "sha256": "5845782351023e002e46542025c3fef2e04b7c5db194bcacb5d973a30c900c6c",
+      "bytes": 1718
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/prepare.py",
+      "sha256": "b7c1211330eeefb84688de8bc7cf9419bc73037ded4b3464dcf73cbe5c75e9dd",
+      "bytes": 5618
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/run-campaign.py",
+      "sha256": "57a80ab24657a32d4c461cea22a52a6aa3bfdeb9986c004e488401674f0af790",
+      "bytes": 14005
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-reservation-v1.json",
+      "sha256": "a7a8d2bfe79b88a678e0afe38af33ca00b5db398367ac7974b34527e4b86253f",
+      "bytes": 476
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/desktop-context-campaign.json",
+      "sha256": "02958d76fd11c60b14503daf3838e7aa432b4b3560799af0b0da30a35297c165",
+      "bytes": 337
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/desktop-context-campaign.xml",
+      "sha256": "7b0571ba0779fc7eff3f7212b85b2c8dcf0f461f7a37fd390c97233ba01c7bf9",
+      "bytes": 67772
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/report.json",
+      "sha256": "b642df39a20d8c4dffa66ca6dd658092b797e632af47e3dc87deae635ea04c21",
+      "bytes": 5154235
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/artifacts/len1048576/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/artifacts/len2818048/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/artifacts/len3145728/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/artifacts/results.json",
+      "sha256": "eb761acb2a6de0333af7debbbf683d4a13db5583fa47b935a488091f333b1a25",
+      "bytes": 1263697
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/desktop-context-after.xml",
+      "sha256": "32bb8e5c77ae4049e3ff68c935fb20e56490fda8c7d57ab0156537ff9fcf553a",
+      "bytes": 67776
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/desktop-context-baseline-pmon.txt",
+      "sha256": "0d32524d160e05eab28704742b08793e4d4f144540b4da7d94bc1dd0bcdd1bb8",
+      "bytes": 1359
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/desktop-context-before.xml",
+      "sha256": "8693058c6eca5d68856c9e15df2a88bfd6105ea0782acb10fc554d75534dbf25",
+      "bytes": 67771
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/desktop-context-pmon.txt",
+      "sha256": "18bb1e10cf109f8e2b17c1c52cdaeb04d0ffecf9c78c5a45ccd950d27e1ae208",
+      "bytes": 35568
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/heartbeat.json",
+      "sha256": "913e157a1fa7dd49ec94948577e332c4833fb50105a6cd6bf87a25a71338c751",
+      "bytes": 184
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/nvml-raw.csv",
+      "sha256": "8fbad6f5f92b2aeb59cccbbaf165f1866d19e88ba4b8e31c7c48896740ed4287",
+      "bytes": 20891
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/process.json",
+      "sha256": "d51004f5c29954b93b8b396df13e44b3680a081b9e816e9fd888c3daa3ca1e7f",
+      "bytes": 1486777
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/stdout.log",
+      "sha256": "8d19531a5740201a24595f3ba1ef6077fc05b139b1bf6db54ad01e1beb3749c4",
+      "bytes": 213
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/artifacts/len1048576/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/artifacts/len2818048/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/artifacts/len3145728/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/artifacts/results.json",
+      "sha256": "14335ad235f031e7f5c2dba7dbcd5a6a3d07a6799e588fa44bb06522cff6e477",
+      "bytes": 1263618
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/desktop-context-baseline-pmon.txt",
+      "sha256": "940f892afb6e946388739b4f1d7c53f8c4cf86be9cf5aa4e4a15c4f3257f1087",
+      "bytes": 1359
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/desktop-context-before.xml",
+      "sha256": "9277c9ed1c14be93aa333ce3d64153e315b4f65db6f0b77cee4da2bdf57f6671",
+      "bytes": 67775
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/desktop-context-pmon.txt",
+      "sha256": "9bb22c50adf809c82a2b3a025002a90014d98b9f47576d0476a64de9bda2fac1",
+      "bytes": 37809
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/heartbeat.json",
+      "sha256": "27b9b86e3d5bdd29a607649b80d40618be0b5a031ceb00c279755914593cbbcc",
+      "bytes": 184
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/nvml-raw.csv",
+      "sha256": "ab43dd131707be37c9b73db5fa2c96db4f522f1a9dc7d4a814a52b20a96a04d6",
+      "bytes": 25807
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/process.json",
+      "sha256": "61ca5adda86771d27f4c19ac88993930ec1604322a9dcb4ab175c9f30c0e1ebf",
+      "bytes": 1533932
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/stdout.log",
+      "sha256": "8f62c4c91106a4286c05e594f5e0d132d8ca67daa9f9d25ac097970bd6b7a106",
+      "bytes": 213
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1.log",
+      "sha256": "d33111c30c5c977ea7304f85e923835532850963c8ad20dc737b0551f9e10950",
+      "bytes": 1091
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/desktop-context-campaign.json",
+      "sha256": "02958d76fd11c60b14503daf3838e7aa432b4b3560799af0b0da30a35297c165",
+      "bytes": 337
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/desktop-context-campaign.xml",
+      "sha256": "8726cab5196952467ece60816be47b25794f4f32f3105f4acf88f9e25de9f317",
+      "bytes": 67771
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/report.json",
+      "sha256": "492e6c1db979476e077be8dc2abb5586cc1bd0571bde55dd6d9031b533184a33",
+      "bytes": 6611569
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/artifacts/len1048576/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/artifacts/len2818048/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/artifacts/len3145728/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/artifacts/results.json",
+      "sha256": "45def6bf1ca9fc9f865d92d06d18705eb824a267ee35823c4e91e5d372d38ccf",
+      "bytes": 1263699
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/desktop-context-after.xml",
+      "sha256": "b831e716ec229874abce8792177b3feba53a8a03ae33a857b1cfc1e596b5d618",
+      "bytes": 67769
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/desktop-context-baseline-pmon.txt",
+      "sha256": "144d16342a64cbd96b46d4d353a8333f43b4acdf1c7b7b284cae29704ec0208b",
+      "bytes": 1359
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/desktop-context-before.xml",
+      "sha256": "c3a4eb1016d0be70b15b77656ccf5adfc1c1ad2a6891fc9aaab10ab006bfa4e0",
+      "bytes": 67772
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/desktop-context-pmon.txt",
+      "sha256": "407653a5dd7d8dd811bf74d5f692d1beabfe25d83ab178817ec2ef6a6494fa6c",
+      "bytes": 35568
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/heartbeat.json",
+      "sha256": "30441874bb5a9db3b539ce679a8bf0c955b9bcd8a69bef26c1dea539552c939b",
+      "bytes": 186
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/nvml-raw.csv",
+      "sha256": "f78d94796397871c20005ff5e63be4d2af1373e5691691ae2b97af327ddbee71",
+      "bytes": 20807
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/process.json",
+      "sha256": "9d6655e0ad84872c17141de45b1982575ed62d3cdaa4bfc903b0f5391fc1bd5a",
+      "bytes": 1485944
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/stdout.log",
+      "sha256": "2184395bcfc454f3a69fa129cfffd40c979a57caf97c2ae18d4ad46a767b9d44",
+      "bytes": 213
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/artifacts/len1048576/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/artifacts/len2818048/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/artifacts/len3145728/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/artifacts/results.json",
+      "sha256": "8f71995d063afdde86f8563f12119c30813e907c449418d7cac29f8ee71749ef",
+      "bytes": 1263705
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/desktop-context-after.xml",
+      "sha256": "50ca40e2b8ac807c89992b24a3709660fc75a38101f1477c7a94695564c5fab9",
+      "bytes": 67771
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/desktop-context-baseline-pmon.txt",
+      "sha256": "525af7af89ae4fce543a534f19d34932f9a2cf85e5aefd4872cdc78afc75396e",
+      "bytes": 1359
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/desktop-context-before.xml",
+      "sha256": "2b978aa24b409cbddb1533cbce1106e4ef654866a51e4c1ffae51f2af29408d0",
+      "bytes": 67768
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/desktop-context-pmon.txt",
+      "sha256": "026e193409783b46a2ace6a623228d1264dfe3085b9e0274248e5aa24e97d487",
+      "bytes": 34196
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/heartbeat.json",
+      "sha256": "ddb7842b4cd7291c234249ff90f547b43c375b47c0fb9086c788fad06a1e1a1d",
+      "bytes": 185
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/nvml-raw.csv",
+      "sha256": "ce85ddda8c6e6ff06e766906d000c07876c5470f1d8cc001b1bd7b2f45d21a03",
+      "bytes": 20019
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/process.json",
+      "sha256": "312192115f95078fbbe9137c7935cad23dde9f60a08c033e7bc3a8464e235682",
+      "bytes": 1480845
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/stdout.log",
+      "sha256": "f230734fd41e4c874a28b1863139b57a14b4009c62358f74034171f9db83ce9e",
+      "bytes": 213
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2-summary.json",
+      "sha256": "4950da678d69f576284979210815b077ca2567f27c09069111e303225576aeab",
+      "bytes": 734
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2.log",
+      "sha256": "54f27f518a7c8b5d8d0ca18880ce1747d8cf8354335f89426e3c92e90bb4871e",
+      "bytes": 801
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/desktop-context-campaign.json",
+      "sha256": "02958d76fd11c60b14503daf3838e7aa432b4b3560799af0b0da30a35297c165",
+      "bytes": 337
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/desktop-context-campaign.xml",
+      "sha256": "19b29814af12fbf2e0002f6bf43c7baf3f475e548de80b4ae487665088cdd762",
+      "bytes": 67772
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/report.json",
+      "sha256": "e60f394e7a910c8a740f1166f4d1f6367e5428dcec0e83d563fc3f8abb983c75",
+      "bytes": 642711
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/artifacts/len1048576/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/artifacts/len2818048/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/artifacts/len3145728/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/artifacts/results.json",
+      "sha256": "ef1842883a9b288081564223df0fdab11d490df8125de7df1f4897ff155e031c",
+      "bytes": 347366
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/desktop-context-after.xml",
+      "sha256": "c3b65dba7be8f5e07fe31b9c22cdd255b0027f0d9afb6ffd4a81a6b0e6795f9c",
+      "bytes": 67777
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/desktop-context-baseline-pmon.txt",
+      "sha256": "f919b48babad09d246745936d41694cb0b23507ec8714bf96de61a2a619d084a",
+      "bytes": 1359
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/desktop-context-before.xml",
+      "sha256": "28ab084d34645844866318406e1f3b394659f16c10d1d7a3f8b170c502af69a1",
+      "bytes": 67773
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/desktop-context-pmon.txt",
+      "sha256": "dfb2b3ca3bd7ca62de72e0e28c15fd83cffc45cd24d11d571e3e852d4ede054e",
+      "bytes": 30779
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/heartbeat.json",
+      "sha256": "0f49c653a181fa65391b0b4b1919f666221ac712d7d59629282042f62c9203d5",
+      "bytes": 184
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/nvml-raw.csv",
+      "sha256": "e76f4bda86a54b22fa8cdcceabe04bbc27df9ff00970568c8d06351639f6fd77",
+      "bytes": 21784
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/process.json",
+      "sha256": "1150a22f4fb6a63bd687bff3d2ba787a658fdc4ebfd95b22291416c41a3b0946",
+      "bytes": 529738
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/stdout.log",
+      "sha256": "eeb4561044ff2cfd607f612a0507b4a469f9f0f2cb14284b5c49328b4487d155",
+      "bytes": 213
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1-rejection.json",
+      "sha256": "ffefb7dad031cb4c0c404cc4d8d3ba8f7e571a07ceedd8bd63a0c69b67fd9c0b",
+      "bytes": 488
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1.log",
+      "sha256": "18ed12c3f1943d11b6982bbd852bf637535db43c9371ea75f43f0d4a5039802b",
+      "bytes": 729
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/desktop-context-campaign.json",
+      "sha256": "02958d76fd11c60b14503daf3838e7aa432b4b3560799af0b0da30a35297c165",
+      "bytes": 337
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/desktop-context-campaign.xml",
+      "sha256": "30980804528d6311beb09d96a952ce12a067ca82a0f795504ce24625d6c05bc0",
+      "bytes": 67770
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/report.json",
+      "sha256": "5d5cbd1f78419e79273cc5e3fa09138b38c390adada80b8c0c948306705b2f5c",
+      "bytes": 664306
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/artifacts/len1048576/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/artifacts/len2818048/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/artifacts/len3145728/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/artifacts/results.json",
+      "sha256": "db76e07e2fb068a4b5711a6a33aff8030fb84a30bc4898c82210dac34182de45",
+      "bytes": 347366
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/desktop-context-baseline-pmon.txt",
+      "sha256": "54de965740842afc588e264adcfbf313faca214961905899d3205a7882218e35",
+      "bytes": 1359
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/desktop-context-before.xml",
+      "sha256": "92d7ca28381448b15577f6ef363cb3a7cedacfc4238e274b259f200972bf6277",
+      "bytes": 67771
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/desktop-context-pmon.txt",
+      "sha256": "aa8a9fe8ba06f612741db6b4d41f66e39c1670adcba39fa3357205e15c2a048c",
+      "bytes": 30093
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/heartbeat.json",
+      "sha256": "7c90df3dd58eb862790f64919722e94ffd87fdf96590325c70e8c1908b789889",
+      "bytes": 184
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/nvml-raw.csv",
+      "sha256": "236770153c8a4a2f9ab46e860a1dc1a92bf7b8c3f20566236f87ae49ec9dbfa5",
+      "bytes": 22771
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/process.json",
+      "sha256": "d2c431254ff0016209e91bdeee33be2aa38e05e341bd02f0cdb3c13e5ff9e94a",
+      "bytes": 546815
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/stdout.log",
+      "sha256": "0fa9efeb87d3ca30e35f6d26b621574e7924594d13aec4f3c442853a1279098b",
+      "bytes": 213
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2.log",
+      "sha256": "18ed12c3f1943d11b6982bbd852bf637535db43c9371ea75f43f0d4a5039802b",
+      "bytes": 729
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/desktop-context-campaign.json",
+      "sha256": "02958d76fd11c60b14503daf3838e7aa432b4b3560799af0b0da30a35297c165",
+      "bytes": 337
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/desktop-context-campaign.xml",
+      "sha256": "ba0113f7c0f8fd3fa3e19d67a5655b1545eb1018c50c5788aef86abe8f0ef6f7",
+      "bytes": 67771
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/report.json",
+      "sha256": "e5b43bc7219c77e977d8364b994aab058a564084043881c207cda342ab2dcbf5",
+      "bytes": 2042438
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/artifacts/len1048576/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/artifacts/len2818048/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/artifacts/len3145728/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/artifacts/results.json",
+      "sha256": "afbc7dfef12f920b07be6ea0c67703319dae94d1823da3e37b23d031e2859376",
+      "bytes": 347366
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/desktop-context-after.xml",
+      "sha256": "1213be86a9c37159104ac1eb0e689c5af884a55367f41d31d2b9a091304be6b8",
+      "bytes": 67776
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/desktop-context-baseline-pmon.txt",
+      "sha256": "e74b75c3144b0f276ed2e17f6591f221353a4466541ea221537df7d4c57d6e77",
+      "bytes": 1359
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/desktop-context-before.xml",
+      "sha256": "75d8986eec79ab56f9a36b4aa5fd048c909ca448ff1623cce947142e831869e7",
+      "bytes": 67771
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/desktop-context-pmon.txt",
+      "sha256": "e8f2912934603b4d1b323b91183ae98d348aca3be29dfce35b00da0cfebf7e75",
+      "bytes": 42108
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/heartbeat.json",
+      "sha256": "74fed1659aaf1328c69a9c6617c92f5f8236ce0bde4bf0c0403e1224e575fbf8",
+      "bytes": 185
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/nvml-raw.csv",
+      "sha256": "ace005408daa44f0a89bf2bd996ec8560c00ad91fa9e997e3dcae1643313abde",
+      "bytes": 24174
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/process.json",
+      "sha256": "2a6b34d1bd711e5522018d8e437c4eb560de208eb99b8b88d805261babecfde5",
+      "bytes": 527159
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/stdout.log",
+      "sha256": "81ab57b2b225135dfedcc4843f1bd25d58e4c9e9b7ebc543c2cf4287e445451a",
+      "bytes": 213
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/artifacts/len1048576/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/artifacts/len2818048/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/artifacts/len3145728/resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/artifacts/results.json",
+      "sha256": "02d589715d145a3f3d21f0d32ccc5f825b1b30842bf5bd51c20ee76694ea40d8",
+      "bytes": 347365
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/desktop-context-after.xml",
+      "sha256": "2ef04cea428d429eee7f7f33e50cc2ecbe5f8def5a073bc1efcf18f7ee11f9e0",
+      "bytes": 67777
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/desktop-context-baseline-pmon.txt",
+      "sha256": "03a2112ec5488c123f64b047eed0cdff6b96df3d26d4194f93427134d6830338",
+      "bytes": 1359
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/desktop-context-before.xml",
+      "sha256": "9289dd14d1a12e6713bfaa5c41c797e3d39b295d7e48e131eec72b32dd55875f",
+      "bytes": 67773
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/desktop-context-pmon.txt",
+      "sha256": "8d43c0b6b5cdd00023e6df1058c35dcebf610b1376a69ca6e933f0e9eca296e6",
+      "bytes": 27839
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/heartbeat.json",
+      "sha256": "43bec12c75848bce3b12033824d0281fe8dd2a6207ba487462ac48d23ccd0df2",
+      "bytes": 184
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/nvml-raw.csv",
+      "sha256": "40589cfa9642bcf9cd60ac25f35ce365f5d4c1508353b6e23aa78159f15ff959",
+      "bytes": 16186
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/process.json",
+      "sha256": "c3547513b630072d0a22a77105b514e544fef51274d5d7b064182116dfd0ade4",
+      "bytes": 475733
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/stdout.log",
+      "sha256": "baf31f0f3e216ac10b7cf7e37b5b10dab8ff9d8472c496eacdc9d4510dabcb00",
+      "bytes": 213
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3.log",
+      "sha256": "c5d4c706fe59532346c1e7ae701a36194b153212dc542247b278bf0372930d1f",
+      "bytes": 804
+    },
+    {
+      "path": "target/paired-vector-batch-cpu-check-v1.log",
+      "sha256": "33dd95a592cae20dddeae662bd211ac53472a0f5ad30a44c343ba7b855926b82",
+      "bytes": 123
+    },
+    {
+      "path": "target/paired-vector-batch-cpu-tests-v1.log",
+      "sha256": "4d6aec57f9ddfbb8e55c052e766908c447ed4270a189572d43afca512e15c9fe",
+      "bytes": 996
+    },
+    {
+      "path": "target/paired-vector-batch-cpu-tests-v2.log",
+      "sha256": "44c248d597ae0f5aa8284a4476a6f60679f1877d45037ea3008c047d6ed1d7d0",
+      "bytes": 996
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-audit-v1/audit.json",
+      "sha256": "32c0d36584eb1c0a3a549beac222abb757891fe1dbce55f6ecfc0aa60068a623",
+      "bytes": 14836
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-audit-v1/audit.py",
+      "sha256": "8dd83426bff5373d594d5a63584991e3d505b6b084008168c4ff95898468fccf",
+      "bytes": 7292
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len1024-members1-resources.json",
+      "sha256": "a52781b3f0158804adfcabfb7e1f2daf91fe09e02518fb1ef87e040ef2c3ee42",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len1024-members1.ptx",
+      "sha256": "8ed670beafdd115d11e16866ef836ba44a0967e3bd2143ceb83a9458bfeee1d1",
+      "bytes": 52686
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len1024-members4-resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len1024-members4.ptx",
+      "sha256": "05352936bca35ab408bba157d24c65cb0e38ab34cfa282f3e79d032b2b52840c",
+      "bytes": 133382
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len1048576-members1-resources.json",
+      "sha256": "a52781b3f0158804adfcabfb7e1f2daf91fe09e02518fb1ef87e040ef2c3ee42",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len1048576-members1.ptx",
+      "sha256": "efa3b3faab25ca0b448a33e7153d8d2c34f7ec1f0a64ef78388cc23878bc76f7",
+      "bytes": 52779
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len1048576-members4-resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len1048576-members4.ptx",
+      "sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "bytes": 133637
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len2818048-members1-resources.json",
+      "sha256": "a52781b3f0158804adfcabfb7e1f2daf91fe09e02518fb1ef87e040ef2c3ee42",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len2818048-members1.ptx",
+      "sha256": "d78f1521957583599d9709a1b31a7f9539dce8fdc9f5283799961622907e28a8",
+      "bytes": 52781
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len2818048-members4-resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len2818048-members4.ptx",
+      "sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "bytes": 133643
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len3145728-members1-resources.json",
+      "sha256": "a52781b3f0158804adfcabfb7e1f2daf91fe09e02518fb1ef87e040ef2c3ee42",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len3145728-members1.ptx",
+      "sha256": "f83b755251b9161b07a17b842a333b8b73dee7c5625d0a2377295317c4a96026",
+      "bytes": 52781
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len3145728-members4-resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len3145728-members4.ptx",
+      "sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "bytes": 133643
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len65536-members1-resources.json",
+      "sha256": "a52781b3f0158804adfcabfb7e1f2daf91fe09e02518fb1ef87e040ef2c3ee42",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len65536-members1.ptx",
+      "sha256": "7a6aa0c3d8d8c32429f21205c92364ddb424ef8761a9254e7ee08b376d7a1502",
+      "bytes": 52731
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len65536-members4-resources.json",
+      "sha256": "257a80fa740344092240070f5e08ca2163de279353583f87e24e776a69c128dc",
+      "bytes": 367
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/len65536-members4.ptx",
+      "sha256": "6a833599dfa3b316df6e7d1d4a0348b1f78b25fd4d5ca7585d685075a68eb29f",
+      "bytes": 133509
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/qualification.json",
+      "sha256": "0008dcf4858655f5b42f07bb4671a1ab2c6ce5347ce256d6986f28153454fea8",
+      "bytes": 10889
+    },
+    {
+      "path": "target/paired-vector-batch-leaf-v1/test.log",
+      "sha256": "1e6689485ef4f5d697f847e6e6a8b1610e2caeaa8221ea81e898c4fdc8ffb14d",
+      "bytes": 258
+    },
+    {
+      "path": "target/paired-vector-batch-timing-clippy-v1.log",
+      "sha256": "dae5d4c87c789e78ecf04cb699e4a3ba466a79be4a2531f482b23bec1300f359",
+      "bytes": 123
+    },
+    {
+      "path": "target/paired-vector-batch-timing-cpu-check-v1.log",
+      "sha256": "2803c5e5eb25a8de1b684c2458d7a42142ec573ba3af7d2831ba13a4d7288a78",
+      "bytes": 611
+    },
+    {
+      "path": "target/paired-vector-batch-timing-cpu-check-v2.log",
+      "sha256": "ca15dfd73c84f3db135b0284231227c3a0dc3ab98cd067c905222e2fce759aeb",
+      "bytes": 123
+    }
+  ],
+  "omitted_byte_identical_aliases": [
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/artifacts/report.json",
+      "canonical": "target/paired-vector-batch-component-v1/untimed-v1/worker0/artifacts/results.json",
+      "sha256": "ef1842883a9b288081564223df0fdab11d490df8125de7df1f4897ff155e031c",
+      "bytes": 347366,
+      "reason": "Byte-identical redundant artifact report/results JSON"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/artifacts/len2818048/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len2818048-members4.ptx",
+      "sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/artifacts/len3145728/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len3145728-members4.ptx",
+      "sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v1/worker0/artifacts/len1048576/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len1048576-members4.ptx",
+      "sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "bytes": 133637,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/artifacts/report.json",
+      "canonical": "target/paired-vector-batch-component-v1/untimed-v2/worker0/artifacts/results.json",
+      "sha256": "db76e07e2fb068a4b5711a6a33aff8030fb84a30bc4898c82210dac34182de45",
+      "bytes": 347366,
+      "reason": "Byte-identical redundant artifact report/results JSON"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/artifacts/len2818048/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len2818048-members4.ptx",
+      "sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/artifacts/len3145728/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len3145728-members4.ptx",
+      "sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v2/worker0/artifacts/len1048576/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len1048576-members4.ptx",
+      "sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "bytes": 133637,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/artifacts/report.json",
+      "canonical": "target/paired-vector-batch-component-v1/timing-v1/worker0/artifacts/results.json",
+      "sha256": "eb761acb2a6de0333af7debbbf683d4a13db5583fa47b935a488091f333b1a25",
+      "bytes": 1263697,
+      "reason": "Byte-identical redundant artifact report/results JSON"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/artifacts/len2818048/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len2818048-members4.ptx",
+      "sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/artifacts/len3145728/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len3145728-members4.ptx",
+      "sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker0/artifacts/len1048576/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len1048576-members4.ptx",
+      "sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "bytes": 133637,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/artifacts/report.json",
+      "canonical": "target/paired-vector-batch-component-v1/timing-v1/worker1/artifacts/results.json",
+      "sha256": "14335ad235f031e7f5c2dba7dbcd5a6a3d07a6799e588fa44bb06522cff6e477",
+      "bytes": 1263618,
+      "reason": "Byte-identical redundant artifact report/results JSON"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/artifacts/len2818048/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len2818048-members4.ptx",
+      "sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/artifacts/len3145728/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len3145728-members4.ptx",
+      "sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v1/worker1/artifacts/len1048576/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len1048576-members4.ptx",
+      "sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "bytes": 133637,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/artifacts/report.json",
+      "canonical": "target/paired-vector-batch-component-v1/timing-v2/worker0/artifacts/results.json",
+      "sha256": "45def6bf1ca9fc9f865d92d06d18705eb824a267ee35823c4e91e5d372d38ccf",
+      "bytes": 1263699,
+      "reason": "Byte-identical redundant artifact report/results JSON"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/artifacts/len2818048/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len2818048-members4.ptx",
+      "sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/artifacts/len3145728/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len3145728-members4.ptx",
+      "sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker0/artifacts/len1048576/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len1048576-members4.ptx",
+      "sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "bytes": 133637,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/artifacts/report.json",
+      "canonical": "target/paired-vector-batch-component-v1/timing-v2/worker1/artifacts/results.json",
+      "sha256": "8f71995d063afdde86f8563f12119c30813e907c449418d7cac29f8ee71749ef",
+      "bytes": 1263705,
+      "reason": "Byte-identical redundant artifact report/results JSON"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/artifacts/len2818048/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len2818048-members4.ptx",
+      "sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/artifacts/len3145728/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len3145728-members4.ptx",
+      "sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/timing-v2/worker1/artifacts/len1048576/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len1048576-members4.ptx",
+      "sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "bytes": 133637,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/artifacts/report.json",
+      "canonical": "target/paired-vector-batch-component-v1/untimed-v3/worker0/artifacts/results.json",
+      "sha256": "afbc7dfef12f920b07be6ea0c67703319dae94d1823da3e37b23d031e2859376",
+      "bytes": 347366,
+      "reason": "Byte-identical redundant artifact report/results JSON"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/artifacts/len2818048/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len2818048-members4.ptx",
+      "sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/artifacts/len3145728/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len3145728-members4.ptx",
+      "sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker0/artifacts/len1048576/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len1048576-members4.ptx",
+      "sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "bytes": 133637,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/artifacts/report.json",
+      "canonical": "target/paired-vector-batch-component-v1/untimed-v3/worker1/artifacts/results.json",
+      "sha256": "02d589715d145a3f3d21f0d32ccc5f825b1b30842bf5bd51c20ee76694ea40d8",
+      "bytes": 347365,
+      "reason": "Byte-identical redundant artifact report/results JSON"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/artifacts/len2818048/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len2818048-members4.ptx",
+      "sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/artifacts/len3145728/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len3145728-members4.ptx",
+      "sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "bytes": 133643,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    },
+    {
+      "path": "target/paired-vector-batch-component-v1/untimed-v3/worker1/artifacts/len1048576/loaded-module.ptx",
+      "canonical": "target/paired-vector-batch-leaf-v1/len1048576-members4.ptx",
+      "sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "bytes": 133637,
+      "reason": "Byte-identical reloaded qualified PTX; canonical raw PTX retained"
+    }
+  ],
+  "excluded": [
+    {
+      "path": "target/paired-vector-batch-component-audit-v2/package.log",
+      "reason": "Python bytecode cache"
+    }
+  ],
+  "excluded_binaries": [
+    {
+      "path": "target/paired-vector-batch-build-v1/retained/tests-retained",
+      "sha256": "0c49cf9ccd52be0801eb23c5273495e04c57a4e43614183e9a5795786ecdfa98",
+      "source_before_after_equal": true,
+      "bytes": 219557984,
+      "payload_included": false,
+      "reason": "Excluded retained executable; exact identity/size and source build metadata retained"
+    },
+    {
+      "path": "target/paired-vector-batch-build-v2/retained/tests-retained",
+      "sha256": "e4176914f623c44a5bd1a399f0c5b9abed460795afe003cbe299e3e1671c5d5f",
+      "source_before_after_equal": true,
+      "bytes": 221874720,
+      "payload_included": false,
+      "reason": "Excluded retained executable; exact identity/size and source build metadata retained"
+    }
+  ],
+  "external_durable_source_archives": [
+    {
+      "path": "docs/benchmarks/transformer-training-sources/paired-vector-batch-v1-20261119.tar.gz",
+      "sha256": "2c6e6d5050cd08bc7ec27fbf28ec5559dac6b34d8c1fb279feb2dbad80db6e90",
+      "files": 380,
+      "scope": "CFGTEST only independent paired-vector batched leaf prototype; no production batch dispatch.",
+      "bytes": 1129421,
+      "durable_existing_repository_file": true,
+      "duplicate_archive_payload_included": false
+    },
+    {
+      "path": "docs/benchmarks/transformer-training-sources/paired-vector-batch-component-v2-20261119.tar.gz",
+      "sha256": "cfb41204efc57054b3cd3a89cfe4d0cb491a86681187caf603b583ab68e83e6f",
+      "files": 381,
+      "scope": "CFGTEST balanced paired-vector component timing harness; no production batching or model claim.",
+      "bytes": 1135912,
+      "durable_existing_repository_file": true,
+      "duplicate_archive_payload_included": false
+    }
+  ],
+  "qualified_timing": "target/paired-vector-batch-component-v1/timing-v2/report.json",
+  "final_audit": "target/paired-vector-batch-component-audit-v2/audit.json",
+  "final_decision": "NO_ADOPTION: grouping regresses at all three lengths in both isolated orientations; no owner/model/PyTorch-parity claim.",
+  "all_rejected_attempts_preserved": true,
+  "full_model_parity_bundle_unchanged": true
+}

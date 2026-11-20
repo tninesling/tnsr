@@ -1,0 +1,16 @@
+{
+  "archives": {
+    "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz": {
+      "sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "bytes": 242815195
+    },
+    "docs/benchmarks/transformer-training-evidence/attention-register-20261119/new-raw-objects.tar.gz": {
+      "sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123",
+      "bytes": 279558220
+    }
+  },
+  "reused_objects": 3,
+  "new_objects": 6,
+  "path_aliases": 20,
+  "no_executable_payload": true
+}

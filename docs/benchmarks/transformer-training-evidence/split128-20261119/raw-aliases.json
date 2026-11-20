@@ -1,0 +1,288 @@
+{
+  "scope": "Fresh screen/timing/reference/fixture F32 byte aliases; existing packed-profile objects reused by verified SHA256. No duplicated raw snapshot payload when identical.",
+  "aliases": {
+    "target/split128-model-v1/screen/w512_s512_b32/archive/weights.f32": {
+      "sha256": "317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33970636,
+        60940288,
+        1795150067302961918,
+        1795150067302961918
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6.f32"
+    },
+    "target/split128-model-v1/screen/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33970981,
+        60940288,
+        1795150082165223009,
+        1795150082165223009
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/split128-model-v1/screen/w512_s512_b32/trial0-native/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33970982,
+        60940288,
+        1795150082256224607,
+        1795150082256224607
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33970818,
+        60940288,
+        1795150072910060420,
+        1795150072910060420
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33970819,
+        60940288,
+        1795150073003062054,
+        1795150073003062054
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_gradients.f32": {
+      "sha256": "07819aae36c8433932eba452121b8276f2afed1b451b5265ce9788e056fe9962",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33970998,
+        60940288,
+        1795150091071379467,
+        1795150091071379467
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/split128-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7089fe29233501b8914703ffa54fcadc0749a83b6efdcc9d0ea49e889c7c4e76",
+      "member": "objects/07819aae36c8433932eba452121b8276f2afed1b451b5265ce9788e056fe9962.f32"
+    },
+    "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_weights.f32": {
+      "sha256": "5c41fbf92a5a9752521c3451f26cc703de44f37cda6ef3a01c522f0d5c989356",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33970999,
+        60940288,
+        1795150091082379660,
+        1795150091082379660
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/split128-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7089fe29233501b8914703ffa54fcadc0749a83b6efdcc9d0ea49e889c7c4e76",
+      "member": "objects/5c41fbf92a5a9752521c3451f26cc703de44f37cda6ef3a01c522f0d5c989356.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/archive/weights.f32": {
+      "sha256": "317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971016,
+        60940288,
+        1795150171308789027,
+        1795150171308789027
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971047,
+        60940288,
+        1795150199816289830,
+        1795150199816289830
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971048,
+        60940288,
+        1795150199914291551,
+        1795150199914291551
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971007,
+        60940288,
+        1795150176845886300,
+        1795150176845886300
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971031,
+        60940288,
+        1795150176940887969,
+        1795150176940887969
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_gradients.f32": {
+      "sha256": "da5941e76772e3b7c04c80742072c4f96bb9c06a22f7327ce20b86ca8a4033d9",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971064,
+        60940288,
+        1795150223225701072,
+        1795150223225701072
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/split128-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7089fe29233501b8914703ffa54fcadc0749a83b6efdcc9d0ea49e889c7c4e76",
+      "member": "objects/da5941e76772e3b7c04c80742072c4f96bb9c06a22f7327ce20b86ca8a4033d9.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_weights.f32": {
+      "sha256": "b82ec1633f36eff006c4635884f91abc3c7943948f68d32f62c21d11daf54e5c",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971065,
+        60940288,
+        1795150223236701265,
+        1795150223236701265
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/split128-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7089fe29233501b8914703ffa54fcadc0749a83b6efdcc9d0ea49e889c7c4e76",
+      "member": "objects/b82ec1633f36eff006c4635884f91abc3c7943948f68d32f62c21d11daf54e5c.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971100,
+        60940288,
+        1795150261821379096,
+        1795150261821379096
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971101,
+        60940288,
+        1795150261917380783,
+        1795150261917380783
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971087,
+        60940288,
+        1795150285599802216,
+        1795150285599802216
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971118,
+        60940288,
+        1795150285696803976,
+        1795150285696803976
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/artifacts/qual_gradients.f32": {
+      "sha256": "e0f7ad2314f4d87e4429269204315529246017c0a28e1aae228085b66f3e279a",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971083,
+        60940288,
+        1795150242550040549,
+        1795150242550040549
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/split128-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7089fe29233501b8914703ffa54fcadc0749a83b6efdcc9d0ea49e889c7c4e76",
+      "member": "objects/e0f7ad2314f4d87e4429269204315529246017c0a28e1aae228085b66f3e279a.f32"
+    },
+    "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/artifacts/qual_weights.f32": {
+      "sha256": "e1147ddebef576aecf35291e2be087e4170867b09b4ea8d946a83f607a0276df",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971084,
+        60940288,
+        1795150242561040743,
+        1795150242561040743
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/split128-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7089fe29233501b8914703ffa54fcadc0749a83b6efdcc9d0ea49e889c7c4e76",
+      "member": "objects/e1147ddebef576aecf35291e2be087e4170867b09b4ea8d946a83f607a0276df.f32"
+    }
+  },
+  "unique_objects": 9,
+  "new_unique_objects": 6,
+  "all_referenced_objects_decompressed_and_verified": true
+}

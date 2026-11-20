@@ -1,0 +1,34 @@
+{
+  "elements_per_member": 2818048,
+  "functions": [
+    {
+      "capacity256": 6,
+      "local_bytes": 0,
+      "max_threads": 1024,
+      "name": "resident_test_vector4_bf16_adam_paired_shadow_0",
+      "registers": 40,
+      "shared_bytes": 32
+    },
+    {
+      "capacity256": 4,
+      "local_bytes": 0,
+      "max_threads": 1024,
+      "name": "resident_test_batched_paired_vector_adam_1",
+      "registers": 56,
+      "shared_bytes": 32
+    },
+    {
+      "capacity256": 4,
+      "local_bytes": 0,
+      "max_threads": 1024,
+      "name": "resident_test_batched_paired_vector_adam_2",
+      "registers": 56,
+      "shared_bytes": 32
+    }
+  ],
+  "loads_per_executed_full_CTA_region": 10,
+  "members": 4,
+  "ordinary_entries_byte_identical": true,
+  "parameter_bytes": 320,
+  "root_pointer_parameters": 40
+}

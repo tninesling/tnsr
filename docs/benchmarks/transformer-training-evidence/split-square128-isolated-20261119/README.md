@@ -1,0 +1,7 @@
+Build-owner receipt self-close of isolated split Square128Streamed leaf. This package is not an independent audit. All four loaded candidates satisfy128registers/34,816shared bytes/local0/maxthreads512/APIcapacity2. Root untimed math run passes288partial-plane/final comparisons,32readonly arrays and864sampled F64 dyadic/cancellation checks.
+
+The archive contains both sealed source archives, exact405-member before/after manifests, source delta proof, CPU checks and failed-attempt logs, PTX/resources/typed bindings, root launch/controller/exit/log and build-owner verifier/addendum. It contains no executable or raw numeric arrays. Member hashes were verified after decompression.
+
+Raw arrays were checked in memory, not retained. Independent oracle values are sampled dyadic/cancellation points; all-element comparisons use the Rectangle baseline and host left4 reducer. Canonical PTX identity is internal combined-module prefix plus unchanged baseline-generator source, not an external old golden. No performance-grade isolation trace, full-model integration, latency, memory/capacity, achieved occupancy, parity or adoption claim. Independent review remains separate.
+
+Extraction restores repository-relative artifact paths. To reproduce math, rebuild the sealed source with the recorded pinned environment; no binary is bundled. Root must reserve CUDA and run the exact ignored test selector recorded in qualification.json with a fresh evidence directory.

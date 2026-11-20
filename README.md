@@ -152,6 +152,14 @@ Benchmarks are defined in `benches/` using `criterion`. To run the benchmarks:
   implementation on CPU.
 - `cargo bench --bench gpu --features cuda` - Benchmark tiled PTX execution on GPU.
 
+See [complete decoder-training measurements](docs/transformer-training-performance.md)
+for BF16 forward/backward, clipping and Adam throughput, PyTorch eager/compiled
+controls, numerical qualification, and GPU memory/capacity results.
+Use these larger workloads to guide training optimizations; keep LeNet as a
+correctness smoke test.
+Track the ongoing [PyTorch parity work](docs/transformer-training-parity.md) for
+qualified complete-update improvements and the remaining gaps.
+
 ## Tracing
 
 Trace spans are collected using the `tracing` crate. To get a JSON dump of
@@ -192,10 +200,12 @@ benchmarks and current schedule limits.
 ## Explicit derivative and attention precision options
 
 `TensorGraph::with_gradients_with_options` accepts
-`graph::GradientOptions { compact_softmax: true }` for an opt-in homogeneous-f32
-softmax derivative. It changes floating-point operation order; default
-`with_gradients` retains primitive differentiation. Casts, unsupported shapes
-and escaping normalization intermediates retain the primitive path.
+`graph::GradientOptions { compact_softmax: true }` for an opt-in derivative on
+locally f32 softmax regions, including inside mixed graphs. It changes
+floating-point operation order; default `with_gradients` retains primitive
+differentiation. BF16 softmax, interior casts, unsupported shapes and escaping
+normalization intermediates retain the primitive path. Casts surrounding an
+eligible region preserve their storage-rounding boundaries.
 Probabilities still materialize, so this does not provide memory-linear
 attention backward.
 

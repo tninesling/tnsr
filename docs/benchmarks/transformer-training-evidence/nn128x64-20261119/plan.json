@@ -1,0 +1,149 @@
+{
+  "scope": "Fresh B32 complete mixed-BF16 decoder update experiment. Same sealed current binary and source in both native arms; packed policy versus only NN128x64 flag added. Two fresh reversed trials, unchanged numerical gates and monitored idle desktop contexts. No adoption or parity inference from prerequisite component/first-update screens.",
+  "adoption": false,
+  "timing_launched": false,
+  "binary": "target/recovery-current-v1/retained/transformer-training-bench",
+  "binary_sha256": "125b2bba930b62716cc1009a2d4d12bdc9e650df0d2836154e3873cd31f9a29b",
+  "source": "docs/benchmarks/transformer-training-sources/parity-candidate-recovery-20261109.tar.gz",
+  "source_sha256": "c5aecfd0f140b4efaa68fc30af8c7f043051ffdaf013d7d86bddd9010fccda80",
+  "python_sources": {
+    "integrations/transformer_bench/test_desktop_contexts.py": "5181f3bb6f556d586caf67ea1281fe413ad525f07686d1dfbadef92787df9d2f",
+    "integrations/transformer_bench/run.py": "32ac9c373865cb2812deff5ed586a4348a5f2ce799fb714f7f4edbfc50eaddd9",
+    "integrations/transformer_bench/reference.py": "71a39a25589ffff1cc492c9c1257105980550d96c316d7ac091e9c75564bd674",
+    "integrations/transformer_bench/test_validate.py": "f92de3078028dbe3ff8bd699da9270f0d06de1b1cd2aac31e73f74626da50143",
+    "integrations/transformer_bench/online_attention_leaf.py": "bd4069926621e11b5f5a16d6fc107cfe695f7b756651cb86ad309aea95ffd9b4",
+    "integrations/transformer_bench/desktop_contexts.py": "3b57cef8f0ba21ebcf9a5223e51c92157b7a2bbb0c0c6edc70318c8011d18354",
+    "integrations/transformer_bench/validate.py": "45db1595f2a60a363ca2e80162ce3aeee6f5186e928482956e054a7c50473870",
+    "integrations/transformer_bench/online_attention_model_screen.py": "bf43241807ba6879ba4f99a333e9d1ba39235efd6a926533aa83881df4be11c8"
+  },
+  "prequalification": {
+    "target/recovery-packed-performance-v1/plan.json": "d3e40158f5e51bfb0392d5b3735486fe8ef7f2259ea899fe4db3d7171c818ce8",
+    "target/recovery-packed-performance-v1/audit.json": "9334d33cf9124247d7de56aa63e4ebcc9fad0f5afc5c7030844612dd15897539",
+    "target/recovery-nn-archive-v1/report.json": "75fa034f4d69682dc852052cd14cc051822e7a56a7bed6e553d594db64c4bd01",
+    "target/recovery-nn-semantics-v1/qualification.json": "4dc7162f71c19d06a74da7210a7d7b185382bbb0d217cd92fa7955966bfa2f89",
+    "target/recovery-packed-semantics-v1/qualification.json": "87b4b3387a17921f360e4bcd65b931a4c45fe2afab2081e1932ec8b25e7657e5",
+    "target/recovery-desktop-guard-v2/qualification.json": "6c913b2cd855dc1001bc93835cec962983fff56fb65c5ddfd9458997e7f71f95",
+    "target/recovery-current-v1/qualification.json": "ad34dbb319c27dd1f16af9d3f4507b46a35bcd5f99583479ec2cf0d6b6730bf0",
+    "target/recovery-current-v1/retained/release-provenance.json": "a6243f58b94d1e0d0af41e52ec741abd0cc2b7f87eedc2a239ead0630e77fc0b",
+    "target/recovery-fixtures-v1/report.json": "d64ec259f3ae57b9a4b3432b5afc9df9c2b872b47408cd03e28d7742b267c875",
+    "target/recovery-environment-20261119/compiled-preflight.log": "5c66268491a9c0746f75b0de38ba44f4dee9afeb4b2787e6cccd3d7c1c3a2575",
+    "target/recovery-environment-20261119/build-tools/cc": "9985996e8f5b8b0d82438773eac23c6099640f6f91723fa6ce6fd04246ae0113",
+    "target/recovery-environment-20261119/build-tools/libgcc.so": "9d339ecb409578d6a5d587e6c537a8f9589b8a13fefba30d167433a4b5758bee",
+    "target/recovery-environment-20261119/build-tools/cxx": "57cd6b081646e6d6a09fd1e455bcdb14a81f38116a01c7c568f0f18bf6a53469",
+    "target/recovery-environment-20261119/build-tools/libgcc_s.so": "9d339ecb409578d6a5d587e6c537a8f9589b8a13fefba30d167433a4b5758bee",
+    "target/recovery-environment-20261119/build-tools/crtbeginS.o": "2f1e08e2a1d2029017e165a77ae376ad544bde98ade3a1a85d77fe621fd39466",
+    "target/recovery-environment-20261119/build-tools/crtendS.o": "2f1e08e2a1d2029017e165a77ae376ad544bde98ade3a1a85d77fe621fd39466",
+    "target/recovery-environment-20261119/build-tools/provenance.json": "521e7410ce7ed9a9ea16eb2cef01292ec555a08d63e02ba9a2cc985620e7ebe7"
+  },
+  "trials": 2,
+  "warmups": 256,
+  "repeats": 64,
+  "modes": [
+    "native_baseline",
+    "native",
+    "pytorch_cudagraph_sdpa"
+  ],
+  "expected_workers": 6,
+  "expected_timed_updates": 384,
+  "expected_fixed_comparisons": 4,
+  "orders": [
+    [
+      "native_baseline",
+      "native",
+      "pytorch_cudagraph_sdpa"
+    ],
+    [
+      "pytorch_cudagraph_sdpa",
+      "native",
+      "native_baseline"
+    ]
+  ],
+  "prerequisite_memory_disclosure": {
+    "untimed_observed_NVML_candidate_mib": 6288,
+    "untimed_observed_NVML_baseline_mib": 6064,
+    "causal_attribution": false,
+    "note": "Prior one-update observations include setup and are sampled lower bounds. Timed campaign must report whole-process NVML separately from six CUDA allocator stages; no memory-saving claim."
+  },
+  "groups": [
+    {
+      "name": "w512_s512_b32",
+      "baseline_arguments": [
+        "--physical-order-casts",
+        "--first-accumulation-overwrite",
+        "--gradient-norm-partials",
+        "--shared-memory-reuse",
+        "--incremental-allocation-reuse",
+        "--compact-softmax",
+        "--attention-softmax-fusion",
+        "--attention-softmax-backward-fusion",
+        "--narrow-bf16-tile",
+        "--transposed-bf16-outputs",
+        "--direct-master-bindings",
+        "--medium-bf16-tile-policy=square-then-tall",
+        "--qkv-grad-pack-fusion",
+        "--swiglu-pair-fusion",
+        "--column-reduction-policy=four",
+        "--batched-attention-bf16-tile-policy=tall-scores-by-grid",
+        "--layer-norm-pair-fusion",
+        "--split-k-bf16-tile-policy=square64",
+        "--indexed-loss-cooperative-ordered-backward",
+        "--indexed-loss-cooperative-ordered-forward",
+        "--plain-bf16-output",
+        "--online-attention-pair-numerical-screen",
+        "--fused-nt128-bias",
+        "--contiguous-bias-reshape-aliases",
+        "--fused-nt128-bias-ldmatrix",
+        "--small-accumulation-norm-batches",
+        "--online-attention-packed-backward"
+      ],
+      "candidate_arguments": [
+        "--physical-order-casts",
+        "--first-accumulation-overwrite",
+        "--gradient-norm-partials",
+        "--shared-memory-reuse",
+        "--incremental-allocation-reuse",
+        "--compact-softmax",
+        "--attention-softmax-fusion",
+        "--attention-softmax-backward-fusion",
+        "--narrow-bf16-tile",
+        "--transposed-bf16-outputs",
+        "--direct-master-bindings",
+        "--medium-bf16-tile-policy=square-then-tall",
+        "--qkv-grad-pack-fusion",
+        "--swiglu-pair-fusion",
+        "--column-reduction-policy=four",
+        "--batched-attention-bf16-tile-policy=tall-scores-by-grid",
+        "--layer-norm-pair-fusion",
+        "--split-k-bf16-tile-policy=square64",
+        "--indexed-loss-cooperative-ordered-backward",
+        "--indexed-loss-cooperative-ordered-forward",
+        "--plain-bf16-output",
+        "--online-attention-pair-numerical-screen",
+        "--fused-nt128-bias",
+        "--contiguous-bias-reshape-aliases",
+        "--fused-nt128-bias-ldmatrix",
+        "--small-accumulation-norm-batches",
+        "--online-attention-packed-backward",
+        "--nn128x64-ldmatrix"
+      ],
+      "only_added_flag": "--nn128x64-ldmatrix",
+      "historical_qualified_control": {
+        "median_ms": 29.49940098915249,
+        "campaign": "fused_nt128_bias_ldmatrix_b32",
+        "mode": "pytorch_cudagraph_sdpa"
+      },
+      "baseline_packed_campaign": "target/recovery-packed-performance-v1/campaign-w512_s512_b32",
+      "output": "target/recovery-nn-performance-v2/campaign-w512_s512_b32"
+    }
+  ],
+  "environment_requalification": {
+    "python": "/tmp/tnsr-python312-runtime/python/bin/python3.12",
+    "driver": "595.99.02",
+    "CC": "/home/taylor/code/tnsr/target/recovery-environment-20261119/build-tools/cc",
+    "CXX": "/home/taylor/code/tnsr/target/recovery-environment-20261119/build-tools/cxx",
+    "torch": "2.11.0+cu130",
+    "numpy": "2.4.3",
+    "prior_attempt": "target/recovery-nn-performance-v1/campaign-w512_s512_b32/report.json",
+    "prior_disposition": "Two PyTorch workers failed missing C compiler, one baseline contended by transient nautilus; no adoption."
+  }
+}

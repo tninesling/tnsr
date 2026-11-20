@@ -1,0 +1,113 @@
+{
+  "scope": "Draft evidence and root-reviewed publication recipe; no executable payload. Raw archive dependencies are explicitly hash-pinned.",
+  "files": {
+    "README.md": {
+      "bytes": 3858,
+      "sha256": "cc81b598e2de3f913f77acedd528373867cd23728e015935a8f44c6a3f42d9df"
+    },
+    "build-qualification.json": {
+      "bytes": 4976,
+      "sha256": "7a1af04cd9f6123c428dadfc28d049ee65d276be08728bedca9cb488c1b0eadb"
+    },
+    "controller-timing-audit.json": {
+      "bytes": 67227,
+      "sha256": "3337833b97d66ba23ce4a6a78addf6d286cd32cf00e5b581451f5337c0ff9a89"
+    },
+    "corrected-default-prefix.json": {
+      "bytes": 1820,
+      "sha256": "c2aaf64b83ec2e77eaed7b9cedae2e3a6c4a23441a1c1cedfee52dec8ae055c1"
+    },
+    "evidence.json": {
+      "bytes": 1517,
+      "sha256": "608801edd9742ff777fad16900a8b51c8ff248d5f8278fdf040237f2216e19d5"
+    },
+    "independent-audit.json": {
+      "bytes": 37174,
+      "sha256": "b778ac169a3693cdf0b9e0a845fcf94260c1c6d09ca360f03a6d6f93c46aa274"
+    },
+    "metadata-and-guards.tar.gz": {
+      "bytes": 7858473,
+      "sha256": "892dc11ae3c32b40f86e73231a8795b66d8c33277d50ff73670cf996ae924679"
+    },
+    "metadata-manifest.json": {
+      "bytes": 55730,
+      "sha256": "ed239c68f7076e4c4cd1aad7614849f7c29726c097504188c0b13d42d0102635"
+    },
+    "new-raw-objects.tar.gz": {
+      "bytes": 279558220,
+      "sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123"
+    },
+    "publication/docs-inputs.json": {
+      "bytes": 693,
+      "sha256": "5e77ef9295149ad010f6959df4b9263eb5762e5fcbb11ea84e318fb4b16671ed"
+    },
+    "publication/hybrid-accepted-manifest.preview.json": {
+      "bytes": 100785,
+      "sha256": "bd7903ae394b36dab48856390c494f34d238b2749b256416b5339559bd046ca5"
+    },
+    "publication/prepare-docs.py": {
+      "bytes": 11391,
+      "sha256": "64aebef6f6f5a34175c8341316feb69cd84cfb91ddf99976b30c895a36c36d82"
+    },
+    "publication/prepare-evidence.py": {
+      "bytes": 6807,
+      "sha256": "c129b0676dc8bcbc026daead92dd5fff7955b35cafecaca6c40b65b44735ea3d"
+    },
+    "publication/preview-verification.json": {
+      "bytes": 877,
+      "sha256": "d8a2bdb315e954eb2ff996d8e45b5ff7228ea44f6693879fa51c2c51648f7874"
+    },
+    "publication/preview.json": {
+      "bytes": 1090,
+      "sha256": "444bf7e0e20976d4af4e3a73bc0d5c98d6207e7d2199d058b921e8b9b51ce5ab"
+    },
+    "publication/publication-plan.json": {
+      "bytes": 13483,
+      "sha256": "ee79b31364357f674c85dc061babc7278679417dfabf2fd7523cc66ee0f6dec5"
+    },
+    "publication/publish.py": {
+      "bytes": 15659,
+      "sha256": "c112431880c6036af0c2214eefbf070a2885896319874c129cab586b61205736"
+    },
+    "publication/transformer-training-parity.md.prepared": {
+      "bytes": 224732,
+      "sha256": "ff586d7e83e09fa556dadf310980b2c1da5647bd4e8269eaa9bc85e568eda034"
+    },
+    "publication/transformer-training-profile.md.prepared": {
+      "bytes": 18441,
+      "sha256": "47b05ecdb38ccb17cea489d43ed8eb476578583a8abf8f8b978ce71cd5d3495e"
+    },
+    "publication/verify-preview.log": {
+      "bytes": 843,
+      "sha256": "bb8656e85204a59029ea80baa98037fdbab088c4ecbb9c67776e5c3600fe4f0a"
+    },
+    "publication/verify-preview.py": {
+      "bytes": 3752,
+      "sha256": "69028f184094ec24dde6d211cf7801c0e4fc64b33703f04c61e8d74896016e4e"
+    },
+    "raw-aliases.json": {
+      "bytes": 13893,
+      "sha256": "2ab699d39374128e42a781194e15a5d78e22442c3a9d19d27b9df2f99f335cff"
+    },
+    "raw-archives.json": {
+      "bytes": 557,
+      "sha256": "a0be3b7e27694f62350f0bbf298765075f8b847bd1c6e9ca0fbd1816c2024c14"
+    }
+  },
+  "external_raw_dependencies": {
+    "archives": {
+      "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz": {
+        "sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+        "bytes": 242815195
+      },
+      "docs/benchmarks/transformer-training-evidence/attention-register-20261119/new-raw-objects.tar.gz": {
+        "sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123",
+        "bytes": 279558220
+      }
+    },
+    "reused_objects": 3,
+    "new_objects": 6,
+    "path_aliases": 20,
+    "no_executable_payload": true
+  }
+}

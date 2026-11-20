@@ -1,0 +1,113 @@
+{
+  "status": "PASS_CORRECTNESS_NO_PERFORMANCE_ADOPTION",
+  "source_archive": {
+    "path": "docs/benchmarks/transformer-training-sources/attention-register-live-v1-20261119.tar.gz",
+    "sha256": "5ffa9d710088a9888f79a25304467c19507b7d50703db2fe4d50ceffe57820d3",
+    "bytes": 1516257,
+    "files": 402,
+    "reopened_all_members_verified": true,
+    "runtime_equivalent_isolated_v2_archive": "38fd0a07875b6c13be31158ca3397197dd65e8df39bae5b2c73c4aa6aae714d2",
+    "sole_delta_vs_isolated_v2": "Comment correction in forward.rs; all runtime/CLI/testcode bytes identical."
+  },
+  "binary": {
+    "path": "target/attention-register-live-build-v1/retained/transformer-training-bench",
+    "sha256": "7406a37238f68bcc988de6ccf33f7b01e95e708cf0242c9e230059022635e1bf",
+    "bytes": 8698640,
+    "profile": "release",
+    "source_before_after_equal": true
+  },
+  "test_binary": {
+    "path": "target/attention-register-live-build-v1/retained/tests-retained",
+    "sha256": "b6345013127663d3020c79cc18fdc4049f193f8a9a557f7ad4e3b73b35f0460c",
+    "bytes": 226470048,
+    "profile": "test"
+  },
+  "source_before_after_equal": true,
+  "CPU_whitelist_passed": 14,
+  "CPU_whitelist": {
+    "path": "target/attention-register-live-build-v1/cpu-whitelist.json",
+    "sha256": "5cb5bf118978ba189b6e755921b21a3e97bf341ff4d9eb68c27e0da95a6ce69c"
+  },
+  "CPU_tests_log": {
+    "path": "target/attention-register-live-build-v1/cpu-tests-v1.log",
+    "sha256": "540dcd4516b3ae39feb87aa85e4b04b402daa0836a75c399a7eae39ef86f110d"
+  },
+  "checks": {
+    "CPU_check": true,
+    "CUDA_alltarget_check": true,
+    "fmt": true,
+    "strict_alltarget_allfeature_Clippy": true,
+    "live_CPU14": true,
+    "retained_default_IR_PTX_identity": true,
+    "full_state_exact": true,
+    "forced_resource_fallback": true,
+    "packed_backward_unchanged": true,
+    "paired_leaf_exact": true,
+    "default_prefix_byte_exact": true,
+    "source_equivalent_isolated_v2": true
+  },
+  "default_prefix": {
+    "path": "target/attention-register-live-audit-v1/root-default-prefix.json",
+    "sha256": "c2aaf64b83ec2e77eaed7b9cedae2e3a6c4a23441a1c1cedfee52dec8ae055c1",
+    "qualified": true
+  },
+  "promotion": {
+    "path": "target/attention-register-live-build-v1/source-delta-proof.json",
+    "sha256": "6674e0666c686cf4618b596d3ed1fd4b480f064a6d572b558e46f742cb19fd58",
+    "base400_checked": true,
+    "only6existing_and2new_scoped_files": true,
+    "all394unrelated_base_files_unchanged": true,
+    "runtime_CLI_and_testcode_byte_identical_to_isolated_v2": true,
+    "sole_isolated_difference": "Two-line forward.rs documentation correction, outside the unchangedGlobalprefix."
+  },
+  "isolated_GPU_prerequisite": {
+    "path": "target/attention-reg-isolated-model-audit-v2/audit.json",
+    "sha256": "6d0c1bd258625ae85b4cf05de279558cdbcd4fb463cf301da4a80167c40d413e",
+    "scope": "Audited isolatedV2 B32V16384three-armfullstate; liveRuntimecodeidentical. Root will bind state/pairedleaf checks afterreview; no newGPUlaunch bybuilder."
+  },
+  "new_option": "--online-attention-register-statistics",
+  "library_and_CLI_default": false,
+  "statistics_allocation_removed": false,
+  "root_must_bind_actual_state_and_paired_leaf": false,
+  "GPU_launches_by_builder": 0,
+  "performance_timing_by_builder": false,
+  "no_default_policy_or_parity_adoption": true,
+  "build_ready": true,
+  "source_closed": true,
+  "paired_leaf": {
+    "path": "target/attention-forward-register-stats-run-v2/artifacts/qualification.json",
+    "sha256": "207ea6bfe536e874ce95bf90477525917be8ec475edb6bdc20eae7921b8b1479",
+    "qualified": true,
+    "cases": 4,
+    "full_array_comparisons": 408,
+    "readonly_arrays": 96,
+    "strict_resources_passed": true,
+    "scope": "Previously qualified canonical paired forward+unchanged backward leaf; source-equivalent promoted transform. Not a new live paired-leaf GPU run."
+  },
+  "actual_state": {
+    "path": "target/attention-register-live-model-v1/artifacts/exact-state-register-statistics-b32-unique-v16384.json",
+    "sha256": "4557d229045ae93ee89b65b4f3e08c9c744dce495d7f8863224c5213ff75fd27",
+    "qualified": true,
+    "vocab": 16384,
+    "batch": 32,
+    "selected_register_pairs": 4,
+    "selected_rectangles": 16,
+    "microbatches": [
+      1,
+      2,
+      1,
+      0
+    ]
+  },
+  "GPU_state_execution": {
+    "path": "target/attention-register-live-model-v1/launch.json",
+    "sha256": "a6076ad191e9546983ea150b7b31d4f9b6e559d9754996bfa56bf6e0cf60ffe3"
+  },
+  "build_ready_initial": {
+    "path": "target/attention-register-live-audit-v1/qualification.build-ready.initial.json",
+    "sha256": "48a6f6aa537c152996b8fa31fa85d911cc76128be1da1324d7aa7d9fea508ed4"
+  },
+  "V4096_fixed_gates_pending": true,
+  "full_model_performance_pending": true,
+  "actual_state_scope": "Synthetic B32 V16384 unique-token full-state proof; explicit forced-resource hook, empty interval, NaN rollback/recovery and unchanged packed backward4. Separate from V4096 fixed model gates and timing."
+}

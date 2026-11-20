@@ -1,0 +1,143 @@
+{
+  "phase": "timing",
+  "policy": {
+    "scope": "Prepared policy only; source/build/state/first-update proof required before complete-model timing.",
+    "case": "w1024_s128",
+    "baseline_arguments": [
+      "--physical-order-casts",
+      "--first-accumulation-overwrite",
+      "--gradient-norm-partials",
+      "--shared-memory-reuse",
+      "--incremental-allocation-reuse",
+      "--compact-softmax",
+      "--attention-softmax-fusion",
+      "--attention-softmax-backward-fusion",
+      "--narrow-bf16-tile",
+      "--transposed-bf16-outputs",
+      "--direct-master-bindings",
+      "--medium-bf16-tile-policy=square-then-tall",
+      "--qkv-grad-pack-fusion",
+      "--swiglu-pair-fusion",
+      "--column-reduction-policy=four",
+      "--batched-attention-bf16-tile-policy=tall-scores-by-grid",
+      "--layer-norm-pair-fusion",
+      "--split-k-bf16-tile-policy=square64",
+      "--indexed-loss-cooperative-ordered-backward",
+      "--small-grid-split-k-bf16",
+      "--indexed-loss-cooperative-ordered-forward",
+      "--contiguous-bias-reshape-aliases",
+      "--borrowed-bf16-adam-source",
+      "--small-accumulation-norm-batches"
+    ],
+    "candidate_arguments": [
+      "--physical-order-casts",
+      "--first-accumulation-overwrite",
+      "--gradient-norm-partials",
+      "--shared-memory-reuse",
+      "--incremental-allocation-reuse",
+      "--compact-softmax",
+      "--attention-softmax-fusion",
+      "--attention-softmax-backward-fusion",
+      "--narrow-bf16-tile",
+      "--transposed-bf16-outputs",
+      "--direct-master-bindings",
+      "--medium-bf16-tile-policy=square-then-tall",
+      "--qkv-grad-pack-fusion",
+      "--swiglu-pair-fusion",
+      "--column-reduction-policy=four",
+      "--batched-attention-bf16-tile-policy=tall-scores-by-grid",
+      "--layer-norm-pair-fusion",
+      "--split-k-bf16-tile-policy=square64",
+      "--indexed-loss-cooperative-ordered-backward",
+      "--small-grid-split-k-bf16",
+      "--indexed-loss-cooperative-ordered-forward",
+      "--contiguous-bias-reshape-aliases",
+      "--borrowed-bf16-adam-source",
+      "--small-accumulation-norm-batches",
+      "--vector-bf16-first-adam"
+    ],
+    "historical_control": {
+      "median_ms": 6.796194764319807,
+      "campaign": "adam256_v30_w1024_s128_retry_v2",
+      "mode": "pytorch_cudagraph_sdpa"
+    },
+    "trials": 2,
+    "warmups": 256,
+    "repeats": 64,
+    "modes": [
+      "native_baseline",
+      "native",
+      "pytorch_cudagraph_sdpa"
+    ],
+    "timing_permission": false,
+    "adoption": false,
+    "required": [
+      "source-frozen CPU/CUDA/fmt/clippy checks",
+      "owner state and fallback GPU proofs",
+      "immutable release/source archive",
+      "fresh full fixed numerical comparisons",
+      "reversed isolated complete-update timing",
+      "separate allocator and whole-process memory audit"
+    ],
+    "config": {
+      "width": 1024,
+      "sequence": 128,
+      "batch": 2,
+      "layers": 4,
+      "heads": 16,
+      "hidden": 2752,
+      "vocab": 4096,
+      "epsilon": 1e-05,
+      "learning_rate": 0.0001,
+      "max_grad_norm": 1.0
+    },
+    "fixture_sha256": "fc662a7c73979303dcdfc14f51d44c3d2fe078acf74eef384c79c21889c0d991",
+    "historical_control_raw_available": false
+  },
+  "build": {
+    "status": "PASS",
+    "source_before_after_equal": true,
+    "source_files": 371,
+    "source_archive": {
+      "path": "docs/benchmarks/transformer-training-sources/parity-vector-owner-v1.tar.gz",
+      "sha256": "e51266c35fea2ef0b73a0f5bd4c46d1e0bc86b0c68abbfa85009b56a766afb88",
+      "files": 371
+    },
+    "binary": {
+      "path": "target/vector-owner-build-v1/retained/transformer-training-bench",
+      "sha256": "bf296be4ee1e9fa566fe2ba3f91209e032f4dc4f5436515d497d6e1c2271d86f"
+    },
+    "test_binary": {
+      "path": "target/vector-owner-build-v1/retained/tests-retained",
+      "sha256": "8995588688bb47149814ba3bbc7ea3ca3eff582c39c795397d89895b590f5d4d",
+      "source_archive": {
+        "path": "docs/benchmarks/transformer-training-sources/parity-vector-owner-v1.tar.gz",
+        "sha256": "e51266c35fea2ef0b73a0f5bd4c46d1e0bc86b0c68abbfa85009b56a766afb88",
+        "files": 371
+      }
+    },
+    "checks": {
+      "format": true,
+      "cpu_all_targets": true,
+      "cuda_all_targets": true,
+      "strict_clippy_all_targets_all_features": true,
+      "cpu_nextest_passed": 339,
+      "vector_cpu_passed": 6,
+      "actual_decoder_state_passed": true
+    },
+    "note": "CPU build emitted two preexisting test-only dead-code warnings; strict all-feature Clippy passed. No complete-model performance claim. Current driver595.99.02/Python3.12.16 recorded separately."
+  },
+  "python_sources": {
+    "integrations/transformer_bench/run.py": "32ac9c373865cb2812deff5ed586a4348a5f2ce799fb714f7f4edbfc50eaddd9",
+    "integrations/transformer_bench/reference.py": "71a39a25589ffff1cc492c9c1257105980550d96c316d7ac091e9c75564bd674",
+    "integrations/transformer_bench/validate.py": "45db1595f2a60a363ca2e80162ce3aeee6f5186e928482956e054a7c50473870",
+    "integrations/transformer_bench/desktop_contexts.py": "3b57cef8f0ba21ebcf9a5223e51c92157b7a2bbb0c0c6edc70318c8011d18354",
+    "target/vector-owner-model-v1/run-phase.py": "9794815565d0153284e846dded9ec5d2e9befd348caf20c5f8516bd277ce3742"
+  },
+  "python": "/tmp/tnsr-python312-runtime/python/bin/python3.12",
+  "CC": "/home/taylor/code/tnsr/target/recovery-environment-20261119/build-tools/cc",
+  "CXX": "/home/taylor/code/tnsr/target/recovery-environment-20261119/build-tools/cxx",
+  "source_state_report_sha256": "48a789055109b470fcf44929ade1da79032698f185f2a1c17024a77840e4682d",
+  "leaf_log_sha256": "acbd85354cbd7295443154ac2f03285ea377eee0a4ea1c1d22e29e9153f0241b",
+  "adoption": false
+}

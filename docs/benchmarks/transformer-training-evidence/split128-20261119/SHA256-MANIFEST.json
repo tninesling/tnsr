@@ -1,0 +1,109 @@
+{
+  "scope": "Draft evidence and publication recipe, no executable binary payload. Referenced existing packed-profile rawarchive is an external durable dependency.",
+  "files": {
+    "README.md": {
+      "bytes": 3856,
+      "sha256": "809fa09dc1b11e7fbf46c2e8d412fc130c3a65bcaff67b4e36bb88d152208a60"
+    },
+    "build-qualification.json": {
+      "bytes": 3981,
+      "sha256": "4fd7e9b487491994b8cce5894259cfe967cd68d2fbfdaba0e6c115ce537abcff"
+    },
+    "controller-timing-audit.json": {
+      "bytes": 60129,
+      "sha256": "70c5be96e5560e723e3c8b53f50ef0a6591d2b3c94634ee19eb2487f06e4d7b0"
+    },
+    "evidence.json": {
+      "bytes": 1335,
+      "sha256": "100f839706396b649406b92e7e8c784774e8464134824db96f957b2c953c8f93"
+    },
+    "independent-audit.json": {
+      "bytes": 36111,
+      "sha256": "c0323d653de2b36465a29c38238bcb9b3e5cca4af4ad2eb6779d85121afc0401"
+    },
+    "metadata-and-guards.tar.gz": {
+      "bytes": 6765681,
+      "sha256": "f441da41b4de8129c6bd1917931eb3a241fad2d2ae094b6d54467a37ef9a755a"
+    },
+    "metadata-manifest.json": {
+      "bytes": 46443,
+      "sha256": "fddd0d867fa04299a66b5590ee78d02bb19b30eaef303d02bd0266a584448c5f"
+    },
+    "new-raw-objects.tar.gz": {
+      "bytes": 279495358,
+      "sha256": "7089fe29233501b8914703ffa54fcadc0749a83b6efdcc9d0ea49e889c7c4e76"
+    },
+    "publication/docs-inputs.json": {
+      "bytes": 673,
+      "sha256": "f7c843822e8f7de55dec6c0a5ba2060862658eada12b2ce82615d82b6dedf464"
+    },
+    "publication/hybrid-accepted-manifest.preview.json": {
+      "bytes": 88697,
+      "sha256": "8daea0764354488438369c82bf4848c0d474791225e6d088da27dbdc10d6fd1d"
+    },
+    "publication/prepare-docs.py": {
+      "bytes": 11144,
+      "sha256": "8539bf5225d918f85c6e0207794fe681f7e9aebac2230b25e157660892d6de38"
+    },
+    "publication/prepare-evidence.py": {
+      "bytes": 5737,
+      "sha256": "5b8757e054f41ba30f02603380ff6244b86fb0e80247fd3e46c295703d37f62b"
+    },
+    "publication/preview-verification.json": {
+      "bytes": 794,
+      "sha256": "86a5bf7bfbe94b54a9b49a193381f6dfd14a43ecab03719bdea40b1946db0bb9"
+    },
+    "publication/preview.json": {
+      "bytes": 1083,
+      "sha256": "f563a574358f735fd3cb3d7be70b4b19586ebf415f67a6a50e607ec0dff48983"
+    },
+    "publication/publication-plan.json": {
+      "bytes": 12186,
+      "sha256": "2e014a3a1acec3395ae0f0fbf9e881cc39a339eacaeba721507bb5c944eea5f1"
+    },
+    "publication/publish.py": {
+      "bytes": 14864,
+      "sha256": "bb1f31be79a8f9016980e045fa36614f8816c1d92fcdbcc223a5730153a979dc"
+    },
+    "publication/transformer-training-parity.md.prepared": {
+      "bytes": 220026,
+      "sha256": "65dafaacb83a74fb64bb746cf7b6b42fe946e00fa5dc12b66b3878a9c794446d"
+    },
+    "publication/transformer-training-profile.md.prepared": {
+      "bytes": 18299,
+      "sha256": "46c3f8871abe4380e7f731bb7125af9c5907f874e8800ed3b1fb0989479202c8"
+    },
+    "publication/verify-preview.log": {
+      "bytes": 762,
+      "sha256": "30b434f82d2fb9e5d7dec9340af8ac879ba6f3d0cee0dfbe17bf61a776b9e377"
+    },
+    "publication/verify-preview.py": {
+      "bytes": 3353,
+      "sha256": "048c33bde1b2e7cdaefed28668050236566930e0ad6a2d5b0fe1e9ec02f9817b"
+    },
+    "raw-aliases.json": {
+      "bytes": 13624,
+      "sha256": "01abc4369423fb915cf3f4cd62c1a9dda5031db0e6c8204095339ecd7596ab98"
+    },
+    "raw-archives.json": {
+      "bytes": 543,
+      "sha256": "9ac71007ee4dbc97eca21ad44361db99856c48ed2ad9b9613d63f2da0bd5b551"
+    }
+  },
+  "external_raw_dependencies": {
+    "archives": {
+      "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz": {
+        "sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+        "bytes": 242815195
+      },
+      "docs/benchmarks/transformer-training-evidence/split128-20261119/new-raw-objects.tar.gz": {
+        "sha256": "7089fe29233501b8914703ffa54fcadc0749a83b6efdcc9d0ea49e889c7c4e76",
+        "bytes": 279495358
+      }
+    },
+    "reused_objects": 3,
+    "new_objects": 6,
+    "path_aliases": 20,
+    "no_binary_payload": true
+  }
+}

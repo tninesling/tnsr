@@ -1,0 +1,40 @@
+{
+  "qualified": true,
+  "phase": "timing",
+  "report_sha256": "b3b219eb3599f1e69d9928ee08aac85ec81d07977933a6c6b8396caf986b5093",
+  "summaries": {
+    "native_baseline": {
+      "successful_processes": 2,
+      "median_complete_update_ms": 7.132414750000001,
+      "tokens_per_second": 35892.472461728335,
+      "process_medians_ms": [
+        6.9659345,
+        7.298895
+      ],
+      "nvml_observed_process_peak_mib": 2008
+    },
+    "native": {
+      "successful_processes": 2,
+      "median_complete_update_ms": 7.07489775,
+      "tokens_per_second": 36184.26852882786,
+      "process_medians_ms": [
+        7.1845775000000005,
+        6.965218
+      ],
+      "nvml_observed_process_peak_mib": 2008
+    },
+    "pytorch_cudagraph_sdpa": {
+      "successful_processes": 2,
+      "median_complete_update_ms": 6.835767748270882,
+      "tokens_per_second": 37450.07282682411,
+      "process_medians_ms": [
+        6.8937975011067465,
+        6.777737995435018
+      ],
+      "nvml_observed_process_peak_mib": 1340
+    }
+  },
+  "comparisons": 4,
+  "adoption": false,
+  "scope": "Complete-update experiment; independent numerical/state/memory audit required before adoption"
+}

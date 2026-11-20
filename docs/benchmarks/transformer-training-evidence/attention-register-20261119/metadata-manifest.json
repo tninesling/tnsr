@@ -1,0 +1,1178 @@
+{
+  "docs/benchmarks/transformer-training-sources/attention-reg-isolated-v2-20261119.tar.gz": {
+    "bytes": 1516232,
+    "sha256": "38fd0a07875b6c13be31158ca3397197dd65e8df39bae5b2c73c4aa6aae714d2"
+  },
+  "docs/benchmarks/transformer-training-sources/attention-register-live-v1-20261119.tar.gz": {
+    "bytes": 1516257,
+    "sha256": "5ffa9d710088a9888f79a25304467c19507b7d50703db2fe4d50ceffe57820d3"
+  },
+  "integrations/transformer_bench/desktop_contexts.py": {
+    "bytes": 11471,
+    "sha256": "3b57cef8f0ba21ebcf9a5223e51c92157b7a2bbb0c0c6edc70318c8011d18354"
+  },
+  "integrations/transformer_bench/reference.py": {
+    "bytes": 26572,
+    "sha256": "71a39a25589ffff1cc492c9c1257105980550d96c316d7ac091e9c75564bd674"
+  },
+  "integrations/transformer_bench/run.py": {
+    "bytes": 23850,
+    "sha256": "32ac9c373865cb2812deff5ed586a4348a5f2ce799fb714f7f4edbfc50eaddd9"
+  },
+  "integrations/transformer_bench/validate.py": {
+    "bytes": 17420,
+    "sha256": "45db1595f2a60a363ca2e80162ce3aeee6f5186e928482956e054a7c50473870"
+  },
+  "target/attention-forward-register-stats-audit-v1/audit.json": {
+    "bytes": 5932,
+    "sha256": "3f4bb69eebb8662019a9fde1672373f44c8bc58f402be843aec6c20e0d9db13b"
+  },
+  "target/attention-forward-register-stats-leaf-v1/exit.json": {
+    "bytes": 23,
+    "sha256": "931a4bbf4bb82e790952c37ff8ce91e472e565ba705fad3619167cb1f73caa5e"
+  },
+  "target/attention-forward-register-stats-leaf-v1/launch.json": {
+    "bytes": 1166,
+    "sha256": "a123740ecc6eca342bf5c84cce5ab71f7ca9337234c5590574dbb1b56ba6246e"
+  },
+  "target/attention-forward-register-stats-leaf-v1/test.log": {
+    "bytes": 516,
+    "sha256": "daa34d33d5f03f3dea25e89cd60a795078067ca310f2bffb64c4dace77277551"
+  },
+  "target/attention-forward-register-stats-review-v1/README.md": {
+    "bytes": 1045,
+    "sha256": "f1654c4438a98606e44cedac39d02c98637b5be361808b6d6839587aa0dc6ea0"
+  },
+  "target/attention-forward-register-stats-review-v1/review.json": {
+    "bytes": 4551,
+    "sha256": "6a9f835cc20f2b865367fb0e2eebc355a68e19b41ea3b3317ee8cff00df419dd"
+  },
+  "target/attention-forward-register-stats-run-v2/artifacts/HeadMajor-Async16/loaded-module.ptx": {
+    "bytes": 277923,
+    "sha256": "5774a3fde6f114d5d4f31a134d88ea9a20b4ca0e690135713a4d22ccd46f74b8"
+  },
+  "target/attention-forward-register-stats-run-v2/artifacts/HeadMajor-Async16/resources-before-math.json": {
+    "bytes": 1268,
+    "sha256": "d022c77a18bb8d38b019abd2757bba1fce17bc62422faf9edabcf87cc5e7897b"
+  },
+  "target/attention-forward-register-stats-run-v2/artifacts/HeadMajor-Scalar/loaded-module.ptx": {
+    "bytes": 246775,
+    "sha256": "a551979b245cf6e1df394513be9106ccd7c17f97480af7342a3dd4beb1d68e41"
+  },
+  "target/attention-forward-register-stats-run-v2/artifacts/HeadMajor-Scalar/resources-before-math.json": {
+    "bytes": 1268,
+    "sha256": "1f20e118cff977a2f14a9cd77bf2c137c1fb77d246b19fdfbcf210de2f27cdc5"
+  },
+  "target/attention-forward-register-stats-run-v2/artifacts/SequenceMajor-Async16/loaded-module.ptx": {
+    "bytes": 285649,
+    "sha256": "0315fbe223864d956e5092c0224e14118808f59a02ab9fd60a483c0441c2112f"
+  },
+  "target/attention-forward-register-stats-run-v2/artifacts/SequenceMajor-Async16/resources-before-math.json": {
+    "bytes": 1268,
+    "sha256": "d022c77a18bb8d38b019abd2757bba1fce17bc62422faf9edabcf87cc5e7897b"
+  },
+  "target/attention-forward-register-stats-run-v2/artifacts/SequenceMajor-Scalar/loaded-module.ptx": {
+    "bytes": 253813,
+    "sha256": "79c291a31f001cfaf4ad40b9985d2335844b5810ed7ce303478d10200ddec3d3"
+  },
+  "target/attention-forward-register-stats-run-v2/artifacts/SequenceMajor-Scalar/resources-before-math.json": {
+    "bytes": 1268,
+    "sha256": "8a951eff53bc428a82c41055cd58cdac78a006598ea9e47f49167cfbe8b3bee4"
+  },
+  "target/attention-forward-register-stats-run-v2/artifacts/qualification.json": {
+    "bytes": 8523,
+    "sha256": "207ea6bfe536e874ce95bf90477525917be8ec475edb6bdc20eae7921b8b1479"
+  },
+  "target/attention-forward-register-stats-run-v2/exit.json": {
+    "bytes": 21,
+    "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+  },
+  "target/attention-forward-register-stats-run-v2/launch.json": {
+    "bytes": 1286,
+    "sha256": "52560b40a079d1014d649e945c0c8039f5a2991af7c029fe031f7c7832f303fb"
+  },
+  "target/attention-forward-register-stats-run-v2/test.log": {
+    "bytes": 282,
+    "sha256": "f227f72d45d00795f6f2d3c0a652b6d561b02c05b48132df09754c2520ddd205"
+  },
+  "target/attention-forward-register-stats-v1/README.md": {
+    "bytes": 1756,
+    "sha256": "671b5bc1e66c066e612babac5810b38e63739ba814a99f17f36b63e2f80bcc06"
+  },
+  "target/attention-forward-register-stats-v1/audit-and-package.py": {
+    "bytes": 10118,
+    "sha256": "3f4c71cee3255f237f5d7def4b94557ed57642f476b504ad5a7393b5e76ed02a"
+  },
+  "target/attention-forward-register-stats-v1/check-v1.log": {
+    "bytes": 123,
+    "sha256": "e8f67df33a7ee53c4a5f7e99880093e20ddb8c54c166c74d57c8af5a14be2507"
+  },
+  "target/attention-forward-register-stats-v1/clippy-v1.log": {
+    "bytes": 2164,
+    "sha256": "f84700e7856ef930b190e6672f76c43105eab943adfe7b2cf55f34897f2f5fc9"
+  },
+  "target/attention-forward-register-stats-v1/clippy-v2.log": {
+    "bytes": 177,
+    "sha256": "832ff46fcce7fa7f3c1114b1f00c2e29d8ee474aabac54527374a56cb773c4d1"
+  },
+  "target/attention-forward-register-stats-v1/construction.initial.json": {
+    "bytes": 1126,
+    "sha256": "372717effe6ae761869261242f0d0e14dc303713a43fc131d377446b528056f2"
+  },
+  "target/attention-forward-register-stats-v1/construction.json": {
+    "bytes": 1450,
+    "sha256": "cf31e1c44004dab8f59ed95393807f809c5ab66ee7e6978ea384af20cb20c05a"
+  },
+  "target/attention-forward-register-stats-v1/cpu-foundation-v2.log": {
+    "bytes": 2382,
+    "sha256": "1d9ae8e6cb4ceb4da240eea3ef3e278d065be8727f499fb4e4969264eeceedab"
+  },
+  "target/attention-forward-register-stats-v1/cpu-tests-attempt1.log": {
+    "bytes": 1626,
+    "sha256": "2ecf13c22452e463c155fa48a9df0d9f0e4e97f8758aefc3fc86078e1c3c4d90"
+  },
+  "target/attention-forward-register-stats-v1/feasibility.json": {
+    "bytes": 3994,
+    "sha256": "7951514d20f24fdb414bd5c5041a266e804d1cf90a6378653aec1f0a44728446"
+  },
+  "target/attention-forward-register-stats-v1/final-check-attempt1.log": {
+    "bytes": 537,
+    "sha256": "988d0f67a1c5b474d28e27fa653f809497012c61324f1264931395ca140fb719"
+  },
+  "target/attention-forward-register-stats-v1/final-check-attempt2.log": {
+    "bytes": 122,
+    "sha256": "953893e5895031d48a5cd426d6538c5f4df5d3d87cd10ba8bce66f3ad4c203ac"
+  },
+  "target/attention-forward-register-stats-v1/final-check-v4.log": {
+    "bytes": 122,
+    "sha256": "294f277b2cd9f9cf4d62f82587fef49509c3d88deebf2faa6ef2d8f0ae59e873"
+  },
+  "target/attention-forward-register-stats-v1/final-clippy-v2.log": {
+    "bytes": 123,
+    "sha256": "e6e82db2dedb7850582031563055e5730659f68c931905ac31588b5dcf877490"
+  },
+  "target/attention-forward-register-stats-v1/final-cpu-tests-v1.log": {
+    "bytes": 3763,
+    "sha256": "24c276e83e5e30495c101fb116ee59112b9f0e4698446ffded45494cff166855"
+  },
+  "target/attention-forward-register-stats-v1/final-cpu-tests-v2.log": {
+    "bytes": 2156,
+    "sha256": "1a6e05f575ca4ea4af4a7764d74dba6bba4e974f4b9513f23d43b3ada806306f"
+  },
+  "target/attention-forward-register-stats-v1/final-fmt-v2.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-forward-register-stats-v1/fmt-v1.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-forward-register-stats-v1/seal.py": {
+    "bytes": 5004,
+    "sha256": "24c2fcad43ebde9fe97f06fba817f90dbe593818e065e38b33fa101b2a6f43b7"
+  },
+  "target/attention-reg-isolated-build-v1/README.md": {
+    "bytes": 2472,
+    "sha256": "9402da190326b16ff0b959cc49ceba049dcaca0c1aea26c999aaf24ddcebe61b"
+  },
+  "target/attention-reg-isolated-build-v1/base.json": {
+    "bytes": 63874,
+    "sha256": "771316280e82b0d67a797f86e0f581b1670551ad748777f6bc74536c16c9e2f3"
+  },
+  "target/attention-reg-isolated-build-v1/binary.json": {
+    "bytes": 409,
+    "sha256": "9a11434aa52b83b50cd185f85d2240180c185114f7873ac0b30f3796792cf517"
+  },
+  "target/attention-reg-isolated-build-v1/check-attempt1.log": {
+    "bytes": 489,
+    "sha256": "1ca9cca3865410cf8fd7dd0b385913fd1c94fe6635b5e5202f101098900ceeff"
+  },
+  "target/attention-reg-isolated-build-v1/check-attempt2.log": {
+    "bytes": 575,
+    "sha256": "d52a933b166c6312048bcf19979f40a9ca743f1ede69f8b1bb741c667111f60a"
+  },
+  "target/attention-reg-isolated-build-v1/check-attempt3.log": {
+    "bytes": 138,
+    "sha256": "a5c67a1ddf98df367194573c6c4936b2e874b4bdea297f017098ba4f5c8715e2"
+  },
+  "target/attention-reg-isolated-build-v1/check-cpu-default-v1.log": {
+    "bytes": 72,
+    "sha256": "fecede7c2157efe2f16c8c8b9dce94b0fb4dd384dca8207046c8bf7636eb0ffe"
+  },
+  "target/attention-reg-isolated-build-v1/check-final-v1.log": {
+    "bytes": 138,
+    "sha256": "e5093ff25bd4c30da8fa3fd2c49a8f1fcad8ff7bb37cd2702d8135ce96e980b7"
+  },
+  "target/attention-reg-isolated-build-v1/cli-help.txt": {
+    "bytes": 5095,
+    "sha256": "dfeeec4d1bd6cb5b1875f94417d3eedc1a512193ce5173fcf69b8c5a40508c1e"
+  },
+  "target/attention-reg-isolated-build-v1/cli-tests-edit.py": {
+    "bytes": 2150,
+    "sha256": "52a17b76e3598ca9851261512bfe71adc723e507b41c559adf3caf6114b4ffde"
+  },
+  "target/attention-reg-isolated-build-v1/clippy-v1.log": {
+    "bytes": 139,
+    "sha256": "3c474044fa6b1a3664427492ab6155b582a5513b3b1ce42c566080c022e84fc2"
+  },
+  "target/attention-reg-isolated-build-v1/cpu-tests-v1.log": {
+    "bytes": 2716,
+    "sha256": "b48a3db7dc33b73f08a3a62d4f678ca83320c055d596bebe1d9467deeaad97e8"
+  },
+  "target/attention-reg-isolated-build-v1/fmt-final-v1.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-reg-isolated-build-v1/ignored-list.log": {
+    "bytes": 9538,
+    "sha256": "667da8a21f27bae7bb4005cf9a53c8aa8c5fe4cc6e4afdeec9c30aa761b9de1a"
+  },
+  "target/attention-reg-isolated-build-v1/implement.py": {
+    "bytes": 5063,
+    "sha256": "c16c38216fc196be2f78b4b5cc001a1f70e5d208f49375f71fcb1cd41336deca"
+  },
+  "target/attention-reg-isolated-build-v1/qualification.json": {
+    "bytes": 2018,
+    "sha256": "6d5e518b4e6d2e565aca9b4fd20c17287569c0d9af6338e9381844d73372133c"
+  },
+  "target/attention-reg-isolated-build-v1/release-build.jsonl": {
+    "bytes": 190252,
+    "sha256": "9b9b56d6df65ac02115bbbd6276182444a7f9cdf2b9f24ce01e3c51cf04c465c"
+  },
+  "target/attention-reg-isolated-build-v1/release-build.log": {
+    "bytes": 129,
+    "sha256": "9a7aaf4c754ca861afb82b540dd7b12c9a1dea76d6a3c83b334fb13d3195e9d3"
+  },
+  "target/attention-reg-isolated-build-v1/runtime-edit.py": {
+    "bytes": 5609,
+    "sha256": "6d46b1ba96b7c39c2c506d806c91368d1d6ee3dcb712d93cada2a292d7ab77e4"
+  },
+  "target/attention-reg-isolated-build-v1/seal.py": {
+    "bytes": 5925,
+    "sha256": "5bd96f8e931170000d24f85c82fcf2559ca55e6325238ef1a235167394bbfb09"
+  },
+  "target/attention-reg-isolated-build-v1/source-after.json": {
+    "bytes": 60454,
+    "sha256": "d7aa9f33b3857f8772807c4bb1db6b97c45885a53c77c770974f673f93061562"
+  },
+  "target/attention-reg-isolated-build-v1/source-archive.json": {
+    "bytes": 353,
+    "sha256": "5c678f7f219b0a72169ea803d237dd03655dac755f26f056e56642b56ab12385"
+  },
+  "target/attention-reg-isolated-build-v1/source-before.json": {
+    "bytes": 60454,
+    "sha256": "d7aa9f33b3857f8772807c4bb1db6b97c45885a53c77c770974f673f93061562"
+  },
+  "target/attention-reg-isolated-build-v1/source-delta-proof.json": {
+    "bytes": 2812,
+    "sha256": "4fde42a7bcea4e4c6227f9835d36194bb212b4be9ad48a0af13c5b580e248b34"
+  },
+  "target/attention-reg-isolated-build-v1/test-build.jsonl": {
+    "bytes": 184975,
+    "sha256": "70d006273b3f6d55c9c35589742ce6881a4dfdaf079fd5a3744e4692ffb8bb60"
+  },
+  "target/attention-reg-isolated-build-v1/test-build.log": {
+    "bytes": 73,
+    "sha256": "f998b36cde88d3eafe6c4c7446b77487d2cc7771780272ff473c471c507ca5d1"
+  },
+  "target/attention-reg-isolated-build-v2/README.md": {
+    "bytes": 1262,
+    "sha256": "f380cef28ce88fdec7283bbaba54215935f7e7b41c2934751d3ac7c66afd761e"
+  },
+  "target/attention-reg-isolated-build-v2/audit-and-package.py": {
+    "bytes": 15455,
+    "sha256": "b673be456b7b3c4b1f4986145237d519691c76565ed0b86a3ae892c3b6ac2a76"
+  },
+  "target/attention-reg-isolated-build-v2/base.json": {
+    "bytes": 64125,
+    "sha256": "46cbf2f50f785c1d71e843610851e7522631299e7ceb88d41ecaae7376d620e1"
+  },
+  "target/attention-reg-isolated-build-v2/binary.json": {
+    "bytes": 409,
+    "sha256": "9426c4b7192dfc9fbaa08de9ac6d48b0d080e18b703c5b7028e7be24e9434554"
+  },
+  "target/attention-reg-isolated-build-v2/check-final-v1.log": {
+    "bytes": 139,
+    "sha256": "b2e9114a3c5bbaf5d8c93b530442d9a9f18db728ceb683e23a2833f0ee30b68d"
+  },
+  "target/attention-reg-isolated-build-v2/cli-help.txt": {
+    "bytes": 5095,
+    "sha256": "dfeeec4d1bd6cb5b1875f94417d3eedc1a512193ce5173fcf69b8c5a40508c1e"
+  },
+  "target/attention-reg-isolated-build-v2/clippy-v1.log": {
+    "bytes": 139,
+    "sha256": "3120996ae602854b4fb7815e92bea188d0da770f14e7248a409e3d09574ef2a4"
+  },
+  "target/attention-reg-isolated-build-v2/cpu-tests-v1.log": {
+    "bytes": 2716,
+    "sha256": "8c1ae4314e1445b9a326c8388150fd06a8eeaedc53d93e81cf48a319f86b3c21"
+  },
+  "target/attention-reg-isolated-build-v2/fmt-final-v1.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-reg-isolated-build-v2/ignored-list.log": {
+    "bytes": 9538,
+    "sha256": "667da8a21f27bae7bb4005cf9a53c8aa8c5fe4cc6e4afdeec9c30aa761b9de1a"
+  },
+  "target/attention-reg-isolated-build-v2/qualification.json": {
+    "bytes": 2096,
+    "sha256": "a3d0f5ee52729d01a7fb0c01c65fc5c34ed04b3c8b9018b57cb1f87706f86848"
+  },
+  "target/attention-reg-isolated-build-v2/release-build.jsonl": {
+    "bytes": 190250,
+    "sha256": "05c0cdcfee18e16811b2445a515ae30cba7c0c980a4b7b8442b1f9b87705d823"
+  },
+  "target/attention-reg-isolated-build-v2/release-build.log": {
+    "bytes": 62,
+    "sha256": "a70da5408e7a6da7efe97b23011504833b16a7875bda14543f2504b5b8c7d97a"
+  },
+  "target/attention-reg-isolated-build-v2/seal.py": {
+    "bytes": 5691,
+    "sha256": "a7012da2e6efb1a277b8afb79bd04493cd529c091dd0f9a3e316376fb1565f53"
+  },
+  "target/attention-reg-isolated-build-v2/source-after.json": {
+    "bytes": 60454,
+    "sha256": "f6a2b9dd1891eb52a4d9888b626e1af1c0758e55babbec192d7948146214db5e"
+  },
+  "target/attention-reg-isolated-build-v2/source-archive.json": {
+    "bytes": 353,
+    "sha256": "130ab69da298c11bf89d0c3b4d2f614db927dc63b7a83fe21a36805600dc2b7f"
+  },
+  "target/attention-reg-isolated-build-v2/source-before.json": {
+    "bytes": 60454,
+    "sha256": "f6a2b9dd1891eb52a4d9888b626e1af1c0758e55babbec192d7948146214db5e"
+  },
+  "target/attention-reg-isolated-build-v2/source-delta-proof.json": {
+    "bytes": 724,
+    "sha256": "5265ceb17abbcb0a270e703d3713505024ccad01ac531a7b64170b0522390198"
+  },
+  "target/attention-reg-isolated-build-v2/test-build.jsonl": {
+    "bytes": 184975,
+    "sha256": "6b56253eeba2fe89dfacff1eaab59fd80dc12bd8332cd5fdfeb1d776d801777a"
+  },
+  "target/attention-reg-isolated-build-v2/test-build.log": {
+    "bytes": 73,
+    "sha256": "6ee7cdbc5065df89c7612edd452e7559642235c2a00b4b952a53916f720d44e5"
+  },
+  "target/attention-reg-isolated-model-audit-v2/audit.json": {
+    "bytes": 5025,
+    "sha256": "6d0c1bd258625ae85b4cf05de279558cdbcd4fb463cf301da4a80167c40d413e"
+  },
+  "target/attention-reg-isolated-model-audit-v2/promotion-review.json": {
+    "bytes": 3922,
+    "sha256": "14e123bf9c13330b1a2ec0328b69bbbbc68d30cff831d0a1062b3d19517f5bb6"
+  },
+  "target/attention-reg-isolated-model-v2/artifacts/exact-state-register-statistics-b32-unique-v16384.json": {
+    "bytes": 29572,
+    "sha256": "4557d229045ae93ee89b65b4f3e08c9c744dce495d7f8863224c5213ff75fd27"
+  },
+  "target/attention-reg-isolated-model-v2/artifacts/global-prune-4-pairs-214-values.json": {
+    "bytes": 4597,
+    "sha256": "89909f8720c63bc9bac986eb1deb1c7d6f0015bc446fbedb68e8298ab43712f0"
+  },
+  "target/attention-reg-isolated-model-v2/exit.json": {
+    "bytes": 21,
+    "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+  },
+  "target/attention-reg-isolated-model-v2/launch.json": {
+    "bytes": 1482,
+    "sha256": "a353816c52073193141eb1e2b4ab7f12c230f590c82debe23c1eb47d018de11f"
+  },
+  "target/attention-reg-isolated-model-v2/test.log": {
+    "bytes": 290,
+    "sha256": "619df5e8f6a40a43024be2c207b17206896ef11214520dde6577fb86b3673cf5"
+  },
+  "target/attention-register-live-audit-v1/README.md": {
+    "bytes": 1992,
+    "sha256": "1ef24f04988ecba9125ac52b92a852231a9c58afd0cde8996f712c6433562d83"
+  },
+  "target/attention-register-live-audit-v1/audit.json": {
+    "bytes": 5480,
+    "sha256": "c10758f3064d8d277b0b804cf71ab1b387c9560075f42de361b87aded2be011d"
+  },
+  "target/attention-register-live-audit-v1/build-audit.json": {
+    "bytes": 1724,
+    "sha256": "c8e8fc7a19ccd9dba5d109a4472f227870ef228d413e9ab997c2342c7f4d3151"
+  },
+  "target/attention-register-live-audit-v1/qualification.build-ready.initial.json": {
+    "bytes": 3225,
+    "sha256": "48a6f6aa537c152996b8fa31fa85d911cc76128be1da1324d7aa7d9fea508ed4"
+  },
+  "target/attention-register-live-audit-v1/qualification.proposed.json": {
+    "bytes": 4976,
+    "sha256": "7a1af04cd9f6123c428dadfc28d049ee65d276be08728bedca9cb488c1b0eadb"
+  },
+  "target/attention-register-live-audit-v1/root-default-prefix.json": {
+    "bytes": 1820,
+    "sha256": "c2aaf64b83ec2e77eaed7b9cedae2e3a6c4a23441a1c1cedfee52dec8ae055c1"
+  },
+  "target/attention-register-live-build-v1/binary.json": {
+    "bytes": 253,
+    "sha256": "c3baa7cb79e0d4b63fee2b1eacd9109dd9fb2ea34d470efe7bd30ee86ef47aa6"
+  },
+  "target/attention-register-live-build-v1/check-cpu.log": {
+    "bytes": 72,
+    "sha256": "59639588a6f1826f129cbcd121edc07279dab94786f5fa5bde6b3439b2e845cc"
+  },
+  "target/attention-register-live-build-v1/check-cuda.log": {
+    "bytes": 123,
+    "sha256": "6c89627e73207644e08d7019e69fd01ca6bd95b010fbb818dc21b51f26b115b9"
+  },
+  "target/attention-register-live-build-v1/clippy.log": {
+    "bytes": 123,
+    "sha256": "44b7fe78d4033408ca9d99f10adfae0302f074224a340bfdbd6ac535502e450c"
+  },
+  "target/attention-register-live-build-v1/cpu-filter.txt": {
+    "bytes": 1997,
+    "sha256": "0e7142c4c9726f8d4ab597233d48117b02fbbea54984a994aaef32e7818b1823"
+  },
+  "target/attention-register-live-build-v1/cpu-tests-v1.log": {
+    "bytes": 2695,
+    "sha256": "540dcd4516b3ae39feb87aa85e4b04b402daa0836a75c399a7eae39ef86f110d"
+  },
+  "target/attention-register-live-build-v1/cpu-whitelist.json": {
+    "bytes": 1947,
+    "sha256": "5cb5bf118978ba189b6e755921b21a3e97bf341ff4d9eb68c27e0da95a6ce69c"
+  },
+  "target/attention-register-live-build-v1/default-prefix.json": {
+    "bytes": 561,
+    "sha256": "8b67183a760544f24a679cc4761ad7a248d2f7366f2b05537401724139e789d9"
+  },
+  "target/attention-register-live-build-v1/fmt.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-live-build-v1/independent-audit.py": {
+    "bytes": 10812,
+    "sha256": "86d201e2d792edf2abef0ce702b10f6918864c9f1330816a78068f7759327273"
+  },
+  "target/attention-register-live-build-v1/prepromotion-comparison.json": {
+    "bytes": 1707,
+    "sha256": "0239b8507ecd44afc3fada52a824800d1b95f9dd3b28f524fbde9dcc480888b1"
+  },
+  "target/attention-register-live-build-v1/promotion-before.json": {
+    "bytes": 60064,
+    "sha256": "f57a846f5e353216d190816c30e13dd9df1cba27db4a04fb2f7e9632050d7341"
+  },
+  "target/attention-register-live-build-v1/qualification.json": {
+    "bytes": 4976,
+    "sha256": "7a1af04cd9f6123c428dadfc28d049ee65d276be08728bedca9cb488c1b0eadb"
+  },
+  "target/attention-register-live-build-v1/release-build.jsonl": {
+    "bytes": 190146,
+    "sha256": "55b989c11a4e9204b0dce5ef878f27cd0f551929776af2d5b0a1b9ce0864500f"
+  },
+  "target/attention-register-live-build-v1/release-build.log": {
+    "bytes": 113,
+    "sha256": "557c7bc3333408bc7d310672a570a673bec5ed9b8ad479e214b3e48f76aceb46"
+  },
+  "target/attention-register-live-build-v1/retained-default-prefix-test.log": {
+    "bytes": 263,
+    "sha256": "0aece01f8eb0e43f58fe04e73d022d5c0a55428c6d6f110d4d8b7cf961b4417b"
+  },
+  "target/attention-register-live-build-v1/source-after.json": {
+    "bytes": 60454,
+    "sha256": "dedc178b926ca93f067bcea9910bb78d600bbaf0ebfefe129919ce95da3e8265"
+  },
+  "target/attention-register-live-build-v1/source-archive.json": {
+    "bytes": 483,
+    "sha256": "f124778c9444877d69aef0a7d09ab5edd6f1528359568df952d1b8217b6df406"
+  },
+  "target/attention-register-live-build-v1/source-before.json": {
+    "bytes": 60454,
+    "sha256": "dedc178b926ca93f067bcea9910bb78d600bbaf0ebfefe129919ce95da3e8265"
+  },
+  "target/attention-register-live-build-v1/source-delta-proof.json": {
+    "bytes": 1380,
+    "sha256": "6674e0666c686cf4618b596d3ed1fd4b480f064a6d572b558e46f742cb19fd58"
+  },
+  "target/attention-register-live-build-v1/test-binary.json": {
+    "bytes": 203,
+    "sha256": "cfeb12a7e9e780364bf1c68f9ea8daa0f0faf0eb78b67dd01ecb23cf8ca5c1e3"
+  },
+  "target/attention-register-live-build-v1/test-build.jsonl": {
+    "bytes": 184922,
+    "sha256": "e15e49f24ba72a125238fd0996d0af29daf3579f7f7cd62981a4556ae42a7258"
+  },
+  "target/attention-register-live-build-v1/test-build.log": {
+    "bytes": 73,
+    "sha256": "eaa59047c2d09ace6b3b017e04f341250082856c77402ddb60c87362f7e08a94"
+  },
+  "target/attention-register-live-model-v1/artifacts/exact-state-register-statistics-b32-unique-v16384.json": {
+    "bytes": 29572,
+    "sha256": "4557d229045ae93ee89b65b4f3e08c9c744dce495d7f8863224c5213ff75fd27"
+  },
+  "target/attention-register-live-model-v1/artifacts/global-prune-4-pairs-214-values.json": {
+    "bytes": 4597,
+    "sha256": "89909f8720c63bc9bac986eb1deb1c7d6f0015bc446fbedb68e8298ab43712f0"
+  },
+  "target/attention-register-live-model-v1/exit.json": {
+    "bytes": 21,
+    "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+  },
+  "target/attention-register-live-model-v1/launch.json": {
+    "bytes": 1501,
+    "sha256": "a6076ad191e9546983ea150b7b31d4f9b6e559d9754996bfa56bf6e0cf60ffe3"
+  },
+  "target/attention-register-live-model-v1/run.py": {
+    "bytes": 2107,
+    "sha256": "3b338e7affb6857fb804209d042fd3af3359b7fc01a8c890ab253bca7ca0d1cd"
+  },
+  "target/attention-register-live-model-v1/test.log": {
+    "bytes": 290,
+    "sha256": "1017f58cd97a62cfc942f63c959b7ea1b3e27f295204d7ce2602447d559e5faa"
+  },
+  "target/attention-register-model-audit-v1/README.md": {
+    "bytes": 3191,
+    "sha256": "3d221bd4141236e4ad0a422d5bfb52f384e215507e508594249d565e7c1bd333"
+  },
+  "target/attention-register-model-audit-v1/audit-attempt2.log": {
+    "bytes": 714,
+    "sha256": "ba5a8b4e984b5d062b1ca4c01a1df82a031f41fe9b7418f436d019d0150c03f8"
+  },
+  "target/attention-register-model-audit-v1/audit.json": {
+    "bytes": 37174,
+    "sha256": "b778ac169a3693cdf0b9e0a845fcf94260c1c6d09ca360f03a6d6f93c46aa274"
+  },
+  "target/attention-register-model-audit-v1/audit.log": {
+    "bytes": 367,
+    "sha256": "564d918f3988f97bdac449687aa93e9ebda14730a407ec0b1c05a61c535c6499"
+  },
+  "target/attention-register-model-audit-v1/audit.py": {
+    "bytes": 16501,
+    "sha256": "8df3d6ed50c70321368b733475187ece76e7550ac2ac3abef757d48b05dca09d"
+  },
+  "target/attention-register-model-audit-v1/fixed-revalidation-summary.json": {
+    "bytes": 1638,
+    "sha256": "112758f200ac58dc9aee3d7614124df28a637049f6eeafc93e2d9edc19dcfee1"
+  },
+  "target/attention-register-model-audit-v1/revalidate.log": {
+    "bytes": 1245,
+    "sha256": "096a8ad95ec6c4cc19dd14829062d8ed64ba5452aa1f1b169e91e100597450fa"
+  },
+  "target/attention-register-model-audit-v1/screen-trial0-native_baseline-revalidation.json": {
+    "bytes": 101354,
+    "sha256": "bfbdccbe7c8d19763b13e6fb5b4e47925f48b918f931f45602fc9047f20ec8d7"
+  },
+  "target/attention-register-model-audit-v1/screen-trial0-pytorch_cudagraph_sdpa-revalidation.json": {
+    "bytes": 111235,
+    "sha256": "544f528f726ed7c2b347281a4c6dd315ad7f79403e8d8045252bd70d6abab228"
+  },
+  "target/attention-register-model-audit-v1/timing-trial0-native_baseline-revalidation.json": {
+    "bytes": 101354,
+    "sha256": "82244cc3a6ca945061ccf6119606f31cc0173a9063172734ca0bc87531ca046f"
+  },
+  "target/attention-register-model-audit-v1/timing-trial0-pytorch_cudagraph_sdpa-revalidation.json": {
+    "bytes": 111199,
+    "sha256": "776edcc13043d0b55f99a457d08baba2974a620208eab6d99232866488f66651"
+  },
+  "target/attention-register-model-audit-v1/timing-trial1-native_baseline-revalidation.json": {
+    "bytes": 101354,
+    "sha256": "fd53e64b284a8997085bb09d0e3838a6ade8b3e4640cd9a04f3855376a35fcd7"
+  },
+  "target/attention-register-model-audit-v1/timing-trial1-pytorch_cudagraph_sdpa-revalidation.json": {
+    "bytes": 111228,
+    "sha256": "fb357856aa3030b40f6c1d8ddc0f9ab5bf4eb76d0a25492ef5f60e2ae4fdcb68"
+  },
+  "target/attention-register-model-v1/README.md": {
+    "bytes": 2982,
+    "sha256": "2ff7db2e28ccc03e815074796a7fdaad018f1a4590aeb03b83d04ee8b48e9eab"
+  },
+  "target/attention-register-model-v1/audit-phase.py": {
+    "bytes": 9369,
+    "sha256": "b981d78faad6de853edb9b21abcd183a0ece086a3ecaee4f602eac2d5fc007c6"
+  },
+  "target/attention-register-model-v1/plan.json": {
+    "bytes": 32401,
+    "sha256": "0569b777e45c4b1039069ada46ab2e64575203c962d981d287f4887614d777b8"
+  },
+  "target/attention-register-model-v1/plan.prepared.json": {
+    "bytes": 26992,
+    "sha256": "806b1240c94f0544b77656727b94d171b95741de1ba676c0d8fb94ed2f7d32a3"
+  },
+  "target/attention-register-model-v1/preparation-tests-attempt1.log": {
+    "bytes": 3830,
+    "sha256": "b1d8a2a84757e9fbaba259d6099424ba00897cebfcd1f8fe15e520e126c017f2"
+  },
+  "target/attention-register-model-v1/preparation-tests.log": {
+    "bytes": 262,
+    "sha256": "57136c64cd3721b82f546e22fa6c7eca1c0a70003fb3e137f8375ee90ac54c2d"
+  },
+  "target/attention-register-model-v1/prepare.py": {
+    "bytes": 4062,
+    "sha256": "faecf6fca2a723d9beb433cb6e5933093065a1ef02e4998d8cee21b5cc8de6e8"
+  },
+  "target/attention-register-model-v1/root-reservation.json": {
+    "bytes": 501,
+    "sha256": "06c3aefaebccfd03d1b1c2827a73a3dbe8be6b03e847e7ded002507d9756bb44"
+  },
+  "target/attention-register-model-v1/run-phase.py": {
+    "bytes": 2507,
+    "sha256": "3177966f1c7f6af7d8c32020210d9ced9c760a9e3840fd74563f894d0ae1a744"
+  },
+  "target/attention-register-model-v1/screen/desktop-context-campaign.json": {
+    "bytes": 337,
+    "sha256": "02958d76fd11c60b14503daf3838e7aa432b4b3560799af0b0da30a35297c165"
+  },
+  "target/attention-register-model-v1/screen/desktop-context-campaign.xml": {
+    "bytes": 67766,
+    "sha256": "79a873a107e0a83a04a7680c359258fc8fdaabf3320dff6087e8ca94b09fdc39"
+  },
+  "target/attention-register-model-v1/screen/report.json": {
+    "bytes": 668706,
+    "sha256": "e08453a5c861228fe7759c83c3c247545e069fa0c499a590a44d70f77b435612"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/archive/manifest.json": {
+    "bytes": 10019,
+    "sha256": "01e72375c6b8735883482f2fed27613ad1dcb8be68c71539dd22ec3085ee63a9"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/config.json": {
+    "bytes": 188,
+    "sha256": "8f07daa7d1a9e35aae2ab1a7b8d4c15e9aea238a6f4c6141c26c018cc9dacab0"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "f1df0b19c96d0130750d2eaabb2f11deadc259d86baf64c90659b0255cd9bf43"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/artifacts/results.json": {
+    "bytes": 50463,
+    "sha256": "4898e9a93ddf5f30bd3fd7b442fa9c704ca283a47578107003bcdf09fc5afff7"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-after.xml": {
+    "bytes": 67773,
+    "sha256": "48d91c251a4192f6097bff9c3c727e70e708c1d76ca703ef0309135e5aa84931"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "7688109eb32dbf02e20bb920a1be7d5b196a7cbee5dadd9f711368866f7906a5"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-before.xml": {
+    "bytes": 67774,
+    "sha256": "b40957f8616fd15a11455627262c8d1d57dda363747271176e1e8d7ab1afff6d"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-pmon.txt": {
+    "bytes": 4103,
+    "sha256": "806d2cf659fd9459f3d0eae46681b599df325637bc8eaf633408865e71994f04"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/heartbeat.json": {
+    "bytes": 187,
+    "sha256": "f700d93174804cfe038b575301ea3ba3859041b8c19bd75369ba1188a7f9cd38"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/nvml-raw.csv": {
+    "bytes": 2134,
+    "sha256": "f4e7b7c14e3f1fe97a489f942ec103ddc4c12c603d517cee7493a6fd27d32997"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/process.json": {
+    "bytes": 68395,
+    "sha256": "6df9455642057a44406fe0abc5a7e3cd60fe41fc39196d099833ba1d2826a33a"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/stdout.log": {
+    "bytes": 38676,
+    "sha256": "cd4b52de72b2266fbb8e84f7f6745e72717f60e0776c1381e9de888ce3654b59"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "f248fb8854e3f7655ce4ad10f7c4d5cc2663486f734a64b9a3590386bbef9c20"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/results.json": {
+    "bytes": 50449,
+    "sha256": "2fc346e591836222e86aac2f5190793e8fda1a32999b249760f45bfebc669983"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-after.xml": {
+    "bytes": 67773,
+    "sha256": "a134535a5ad5b41b076a51f417b31ab93816441e1fa409dddc9daa9723062f9c"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "dc9b48eb95d8bb825a7ba3faf3061cab6af00a16b36185a22d667a2c1a1b93f1"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-before.xml": {
+    "bytes": 67765,
+    "sha256": "fc883c833c7e1831a603e0caf737fe4509b0746614eb29caeb7306e321d6c925"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-pmon.txt": {
+    "bytes": 4103,
+    "sha256": "da66054af575f4d17e44c64ae22b2b0518f10bfc434daac500a01fe15c32dd5e"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/heartbeat.json": {
+    "bytes": 187,
+    "sha256": "aae560369669076829b3ea22226e99d207b41313e1d0fef4a8e5a994ac1d4036"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/nvml-raw.csv": {
+    "bytes": 2134,
+    "sha256": "3a5486792116602a3d99f28475998229698ff9f2db1b5ab12e7e893e123cea54"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/process.json": {
+    "bytes": 68337,
+    "sha256": "b78fc354c06d730aad3b4bf74fc9e0d9aee221411d9f76960328e42ccc0c7000"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/stdout.log": {
+    "bytes": 38662,
+    "sha256": "c833c4e715b4e6b6da0e4c06f87948d0e1e0f3289e055c0c71e6a226cace6452"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline-validation.json": {
+    "bytes": 101538,
+    "sha256": "8986262f07039aff2741c9e230be55458bac1616cfc4317e5f6e6fdfb03cb933"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qualification.json": {
+    "bytes": 10240,
+    "sha256": "547a46f826a58cffee380ab5b1a4ea5c996fdd640e0ca8533336e28edb199675"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/results.json": {
+    "bytes": 4978,
+    "sha256": "660aa9d1721817e41ee80566d0708517700464b85f0c3c96fee034bc164c8ff1"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml": {
+    "bytes": 67767,
+    "sha256": "4a4b536e6d9d087085cfa16e6fda97933356f988e6e08e059687d46ad17b98b6"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "b3a11721fc056e482301a6f1c086ae8509f5573f92191da002e85384a62f1fb7"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml": {
+    "bytes": 67774,
+    "sha256": "1ed05a48389d9f42ba51b89244f2f40cd933910011cab2a3c58c599d890b8070"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt": {
+    "bytes": 5462,
+    "sha256": "9d8b250843bf80c683192648712a641c224d9027546193b4d8948e1366703d94"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/heartbeat.json": {
+    "bytes": 186,
+    "sha256": "88b833027ea87e6345dea3fcf82d4cbd5c8b4f2b072319e534799d4ab1298822"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv": {
+    "bytes": 2675,
+    "sha256": "5f5cdba1334fcb515dc3dc594da83063e1bb42e8e7f442e3d4e5aa7d6910849e"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/process.json": {
+    "bytes": 22608,
+    "sha256": "3738f76e31881fcc5d31290b98f4b19a6c508ed4d67209f53ae33c078a7cf404"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stderr.log": {
+    "bytes": 283,
+    "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stdout.log": {
+    "bytes": 4440,
+    "sha256": "ccec8512c6930218b66281b47db15531cc6f4e8027139b1c49dcbeefcfc9ac7e"
+  },
+  "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa-validation.json": {
+    "bytes": 111419,
+    "sha256": "14038e51178576cf7e044e004753d4930c118a44906fe38b4f3dd248007470ac"
+  },
+  "target/attention-register-model-v1/screen-audit.json": {
+    "bytes": 34362,
+    "sha256": "d35743386bd38c9af993e4b95e2e9a311fba7bde61feb2583127bc174ca66c57"
+  },
+  "target/attention-register-model-v1/screen-launch.json": {
+    "bytes": 5811,
+    "sha256": "3b13549da6a607a504f68ff3aabc4a0a8815864f8040a2545bf9790eac7d32f9"
+  },
+  "target/attention-register-model-v1/screen.log": {
+    "bytes": 7706,
+    "sha256": "dc612521b8d0eb0df945210669b1f8b9a2adb35a3116f398031fd72caa68933e"
+  },
+  "target/attention-register-model-v1/test-preparation.py": {
+    "bytes": 3697,
+    "sha256": "39309b8dcfba605d77eb9a921c3081b688fd5b4e1dd7b6a6177ceb4c84046903"
+  },
+  "target/attention-register-model-v1/timing/desktop-context-campaign.json": {
+    "bytes": 337,
+    "sha256": "02958d76fd11c60b14503daf3838e7aa432b4b3560799af0b0da30a35297c165"
+  },
+  "target/attention-register-model-v1/timing/desktop-context-campaign.xml": {
+    "bytes": 67767,
+    "sha256": "537518a218bf63b0a304ce675e31725da6e6b1ffe64dc8ac224fe380037de2ef"
+  },
+  "target/attention-register-model-v1/timing/report.json": {
+    "bytes": 20490694,
+    "sha256": "4414c9ddf7334ae1d52414015a2f03e6642bd87ad600bda3608f462f10737474"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/archive/manifest.json": {
+    "bytes": 10019,
+    "sha256": "01e72375c6b8735883482f2fed27613ad1dcb8be68c71539dd22ec3085ee63a9"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/config.json": {
+    "bytes": 188,
+    "sha256": "8f07daa7d1a9e35aae2ab1a7b8d4c15e9aea238a6f4c6141c26c018cc9dacab0"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "c5dd736ef49e4a14689e5fe6ced5de5b675be38927f70eb8632d95cc7dfa1ee1"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/artifacts/results.json": {
+    "bytes": 3879159,
+    "sha256": "4db14551e9ab9b6be51048f231660c360b72970a56fd1c2761a775dedafcb030"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-after.xml": {
+    "bytes": 67775,
+    "sha256": "5585429963feaacd19c5baa00018f45291cc6991fd320e9cea3d627f3556b338"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "4988f9bf4229945dbccd69362902a43f589504946003c98684bda1d5b304f9e3"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-before.xml": {
+    "bytes": 67774,
+    "sha256": "0c4420836c7313c0c4eb70cf08469557a6282fbc2420ea6a8ade005e4127b50a"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-pmon.txt": {
+    "bytes": 14354,
+    "sha256": "986de9ae583a12eb2f4e17461b6319276ab121a7be3638047205de1f8a5bf7a8"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/heartbeat.json": {
+    "bytes": 188,
+    "sha256": "8b0be249ffd718e0b91a13f791b51b14311585365f71a56154d83296965a2b28"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/nvml-raw.csv": {
+    "bytes": 8827,
+    "sha256": "10e0e862bfd85766051efcf4ef11eb5060dece027a886e8624f68be0b32a5daf"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/process.json": {
+    "bytes": 4081891,
+    "sha256": "8887741c9023217266f4a33e80c126686b0aefffe13dd82de3e0cd4994e18fca"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/stdout.log": {
+    "bytes": 3157913,
+    "sha256": "d2b90958278861cf159efd4f9fa83cde490f2a995eaa8e32619ee3b45beda97d"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "808a4e89785c6c855a8338731b4bb53cc0fa6b31f4524525eb9cf622a03657ef"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/results.json": {
+    "bytes": 3879193,
+    "sha256": "23f15ee63d7b2e00c38ab191dfe8ec6ae873d36e265efeca015841dd982d2e01"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-after.xml": {
+    "bytes": 67776,
+    "sha256": "c19436a6009b20a0a1a1352147ebe03dc59399efdc3388a36da7083e44e8e3b0"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "d800a44cf4b4c02bb0a4c5e60d4900382211846a15d553c07d79517c0315dd1b"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-before.xml": {
+    "bytes": 67765,
+    "sha256": "abb9d9b0d85cd9779bb1a26bf9241abd08cd7eef0e29060d1324d205de8527d1"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-pmon.txt": {
+    "bytes": 14942,
+    "sha256": "68e42781e5b0a959a64d06b84fd79e2dc052451dac9b72aefd1e9420e8b2448f"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/heartbeat.json": {
+    "bytes": 188,
+    "sha256": "ef8614888fa458b17a71a4c57c54651717307fe218958da74aac635fc561cde6"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/nvml-raw.csv": {
+    "bytes": 9027,
+    "sha256": "2a6bf5da320bcd0f89c901b309e56904ff2d211fed2b5167db47a306c23c17e9"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/process.json": {
+    "bytes": 4082621,
+    "sha256": "054bee2a0c6d9910b3c4de23747486e4703bc25e8fc8ce0b4b7f31c06aa4cb2b"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/stdout.log": {
+    "bytes": 3157947,
+    "sha256": "101ebce08f8069fbfb1432fa03cd5af5c345fd5af1c2faafa11b0b0fa0ec64f0"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline-validation.json": {
+    "bytes": 101538,
+    "sha256": "8b5e1eb5743f94fbd5b7c966525a0e5546000db46c684a46728fa8107e0eba3d"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qualification.json": {
+    "bytes": 10241,
+    "sha256": "585e762044fd25d0b092afe382b7d57f966cee255397ede560701b77e1fcec7a"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/results.json": {
+    "bytes": 53033,
+    "sha256": "679310f9948515d1b7cc3ed1449b80ac478d14b819981cb7b2e760d80870c7b8"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml": {
+    "bytes": 67776,
+    "sha256": "61304cb20091f2bec20eed949d9a0959e2db2e16e33d16e6fe2e22cebc10c4dd"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "c4d6e8d32f78f3320a22139bbc60672a266b2ff29530679e9c1fb5de048eccfa"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml": {
+    "bytes": 67776,
+    "sha256": "bde49e808c6efc619cdadb5975287ab1e9ee6eb317737c4878f39e827f9192cf"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt": {
+    "bytes": 10643,
+    "sha256": "7140dbec70cce3205aabd5e2e0b06b5ecc4027705491f56a82c9c77002fefc31"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/heartbeat.json": {
+    "bytes": 188,
+    "sha256": "5e77d8a411b2d41c27e3bd51835a1715a41ac1aae35d088f06089b30f340fb50"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv": {
+    "bytes": 6069,
+    "sha256": "a424b497cd099745793c00f98433aaf92b1d783c2b1090b8b8969190a1f533f6"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/process.json": {
+    "bytes": 95384,
+    "sha256": "68bb5b3261ed980bfca397559b477bb723c022a8481bcde29b480ccb3e523b4e"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stderr.log": {
+    "bytes": 283,
+    "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stdout.log": {
+    "bytes": 42803,
+    "sha256": "7c99e8e731c1bcb8dc9d224844671a22b25f14f0b910da6cc70edd5d33f712c1"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa-validation.json": {
+    "bytes": 111383,
+    "sha256": "e41726631aefc3a20d113fae89b4145a9b2004814b921e5241b0d47f7d7a6852"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "f1aca8a36eddbc482c7d94a8446864f2d934be12fe712b9d06d85b18389044e4"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/artifacts/results.json": {
+    "bytes": 3879221,
+    "sha256": "512b98ade0e096ed9b4c7d9bed4b3db8235ef0e270e180af69a983738d45ecc4"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-after.xml": {
+    "bytes": 67776,
+    "sha256": "248c7dc73e741b4a7e2238233b19d8270dfe722f59446d066ba4bea2281c501c"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "a5b58952e5eebe52771300348f66d345ee9f9ebbad7692d187159978cdef6f3c"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-before.xml": {
+    "bytes": 67776,
+    "sha256": "82cae1209b27c06c39535641bdb204a22baa96b4e55b28bde58507f733bdea73"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-pmon.txt": {
+    "bytes": 14354,
+    "sha256": "2a9575fff21c7cb104ed88b690bd49e7f0065ace4efe6120c0ee0efba2361834"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/heartbeat.json": {
+    "bytes": 187,
+    "sha256": "da14bae38d57da0cafc552420f57ecd3f5654eefa666753392d36826c583f1b8"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/nvml-raw.csv": {
+    "bytes": 8852,
+    "sha256": "a458fc58dd57436fcdf420db500a363c18ab43a7e212f564ad95e71af478742a"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/process.json": {
+    "bytes": 4082354,
+    "sha256": "b01c71474bf86cf275ceff31f9ddee90ee1333153e25a93b2325f1c25d23dcb2"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/stdout.log": {
+    "bytes": 3157975,
+    "sha256": "b4343d2455db8c09779cb1568c8252af77cda15b480ff374b0eae45e95e2901d"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "c522f4e82cc77024f561e80dfc4ae7e4c268930ac143ab7b089043d6a2ba061f"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/results.json": {
+    "bytes": 3879199,
+    "sha256": "9462ee066ccf37641bbc2c06be7bb22a5a1c81ab3b1e98dd6acf6e4f80f439e9"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-after.xml": {
+    "bytes": 67775,
+    "sha256": "da24029cf5223179b29fc005192a21262d11f16a53b25b4c416ce7a5b2d810f8"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "52182722da05f23c15bfef9046b93fc460b21a38071c4c44ede32fb76e4eb85a"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-before.xml": {
+    "bytes": 67774,
+    "sha256": "e6bc8c9e76cd93a408a776850f712ae499c7d9d51736bbd440685aa735d3513d"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-pmon.txt": {
+    "bytes": 14942,
+    "sha256": "7509a9b8cc51fdf2c2a309035ca6c7e771ae4ea4bdd9bd759fdc1c5383681fc4"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/heartbeat.json": {
+    "bytes": 186,
+    "sha256": "e9698e976dbc1c0bf7b13dc2b0c2a86ccd2bfa5b16087735de4b5d66f0960e77"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/nvml-raw.csv": {
+    "bytes": 9052,
+    "sha256": "d021100a07bad726343461b73623c4fcbe506d70a636d6929541cf45dedb6758"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/process.json": {
+    "bytes": 4082798,
+    "sha256": "38fb28ab0d3ed88be12b6f3fedeb6fc26fb2d8b613ec3848aee4d70974e1eb85"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/stdout.log": {
+    "bytes": 3157953,
+    "sha256": "dd2e73008129fe6e8734b48d401358c5389310402ec6e641126f856173f51ca7"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline-validation.json": {
+    "bytes": 101538,
+    "sha256": "2669117f8c82e605244267935e78252426c5560e616d22dda9833972c13e7345"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/artifacts/qualification.json": {
+    "bytes": 10241,
+    "sha256": "c59a9665c0f27f3414233a27400316e6516a3b84342e5527c13f312f6cf1d4d1"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/artifacts/results.json": {
+    "bytes": 52964,
+    "sha256": "7a3162963b848d74962f470df378b831d6332cb1270b843ce49b27f65804d667"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-after.xml": {
+    "bytes": 67774,
+    "sha256": "11a17efe924a06d314649daa64a35a2f1245bc247ecc7437a50fb52d4853dd19"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "f964de2007b608ccb02cfd76684a5070044506f25604de0d1914a3437ca4c4a3"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-before.xml": {
+    "bytes": 67768,
+    "sha256": "86cb80b9ccbb2da3119430987713f45aa4f76f6e7a0aa5777381307ddd791c79"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon.txt": {
+    "bytes": 10643,
+    "sha256": "583a2beae00fb2031cd3056cbef029f05b050187992d93cbf9806e83968f39b8"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/heartbeat.json": {
+    "bytes": 188,
+    "sha256": "b4dd4d725d8d60d16a742a6932e5c1f70c16c860ccde0898038b7faa0ed7f029"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-raw.csv": {
+    "bytes": 6077,
+    "sha256": "b4a982f158d0a9d600ecfd0090dd8fbd6cbc05249ed48fc3770a913f71b702f4"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/process.json": {
+    "bytes": 95315,
+    "sha256": "66b2747184063cf69b9077735db8d33f0f8a95131c6fb5a341c5ca1808d78fe1"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stderr.log": {
+    "bytes": 283,
+    "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stdout.log": {
+    "bytes": 42734,
+    "sha256": "eec8c6da39f2f41536bb4827efee760f2814d3a1c2cbf93a84f60fe2a501b37d"
+  },
+  "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa-validation.json": {
+    "bytes": 111412,
+    "sha256": "ed674c5eac6163c74e8d0f3b8e9f340d1bf97c315881ab0f165717be7212a9a2"
+  },
+  "target/attention-register-model-v1/timing-audit.json": {
+    "bytes": 67227,
+    "sha256": "3337833b97d66ba23ce4a6a78addf6d286cd32cf00e5b581451f5337c0ff9a89"
+  },
+  "target/attention-register-model-v1/timing-launch.json": {
+    "bytes": 5835,
+    "sha256": "bea38f672c7a6d42cc9ebb4678fc87bc6c57f3ae43923379ea24184046e65c17"
+  },
+  "target/attention-register-model-v1/timing.log": {
+    "bytes": 9573,
+    "sha256": "2d815fcdbabb177c43be6b6d6d2fbf9019dfaf2305589767bed70ce8f930f757"
+  },
+  "target/attention-register-publication-v1/prepare-evidence.py": {
+    "bytes": 6807,
+    "sha256": "c129b0676dc8bcbc026daead92dd5fff7955b35cafecaca6c40b65b44735ea3d"
+  }
+}

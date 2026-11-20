@@ -1,0 +1,35 @@
+{
+  "status": "PASS_DURABLE_BYTE_VERIFICATION",
+  "directory": "docs/benchmarks/transformer-training-evidence/attention-register-20261119",
+  "metadata_archive": {
+    "path": "docs/benchmarks/transformer-training-evidence/attention-register-20261119/metadata-and-guards.tar.gz",
+    "sha256": "892dc11ae3c32b40f86e73231a8795b66d8c33277d50ff73670cf996ae924679",
+    "bytes": 7858473,
+    "files": 294
+  },
+  "raw_aliases": {
+    "path": "docs/benchmarks/transformer-training-evidence/attention-register-20261119/raw-aliases.json",
+    "sha256": "2ab699d39374128e42a781194e15a5d78e22442c3a9d19d27b9df2f99f335cff",
+    "paths": 20,
+    "unique_objects": 9,
+    "new_unique_objects": 6
+  },
+  "reused_raw_archives": {
+    "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz": {
+      "sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "bytes": 242815195
+    }
+  },
+  "new_raw_archive": {
+    "path": "docs/benchmarks/transformer-training-evidence/attention-register-20261119/new-raw-objects.tar.gz",
+    "sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123",
+    "bytes": 279558220,
+    "objects": 6
+  },
+  "all_archive_members_reopened_and_SHA_verified": true,
+  "binary_payload_included": false,
+  "prior_gzip_backup": {
+    "path": "docs/benchmarks/transformer-training-sources/published-69-before-attention-register-20261119.json.gz",
+    "sha256": "c23bb35ecc5f5ee392c176b90fd2c43d97d25da7a55b2d4fefb482b446809247"
+  }
+}

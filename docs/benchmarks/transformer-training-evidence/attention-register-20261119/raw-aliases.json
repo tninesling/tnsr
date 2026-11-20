@@ -1,0 +1,288 @@
+{
+  "scope": "Fresh screen/timing/reference/fixture F32 byte aliases; existing packed-profile/split128 objects reused by verified SHA256. No duplicated raw snapshot payload when identical.",
+  "aliases": {
+    "target/attention-register-model-v1/screen/w512_s512_b32/archive/weights.f32": {
+      "sha256": "317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971320,
+        60940288,
+        1795152424677311015,
+        1795152424677311015
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6.f32"
+    },
+    "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971650,
+        60940288,
+        1795152437997544432,
+        1795152437997544432
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971673,
+        60940288,
+        1795152438091546080,
+        1795152438091546080
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971655,
+        60940288,
+        1795152430442412040,
+        1795152430442412040
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/attention-register-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971656,
+        60940288,
+        1795152430537413705,
+        1795152430537413705
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_gradients.f32": {
+      "sha256": "785ceeca30b55e3e5d045b955cd60bfb7338cb1a2a865cfbcfffd4531fb0d8ce",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971689,
+        60940288,
+        1795152445341673127,
+        1795152445341673127
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/attention-register-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123",
+      "member": "objects/785ceeca30b55e3e5d045b955cd60bfb7338cb1a2a865cfbcfffd4531fb0d8ce.f32"
+    },
+    "target/attention-register-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_weights.f32": {
+      "sha256": "809d7cec10bd93d6ae3e41276284483628e232e5030bc9326162e21feb4ff46a",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971690,
+        60940288,
+        1795152445351673302,
+        1795152445351673302
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/attention-register-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123",
+      "member": "objects/809d7cec10bd93d6ae3e41276284483628e232e5030bc9326162e21feb4ff46a.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/archive/weights.f32": {
+      "sha256": "317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971706,
+        60940288,
+        1795152470872120510,
+        1795152470872120510
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/317b0d5f985d08d3d2a77f13c359c667d830e758f2fe589b54ca65ebd30b93b6.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971737,
+        60940288,
+        1795152500440638654,
+        1795152500440638654
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971738,
+        60940288,
+        1795152500532640266,
+        1795152500532640266
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971693,
+        60940288,
+        1795152476585220623,
+        1795152476585220623
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971721,
+        60940288,
+        1795152476681222305,
+        1795152476681222305
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_gradients.f32": {
+      "sha256": "e4b59f374651a4276f3e53459a30ed5ceabd8bf2cc7bd8af4b4d3cb5e87f852b",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971754,
+        60940288,
+        1795152522765029855,
+        1795152522765029855
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/attention-register-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123",
+      "member": "objects/e4b59f374651a4276f3e53459a30ed5ceabd8bf2cc7bd8af4b4d3cb5e87f852b.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qual_weights.f32": {
+      "sha256": "b44cf593e581e925d80024b96d34962723de01b00df6615a1845aadf1e14728f",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971755,
+        60940288,
+        1795152522776030048,
+        1795152522776030048
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/attention-register-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123",
+      "member": "objects/b44cf593e581e925d80024b96d34962723de01b00df6615a1845aadf1e14728f.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971776,
+        60940288,
+        1795152559476673171,
+        1795152559476673171
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971791,
+        60940288,
+        1795152559569674801,
+        1795152559569674801
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qual_gradients.f32": {
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971807,
+        60940288,
+        1795152582463075974,
+        1795152582463075974
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qual_weights.f32": {
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971808,
+        60940288,
+        1795152582555077586,
+        1795152582555077586
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+      "archive_sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+      "member": "objects/sha256/3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/artifacts/qual_gradients.f32": {
+      "sha256": "353b48a20d38871f4f7d9616481ca706462b49f7605bf2ca5001eaaeba22b7d7",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971773,
+        60940288,
+        1795152541089350961,
+        1795152541089350961
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/attention-register-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123",
+      "member": "objects/353b48a20d38871f4f7d9616481ca706462b49f7605bf2ca5001eaaeba22b7d7.f32"
+    },
+    "target/attention-register-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/artifacts/qual_weights.f32": {
+      "sha256": "bcb0b2ed0c3b31e038692f9a9a3d9ded29dac72a8c7102f5b533e00c1b9a8026",
+      "bytes": 60940288,
+      "stable_fingerprint": [
+        66311,
+        33971774,
+        60940288,
+        1795152541099351136,
+        1795152541099351136
+      ],
+      "archive": "docs/benchmarks/transformer-training-evidence/attention-register-20261119/new-raw-objects.tar.gz",
+      "archive_sha256": "7574d70bf536544e85f7f49d58c04fb3235b8f5f8e1a6b14e59477fcadc07123",
+      "member": "objects/bcb0b2ed0c3b31e038692f9a9a3d9ded29dac72a8c7102f5b533e00c1b9a8026.f32"
+    }
+  },
+  "unique_objects": 9,
+  "new_unique_objects": 6,
+  "all_referenced_objects_decompressed_and_verified": true
+}

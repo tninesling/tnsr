@@ -1,0 +1,137 @@
+{
+  "cases": [
+    {
+      "all65536_BF16_patterns": true,
+      "array_comparisons": 360,
+      "capacity_increased_vs_eager": false,
+      "elements_per_member": 1048576,
+      "feeds": 6,
+      "finite_F32_to_BF16_infinity_health_unchanged": true,
+      "graph_replays_per_feed": 2,
+      "isolated_health_group_per_member": true,
+      "members": 4,
+      "nonNaN_bits_and_NaN_classes_exact": true,
+      "ordinary_canonical_and_eager_PTX_byte_identical": true,
+      "performance_claim": false,
+      "poison_before_every_replay": true,
+      "readonly_checks": 120,
+      "registers_reduced_vs_eager": false,
+      "resources": [
+        {
+          "capacity256": 6,
+          "local_bytes": 0,
+          "max_threads": 1024,
+          "name": "resident_test_vector4_bf16_adam_paired_shadow_0",
+          "registers": 40,
+          "shared_bytes": 32
+        },
+        {
+          "capacity256": 4,
+          "local_bytes": 0,
+          "max_threads": 1024,
+          "name": "resident_test_batched_paired_vector_adam_1",
+          "registers": 56,
+          "shared_bytes": 32
+        },
+        {
+          "capacity256": 4,
+          "local_bytes": 0,
+          "max_threads": 1024,
+          "name": "resident_test_batched_paired_vector_adam_2",
+          "registers": 56,
+          "shared_bytes": 32
+        }
+      ]
+    },
+    {
+      "all65536_BF16_patterns": true,
+      "array_comparisons": 360,
+      "capacity_increased_vs_eager": false,
+      "elements_per_member": 2818048,
+      "feeds": 6,
+      "finite_F32_to_BF16_infinity_health_unchanged": true,
+      "graph_replays_per_feed": 2,
+      "isolated_health_group_per_member": true,
+      "members": 4,
+      "nonNaN_bits_and_NaN_classes_exact": true,
+      "ordinary_canonical_and_eager_PTX_byte_identical": true,
+      "performance_claim": false,
+      "poison_before_every_replay": true,
+      "readonly_checks": 120,
+      "registers_reduced_vs_eager": false,
+      "resources": [
+        {
+          "capacity256": 6,
+          "local_bytes": 0,
+          "max_threads": 1024,
+          "name": "resident_test_vector4_bf16_adam_paired_shadow_0",
+          "registers": 40,
+          "shared_bytes": 32
+        },
+        {
+          "capacity256": 4,
+          "local_bytes": 0,
+          "max_threads": 1024,
+          "name": "resident_test_batched_paired_vector_adam_1",
+          "registers": 56,
+          "shared_bytes": 32
+        },
+        {
+          "capacity256": 4,
+          "local_bytes": 0,
+          "max_threads": 1024,
+          "name": "resident_test_batched_paired_vector_adam_2",
+          "registers": 56,
+          "shared_bytes": 32
+        }
+      ]
+    },
+    {
+      "all65536_BF16_patterns": true,
+      "array_comparisons": 360,
+      "capacity_increased_vs_eager": false,
+      "elements_per_member": 3145728,
+      "feeds": 6,
+      "finite_F32_to_BF16_infinity_health_unchanged": true,
+      "graph_replays_per_feed": 2,
+      "isolated_health_group_per_member": true,
+      "members": 4,
+      "nonNaN_bits_and_NaN_classes_exact": true,
+      "ordinary_canonical_and_eager_PTX_byte_identical": true,
+      "performance_claim": false,
+      "poison_before_every_replay": true,
+      "readonly_checks": 120,
+      "registers_reduced_vs_eager": false,
+      "resources": [
+        {
+          "capacity256": 6,
+          "local_bytes": 0,
+          "max_threads": 1024,
+          "name": "resident_test_vector4_bf16_adam_paired_shadow_0",
+          "registers": 40,
+          "shared_bytes": 32
+        },
+        {
+          "capacity256": 4,
+          "local_bytes": 0,
+          "max_threads": 1024,
+          "name": "resident_test_batched_paired_vector_adam_1",
+          "registers": 56,
+          "shared_bytes": 32
+        },
+        {
+          "capacity256": 4,
+          "local_bytes": 0,
+          "max_threads": 1024,
+          "name": "resident_test_batched_paired_vector_adam_2",
+          "registers": 56,
+          "shared_bytes": 32
+        }
+      ]
+    }
+  ],
+  "production_default_lowering_changed": false,
+  "qualified_math": true,
+  "scope": "One CFG(test) scoped-load resource/math experiment only. Resource capacity is not measured occupancy or performance.",
+  "timing_performed": false
+}

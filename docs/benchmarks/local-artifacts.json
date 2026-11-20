@@ -1,0 +1,29 @@
+{
+  "scope": "Preserved local historical benchmark reports intentionally excluded from Git. No hosted artifact location is claimed. Compact scorecard and human-readable reports remain tracked.",
+  "reports": [
+    {
+      "path": "docs/benchmarks/kernel-paper-performance.json",
+      "bytes": 2624715,
+      "sha256": "8e31d6ccd1407d9c4218c0602d372115b5933dd861ff8420c5aac9935fe91b61",
+      "included_in_git": false
+    },
+    {
+      "path": "docs/benchmarks/transformer-training-performance.json",
+      "bytes": 5168924,
+      "sha256": "4e3e49898e590cc568eee63b510c039e6b75f13459d51326330340342dab0a60",
+      "included_in_git": false
+    },
+    {
+      "path": "docs/benchmarks/transformer-training-parity.json",
+      "bytes": 879987746,
+      "sha256": "c861f7f73e2604121c3b94122baf3391b6ba15dc163c2c8137c2267f338df3a2",
+      "included_in_git": false
+    },
+    {
+      "path": "docs/benchmarks/transformer-training-parity.json.gz",
+      "bytes": 40718837,
+      "sha256": "77ee9831cf8aab13a6f254f00d176ad8fbe740e3c45c1cce26c9d2876eac1e24",
+      "included_in_git": false
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "status": "PASS_DURABLE_BYTE_VERIFICATION",
+  "directory": "docs/benchmarks/transformer-training-evidence/split128-20261119",
+  "metadata_archive": {
+    "path": "docs/benchmarks/transformer-training-evidence/split128-20261119/metadata-and-guards.tar.gz",
+    "sha256": "f441da41b4de8129c6bd1917931eb3a241fad2d2ae094b6d54467a37ef9a755a",
+    "bytes": 6765681,
+    "files": 253
+  },
+  "raw_aliases": {
+    "path": "docs/benchmarks/transformer-training-evidence/split128-20261119/raw-aliases.json",
+    "sha256": "01abc4369423fb915cf3f4cd62c1a9dda5031db0e6c8204095339ecd7596ab98",
+    "paths": 20,
+    "unique_objects": 9,
+    "new_unique_objects": 6
+  },
+  "reused_raw_archive": {
+    "path": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+    "sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+    "bytes": 242815195,
+    "objects": 5,
+    "aliases": 9,
+    "uncompressed_F32_bytes": 304701440,
+    "compression_level": 1,
+    "gzip_mtime": 0
+  },
+  "all_archive_members_reopened_and_SHA_verified": true,
+  "binary_payload_included": false,
+  "prior_gzip_backup": {
+    "path": "docs/benchmarks/transformer-training-sources/published-68-before-split128-20261119.json.gz",
+    "sha256": "f70ce0481fbd355ae7256673cf125cb4041349885999d566475c85a30b6740ca"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "qualified": true,
+  "phase": "screen",
+  "report_sha256": "991095334490a27887f2b4dab54164c42ac76ce910757df55a0434a3c846d182",
+  "summaries": {
+    "native_baseline": {
+      "successful_processes": 1,
+      "median_complete_update_ms": 8.670677,
+      "tokens_per_second": 29524.79950527508,
+      "process_medians_ms": [
+        8.670677
+      ],
+      "nvml_observed_process_peak_mib": 2004
+    },
+    "native": {
+      "successful_processes": 1,
+      "median_complete_update_ms": 8.591156000000002,
+      "tokens_per_second": 29798.08537989532,
+      "process_medians_ms": [
+        8.591156000000002
+      ],
+      "nvml_observed_process_peak_mib": 2004
+    },
+    "pytorch_cudagraph_sdpa": {
+      "successful_processes": 1,
+      "median_complete_update_ms": 44.630903998040594,
+      "tokens_per_second": 5735.935799356406,
+      "process_medians_ms": [
+        44.630903998040594
+      ],
+      "nvml_observed_process_peak_mib": 1384
+    }
+  },
+  "comparisons": 2,
+  "adoption": false,
+  "scope": "First-update screen only"
+}

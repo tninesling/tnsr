@@ -1,0 +1,1014 @@
+{
+  "docs/benchmarks/transformer-training-sources/split128-isolated-v1-20261119.tar.gz": {
+    "bytes": 1147414,
+    "sha256": "5ff4f3fd6297f7c7c87f9df99c16742af1435dcf244bde7ce05b82b908de6312"
+  },
+  "docs/benchmarks/transformer-training-sources/split128-live-v1-20261119.tar.gz": {
+    "bytes": 1512985,
+    "sha256": "8b02d6e3560aa6565e811fa2d533451f8b893b9b92a6ae0595c083dfd4b9b1f6"
+  },
+  "integrations/transformer_bench/desktop_contexts.py": {
+    "bytes": 11471,
+    "sha256": "3b57cef8f0ba21ebcf9a5223e51c92157b7a2bbb0c0c6edc70318c8011d18354"
+  },
+  "integrations/transformer_bench/reference.py": {
+    "bytes": 26572,
+    "sha256": "71a39a25589ffff1cc492c9c1257105980550d96c316d7ac091e9c75564bd674"
+  },
+  "integrations/transformer_bench/run.py": {
+    "bytes": 23850,
+    "sha256": "32ac9c373865cb2812deff5ed586a4348a5f2ce799fb714f7f4edbfc50eaddd9"
+  },
+  "integrations/transformer_bench/validate.py": {
+    "bytes": 17420,
+    "sha256": "45db1595f2a60a363ca2e80162ce3aeee6f5186e928482956e054a7c50473870"
+  },
+  "target/split-k-next-tile-feasibility-v1/README.md": {
+    "bytes": 1453,
+    "sha256": "81ce55281dcc478f9426465789ea5dcded6de39f3939dcf5196f471d1b1bd0cc"
+  },
+  "target/split-k-next-tile-feasibility-v1/proposal.json": {
+    "bytes": 24274,
+    "sha256": "afee35efa4b71ca5e5cd4b482e2e0c5bc107909a08cbc99523dc2e497dce51b9"
+  },
+  "target/split128-integration-plan-v1/plan.json": {
+    "bytes": 6068,
+    "sha256": "0c17a266cc959bd77a9886911d4639d826ba960771fa5fa1f88a456e1b687d9c"
+  },
+  "target/split128-isolated-build-v1/base-extraction.json": {
+    "bytes": 491,
+    "sha256": "6c13285e28b97d046e332540e7deea3dfb306c1f4a61ba689b3a42a79d0ff9fc"
+  },
+  "target/split128-isolated-build-v1/binary.json": {
+    "bytes": 256,
+    "sha256": "88151ae82862731da157dfcf13b77d80c894dafc7a2aa691ab64d7e13286f081"
+  },
+  "target/split128-isolated-build-v1/check-v1.log": {
+    "bytes": 31787,
+    "sha256": "2b1a7b3f1688af503ef439b06b4095ca02db4ea32522068f862d0c99c0347e0e"
+  },
+  "target/split128-isolated-build-v1/check-v2.log": {
+    "bytes": 429,
+    "sha256": "619fae96bb3f6988ba84c4e8aa00985c592e0cdfc73e9e75723320fd88bfb741"
+  },
+  "target/split128-isolated-build-v1/check-v3.log": {
+    "bytes": 1398,
+    "sha256": "49b5485dce3d11ebd4fbfc959cc3fadf14c4942d464c7b49a47681735e6daaf6"
+  },
+  "target/split128-isolated-build-v1/clippy-v1.log": {
+    "bytes": 746,
+    "sha256": "c51b7819d10ff9e7e3460eb2fcbcdcbb3bc9382383cf27c741361866098c50c3"
+  },
+  "target/split128-isolated-build-v1/clippy-v2.log": {
+    "bytes": 122,
+    "sha256": "664db662c0e5f07d4910516df6fc4ae11c2fe7bc444194c2f026cee818dcbac6"
+  },
+  "target/split128-isolated-build-v1/cpu-tests-v1.log": {
+    "bytes": 2077,
+    "sha256": "86a75961c2fcfdf64e9dd6de4e573f0120a8ec0aa844ff28edd2661a042ecae6"
+  },
+  "target/split128-isolated-build-v1/cpu-tests-v2.log": {
+    "bytes": 1929,
+    "sha256": "a9cc27c55af8a68ad94761c11ce4a715a012fff5a911cdb95eca5ef280f0ca5b"
+  },
+  "target/split128-isolated-build-v1/cpu-tests-v3-whitelist.log": {
+    "bytes": 1355,
+    "sha256": "dcbf56d67464416a51d0e3d939fac10bcd616d2735971b71f719d5c44dee3e3b"
+  },
+  "target/split128-isolated-build-v1/fmt-v1.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-isolated-build-v1/manual-test.json": {
+    "bytes": 745,
+    "sha256": "dd204c443d976893b853e866fc2a1fc304b1af5449a6d29bc5c792b8e320550e"
+  },
+  "target/split128-isolated-build-v1/plan.json": {
+    "bytes": 18622,
+    "sha256": "aaa759e5bb9bae9f045c1aa62e9e74db6c28b09e085d48808597e04b0a12370c"
+  },
+  "target/split128-isolated-build-v1/qualification.json": {
+    "bytes": 1642,
+    "sha256": "9f7c4aa46cb30e1b369f2bd43bcf248803e83759846d17b96bf5bfc83328586e"
+  },
+  "target/split128-isolated-build-v1/retained-cpu-whitelist.json": {
+    "bytes": 1869,
+    "sha256": "b8a68e3b02806446016ce69a4ff8f7de408726b0ca21f866a29bb53b3a7a31b5"
+  },
+  "target/split128-isolated-build-v1/retained-cpu-whitelist.log": {
+    "bytes": 1680,
+    "sha256": "551a007feb22622ae9780071c77ba870751291c59490cebede482c988271cb99"
+  },
+  "target/split128-isolated-build-v1/source-after.json": {
+    "bytes": 57716,
+    "sha256": "07886176daf8aa4af7ee549c7c80c737f4272da8f4ebaaa96cd689e499b66982"
+  },
+  "target/split128-isolated-build-v1/source-archive.json": {
+    "bytes": 480,
+    "sha256": "205f967a758d67969653a45f9149e1662fe9ec6c41a563fefe27258a8ce2ae2b"
+  },
+  "target/split128-isolated-build-v1/source-before.json": {
+    "bytes": 57716,
+    "sha256": "07886176daf8aa4af7ee549c7c80c737f4272da8f4ebaaa96cd689e499b66982"
+  },
+  "target/split128-isolated-build-v1/source-delta-proof.json": {
+    "bytes": 440,
+    "sha256": "619be2d30120b6194aa9f25177ed6132989c35195e8a334e7cb1ee07da31f6f5"
+  },
+  "target/split128-isolated-build-v1/test-build.jsonl": {
+    "bytes": 184925,
+    "sha256": "cf17870c4e4e11b7a24c25d2413e2c007ecaf608e22eaa1ff509b611f39a675c"
+  },
+  "target/split128-isolated-build-v1/test-build.log": {
+    "bytes": 122,
+    "sha256": "23fea794e110f4127b679d4527104f7953c401f33bea30fde018703be01621d3"
+  },
+  "target/split128-isolated-leaf-v1/exit.json": {
+    "bytes": 21,
+    "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+  },
+  "target/split128-isolated-leaf-v1/launch.json": {
+    "bytes": 1338,
+    "sha256": "a22ae71c3293303359ce3e37357553a9e90a0070a37fb26a67d374062d763b50"
+  },
+  "target/split128-isolated-leaf-v1/m1408-n512-k4096-bindings.json": {
+    "bytes": 494,
+    "sha256": "9eedd43abd42a4112d0bbca9e83ed6514fd09ac584c32b4c2a6567f37b4c6d72"
+  },
+  "target/split128-isolated-leaf-v1/m1408-n512-k4096-canonical.ptx": {
+    "bytes": 34532,
+    "sha256": "c038512d694750ccde3de4287e3e03d7a9de7b86ab06a6c7826377ee20186e8c"
+  },
+  "target/split128-isolated-leaf-v1/m1408-n512-k4096-loaded.ptx": {
+    "bytes": 93427,
+    "sha256": "1dbdfce20d49c691fabd7c353cab90c6b9360b41d865402838dc42f071cf81f2"
+  },
+  "target/split128-isolated-leaf-v1/m1408-n512-k4096-resources.json": {
+    "bytes": 513,
+    "sha256": "30d352db1b51f130e7929ddad1a9c857df673798881bda67144f54260d52adfa"
+  },
+  "target/split128-isolated-leaf-v1/m512-n1408-k4096-bindings.json": {
+    "bytes": 494,
+    "sha256": "999174f79bee685bf0eb30ac17e800a828fa90e515adcebe48f020631f27885c"
+  },
+  "target/split128-isolated-leaf-v1/m512-n1408-k4096-canonical.ptx": {
+    "bytes": 34547,
+    "sha256": "eb14623dd13b47a5190370b421b4c34eb267b61225a4642f762a7563bbf90520"
+  },
+  "target/split128-isolated-leaf-v1/m512-n1408-k4096-loaded.ptx": {
+    "bytes": 93473,
+    "sha256": "05d413117f16db4e1fcc1a38fd8a5a181f0e049921c6eda7d84a5bfb21d5dca2"
+  },
+  "target/split128-isolated-leaf-v1/m512-n1408-k4096-resources.json": {
+    "bytes": 513,
+    "sha256": "30d352db1b51f130e7929ddad1a9c857df673798881bda67144f54260d52adfa"
+  },
+  "target/split128-isolated-leaf-v1/m512-n4096-k4096-bindings.json": {
+    "bytes": 495,
+    "sha256": "46142dbb0783fde29ce906ff8de9e113bf31a9e32ed393dd5721bbc4640b56dd"
+  },
+  "target/split128-isolated-leaf-v1/m512-n4096-k4096-canonical.ptx": {
+    "bytes": 34458,
+    "sha256": "8ba92ade1dc0c04f98a6ee5c1673ed550c10377c4ecd55a2872b0776cbe540c9"
+  },
+  "target/split128-isolated-leaf-v1/m512-n4096-k4096-loaded.ptx": {
+    "bytes": 93274,
+    "sha256": "55bec080c36d596f6d58f4e61eb809dfbb5d78712b69f5f05aa47474f40575e4"
+  },
+  "target/split128-isolated-leaf-v1/m512-n4096-k4096-resources.json": {
+    "bytes": 513,
+    "sha256": "0553b28a284f524a568fbd57a40b5193d3c122a781b832cb8928199b18e629ba"
+  },
+  "target/split128-isolated-leaf-v1/qualification.json": {
+    "bytes": 3771,
+    "sha256": "fd4295e83a271a8a8fe44447552c72c1addfacf27a99556dad0607b7446618c4"
+  },
+  "target/split128-isolated-leaf-v1/test.log": {
+    "bytes": 258,
+    "sha256": "fd8ed88387f804868ec5b1e90cfb814f3886365ea0dc3f2e600b805fd5b23969"
+  },
+  "target/split128-live-build-v1/binary.json": {
+    "bytes": 317,
+    "sha256": "8637d230f1253166c3f14cfa953acec2f7dfc71f02a6461b51b4aed8dbe331f6"
+  },
+  "target/split128-live-build-v1/cli-help.txt": {
+    "bytes": 5048,
+    "sha256": "93f63190fe6e62fe9b6216bef99b9503d8382e0937d79c19da87b62a138acd23"
+  },
+  "target/split128-live-build-v1/manual-tests.json": {
+    "bytes": 1816,
+    "sha256": "9e00463acc150f416cd5bf1146442bbaf5c4ad26e3848e365bb33d1e4dafcbf1"
+  },
+  "target/split128-live-build-v1/qualification.build-ready.json": {
+    "bytes": 1712,
+    "sha256": "00396398913128968715bf03fbcab59ba2ce405cb337b8acccba80c272da673a"
+  },
+  "target/split128-live-build-v1/qualification.json": {
+    "bytes": 3981,
+    "sha256": "4fd7e9b487491994b8cce5894259cfe967cd68d2fbfdaba0e6c115ce537abcff"
+  },
+  "target/split128-live-build-v1/release-build.jsonl": {
+    "bytes": 190146,
+    "sha256": "f94547399cb47040fff6aa7c5084b6f99d5eeb4311f951b77298e33a081c3dae"
+  },
+  "target/split128-live-build-v1/release-build.log": {
+    "bytes": 113,
+    "sha256": "50518a48f870acc2b8e6285f62b075cabb269e2f7d2d8278baea8d8b83921042"
+  },
+  "target/split128-live-build-v1/release-source-after.json": {
+    "bytes": 60064,
+    "sha256": "f57a846f5e353216d190816c30e13dd9df1cba27db4a04fb2f7e9632050d7341"
+  },
+  "target/split128-live-build-v1/release-source-before.json": {
+    "bytes": 60064,
+    "sha256": "f57a846f5e353216d190816c30e13dd9df1cba27db4a04fb2f7e9632050d7341"
+  },
+  "target/split128-live-build-v1/retained-cpu-whitelist.json": {
+    "bytes": 2188,
+    "sha256": "91e33e6d9aab78e9019cdebe735f1148a03e5fec37785a72fe1df8f183e1fbc0"
+  },
+  "target/split128-live-build-v1/retained-cpu-whitelist.log": {
+    "bytes": 2155,
+    "sha256": "6d6924b91549aa664c9bdd57c1d5912515b7742f1d6ed3855154e820824b9ead"
+  },
+  "target/split128-live-build-v1/source-after.json": {
+    "bytes": 60064,
+    "sha256": "f57a846f5e353216d190816c30e13dd9df1cba27db4a04fb2f7e9632050d7341"
+  },
+  "target/split128-live-build-v1/source-archive.json": {
+    "bytes": 508,
+    "sha256": "febe7bdff77584cb7dfd2f2d9d49ec1fae3e4caf92df69548ba79042103a243d"
+  },
+  "target/split128-live-build-v1/source-before.json": {
+    "bytes": 60064,
+    "sha256": "f57a846f5e353216d190816c30e13dd9df1cba27db4a04fb2f7e9632050d7341"
+  },
+  "target/split128-live-build-v1/source-delta-proof.json": {
+    "bytes": 1052,
+    "sha256": "fafae15199a87251b398d116ce64a4606a8aa5f23a661eced73d5d8ac92d6ed4"
+  },
+  "target/split128-live-build-v1/split128-live-check-cpu-v1.log": {
+    "bytes": 147,
+    "sha256": "048bb955dc3163527466e56973c9d188f06d3104cc9ab26f36a5d94f41f3bcdc"
+  },
+  "target/split128-live-build-v1/split128-live-check-v1.log": {
+    "bytes": 1047,
+    "sha256": "0e7b145a8c465ee07c0f83fd782392b9fb439a289d1af54f0fbd380a17c3bd86"
+  },
+  "target/split128-live-build-v1/split128-live-check-v2.log": {
+    "bytes": 123,
+    "sha256": "8e3d3c1b5f88440f0afe0f47977eee8cb978d98f41219647421eb0f9d41f3493"
+  },
+  "target/split128-live-build-v1/split128-live-clippy-v1.log": {
+    "bytes": 123,
+    "sha256": "510b14a77731ceb1864b73db2c6392fd01c267c4b8c6e5210ade94102fd41f9e"
+  },
+  "target/split128-live-build-v1/split128-live-clippy-v2.log": {
+    "bytes": 123,
+    "sha256": "7adf9d729cf8624bfeb3eb0a66c6bb307d5f72ad97d572d5894ef65234a195d7"
+  },
+  "target/split128-live-build-v1/split128-live-cpu-fix-v1.log": {
+    "bytes": 703,
+    "sha256": "92ee087d89f12beacc5672ad82f8837c71fddf6fd7a4432c4de0feed3958f3a9"
+  },
+  "target/split128-live-build-v1/split128-live-cpu-whitelist-v1.log": {
+    "bytes": 2793,
+    "sha256": "177c1af8356cb2a359aa7ffca039560bc44180dc61187f14e41e431cdf3f1374"
+  },
+  "target/split128-live-build-v1/split128-live-fmt-v1.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-live-build-v1/split128-live-fmt-v2.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-live-build-v1/test-build.jsonl": {
+    "bytes": 184923,
+    "sha256": "bd844b630da71e09303e86984436fac5c58b6c2cdedc057808e6b129e76ce973"
+  },
+  "target/split128-live-build-v1/test-build.log": {
+    "bytes": 123,
+    "sha256": "ce029f83aec0ef78b52e49e545061189e8c5c99cd69fbc78bf218a9442d5e741"
+  },
+  "target/split128-live-leaf-v1/m1408-n512-k4096-bindings.json": {
+    "bytes": 494,
+    "sha256": "9eedd43abd42a4112d0bbca9e83ed6514fd09ac584c32b4c2a6567f37b4c6d72"
+  },
+  "target/split128-live-leaf-v1/m1408-n512-k4096-canonical.ptx": {
+    "bytes": 34532,
+    "sha256": "c038512d694750ccde3de4287e3e03d7a9de7b86ab06a6c7826377ee20186e8c"
+  },
+  "target/split128-live-leaf-v1/m1408-n512-k4096-loaded.ptx": {
+    "bytes": 93422,
+    "sha256": "43b7ccc5661f424d53f43c1d14c4bad8b9a983ebdd1b6471635996d05d2fd3e4"
+  },
+  "target/split128-live-leaf-v1/m1408-n512-k4096-resources.json": {
+    "bytes": 508,
+    "sha256": "f78fca55acf9b412f89f761c3ebd7eef629f9ee76af999f6598e567dacf7aa1c"
+  },
+  "target/split128-live-leaf-v1/m512-n1408-k4096-bindings.json": {
+    "bytes": 494,
+    "sha256": "999174f79bee685bf0eb30ac17e800a828fa90e515adcebe48f020631f27885c"
+  },
+  "target/split128-live-leaf-v1/m512-n1408-k4096-canonical.ptx": {
+    "bytes": 34547,
+    "sha256": "eb14623dd13b47a5190370b421b4c34eb267b61225a4642f762a7563bbf90520"
+  },
+  "target/split128-live-leaf-v1/m512-n1408-k4096-loaded.ptx": {
+    "bytes": 93468,
+    "sha256": "5bc83d5a63efc75ebdb21710b27a10ce8ec301cf09ab4268354e0083f0e3d914"
+  },
+  "target/split128-live-leaf-v1/m512-n1408-k4096-resources.json": {
+    "bytes": 508,
+    "sha256": "f78fca55acf9b412f89f761c3ebd7eef629f9ee76af999f6598e567dacf7aa1c"
+  },
+  "target/split128-live-leaf-v1/m512-n4096-k4096-bindings.json": {
+    "bytes": 495,
+    "sha256": "46142dbb0783fde29ce906ff8de9e113bf31a9e32ed393dd5721bbc4640b56dd"
+  },
+  "target/split128-live-leaf-v1/m512-n4096-k4096-canonical.ptx": {
+    "bytes": 34458,
+    "sha256": "8ba92ade1dc0c04f98a6ee5c1673ed550c10377c4ecd55a2872b0776cbe540c9"
+  },
+  "target/split128-live-leaf-v1/m512-n4096-k4096-loaded.ptx": {
+    "bytes": 93269,
+    "sha256": "663150e85e3b55ddbb9824c1df5c45078b73ed86c319f63a42b48e9633c9e7bb"
+  },
+  "target/split128-live-leaf-v1/m512-n4096-k4096-resources.json": {
+    "bytes": 508,
+    "sha256": "6173c29c6d58587ebdc46b48fbce2d7beb5627cfb64ebbacb1cfc05d274e5813"
+  },
+  "target/split128-live-leaf-v1/qualification.json": {
+    "bytes": 3756,
+    "sha256": "4a5608fff458582a068696af5aae2211a782b58a9a30de5bc44ae323a68c915f"
+  },
+  "target/split128-live-model-proof-v1/actual-b32-v16384-unique-state.json": {
+    "bytes": 17049,
+    "sha256": "3508cba4abbd0b9bdfd26e72f511137bddedc379aadb0bc60dfc91617f0afb41"
+  },
+  "target/split128-live-model-proof-v1/actual-b32-v4096-census.json": {
+    "bytes": 50787,
+    "sha256": "89dd0a297a7dc52d7aec9c4d02ba39cee8da09a994a2317b2e642f485665fca4"
+  },
+  "target/split128-model-audit-v1/README.md": {
+    "bytes": 3278,
+    "sha256": "63ae41ed8718d3dea3cfac739a18153a26df5392d760424bef4d28cfe6fef690"
+  },
+  "target/split128-model-audit-v1/audit-final.log": {
+    "bytes": 699,
+    "sha256": "beeae079e8d98465e057653cdeed970bee4adc7aa8c5799fdf0cbbe6315f876c"
+  },
+  "target/split128-model-audit-v1/audit.json": {
+    "bytes": 36111,
+    "sha256": "c0323d653de2b36465a29c38238bcb9b3e5cca4af4ad2eb6779d85121afc0401"
+  },
+  "target/split128-model-audit-v1/audit.log": {
+    "bytes": 699,
+    "sha256": "29db0d92c90f9969acccf922a689a77438a643cbbb337c3d10f8e81926453cda"
+  },
+  "target/split128-model-audit-v1/audit.py": {
+    "bytes": 16480,
+    "sha256": "8297085aab30b0b136aaee35512be329f35930c295d7d74f7f0aefafd3d61de4"
+  },
+  "target/split128-model-audit-v1/execution-order.json": {
+    "bytes": 827,
+    "sha256": "b265153d2c08e2a3906d9855cd0fc11a54d15c253c31e23aa680222ddb5a1c41"
+  },
+  "target/split128-model-audit-v1/fixed-revalidation-summary.json": {
+    "bytes": 1638,
+    "sha256": "112758f200ac58dc9aee3d7614124df28a637049f6eeafc93e2d9edc19dcfee1"
+  },
+  "target/split128-model-audit-v1/revalidate-attempt2.log": {
+    "bytes": 1245,
+    "sha256": "096a8ad95ec6c4cc19dd14829062d8ed64ba5452aa1f1b169e91e100597450fa"
+  },
+  "target/split128-model-audit-v1/revalidate.log": {
+    "bytes": 238,
+    "sha256": "2385f2b7710527e318a5e43c039a8908e6500bb8f03b668c6017a770ad7feefc"
+  },
+  "target/split128-model-audit-v1/screen-trial0-native_baseline-revalidation.json": {
+    "bytes": 101274,
+    "sha256": "988f2d8668f38ef9ad91c6a1281b55002a6d08ea5757c27a803ab0843079d46d"
+  },
+  "target/split128-model-audit-v1/screen-trial0-pytorch_cudagraph_sdpa-revalidation.json": {
+    "bytes": 111142,
+    "sha256": "97e50d558c4cde6a6496805e79ba20dda38aac3860c55aaf5957da65c6d08978"
+  },
+  "target/split128-model-audit-v1/timing-trial0-native_baseline-revalidation.json": {
+    "bytes": 101274,
+    "sha256": "54d5037eadb1717e10e24e8d0aa81bb14245256d1379b07a5753613e42fd27b0"
+  },
+  "target/split128-model-audit-v1/timing-trial0-pytorch_cudagraph_sdpa-revalidation.json": {
+    "bytes": 111130,
+    "sha256": "63d46a377dc34ec7aeeeb1d2a38a9fc2cc002eadb80445456f37ee048380f15c"
+  },
+  "target/split128-model-audit-v1/timing-trial1-native_baseline-revalidation.json": {
+    "bytes": 101274,
+    "sha256": "0facf26ae7368f3d8e045b2ea9a515ed1d5fb2017f734a8d4d7ca9cc753d168f"
+  },
+  "target/split128-model-audit-v1/timing-trial1-pytorch_cudagraph_sdpa-revalidation.json": {
+    "bytes": 111124,
+    "sha256": "b9695d69de143b5730fa0d94b82e752c9f51b3ea139fb2e0166ae4c3c58f8368"
+  },
+  "target/split128-model-v1/README.md": {
+    "bytes": 2911,
+    "sha256": "2903c0cffe27d1172faa228cbab95deff8ba553ed12d3fd6b463e84523fd7067"
+  },
+  "target/split128-model-v1/audit-phase.py": {
+    "bytes": 9191,
+    "sha256": "80735d20b7989c9908b9a4d44d504209e8869aa5b279623ce9b0a93b2e00a5db"
+  },
+  "target/split128-model-v1/plan.json": {
+    "bytes": 19823,
+    "sha256": "8f477e335ed2d2613f588729bf27ee505dc3d29235d7148bb48de95086ce958c"
+  },
+  "target/split128-model-v1/plan.prepared-attempt1.json": {
+    "bytes": 15428,
+    "sha256": "a00f4cf3358fc5116c81f7e43e00d65d1b1ceb92068318bc7588ead1524dfdef"
+  },
+  "target/split128-model-v1/plan.prepared.json": {
+    "bytes": 15481,
+    "sha256": "661369233aa61f10be4c0e00a903603cc0be39d4810b4173df59db0620709757"
+  },
+  "target/split128-model-v1/preparation-tests.log": {
+    "bytes": 101,
+    "sha256": "199ba496f288116d36c62f29346d4fbf0bd75745a1c893abfcbdaa4c6d5b1033"
+  },
+  "target/split128-model-v1/prepare.py": {
+    "bytes": 3857,
+    "sha256": "20081c67125ea0933930ccd8c59ff0c17bc2b82298b26a7f319fdbca09c24570"
+  },
+  "target/split128-model-v1/run-phase.py": {
+    "bytes": 2487,
+    "sha256": "0e3ffbc15fe862adbf3806ac0944aa58eb0e3959045acdb31b6f1a7b665110ad"
+  },
+  "target/split128-model-v1/screen/desktop-context-campaign.json": {
+    "bytes": 337,
+    "sha256": "02958d76fd11c60b14503daf3838e7aa432b4b3560799af0b0da30a35297c165"
+  },
+  "target/split128-model-v1/screen/desktop-context-campaign.xml": {
+    "bytes": 67766,
+    "sha256": "bcd767f46a97b2e7e0ad175e5d498aaf1324a31a2cca1dae8fbb0c1c691ac2ca"
+  },
+  "target/split128-model-v1/screen/report.json": {
+    "bytes": 665166,
+    "sha256": "d68dec202441908cca244ccfc748ed42f5b4383bc51d9bd63e29b41503f14790"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/archive/manifest.json": {
+    "bytes": 10019,
+    "sha256": "01e72375c6b8735883482f2fed27613ad1dcb8be68c71539dd22ec3085ee63a9"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/config.json": {
+    "bytes": 188,
+    "sha256": "8f07daa7d1a9e35aae2ab1a7b8d4c15e9aea238a6f4c6141c26c018cc9dacab0"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "5b466893e7f3c4ed9d18e8772f9da913a2a62ab07b9a6be401a0a44d8894217d"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/artifacts/results.json": {
+    "bytes": 49672,
+    "sha256": "a9c2c7e7ef3a330146c7413a842a2bc301f88799a4a5082b6c62ee5d15592404"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-after.xml": {
+    "bytes": 67770,
+    "sha256": "e87e8693233a9595a90b170c2a120f140d720d5ba7656d8b198e29ad714a54cf"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "d4817b5b92e2580df4eaeb63176a52c601519a7300d778d6be79d0003d1bd17c"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-before.xml": {
+    "bytes": 67773,
+    "sha256": "f2357eff46e1e41c6d2f1c61b0144b13ce9fbd9b224d31b2bd455b04983e19af"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/desktop-context-pmon.txt": {
+    "bytes": 5560,
+    "sha256": "541f84e1b16893019c7058f0befc74e91e99b4673fb0e5cbf4b84b2e5fb4cdae"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/heartbeat.json": {
+    "bytes": 186,
+    "sha256": "249a46c46fd729105502b9646e9cb7aae097be4c53c34df15b94ab11e75572aa"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/nvml-raw.csv": {
+    "bytes": 2849,
+    "sha256": "f606ac0818b77182c69d2e4fe5dfc6de6f4f33d6d289cb2bbde06da2ab518c6a"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/process.json": {
+    "bytes": 71704,
+    "sha256": "2cf49382fdbb6d61cb18039c4615a526fe2ee81daefa64bcd37682b1c924203f"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native/stdout.log": {
+    "bytes": 37993,
+    "sha256": "59b9a49f662e9aa5c873deb5e53c08ca2e646204bda5fb3787b99b6a7f29d79b"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "94f1fe05ce241c2f8dc3080469877834debcfd387dd32a6134879911b59dd074"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/artifacts/results.json": {
+    "bytes": 41563,
+    "sha256": "7433ebaa2183db16466174396fe3d35821fe7878c409e3c99661812acf757608"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-after.xml": {
+    "bytes": 67774,
+    "sha256": "8a9954a8f015694ee1a35cd5fe5ae7fb6505c9556069b1beb2a6f76596b3ba03"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "071100f0fc8e9f02d773a0fb33d190a05224d3a54d965ed5bb497a5684115410"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-before.xml": {
+    "bytes": 67767,
+    "sha256": "79ec08e3fb627385b338fb1f116adde418b8561c9fe2dfd74b462b0fb18d2d19"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/desktop-context-pmon.txt": {
+    "bytes": 4103,
+    "sha256": "c6e0575f30d65d5921cfd114adadffe12bdee78b5fc66af0f4e24bc0563ab119"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/heartbeat.json": {
+    "bytes": 186,
+    "sha256": "3d70ade18e5f3a07cddc8548aae316cc2c7fc3ccf7baaae634adca7e8c401f3f"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/nvml-raw.csv": {
+    "bytes": 2095,
+    "sha256": "f30e2bdfa351038dc72d98c4f5d3af426becb7953397b43620a6ee5a0db8a90d"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/process.json": {
+    "bytes": 58916,
+    "sha256": "df09ccd3e2e5aacef8bc002e22ce9a7f2253a61f7630bec1550b630f3b1d5851"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline/stdout.log": {
+    "bytes": 30539,
+    "sha256": "15091e40ceffa17348d896d09154da9ecbddfaf2a0786289545e6f907ba063ab"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-native_baseline-validation.json": {
+    "bytes": 101458,
+    "sha256": "d08fa30d05ddbc36f3bbed5057e476626ee9a1aaffe032774a39357f9dfd7a73"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qualification.json": {
+    "bytes": 10241,
+    "sha256": "17d015e9b7fa55d6f9c749863463d95c9f7ac8ce184005952dbdb4d9c5e23792"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/results.json": {
+    "bytes": 4978,
+    "sha256": "f4f209e56221c37f8b669a70b988d9a5ff994bf5ec967dbfd2b5e44770255052"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml": {
+    "bytes": 67774,
+    "sha256": "c10dbcd0ca215b6170d5b0cb2467db3e3e02473ecb3145180444a97dd8731777"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "5d4861b8e2439863a70b59e341b8c5cdd855093b3a2607418e3b3d8989e4e241"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml": {
+    "bytes": 67766,
+    "sha256": "2090822604f3452cb2a9797509849f5684edaf03f37fdac9ec8cbf5ffe92f5e8"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt": {
+    "bytes": 6246,
+    "sha256": "a09c8944dea23a8db224f0b8fc2b030cb2fee6707fd36229cee974aee8d630f5"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/heartbeat.json": {
+    "bytes": 187,
+    "sha256": "c4b1ec5ef93d032330e6ff6b72b731cc9eed2fdcbf5cb941f28c716d3b146fee"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv": {
+    "bytes": 2996,
+    "sha256": "02427012754baaf26ef076b0200e791513054135bfea51bc6b13a678335f16a7"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/process.json": {
+    "bytes": 24362,
+    "sha256": "8f515c4e9df62974c541d33d0991c00db90c22029f64015dfcb8046fc1b30b99"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stderr.log": {
+    "bytes": 283,
+    "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stdout.log": {
+    "bytes": 4440,
+    "sha256": "a638a3312ccfdb2a35168fb8460992afb432a688136214c13e6cfb28ac2b68b6"
+  },
+  "target/split128-model-v1/screen/w512_s512_b32/trial0-pytorch_cudagraph_sdpa-validation.json": {
+    "bytes": 111326,
+    "sha256": "0d46dfc5d212bbe6ffbe25b7789420fe1c4442fb2393bb35dc5a96829176a823"
+  },
+  "target/split128-model-v1/screen-audit.json": {
+    "bytes": 30810,
+    "sha256": "a8a3ff1e42ef178a508b594625e43e1951aaee65bcaa4bb5721ce397c7aa1152"
+  },
+  "target/split128-model-v1/screen-launch.json": {
+    "bytes": 5764,
+    "sha256": "b6aedd70596d1cb4f58f27254adbb347ab1ef4fd15e68d1a27760a898c817c8e"
+  },
+  "target/split128-model-v1/screen.log": {
+    "bytes": 7626,
+    "sha256": "46843dfd013f639faf264f0f1f30bdf6ff5270db57c0074671effcbf0db40ca8"
+  },
+  "target/split128-model-v1/test-preparation.py": {
+    "bytes": 2999,
+    "sha256": "65a1c9a6b890195e0be73afb791e75dee8cfd362d2060c76de2fb8e5732505cb"
+  },
+  "target/split128-model-v1/timing/desktop-context-campaign.json": {
+    "bytes": 337,
+    "sha256": "02958d76fd11c60b14503daf3838e7aa432b4b3560799af0b0da30a35297c165"
+  },
+  "target/split128-model-v1/timing/desktop-context-campaign.xml": {
+    "bytes": 67766,
+    "sha256": "5171e4947e7b85255612c847a7972a433dfd5edafcff15ff052bcc47b7423fa6"
+  },
+  "target/split128-model-v1/timing/report.json": {
+    "bytes": 18181275,
+    "sha256": "8979fc5b21957dba7978e52922750706e538a686219340d942db0188f20cb61b"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/archive/manifest.json": {
+    "bytes": 10019,
+    "sha256": "01e72375c6b8735883482f2fed27613ad1dcb8be68c71539dd22ec3085ee63a9"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/config.json": {
+    "bytes": 188,
+    "sha256": "8f07daa7d1a9e35aae2ab1a7b8d4c15e9aea238a6f4c6141c26c018cc9dacab0"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qualification.json": {
+    "bytes": 10432,
+    "sha256": "6b13fe06a2f416badeffc34dd7701fb01312421457170f020081e0864b7d1912"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/artifacts/results.json": {
+    "bytes": 3801666,
+    "sha256": "ca0c9d7029a5d53650af155541a5371e5905ccf1845d164a4f7932d3824c5c40"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-after.xml": {
+    "bytes": 67776,
+    "sha256": "fb8f4b6aa3e59ee7d2b67b28e057e9e01225ffb9e626b37d9d2610185675254c"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "265bc480f3e91109c4c537875dbe7db44ed3403a067100e6f1ed84325493c0c1"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-before.xml": {
+    "bytes": 67776,
+    "sha256": "7cf37207502e76762ec0c419a4d571f1d05a634379d37d0bb1c0460357f27924"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-pmon.txt": {
+    "bytes": 14942,
+    "sha256": "7ecf9d85b7bbc7a07cbf6c45c11a2558fc128323a75696ee26939c5249244428"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/heartbeat.json": {
+    "bytes": 186,
+    "sha256": "1ed9d41d97fc5000caa05dd3d961a6a9c37347c3bf89e657dc1dd1d8a630b492"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/nvml-raw.csv": {
+    "bytes": 9045,
+    "sha256": "4240f84fe391fe529ca4adef473016ed8b12768d77c81602c8ba78dc86212782"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/process.json": {
+    "bytes": 4002693,
+    "sha256": "d6f3705e8d15638b5a683a69620352d1b783c5f06166e0f1088fae681089111c"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native/stdout.log": {
+    "bytes": 3093288,
+    "sha256": "8586506527b1c472652518045394dad537c418ef901c4fbf57b25897d09a0d51"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "7888281b8fbd2076e6ff0dc4fc0d94bb219ffde3d8b32e4ba91e93322df59c5c"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/results.json": {
+    "bytes": 2922040,
+    "sha256": "d5e8df8928cbdab81896ff9a791447f01cc8837a45fc193b684f9c96dcb7b56f"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-after.xml": {
+    "bytes": 67778,
+    "sha256": "2b9e62632ef3de40c3f4a4f2d61177e1533380e0cb21f00678a49d73a252a272"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "760ed796ed1cd13897a7b4cb33e31aa965cbd1c7e3f60abc4f77ff9f821dfb41"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-before.xml": {
+    "bytes": 67766,
+    "sha256": "21bb67970ee529132db46219893e99cfd38e4183ca429362c61f2c162d06fbd9"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-pmon.txt": {
+    "bytes": 14354,
+    "sha256": "42757fd24fa4004e57b7afdfa69fe70e1497db856b204c0bd6ecc3eff867572e"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/heartbeat.json": {
+    "bytes": 186,
+    "sha256": "c94ab9e2d292e44dcc343901467e8715b81e223a2c77729635662d8310d8540f"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/nvml-raw.csv": {
+    "bytes": 8861,
+    "sha256": "70bab8280c299137f95418c1db7fad16502e5118caf79eb8b00229ba2274ee2b"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/process.json": {
+    "bytes": 3107635,
+    "sha256": "da623fc6855d90f7f8b48bbc0edc6700fec24d59895bbf28f62a4e47c2414eef"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/stdout.log": {
+    "bytes": 2293748,
+    "sha256": "405b88e6c6a8fcd68c894f4fbb2c8062b8fee4426abbc7871acefc47d1c0c10e"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline-validation.json": {
+    "bytes": 101458,
+    "sha256": "ed0910a2ff26357e0e30bd3ad440a391d125b26e17a4a271aa6e1d0e6a677140"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/qualification.json": {
+    "bytes": 10241,
+    "sha256": "7305cf497d314194c590e5f5bd08694c37f1f3d23d5bfb73ace51cd05f4e0a74"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/artifacts/results.json": {
+    "bytes": 53007,
+    "sha256": "c0b9d7df42359153e1c124cceb969f36161cdb0a3862805596acbf436cd20a21"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml": {
+    "bytes": 67776,
+    "sha256": "477afe335cf72a3fbba497d101d6fdf07ff603617d98d69a046e843f305d3920"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "1c4b43716049badfd5db16508b1d8ce5648bfce93c44e508effea64a37a1f5d2"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml": {
+    "bytes": 67774,
+    "sha256": "5c384d756e61df21d711eae804f554cd33a8791e3cddae5044a6d5103a90f177"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt": {
+    "bytes": 10643,
+    "sha256": "ee841232183e102fa5d5cc49289e7cabd121b394c3a732c8917101abee373c0e"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/heartbeat.json": {
+    "bytes": 187,
+    "sha256": "0cc19af2ab92aa2f6e7433d8a5530e211cc8957b277356668add68cdfef9d7ab"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv": {
+    "bytes": 6263,
+    "sha256": "7f2008562aa6783f378bd3d29f57a2bfd1426ca040bb54883f15678ed8845c25"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/process.json": {
+    "bytes": 95581,
+    "sha256": "905cc084b52b717693b2c1904210e1a5782be515d382f3917c3f98998fd59b7f"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stderr.log": {
+    "bytes": 283,
+    "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stdout.log": {
+    "bytes": 42777,
+    "sha256": "1da6b763665effb7af7e0432b6ca110abc77ae2b71403a01fbe6331cdcce3865"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa-validation.json": {
+    "bytes": 111314,
+    "sha256": "b275a1a453a64932caf1e3438c136871f0a391da8c18ab3969350997f111e0e3"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qualification.json": {
+    "bytes": 10433,
+    "sha256": "eb26ec9d9fe04023b75e79dc6af2647bc3f63ba88169ea3bd60a04fb7775a2b0"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/artifacts/results.json": {
+    "bytes": 3801471,
+    "sha256": "73a6149e38cfd6d09afb634548da281904571788f2c303c02316b8a12938a3dc"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-after.xml": {
+    "bytes": 67776,
+    "sha256": "3ae72681c732434d2d66fba54dffe8c7d19ec2652f1015570435e7c00f22f054"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "ad117e326b8790d57195c9ded4f252475bc4847774ac26ed1ab6950d010f8cde"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-before.xml": {
+    "bytes": 67767,
+    "sha256": "303bb0161ceb577045311dac50f2630a8c1af4afb72202fff957691db61b784f"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-pmon.txt": {
+    "bytes": 14942,
+    "sha256": "f4153c00850c1b0470f7efaf6bd788e8b47470fa6a43abfdbc73b7ed302b6b58"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/heartbeat.json": {
+    "bytes": 186,
+    "sha256": "d1c353bf80e9fc8df6ed2413e19d8760982a51a10432e4fcb63bcc2e3d9a51ca"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/nvml-raw.csv": {
+    "bytes": 9013,
+    "sha256": "f683de1d18c2065dc7b68452aabb36b6f75b3c587eb745161ae121fa1f82fd9c"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/process.json": {
+    "bytes": 4002210,
+    "sha256": "2fdd74e0f7b2e251d9ca96c27ca8a9b2169c61d3089db8fe3e6fb3417eab2d9b"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native/stdout.log": {
+    "bytes": 3093093,
+    "sha256": "bc4a16d5000257ab6466c830a7541aa5137c8c4165abf089229c15f1db3053bf"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qualification.json": {
+    "bytes": 10432,
+    "sha256": "8dc55133863e1d554a505aab8616fb08d342f15989615c956c119655287d54f3"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/results.json": {
+    "bytes": 2921978,
+    "sha256": "5ef183d089f751cb115999a62ea9bb2d8ede2f6f9edfd25018a330d584905fdf"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-after.xml": {
+    "bytes": 67778,
+    "sha256": "05bc3f32ff993a8727edaacc2497ce9610c560247b658f3aa95a6f7cbb22a05c"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "f690c1ccfc351c1f7a302f20ebea3b9ba815184c10612e542c2e3a0067ad092b"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-before.xml": {
+    "bytes": 67774,
+    "sha256": "e375253b2ca9f38a4762a7c012a141dacc1783da5459b9e69ac695e442d112aa"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-pmon.txt": {
+    "bytes": 14354,
+    "sha256": "9030da256c09a5b0725b8db92278f82066e34dad7bec0f2dff4abdebf6c8d650"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/heartbeat.json": {
+    "bytes": 188,
+    "sha256": "e8bf621858e1add80b6854aacfb5cd3e8e20701d3a7952c30e8dc5b65c1bb6a2"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/nvml-raw.csv": {
+    "bytes": 8839,
+    "sha256": "2bed83356a1198eba61ce0bb1c2c919c223a53db794232782d03381dba593d65"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/process.json": {
+    "bytes": 3107410,
+    "sha256": "5ced6a6a02cf084efc86614040f1ac39972ebe36da45f839732e7caa3c6ca879"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/stdout.log": {
+    "bytes": 2293686,
+    "sha256": "959dbead4e4e1af55e34b4e69d14674cf87e6c7ef97d625abf923600a65f5a67"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline-validation.json": {
+    "bytes": 101458,
+    "sha256": "242f0990e383dfdc9f8060f769dc9a7ad82e3d8391420916b7a08ef02c17eeab"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/artifacts/qualification.json": {
+    "bytes": 10241,
+    "sha256": "9e49dd08d80bb4a4d4b49a6338b133604ce5bac6350bd3d2503714a478c27e19"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/artifacts/results.json": {
+    "bytes": 53056,
+    "sha256": "a9f7d26a80a56c01fdd64edfeb10974f61dd2b9ea1627b06dd10b9133a95d9fc"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-after.xml": {
+    "bytes": 67769,
+    "sha256": "2aee83c185125ab27573f52b022eb23b5ab1f6a0c455db6e9b14aa11ca012ab7"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-baseline-pmon.txt": {
+    "bytes": 1359,
+    "sha256": "2034523728c50e9a81976be056026a0ad89d3c4618f29b0176ced2530f78d9dc"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-before.xml": {
+    "bytes": 67769,
+    "sha256": "c23bad9aeaf001201db90f4ec536bb1d407da4863a57768bfc5619b3e3b018e1"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon.txt": {
+    "bytes": 11231,
+    "sha256": "79fe925f53b831c7feaaf4da80cfdb0a661475a74aeebc3fb33bec357278ddbf"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/heartbeat.json": {
+    "bytes": 188,
+    "sha256": "1fcb5d5bf8d7cdf69e6b2c000834466479777422878d797ed0c3f4f66485424f"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-raw.csv": {
+    "bytes": 6249,
+    "sha256": "f6447c7400caed6d3314aefb66ab416a33a68eda09b85d73f3ac4134684c4b17"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-stderr.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/process.json": {
+    "bytes": 95804,
+    "sha256": "273004a1d62c41cdf02bb6b996c8c015759842d23d3f366bfee4b54030108270"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stderr.log": {
+    "bytes": 283,
+    "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stdout.log": {
+    "bytes": 42826,
+    "sha256": "3e4f2b4491ae387626b96d98bc64ff12ddda0c6a5fd1d668b6a2d321c438e605"
+  },
+  "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa-validation.json": {
+    "bytes": 111308,
+    "sha256": "00538e1a00c1f080bd98b17e8aad3e59fe57035a76f3c9d123935a2d4543d8fb"
+  },
+  "target/split128-model-v1/timing-audit.json": {
+    "bytes": 60129,
+    "sha256": "70c5be96e5560e723e3c8b53f50ef0a6591d2b3c94634ee19eb2487f06e4d7b0"
+  },
+  "target/split128-model-v1/timing-launch.json": {
+    "bytes": 5788,
+    "sha256": "5f09bae256c2f91c8278e834bfaafb59401fd7d9b2589781292efb688b6f81a7"
+  },
+  "target/split128-model-v1/timing-reservation.json": {
+    "bytes": 461,
+    "sha256": "bc849ea116b7cbfe4659d50012e37c6dc0096de17c0a1d6defaab43f0b1dabbc"
+  },
+  "target/split128-model-v1/timing.log": {
+    "bytes": 9455,
+    "sha256": "0fadb69e25a0f2499a9193f71088a66086a72b0efa5f4c83dd87f7f13592172f"
+  },
+  "target/split128-publication-v1/prepare-evidence.py": {
+    "bytes": 5737,
+    "sha256": "5b8757e054f41ba30f02603380ff6244b86fb0e80247fd3e46c295703d37f62b"
+  }
+}

@@ -1,0 +1,5199 @@
+{
+  "kind": "steady_update_nsight_diagnostic",
+  "profiled_steps": 5,
+  "warmup_updates": 5,
+  "qualification_updates": 1,
+  "capture": "cudaProfilerApi around measured updates only; node-level CUDA graph tracing; CPU sampling/context-switch tracing disabled",
+  "scope": "Profiler activity totals are diagnostic, may overlap and incur tracing overhead; not unprofiled wall-time benchmark results. Grouping uses kernel name prefix; not hardware utilization or roofline analysis.",
+  "cases": {
+    "w2048_s128": {
+      "tables": {
+        "cuda_gpu_kern_sum": [
+          {
+            "Time (%)": "20.2",
+            "Total Time (ns)": "36436620",
+            "Instances": "60",
+            "Avg (ns)": "607277.0",
+            "Med (ns)": "599477.5",
+            "Min (ns)": "526853",
+            "Max (ns)": "834376",
+            "StdDev (ns)": "53885.1",
+            "Name": "resident_adam_1"
+          },
+          {
+            "Time (%)": "14.7",
+            "Total Time (ns)": "26592015",
+            "Instances": "465",
+            "Avg (ns)": "57187.1",
+            "Med (ns)": "2368.0",
+            "Min (ns)": "927",
+            "Max (ns)": "564326",
+            "StdDev (ns)": "112345.0",
+            "Name": "materialize_view_0"
+          },
+          {
+            "Time (%)": "11.9",
+            "Total Time (ns)": "21452567",
+            "Instances": "180",
+            "Avg (ns)": "119180.9",
+            "Med (ns)": "99489.0",
+            "Min (ns)": "12864",
+            "Max (ns)": "461349",
+            "StdDev (ns)": "65115.6",
+            "Name": "matmul_region_0_5"
+          },
+          {
+            "Time (%)": "7.6",
+            "Total Time (ns)": "13755018",
+            "Instances": "40",
+            "Avg (ns)": "343875.5",
+            "Med (ns)": "326227.5",
+            "Min (ns)": "322531",
+            "Max (ns)": "587206",
+            "StdDev (ns)": "62222.0",
+            "Name": "resident_accumulate_9"
+          },
+          {
+            "Time (%)": "7.6",
+            "Total Time (ns)": "13680425",
+            "Instances": "20",
+            "Avg (ns)": "684021.3",
+            "Med (ns)": "672359.0",
+            "Min (ns)": "661991",
+            "Max (ns)": "905801",
+            "StdDev (ns)": "52480.1",
+            "Name": "resident_adam_5"
+          },
+          {
+            "Time (%)": "5.8",
+            "Total Time (ns)": "10413128",
+            "Instances": "105",
+            "Avg (ns)": "99172.6",
+            "Med (ns)": "138850.0",
+            "Min (ns)": "15072",
+            "Max (ns)": "493925",
+            "StdDev (ns)": "75153.8",
+            "Name": "matmul_region_0_7"
+          },
+          {
+            "Time (%)": "4.0",
+            "Total Time (ns)": "7202793",
+            "Instances": "105",
+            "Avg (ns)": "68598.0",
+            "Med (ns)": "7104.0",
+            "Min (ns)": "3552",
+            "Max (ns)": "1326574",
+            "StdDev (ns)": "282209.6",
+            "Name": "reduction_region_0_3"
+          },
+          {
+            "Time (%)": "3.7",
+            "Total Time (ns)": "6728418",
+            "Instances": "20",
+            "Avg (ns)": "336420.9",
+            "Med (ns)": "336499.0",
+            "Min (ns)": "334115",
+            "Max (ns)": "339331",
+            "StdDev (ns)": "1291.8",
+            "Name": "resident_accumulate_5"
+          },
+          {
+            "Time (%)": "3.7",
+            "Total Time (ns)": "6602149",
+            "Instances": "20",
+            "Avg (ns)": "330107.5",
+            "Med (ns)": "330339.5",
+            "Min (ns)": "327459",
+            "Max (ns)": "332547",
+            "StdDev (ns)": "1695.4",
+            "Name": "resident_accumulate_13"
+          },
+          {
+            "Time (%)": "3.6",
+            "Total Time (ns)": "6567938",
+            "Instances": "5",
+            "Avg (ns)": "1313587.6",
+            "Med (ns)": "1314957.0",
+            "Min (ns)": "1308045",
+            "Max (ns)": "1316045",
+            "StdDev (ns)": "3275.2",
+            "Name": "reduction_region_0_4"
+          },
+          {
+            "Time (%)": "2.9",
+            "Total Time (ns)": "5314770",
+            "Instances": "60",
+            "Avg (ns)": "88579.5",
+            "Med (ns)": "76624.0",
+            "Min (ns)": "11296",
+            "Max (ns)": "278723",
+            "StdDev (ns)": "69386.8",
+            "Name": "matmul_region_0_8"
+          },
+          {
+            "Time (%)": "2.5",
+            "Total Time (ns)": "4515917",
+            "Instances": "20",
+            "Avg (ns)": "225795.9",
+            "Med (ns)": "225762.0",
+            "Min (ns)": "220674",
+            "Max (ns)": "231298",
+            "StdDev (ns)": "2972.3",
+            "Name": "resident_adam_3"
+          },
+          {
+            "Time (%)": "1.2",
+            "Total Time (ns)": "2234872",
+            "Instances": "5",
+            "Avg (ns)": "446974.4",
+            "Med (ns)": "449157.0",
+            "Min (ns)": "440421",
+            "Max (ns)": "453765",
+            "StdDev (ns)": "5596.3",
+            "Name": "resident_adam_7"
+          },
+          {
+            "Time (%)": "1.2",
+            "Total Time (ns)": "2125012",
+            "Instances": "40",
+            "Avg (ns)": "53125.3",
+            "Med (ns)": "52976.5",
+            "Min (ns)": "15456",
+            "Max (ns)": "91297",
+            "StdDev (ns)": "38007.4",
+            "Name": "matmul_region_0_6"
+          },
+          {
+            "Time (%)": "1.1",
+            "Total Time (ns)": "1900530",
+            "Instances": "20",
+            "Avg (ns)": "95026.5",
+            "Med (ns)": "94833.0",
+            "Min (ns)": "91553",
+            "Max (ns)": "98561",
+            "StdDev (ns)": "2393.4",
+            "Name": "resident_accumulate_11"
+          },
+          {
+            "Time (%)": "0.9",
+            "Total Time (ns)": "1610318",
+            "Instances": "20",
+            "Avg (ns)": "80515.9",
+            "Med (ns)": "80449.0",
+            "Min (ns)": "80129",
+            "Max (ns)": "80993",
+            "StdDev (ns)": "299.3",
+            "Name": "matmul_region_0_10"
+          },
+          {
+            "Time (%)": "0.5",
+            "Total Time (ns)": "954251",
+            "Instances": "20",
+            "Avg (ns)": "47712.6",
+            "Med (ns)": "47696.0",
+            "Min (ns)": "46689",
+            "Max (ns)": "51425",
+            "StdDev (ns)": "994.9",
+            "Name": "pointwise_region_0_33"
+          },
+          {
+            "Time (%)": "0.5",
+            "Total Time (ns)": "841698",
+            "Instances": "5",
+            "Avg (ns)": "168339.6",
+            "Med (ns)": "168640.0",
+            "Min (ns)": "167745",
+            "Max (ns)": "168832",
+            "StdDev (ns)": "506.6",
+            "Name": "pointwise_region_4_66"
+          },
+          {
+            "Time (%)": "0.5",
+            "Total Time (ns)": "841320",
+            "Instances": "10",
+            "Avg (ns)": "84132.0",
+            "Med (ns)": "84097.0",
+            "Min (ns)": "67072",
+            "Max (ns)": "101025",
+            "StdDev (ns)": "17585.1",
+            "Name": "matmul_region_0_4"
+          },
+          {
+            "Time (%)": "0.4",
+            "Total Time (ns)": "779881",
+            "Instances": "5",
+            "Avg (ns)": "155976.2",
+            "Med (ns)": "155746.0",
+            "Min (ns)": "155266",
+            "Max (ns)": "156833",
+            "StdDev (ns)": "635.4",
+            "Name": "resident_accumulate_59"
+          },
+          {
+            "Time (%)": "0.4",
+            "Total Time (ns)": "675591",
+            "Instances": "5",
+            "Avg (ns)": "135118.2",
+            "Med (ns)": "101409.0",
+            "Min (ns)": "100705",
+            "Max (ns)": "270211",
+            "StdDev (ns)": "75521.5",
+            "Name": "reduction_region_1_4"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "549146",
+            "Instances": "60",
+            "Avg (ns)": "9152.4",
+            "Med (ns)": "7231.5",
+            "Min (ns)": "7104",
+            "Max (ns)": "13279",
+            "StdDev (ns)": "2802.7",
+            "Name": "broadcast_axis_3"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "522820",
+            "Instances": "40",
+            "Avg (ns)": "13070.5",
+            "Med (ns)": "13071.5",
+            "Min (ns)": "12960",
+            "Max (ns)": "13185",
+            "StdDev (ns)": "54.8",
+            "Name": "reindex_5"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "506182",
+            "Instances": "5",
+            "Avg (ns)": "101236.4",
+            "Med (ns)": "101313.0",
+            "Min (ns)": "100865",
+            "Max (ns)": "101409",
+            "StdDev (ns)": "220.2",
+            "Name": "reduction_region_1_5"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "406880",
+            "Instances": "5",
+            "Avg (ns)": "81376.0",
+            "Med (ns)": "81248.0",
+            "Min (ns)": "81120",
+            "Max (ns)": "81696",
+            "StdDev (ns)": "243.7",
+            "Name": "indexed_cross_entropy_55"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "372929",
+            "Instances": "125",
+            "Avg (ns)": "2983.4",
+            "Med (ns)": "1984.0",
+            "Min (ns)": "1920",
+            "Max (ns)": "4385",
+            "StdDev (ns)": "1089.0",
+            "Name": "linear_cast_0"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "310756",
+            "Instances": "5",
+            "Avg (ns)": "62151.2",
+            "Med (ns)": "62145.0",
+            "Min (ns)": "61921",
+            "Max (ns)": "62305",
+            "StdDev (ns)": "152.5",
+            "Name": "indexed_cross_entropy_backward_3"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "275907",
+            "Instances": "20",
+            "Avg (ns)": "13795.4",
+            "Med (ns)": "13792.0",
+            "Min (ns)": "13536",
+            "Max (ns)": "14176",
+            "StdDev (ns)": "162.1",
+            "Name": "matmul_region_0_9"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "275610",
+            "Instances": "40",
+            "Avg (ns)": "6890.3",
+            "Med (ns)": "6896.0",
+            "Min (ns)": "6816",
+            "Max (ns)": "6976",
+            "StdDev (ns)": "52.3",
+            "Name": "concat_7"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "273311",
+            "Instances": "125",
+            "Avg (ns)": "2186.5",
+            "Med (ns)": "1632.0",
+            "Min (ns)": "1600",
+            "Max (ns)": "4416",
+            "StdDev (ns)": "945.4",
+            "Name": "mul_13"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "270945",
+            "Instances": "40",
+            "Avg (ns)": "6773.6",
+            "Med (ns)": "6735.5",
+            "Min (ns)": "6305",
+            "Max (ns)": "7392",
+            "StdDev (ns)": "250.8",
+            "Name": "pointwise_region_0_4"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "261763",
+            "Instances": "20",
+            "Avg (ns)": "13088.2",
+            "Med (ns)": "13088.0",
+            "Min (ns)": "12992",
+            "Max (ns)": "13153",
+            "StdDev (ns)": "41.7",
+            "Name": "reindex_1"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "261313",
+            "Instances": "20",
+            "Avg (ns)": "13065.7",
+            "Med (ns)": "13056.0",
+            "Min (ns)": "12992",
+            "Max (ns)": "13120",
+            "StdDev (ns)": "36.0",
+            "Name": "reindex_6"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "261124",
+            "Instances": "20",
+            "Avg (ns)": "13056.2",
+            "Med (ns)": "13040.0",
+            "Min (ns)": "12896",
+            "Max (ns)": "13184",
+            "StdDev (ns)": "79.1",
+            "Name": "broadcast_axis_6"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "253025",
+            "Instances": "20",
+            "Avg (ns)": "12651.3",
+            "Med (ns)": "12671.5",
+            "Min (ns)": "12448",
+            "Max (ns)": "12960",
+            "StdDev (ns)": "108.9",
+            "Name": "pointwise_region_0_52"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "225975",
+            "Instances": "100",
+            "Avg (ns)": "2259.8",
+            "Med (ns)": "1664.0",
+            "Min (ns)": "1600",
+            "Max (ns)": "4288",
+            "StdDev (ns)": "841.9",
+            "Name": "mul_16"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "224190",
+            "Instances": "20",
+            "Avg (ns)": "11209.5",
+            "Med (ns)": "11168.0",
+            "Min (ns)": "10592",
+            "Max (ns)": "11840",
+            "StdDev (ns)": "413.0",
+            "Name": "reduction_region_0_21"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "151008",
+            "Instances": "20",
+            "Avg (ns)": "7550.4",
+            "Med (ns)": "7552.0",
+            "Min (ns)": "7488",
+            "Max (ns)": "7584",
+            "StdDev (ns)": "24.2",
+            "Name": "concat_12"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "141599",
+            "Instances": "20",
+            "Avg (ns)": "7080.0",
+            "Med (ns)": "6976.0",
+            "Min (ns)": "6912",
+            "Max (ns)": "7647",
+            "StdDev (ns)": "257.5",
+            "Name": "reduction_region_0_27"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "140835",
+            "Instances": "20",
+            "Avg (ns)": "7041.8",
+            "Med (ns)": "6976.5",
+            "Min (ns)": "6912",
+            "Max (ns)": "7553",
+            "StdDev (ns)": "177.3",
+            "Name": "reduction_region_1_28"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "130880",
+            "Instances": "20",
+            "Avg (ns)": "6544.0",
+            "Med (ns)": "6400.0",
+            "Min (ns)": "6335",
+            "Max (ns)": "9088",
+            "StdDev (ns)": "602.8",
+            "Name": "pointwise_region_0_5"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "130080",
+            "Instances": "40",
+            "Avg (ns)": "3252.0",
+            "Med (ns)": "3263.5",
+            "Min (ns)": "3232",
+            "Max (ns)": "3296",
+            "StdDev (ns)": "21.2",
+            "Name": "add_2"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "125826",
+            "Instances": "90",
+            "Avg (ns)": "1398.1",
+            "Med (ns)": "1440.0",
+            "Min (ns)": "1088",
+            "Max (ns)": "1728",
+            "StdDev (ns)": "167.0",
+            "Name": "resident_accumulate_0"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "118175",
+            "Instances": "20",
+            "Avg (ns)": "5908.8",
+            "Med (ns)": "5919.5",
+            "Min (ns)": "5856",
+            "Max (ns)": "5984",
+            "StdDev (ns)": "34.8",
+            "Name": "reduction_region_3_61"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "97342",
+            "Instances": "60",
+            "Avg (ns)": "1622.4",
+            "Med (ns)": "1600.0",
+            "Min (ns)": "1567",
+            "Max (ns)": "1952",
+            "StdDev (ns)": "71.0",
+            "Name": "narrow_2"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "97311",
+            "Instances": "40",
+            "Avg (ns)": "2432.8",
+            "Med (ns)": "2432.0",
+            "Min (ns)": "2304",
+            "Max (ns)": "2656",
+            "StdDev (ns)": "78.5",
+            "Name": "reduction_region_1_59"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "96512",
+            "Instances": "40",
+            "Avg (ns)": "2412.8",
+            "Med (ns)": "2432.0",
+            "Min (ns)": "2304",
+            "Max (ns)": "2561",
+            "StdDev (ns)": "62.3",
+            "Name": "reduction_region_0_41"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "95554",
+            "Instances": "40",
+            "Avg (ns)": "2388.9",
+            "Med (ns)": "2384.0",
+            "Min (ns)": "2305",
+            "Max (ns)": "2465",
+            "StdDev (ns)": "49.4",
+            "Name": "reduction_region_0_42"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "91808",
+            "Instances": "55",
+            "Avg (ns)": "1669.2",
+            "Med (ns)": "1632.0",
+            "Min (ns)": "1600",
+            "Max (ns)": "2144",
+            "StdDev (ns)": "100.8",
+            "Name": "add_33"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "89120",
+            "Instances": "15",
+            "Avg (ns)": "5941.3",
+            "Med (ns)": "5920.0",
+            "Min (ns)": "5856",
+            "Max (ns)": "6047",
+            "StdDev (ns)": "50.8",
+            "Name": "reduction_region_2_56"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "87516",
+            "Instances": "20",
+            "Avg (ns)": "4375.8",
+            "Med (ns)": "4384.0",
+            "Min (ns)": "4288",
+            "Max (ns)": "4448",
+            "StdDev (ns)": "34.2",
+            "Name": "reduction_region_0_58"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "87073",
+            "Instances": "40",
+            "Avg (ns)": "2176.8",
+            "Med (ns)": "2016.0",
+            "Min (ns)": "1952",
+            "Max (ns)": "2752",
+            "StdDev (ns)": "252.7",
+            "Name": "resident_adam_2"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "84218",
+            "Instances": "60",
+            "Avg (ns)": "1403.6",
+            "Med (ns)": "1408.0",
+            "Min (ns)": "1344",
+            "Max (ns)": "1504",
+            "StdDev (ns)": "33.5",
+            "Name": "broadcast_axis_2"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "78497",
+            "Instances": "40",
+            "Avg (ns)": "1962.4",
+            "Med (ns)": "2000.0",
+            "Min (ns)": "1696",
+            "Max (ns)": "2336",
+            "StdDev (ns)": "199.0",
+            "Name": "resident_accumulate_8"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "78242",
+            "Instances": "20",
+            "Avg (ns)": "3912.1",
+            "Med (ns)": "3920.0",
+            "Min (ns)": "3616",
+            "Max (ns)": "4192",
+            "StdDev (ns)": "178.6",
+            "Name": "div_25"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "77054",
+            "Instances": "25",
+            "Avg (ns)": "3082.2",
+            "Med (ns)": "3040.0",
+            "Min (ns)": "2976",
+            "Max (ns)": "3264",
+            "StdDev (ns)": "80.9",
+            "Name": "pointwise_region_0_39"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "76352",
+            "Instances": "5",
+            "Avg (ns)": "15270.4",
+            "Med (ns)": "15072.0",
+            "Min (ns)": "14432",
+            "Max (ns)": "16416",
+            "StdDev (ns)": "842.5",
+            "Name": "resident_adam_6"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "75072",
+            "Instances": "25",
+            "Avg (ns)": "3002.9",
+            "Med (ns)": "2848.0",
+            "Min (ns)": "1664",
+            "Max (ns)": "4447",
+            "StdDev (ns)": "893.1",
+            "Name": "div_22"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "71839",
+            "Instances": "30",
+            "Avg (ns)": "2394.6",
+            "Med (ns)": "2400.0",
+            "Min (ns)": "2304",
+            "Max (ns)": "2496",
+            "StdDev (ns)": "57.0",
+            "Name": "reduction_region_0_54"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "71163",
+            "Instances": "20",
+            "Avg (ns)": "3558.2",
+            "Med (ns)": "3599.5",
+            "Min (ns)": "3200",
+            "Max (ns)": "3904",
+            "StdDev (ns)": "198.4",
+            "Name": "pointwise_region_0_20"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "69462",
+            "Instances": "40",
+            "Avg (ns)": "1736.6",
+            "Med (ns)": "1663.5",
+            "Min (ns)": "1600",
+            "Max (ns)": "2016",
+            "StdDev (ns)": "136.2",
+            "Name": "add_36"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "65408",
+            "Instances": "15",
+            "Avg (ns)": "4360.5",
+            "Med (ns)": "4352.0",
+            "Min (ns)": "4320",
+            "Max (ns)": "4417",
+            "StdDev (ns)": "25.7",
+            "Name": "reduction_region_3_57"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "63328",
+            "Instances": "40",
+            "Avg (ns)": "1583.2",
+            "Med (ns)": "1568.0",
+            "Min (ns)": "1535",
+            "Max (ns)": "1632",
+            "StdDev (ns)": "19.2",
+            "Name": "mul_7"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "56606",
+            "Instances": "20",
+            "Avg (ns)": "2830.3",
+            "Med (ns)": "2784.0",
+            "Min (ns)": "2687",
+            "Max (ns)": "3040",
+            "StdDev (ns)": "115.9",
+            "Name": "pointwise_region_1_23"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "52640",
+            "Instances": "20",
+            "Avg (ns)": "2632.0",
+            "Med (ns)": "2688.0",
+            "Min (ns)": "2496",
+            "Max (ns)": "2784",
+            "StdDev (ns)": "104.2",
+            "Name": "pointwise_region_0_53"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "51169",
+            "Instances": "20",
+            "Avg (ns)": "2558.5",
+            "Med (ns)": "2560.0",
+            "Min (ns)": "2528",
+            "Max (ns)": "2593",
+            "StdDev (ns)": "16.4",
+            "Name": "pointwise_region_3_25"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "49822",
+            "Instances": "20",
+            "Avg (ns)": "2491.1",
+            "Med (ns)": "2496.0",
+            "Min (ns)": "2464",
+            "Max (ns)": "2497",
+            "StdDev (ns)": "11.7",
+            "Name": "pointwise_region_2_24"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "49406",
+            "Instances": "20",
+            "Avg (ns)": "2470.3",
+            "Med (ns)": "2464.0",
+            "Min (ns)": "2432",
+            "Max (ns)": "2528",
+            "StdDev (ns)": "19.7",
+            "Name": "pointwise_region_0_22"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "49375",
+            "Instances": "40",
+            "Avg (ns)": "1234.4",
+            "Med (ns)": "1120.0",
+            "Min (ns)": "1056",
+            "Max (ns)": "1632",
+            "StdDev (ns)": "194.2",
+            "Name": "resident_accumulate_4"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "49024",
+            "Instances": "20",
+            "Avg (ns)": "2451.2",
+            "Med (ns)": "2464.0",
+            "Min (ns)": "2431",
+            "Max (ns)": "2465",
+            "StdDev (ns)": "16.2",
+            "Name": "exp_13"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "47293",
+            "Instances": "20",
+            "Avg (ns)": "2364.7",
+            "Med (ns)": "2368.0",
+            "Min (ns)": "2336",
+            "Max (ns)": "2400",
+            "StdDev (ns)": "17.5",
+            "Name": "pointwise_region_4_26"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "46079",
+            "Instances": "15",
+            "Avg (ns)": "3071.9",
+            "Med (ns)": "3104.0",
+            "Min (ns)": "2943",
+            "Max (ns)": "3168",
+            "StdDev (ns)": "70.7",
+            "Name": "pointwise_region_0_38"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "44800",
+            "Instances": "15",
+            "Avg (ns)": "2986.7",
+            "Med (ns)": "2945.0",
+            "Min (ns)": "2496",
+            "Max (ns)": "3552",
+            "StdDev (ns)": "356.8",
+            "Name": "pointwise_region_0_50"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "44545",
+            "Instances": "10",
+            "Avg (ns)": "4454.5",
+            "Med (ns)": "4416.0",
+            "Min (ns)": "4384",
+            "Max (ns)": "4608",
+            "StdDev (ns)": "82.3",
+            "Name": "embedding_backward_47"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "43362",
+            "Instances": "15",
+            "Avg (ns)": "2890.8",
+            "Med (ns)": "2881.0",
+            "Min (ns)": "2688",
+            "Max (ns)": "3072",
+            "StdDev (ns)": "115.8",
+            "Name": "pointwise_region_1_39"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "42304",
+            "Instances": "25",
+            "Avg (ns)": "1692.2",
+            "Med (ns)": "1664.0",
+            "Min (ns)": "1632",
+            "Max (ns)": "2496",
+            "StdDev (ns)": "169.2",
+            "Name": "pointwise_region_1_40"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "42272",
+            "Instances": "20",
+            "Avg (ns)": "2113.6",
+            "Med (ns)": "2048.0",
+            "Min (ns)": "1984",
+            "Max (ns)": "2592",
+            "StdDev (ns)": "153.8",
+            "Name": "resident_adam_4"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "42209",
+            "Instances": "20",
+            "Avg (ns)": "2110.5",
+            "Med (ns)": "2112.0",
+            "Min (ns)": "2048",
+            "Max (ns)": "2240",
+            "StdDev (ns)": "47.0",
+            "Name": "pointwise_region_4_57"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "38592",
+            "Instances": "25",
+            "Avg (ns)": "1543.7",
+            "Med (ns)": "1536.0",
+            "Min (ns)": "1535",
+            "Max (ns)": "1568",
+            "StdDev (ns)": "14.0",
+            "Name": "neg_35"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "37758",
+            "Instances": "20",
+            "Avg (ns)": "1887.9",
+            "Med (ns)": "1952.0",
+            "Min (ns)": "1663",
+            "Max (ns)": "2176",
+            "StdDev (ns)": "171.6",
+            "Name": "pointwise_region_2_55"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "36193",
+            "Instances": "20",
+            "Avg (ns)": "1809.7",
+            "Med (ns)": "1760.5",
+            "Min (ns)": "1696",
+            "Max (ns)": "2016",
+            "StdDev (ns)": "96.0",
+            "Name": "resident_accumulate_12"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "35839",
+            "Instances": "20",
+            "Avg (ns)": "1792.0",
+            "Med (ns)": "1792.0",
+            "Min (ns)": "1759",
+            "Max (ns)": "1856",
+            "StdDev (ns)": "25.5",
+            "Name": "pointwise_region_1_54"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "35168",
+            "Instances": "5",
+            "Avg (ns)": "7033.6",
+            "Med (ns)": "7008.0",
+            "Min (ns)": "6976",
+            "Max (ns)": "7136",
+            "StdDev (ns)": "61.6",
+            "Name": "resident_accumulate_58"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "33183",
+            "Instances": "20",
+            "Avg (ns)": "1659.2",
+            "Med (ns)": "1664.0",
+            "Min (ns)": "1632",
+            "Max (ns)": "1696",
+            "StdDev (ns)": "15.6",
+            "Name": "pointwise_region_3_56"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "32446",
+            "Instances": "20",
+            "Avg (ns)": "1622.3",
+            "Med (ns)": "1631.5",
+            "Min (ns)": "1599",
+            "Max (ns)": "1664",
+            "StdDev (ns)": "21.0",
+            "Name": "pointwise_region_2_41"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "31074",
+            "Instances": "20",
+            "Avg (ns)": "1553.7",
+            "Med (ns)": "1568.0",
+            "Min (ns)": "1536",
+            "Max (ns)": "1569",
+            "StdDev (ns)": "16.3",
+            "Name": "neg_38"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "30110",
+            "Instances": "5",
+            "Avg (ns)": "6022.0",
+            "Med (ns)": "6015.0",
+            "Min (ns)": "5984",
+            "Max (ns)": "6079",
+            "StdDev (ns)": "41.4",
+            "Name": "reduction_region_2_54"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "29600",
+            "Instances": "5",
+            "Avg (ns)": "5920.0",
+            "Med (ns)": "5920.0",
+            "Min (ns)": "5888",
+            "Max (ns)": "5952",
+            "StdDev (ns)": "32.0",
+            "Name": "reduction_region_3_70"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "27936",
+            "Instances": "20",
+            "Avg (ns)": "1396.8",
+            "Med (ns)": "1408.0",
+            "Min (ns)": "1375",
+            "Max (ns)": "1472",
+            "StdDev (ns)": "23.8",
+            "Name": "broadcast_axis_5"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "27359",
+            "Instances": "15",
+            "Avg (ns)": "1823.9",
+            "Med (ns)": "1856.0",
+            "Min (ns)": "1664",
+            "Max (ns)": "1983",
+            "StdDev (ns)": "82.8",
+            "Name": "pointwise_region_3_53"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "26879",
+            "Instances": "15",
+            "Avg (ns)": "1791.9",
+            "Med (ns)": "1792.0",
+            "Min (ns)": "1760",
+            "Max (ns)": "1824",
+            "StdDev (ns)": "17.0",
+            "Name": "pointwise_region_1_51"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "25983",
+            "Instances": "15",
+            "Avg (ns)": "1732.2",
+            "Med (ns)": "1696.0",
+            "Min (ns)": "1632",
+            "Max (ns)": "1951",
+            "StdDev (ns)": "86.9",
+            "Name": "pointwise_region_2_52"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "24477",
+            "Instances": "15",
+            "Avg (ns)": "1631.8",
+            "Med (ns)": "1632.0",
+            "Min (ns)": "1600",
+            "Max (ns)": "1696",
+            "StdDev (ns)": "29.6",
+            "Name": "pointwise_region_2_40"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "24256",
+            "Instances": "10",
+            "Avg (ns)": "2425.6",
+            "Med (ns)": "2448.0",
+            "Min (ns)": "2336",
+            "Max (ns)": "2528",
+            "StdDev (ns)": "68.8",
+            "Name": "reduction_region_0_40"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "24001",
+            "Instances": "10",
+            "Avg (ns)": "2400.1",
+            "Med (ns)": "2400.0",
+            "Min (ns)": "2336",
+            "Max (ns)": "2464",
+            "StdDev (ns)": "56.4",
+            "Name": "reduction_region_1_68"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "23807",
+            "Instances": "10",
+            "Avg (ns)": "2380.7",
+            "Med (ns)": "2368.0",
+            "Min (ns)": "2336",
+            "Max (ns)": "2432",
+            "StdDev (ns)": "48.1",
+            "Name": "reduction_region_0_52"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "21887",
+            "Instances": "5",
+            "Avg (ns)": "4377.4",
+            "Med (ns)": "4352.0",
+            "Min (ns)": "4351",
+            "Max (ns)": "4448",
+            "StdDev (ns)": "41.9",
+            "Name": "reduction_region_4_71"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "21536",
+            "Instances": "5",
+            "Avg (ns)": "4307.2",
+            "Med (ns)": "4288.0",
+            "Min (ns)": "4288",
+            "Max (ns)": "4352",
+            "StdDev (ns)": "28.6",
+            "Name": "reduction_region_3_55"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "18973",
+            "Instances": "5",
+            "Avg (ns)": "3794.6",
+            "Med (ns)": "3807.0",
+            "Min (ns)": "3712",
+            "Max (ns)": "3840",
+            "StdDev (ns)": "53.4",
+            "Name": "embedding_16"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "16609",
+            "Instances": "10",
+            "Avg (ns)": "1660.9",
+            "Med (ns)": "1664.0",
+            "Min (ns)": "1632",
+            "Max (ns)": "1696",
+            "StdDev (ns)": "23.6",
+            "Name": "pointwise_region_2_50"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "15551",
+            "Instances": "5",
+            "Avg (ns)": "3110.2",
+            "Med (ns)": "3104.0",
+            "Min (ns)": "3040",
+            "Max (ns)": "3168",
+            "StdDev (ns)": "57.0",
+            "Name": "embedding_2"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "15360",
+            "Instances": "5",
+            "Avg (ns)": "3072.0",
+            "Med (ns)": "3072.0",
+            "Min (ns)": "3008",
+            "Max (ns)": "3136",
+            "StdDev (ns)": "50.6",
+            "Name": "pointwise_region_0_37"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "14848",
+            "Instances": "5",
+            "Avg (ns)": "2969.6",
+            "Med (ns)": "2816.0",
+            "Min (ns)": "2624",
+            "Max (ns)": "3584",
+            "StdDev (ns)": "380.2",
+            "Name": "resident_adam_batch_0"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "14528",
+            "Instances": "5",
+            "Avg (ns)": "2905.6",
+            "Med (ns)": "2912.0",
+            "Min (ns)": "2752",
+            "Max (ns)": "2976",
+            "StdDev (ns)": "91.6",
+            "Name": "pointwise_region_1_38"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "14273",
+            "Instances": "5",
+            "Avg (ns)": "2854.6",
+            "Med (ns)": "2880.0",
+            "Min (ns)": "2688",
+            "Max (ns)": "2913",
+            "StdDev (ns)": "94.5",
+            "Name": "pointwise_region_0_62"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "12575",
+            "Instances": "5",
+            "Avg (ns)": "2515.0",
+            "Med (ns)": "2528.0",
+            "Min (ns)": "2240",
+            "Max (ns)": "2911",
+            "StdDev (ns)": "252.2",
+            "Name": "resident_adam_batch_1"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "11712",
+            "Instances": "5",
+            "Avg (ns)": "2342.4",
+            "Med (ns)": "2304.0",
+            "Min (ns)": "2272",
+            "Max (ns)": "2528",
+            "StdDev (ns)": "107.1",
+            "Name": "resident_adam_batch_2"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "9280",
+            "Instances": "5",
+            "Avg (ns)": "1856.0",
+            "Med (ns)": "1856.0",
+            "Min (ns)": "1825",
+            "Max (ns)": "1887",
+            "StdDev (ns)": "21.9",
+            "Name": "pointwise_region_1_63"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "8703",
+            "Instances": "5",
+            "Avg (ns)": "1740.6",
+            "Med (ns)": "2112.0",
+            "Min (ns)": "1151",
+            "Max (ns)": "2144",
+            "StdDev (ns)": "537.9",
+            "Name": "reduction_region_0_67"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "8640",
+            "Instances": "5",
+            "Avg (ns)": "1728.0",
+            "Med (ns)": "1728.0",
+            "Min (ns)": "1728",
+            "Max (ns)": "1728",
+            "StdDev (ns)": "0.0",
+            "Name": "pointwise_region_0_48"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "8576",
+            "Instances": "5",
+            "Avg (ns)": "1715.2",
+            "Med (ns)": "1728.0",
+            "Min (ns)": "1664",
+            "Max (ns)": "1760",
+            "StdDev (ns)": "36.5",
+            "Name": "pointwise_region_3_65"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "8321",
+            "Instances": "5",
+            "Avg (ns)": "1664.2",
+            "Med (ns)": "1664.0",
+            "Min (ns)": "1664",
+            "Max (ns)": "1665",
+            "StdDev (ns)": "0.4",
+            "Name": "pointwise_region_2_64"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "8320",
+            "Instances": "5",
+            "Avg (ns)": "1664.0",
+            "Med (ns)": "1664.0",
+            "Min (ns)": "1664",
+            "Max (ns)": "1664",
+            "StdDev (ns)": "0.0",
+            "Name": "add_4"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "8160",
+            "Instances": "5",
+            "Avg (ns)": "1632.0",
+            "Med (ns)": "1632.0",
+            "Min (ns)": "1632",
+            "Max (ns)": "1632",
+            "StdDev (ns)": "0.0",
+            "Name": "pointwise_region_2_39"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "7873",
+            "Instances": "5",
+            "Avg (ns)": "1574.6",
+            "Med (ns)": "1568.0",
+            "Min (ns)": "1568",
+            "Max (ns)": "1600",
+            "StdDev (ns)": "14.2",
+            "Name": "pointwise_region_1_49"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "7872",
+            "Instances": "5",
+            "Avg (ns)": "1574.4",
+            "Med (ns)": "1568.0",
+            "Min (ns)": "1568",
+            "Max (ns)": "1600",
+            "StdDev (ns)": "14.3",
+            "Name": "mul_8"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "7297",
+            "Instances": "5",
+            "Avg (ns)": "1459.4",
+            "Med (ns)": "1376.0",
+            "Min (ns)": "1376",
+            "Max (ns)": "1601",
+            "StdDev (ns)": "114.8",
+            "Name": "resident_adam_batch_3"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "5472",
+            "Instances": "5",
+            "Avg (ns)": "1094.4",
+            "Med (ns)": "1088.0",
+            "Min (ns)": "1056",
+            "Max (ns)": "1152",
+            "StdDev (ns)": "41.7",
+            "Name": "pointwise_region_0_177"
+          }
+        ],
+        "cuda_gpu_mem_time_sum": [
+          {
+            "Time (%)": "69.8",
+            "Total Time (ns)": "14320151",
+            "Count": "300",
+            "Avg (ns)": "47733.8",
+            "Med (ns)": "1792.0",
+            "Min (ns)": "960",
+            "Max (ns)": "413861",
+            "StdDev (ns)": "69204.9",
+            "Operation": "[CUDA memcpy Device-to-Device]"
+          },
+          {
+            "Time (%)": "30.1",
+            "Total Time (ns)": "6163324",
+            "Count": "15",
+            "Avg (ns)": "410888.3",
+            "Med (ns)": "27072.0",
+            "Min (ns)": "1088",
+            "Max (ns)": "1219917",
+            "StdDev (ns)": "580966.9",
+            "Operation": "[CUDA memset]"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "15902",
+            "Count": "15",
+            "Avg (ns)": "1060.1",
+            "Med (ns)": "1056.0",
+            "Min (ns)": "1023",
+            "Max (ns)": "1184",
+            "StdDev (ns)": "41.7",
+            "Operation": "[CUDA memcpy Device-to-Host]"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "6177",
+            "Count": "20",
+            "Avg (ns)": "308.9",
+            "Med (ns)": "288.0",
+            "Min (ns)": "256",
+            "Max (ns)": "800",
+            "StdDev (ns)": "116.7",
+            "Operation": "[CUDA memcpy Host-to-Device]"
+          }
+        ],
+        "cuda_api_sum": [
+          {
+            "Time (%)": "92.3",
+            "Total Time (ns)": "185698959",
+            "Num Calls": "15",
+            "Avg (ns)": "12379930.6",
+            "Med (ns)": "12632982.0",
+            "Min (ns)": "1410942",
+            "Max (ns)": "23410149",
+            "StdDev (ns)": "9100718.4",
+            "Name": "cuMemcpyDtoHAsync_v2"
+          },
+          {
+            "Time (%)": "3.0",
+            "Total Time (ns)": "6019027",
+            "Num Calls": "5",
+            "Avg (ns)": "1203805.4",
+            "Med (ns)": "1092188.0",
+            "Min (ns)": "1015864",
+            "Max (ns)": "1470635",
+            "StdDev (ns)": "204511.4",
+            "Name": "cuGraphLaunch"
+          },
+          {
+            "Time (%)": "2.9",
+            "Total Time (ns)": "5751017",
+            "Num Calls": "16",
+            "Avg (ns)": "359438.6",
+            "Med (ns)": "4007.5",
+            "Min (ns)": "831",
+            "Max (ns)": "1175466",
+            "StdDev (ns)": "547395.8",
+            "Name": "cuStreamSynchronize"
+          },
+          {
+            "Time (%)": "0.9",
+            "Total Time (ns)": "1780381",
+            "Num Calls": "515",
+            "Avg (ns)": "3457.1",
+            "Med (ns)": "2855.0",
+            "Min (ns)": "2615",
+            "Max (ns)": "18214",
+            "StdDev (ns)": "1458.9",
+            "Name": "cuLaunchKernel"
+          },
+          {
+            "Time (%)": "0.7",
+            "Total Time (ns)": "1464078",
+            "Num Calls": "300",
+            "Avg (ns)": "4880.3",
+            "Med (ns)": "4418.0",
+            "Min (ns)": "3747",
+            "Max (ns)": "13756",
+            "StdDev (ns)": "1236.5",
+            "Name": "cuMemcpyDtoDAsync_v2"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "216991",
+            "Num Calls": "5",
+            "Avg (ns)": "43398.2",
+            "Med (ns)": "13275.0",
+            "Min (ns)": "10710",
+            "Max (ns)": "168088",
+            "StdDev (ns)": "69718.1",
+            "Name": "cuMemsetD8Async"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "212052",
+            "Num Calls": "2",
+            "Avg (ns)": "106026.0",
+            "Med (ns)": "106026.0",
+            "Min (ns)": "55075",
+            "Max (ns)": "156977",
+            "StdDev (ns)": "72055.6",
+            "Name": "cuCtxSynchronize"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "111284",
+            "Num Calls": "20",
+            "Avg (ns)": "5564.2",
+            "Med (ns)": "4945.0",
+            "Min (ns)": "2725",
+            "Max (ns)": "16061",
+            "StdDev (ns)": "2941.6",
+            "Name": "cuMemcpyHtoDAsync_v2"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "9468",
+            "Num Calls": "1",
+            "Avg (ns)": "9468.0",
+            "Med (ns)": "9468.0",
+            "Min (ns)": "9468",
+            "Max (ns)": "9468",
+            "StdDev (ns)": "0.0",
+            "Name": "cuProfilerStart"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "531",
+            "Num Calls": "1",
+            "Avg (ns)": "531.0",
+            "Med (ns)": "531.0",
+            "Min (ns)": "531",
+            "Max (ns)": "531",
+            "StdDev (ns)": "0.0",
+            "Name": "cuProfilerStop"
+          }
+        ]
+      },
+      "kernel_ms_per_update": {
+        "adam": 11.423992600000002,
+        "view_materialization": 5.318403,
+        "matmul": 8.4066044,
+        "gradient_accumulation": 6.018211,
+        "reduction": 3.2728926000000005,
+        "other": 1.6579592000000007
+      },
+      "kernel_time_percent": {
+        "adam": 31.647107112905797,
+        "view_materialization": 14.733208896738912,
+        "matmul": 23.28824249261376,
+        "gradient_accumulation": 16.671839243406712,
+        "reduction": 9.066671023687178,
+        "other": 4.592931230647648
+      },
+      "profiled_result": {
+        "archive": "target/transformer-training/scale-screen/w2048_s128/archive",
+        "backend": "tnsr mixed BF16 resident Adam replay",
+        "config": {
+          "batch": 1,
+          "epsilon": 9.999999747378752e-06,
+          "heads": 32,
+          "hidden": 5504,
+          "layers": 4,
+          "learning_rate": 9.999999747378752e-05,
+          "max_grad_norm": 1.0,
+          "sequence": 128,
+          "vocab": 4096,
+          "width": 2048
+        },
+        "graph_nodes_with_gradients": 2118,
+        "master_parameter_bytes": 844591104,
+        "memory": {
+          "after_qualification": {
+            "current_pool": {
+              "reserved_current": 9059696640,
+              "reserved_high": 9059696640,
+              "used_current": 8727361336,
+              "used_high": 8727361336
+            },
+            "default_pool": {
+              "reserved_current": 9059696640,
+              "reserved_high": 9059696640,
+              "used_current": 8727361336,
+              "used_high": 8727361336
+            },
+            "same_pool": true
+          },
+          "after_setup": {
+            "current_pool": {
+              "reserved_current": 8287944704,
+              "reserved_high": 8287944704,
+              "used_current": 7881120628,
+              "used_high": 8285569908
+            },
+            "default_pool": {
+              "reserved_current": 8287944704,
+              "reserved_high": 8287944704,
+              "used_current": 7881120628,
+              "used_high": 8285569908
+            },
+            "same_pool": true
+          },
+          "initial": {
+            "current_pool": {
+              "reserved_current": 0,
+              "reserved_high": 0,
+              "used_current": 0,
+              "used_high": 0
+            },
+            "default_pool": {
+              "reserved_current": 0,
+              "reserved_high": 0,
+              "used_current": 0,
+              "used_high": 0
+            },
+            "same_pool": true
+          },
+          "lifetime_peak_before_reset": {
+            "current_pool": {
+              "reserved_current": 9059696640,
+              "reserved_high": 9059696640,
+              "used_current": 8727361336,
+              "used_high": 8727361336
+            },
+            "default_pool": {
+              "reserved_current": 9059696640,
+              "reserved_high": 9059696640,
+              "used_current": 8727361336,
+              "used_high": 8727361336
+            },
+            "same_pool": true
+          },
+          "scope": "CUDA current/default process memory-pool accounting only; USED_HIGH/RESERVED_HIGH are exact for each queried pool, not whole-process VRAM; excludes modules/context and other pools. Root separately samples whole-process NVML. High-water marks reset only after warmups; no allocations released by reset.",
+          "steady_after_timing": {
+            "current_pool": {
+              "reserved_current": 9059696640,
+              "reserved_high": 9059696640,
+              "used_current": 8727361336,
+              "used_high": 8727361336
+            },
+            "default_pool": {
+              "reserved_current": 9059696640,
+              "reserved_high": 9059696640,
+              "used_current": 8727361336,
+              "used_high": 8727361336
+            },
+            "same_pool": true
+          },
+          "steady_initial_after_reset": {
+            "current_pool": {
+              "reserved_current": 9059696640,
+              "reserved_high": 9059696640,
+              "used_current": 8727361336,
+              "used_high": 8727361336
+            },
+            "default_pool": {
+              "reserved_current": 9059696640,
+              "reserved_high": 9059696640,
+              "used_current": 8727361336,
+              "used_high": 8727361336
+            },
+            "same_pool": true
+          },
+          "tensor_payload_info": {
+            "bf16_bytes": 889540608,
+            "bf16_tensor_core_programs": 87,
+            "exact_index_bytes": 1536,
+            "f32_bytes": 1079440716,
+            "immutable_source_bytes": 82248,
+            "kernels": 585,
+            "replay": true,
+            "reused_allocations": 403,
+            "unpooled_bytes": 2373430604
+          }
+        },
+        "numerics": {
+          "adam": {
+            "batch_size": 8,
+            "beta1": 0.9,
+            "beta2": 0.999,
+            "epsilon": 1e-08,
+            "learning_rate": 9.999999747378752e-05,
+            "weight_decay": 0.0
+          },
+          "autograd": "primitive default; no compact-softmax/split-K rewrite",
+          "clip_epsilon": 1e-06,
+          "experimental_kernel_flags": false,
+          "matmul_precision": "Tf32x3",
+          "storage": "explicit BF16 linears/attention/FFN multiply; f32 residuals/LN/softmax/masters/Adam"
+        },
+        "parameter_elements": 211147776,
+        "parameter_tensors": 60,
+        "profiled": true,
+        "qualification": {
+          "config": {
+            "batch": 1,
+            "epsilon": 9.999999747378752e-06,
+            "heads": 32,
+            "hidden": 5504,
+            "layers": 4,
+            "learning_rate": 9.999999747378752e-05,
+            "max_grad_norm": 1.0,
+            "sequence": 128,
+            "vocab": 4096,
+            "width": 2048
+          },
+          "dtype": "f32-le",
+          "gradient_norm_before_clip": 36.8805676411203,
+          "gradient_scale": 0.02711454965174198,
+          "gradients_file": "qual_gradients.f32",
+          "loss": 8.727033615112305,
+          "offset_units": "f32 elements",
+          "optimizer_step": 1,
+          "scope": "untimed first complete update; gradients are clipped; weights are post-Adam; snapshot tensors follow original archive order",
+          "snapshot_seconds": 3.618947673,
+          "tensors": [
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "final_norm.bias",
+              "offset": 0,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "final_norm.weight",
+              "offset": 2048,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.0.attn_norm.bias",
+              "offset": 4096,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.0.attn_norm.weight",
+              "offset": 6144,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.0.down.bias",
+              "offset": 8192,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.0.down.weight",
+              "offset": 10240,
+              "shape": [
+                2048,
+                5504
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.0.ffn_norm.bias",
+              "offset": 11282432,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.0.ffn_norm.weight",
+              "offset": 11284480,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 5504,
+              "group": "train",
+              "name": "layer.0.gate.bias",
+              "offset": 11286528,
+              "shape": [
+                5504
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.0.gate.weight",
+              "offset": 11292032,
+              "shape": [
+                5504,
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.0.out.bias",
+              "offset": 22564224,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 4194304,
+              "group": "train",
+              "name": "layer.0.out.weight",
+              "offset": 22566272,
+              "shape": [
+                2048,
+                2048
+              ]
+            },
+            {
+              "count": 6144,
+              "group": "train",
+              "name": "layer.0.qkv.bias",
+              "offset": 26760576,
+              "shape": [
+                6144
+              ]
+            },
+            {
+              "count": 12582912,
+              "group": "train",
+              "name": "layer.0.qkv.weight",
+              "offset": 26766720,
+              "shape": [
+                6144,
+                2048
+              ]
+            },
+            {
+              "count": 5504,
+              "group": "train",
+              "name": "layer.0.up.bias",
+              "offset": 39349632,
+              "shape": [
+                5504
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.0.up.weight",
+              "offset": 39355136,
+              "shape": [
+                5504,
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.1.attn_norm.bias",
+              "offset": 50627328,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.1.attn_norm.weight",
+              "offset": 50629376,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.1.down.bias",
+              "offset": 50631424,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.1.down.weight",
+              "offset": 50633472,
+              "shape": [
+                2048,
+                5504
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.1.ffn_norm.bias",
+              "offset": 61905664,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.1.ffn_norm.weight",
+              "offset": 61907712,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 5504,
+              "group": "train",
+              "name": "layer.1.gate.bias",
+              "offset": 61909760,
+              "shape": [
+                5504
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.1.gate.weight",
+              "offset": 61915264,
+              "shape": [
+                5504,
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.1.out.bias",
+              "offset": 73187456,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 4194304,
+              "group": "train",
+              "name": "layer.1.out.weight",
+              "offset": 73189504,
+              "shape": [
+                2048,
+                2048
+              ]
+            },
+            {
+              "count": 6144,
+              "group": "train",
+              "name": "layer.1.qkv.bias",
+              "offset": 77383808,
+              "shape": [
+                6144
+              ]
+            },
+            {
+              "count": 12582912,
+              "group": "train",
+              "name": "layer.1.qkv.weight",
+              "offset": 77389952,
+              "shape": [
+                6144,
+                2048
+              ]
+            },
+            {
+              "count": 5504,
+              "group": "train",
+              "name": "layer.1.up.bias",
+              "offset": 89972864,
+              "shape": [
+                5504
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.1.up.weight",
+              "offset": 89978368,
+              "shape": [
+                5504,
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.2.attn_norm.bias",
+              "offset": 101250560,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.2.attn_norm.weight",
+              "offset": 101252608,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.2.down.bias",
+              "offset": 101254656,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.2.down.weight",
+              "offset": 101256704,
+              "shape": [
+                2048,
+                5504
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.2.ffn_norm.bias",
+              "offset": 112528896,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.2.ffn_norm.weight",
+              "offset": 112530944,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 5504,
+              "group": "train",
+              "name": "layer.2.gate.bias",
+              "offset": 112532992,
+              "shape": [
+                5504
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.2.gate.weight",
+              "offset": 112538496,
+              "shape": [
+                5504,
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.2.out.bias",
+              "offset": 123810688,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 4194304,
+              "group": "train",
+              "name": "layer.2.out.weight",
+              "offset": 123812736,
+              "shape": [
+                2048,
+                2048
+              ]
+            },
+            {
+              "count": 6144,
+              "group": "train",
+              "name": "layer.2.qkv.bias",
+              "offset": 128007040,
+              "shape": [
+                6144
+              ]
+            },
+            {
+              "count": 12582912,
+              "group": "train",
+              "name": "layer.2.qkv.weight",
+              "offset": 128013184,
+              "shape": [
+                6144,
+                2048
+              ]
+            },
+            {
+              "count": 5504,
+              "group": "train",
+              "name": "layer.2.up.bias",
+              "offset": 140596096,
+              "shape": [
+                5504
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.2.up.weight",
+              "offset": 140601600,
+              "shape": [
+                5504,
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.3.attn_norm.bias",
+              "offset": 151873792,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.3.attn_norm.weight",
+              "offset": 151875840,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.3.down.bias",
+              "offset": 151877888,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.3.down.weight",
+              "offset": 151879936,
+              "shape": [
+                2048,
+                5504
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.3.ffn_norm.bias",
+              "offset": 163152128,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.3.ffn_norm.weight",
+              "offset": 163154176,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 5504,
+              "group": "train",
+              "name": "layer.3.gate.bias",
+              "offset": 163156224,
+              "shape": [
+                5504
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.3.gate.weight",
+              "offset": 163161728,
+              "shape": [
+                5504,
+                2048
+              ]
+            },
+            {
+              "count": 2048,
+              "group": "train",
+              "name": "layer.3.out.bias",
+              "offset": 174433920,
+              "shape": [
+                2048
+              ]
+            },
+            {
+              "count": 4194304,
+              "group": "train",
+              "name": "layer.3.out.weight",
+              "offset": 174435968,
+              "shape": [
+                2048,
+                2048
+              ]
+            },
+            {
+              "count": 6144,
+              "group": "train",
+              "name": "layer.3.qkv.bias",
+              "offset": 178630272,
+              "shape": [
+                6144
+              ]
+            },
+            {
+              "count": 12582912,
+              "group": "train",
+              "name": "layer.3.qkv.weight",
+              "offset": 178636416,
+              "shape": [
+                6144,
+                2048
+              ]
+            },
+            {
+              "count": 5504,
+              "group": "train",
+              "name": "layer.3.up.bias",
+              "offset": 191219328,
+              "shape": [
+                5504
+              ]
+            },
+            {
+              "count": 11272192,
+              "group": "train",
+              "name": "layer.3.up.weight",
+              "offset": 191224832,
+              "shape": [
+                5504,
+                2048
+              ]
+            },
+            {
+              "count": 262144,
+              "group": "train",
+              "name": "position.weight",
+              "offset": 202497024,
+              "shape": [
+                128,
+                2048
+              ]
+            },
+            {
+              "count": 8388608,
+              "group": "train",
+              "name": "token.weight",
+              "offset": 202759168,
+              "shape": [
+                4096,
+                2048
+              ]
+            }
+          ],
+          "weights_file": "qual_weights.f32"
+        },
+        "qualification_step": {
+          "elapsed_ms": 569.680824,
+          "gradient_norm_before_clip": 36.8805676411203,
+          "gradient_scale": 0.02711454965174198,
+          "index": 0,
+          "info": {
+            "bf16_bytes": 889540608,
+            "bf16_tensor_core_programs": 87,
+            "exact_index_bytes": 1536,
+            "f32_bytes": 1079440716,
+            "immutable_source_bytes": 82248,
+            "kernels": 585,
+            "replay": true,
+            "reused_allocations": 403,
+            "unpooled_bytes": 2373430604
+          },
+          "kernel_launches": 687,
+          "loss": 8.727033615112305,
+          "optimizer_step": 1,
+          "phase": "qualification",
+          "replay_active": true,
+          "transfers": {
+            "f32_bytes": 0,
+            "f32_uploads": 0,
+            "index_bytes": 1536,
+            "index_uploads": 3,
+            "parameter_bytes": 0,
+            "parameter_copies": 0,
+            "parameter_refresh_seconds": 1.3726e-05,
+            "upload_seconds": 0.001236491
+          }
+        },
+        "samples": [
+          {
+            "elapsed_ms": 40.536259,
+            "gradient_norm_before_clip": 0.005444388104678518,
+            "gradient_scale": 1.0,
+            "index": 0,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 0.00011029277084162459,
+            "optimizer_step": 7,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000307532,
+              "upload_seconds": 0.00127832
+            }
+          },
+          {
+            "elapsed_ms": 40.24058,
+            "gradient_norm_before_clip": 0.002489002270085448,
+            "gradient_scale": 1.0,
+            "index": 1,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 5.0036465836456046e-05,
+            "optimizer_step": 8,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000295259,
+              "upload_seconds": 0.001197598
+            }
+          },
+          {
+            "elapsed_ms": 40.415791,
+            "gradient_norm_before_clip": 0.0012784063793699466,
+            "gradient_scale": 1.0,
+            "index": 2,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 2.614303957670927e-05,
+            "optimizer_step": 9,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000295609,
+              "upload_seconds": 0.001204862
+            }
+          },
+          {
+            "elapsed_ms": 40.45196,
+            "gradient_norm_before_clip": 0.0007462053620665492,
+            "gradient_scale": 1.0,
+            "index": 3,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 1.5602612620568834e-05,
+            "optimizer_step": 10,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000319064,
+              "upload_seconds": 0.001203188
+            }
+          },
+          {
+            "elapsed_ms": 41.152225,
+            "gradient_norm_before_clip": 0.0004588288280275407,
+            "gradient_scale": 1.0,
+            "index": 4,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 9.960631359717809e-06,
+            "optimizer_step": 11,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000407381,
+              "upload_seconds": 0.001204561
+            }
+          }
+        ],
+        "setup": {
+          "archive_load_seconds": 1.410933945,
+          "graph_build_seconds": 0.0991557,
+          "mixed_compile_seconds": 0.590251676,
+          "resident_owner_seconds": 0.213258705,
+          "total_seconds": 2.720339054
+        },
+        "timing": {
+          "mean_ms": 40.559363,
+          "measured_updates": 5,
+          "median_ms": 40.45196,
+          "qualification_updates": 1,
+          "replay_active_steps": 5,
+          "replay_fallback_steps": 0,
+          "scope": "synchronized complete step: begin/zero, exact-index feed creation+upload, forward+loss, backward, gradient accumulation, norm+clip, Adam+health, device publications, scalar loss readback; excludes archive/setup/qualification snapshots; fixed batch",
+          "tokens_per_second_from_total_time": 3155.868103747093,
+          "warmup_updates": 5
+        },
+        "warmups": [
+          {
+            "elapsed_ms": 43.623966,
+            "gradient_norm_before_clip": 32.59692578008699,
+            "gradient_scale": 0.030677739530801773,
+            "index": 0,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 3.4053914546966553,
+            "optimizer_step": 2,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000484127,
+              "upload_seconds": 0.001061019
+            }
+          },
+          {
+            "elapsed_ms": 41.183374,
+            "gradient_norm_before_clip": 5.263651763934215,
+            "gradient_scale": 0.18998213112354279,
+            "index": 1,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 0.12149965763092041,
+            "optimizer_step": 3,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000219676,
+              "upload_seconds": 0.001200423
+            }
+          },
+          {
+            "elapsed_ms": 41.33909,
+            "gradient_norm_before_clip": 0.13867300328615045,
+            "gradient_scale": 1.0,
+            "index": 2,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 0.0016828977968543768,
+            "optimizer_step": 4,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000236077,
+              "upload_seconds": 0.001206485
+            }
+          },
+          {
+            "elapsed_ms": 41.325844000000004,
+            "gradient_norm_before_clip": 0.02865989544910855,
+            "gradient_scale": 1.0,
+            "index": 3,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 0.0005214490229263902,
+            "optimizer_step": 5,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000211932,
+              "upload_seconds": 0.001201145
+            }
+          },
+          {
+            "elapsed_ms": 41.272022,
+            "gradient_norm_before_clip": 0.019421921901893683,
+            "gradient_scale": 1.0,
+            "index": 4,
+            "info": {
+              "bf16_bytes": 889540608,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 1536,
+              "f32_bytes": 1079440716,
+              "immutable_source_bytes": 82248,
+              "kernels": 585,
+              "replay": true,
+              "reused_allocations": 403,
+              "unpooled_bytes": 2373430604
+            },
+            "kernel_launches": 687,
+            "loss": 0.00028644295525737107,
+            "optimizer_step": 6,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 1536,
+              "index_uploads": 3,
+              "parameter_bytes": 844591104,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000231388,
+              "upload_seconds": 0.001199882
+            }
+          }
+        ]
+      },
+      "first_step_snapshots_bitwise_equal_to_original_native": true,
+      "first_step_snapshot_sha256": {
+        "qual_gradients.f32": "c74ba9b54c3b9ebd6a00805fd1c117a55f5b47658371ccc2f45ad9f79ce642c5",
+        "qual_weights.f32": "d8a8bce56b04f045949e237a3d65d5c9c1f5cecfcd4cf2f1df77c5e69ffa95c9"
+      },
+      "report_path": "target/transformer-training/profiles-v1/w2048_s128.nsys-rep",
+      "sqlite_path": "target/transformer-training/profiles-v1/w2048_s128.sqlite"
+    },
+    "w1024_s512": {
+      "tables": {
+        "cuda_gpu_kern_sum": [
+          {
+            "Time (%)": "16.3",
+            "Total Time (ns)": "15335538",
+            "Instances": "180",
+            "Avg (ns)": "85197.4",
+            "Med (ns)": "90113.0",
+            "Min (ns)": "36576",
+            "Max (ns)": "108481",
+            "StdDev (ns)": "18907.3",
+            "Name": "matmul_region_0_5"
+          },
+          {
+            "Time (%)": "11.6",
+            "Total Time (ns)": "10868623",
+            "Instances": "105",
+            "Avg (ns)": "103510.7",
+            "Med (ns)": "102625.0",
+            "Min (ns)": "91585",
+            "Max (ns)": "366596",
+            "StdDev (ns)": "27043.6",
+            "Name": "matmul_region_0_7"
+          },
+          {
+            "Time (%)": "9.5",
+            "Total Time (ns)": "8898972",
+            "Instances": "60",
+            "Avg (ns)": "148316.2",
+            "Med (ns)": "149986.0",
+            "Min (ns)": "84257",
+            "Max (ns)": "351075",
+            "StdDev (ns)": "32520.9",
+            "Name": "resident_adam_1"
+          },
+          {
+            "Time (%)": "6.6",
+            "Total Time (ns)": "6238246",
+            "Instances": "465",
+            "Avg (ns)": "13415.6",
+            "Med (ns)": "5952.0",
+            "Min (ns)": "832",
+            "Max (ns)": "67553",
+            "StdDev (ns)": "18082.3",
+            "Name": "materialize_view_0"
+          },
+          {
+            "Time (%)": "4.7",
+            "Total Time (ns)": "4395887",
+            "Instances": "60",
+            "Avg (ns)": "73264.8",
+            "Med (ns)": "63280.5",
+            "Min (ns)": "45408",
+            "Max (ns)": "329603",
+            "StdDev (ns)": "40154.2",
+            "Name": "matmul_region_0_8"
+          },
+          {
+            "Time (%)": "3.9",
+            "Total Time (ns)": "3697542",
+            "Instances": "105",
+            "Avg (ns)": "35214.7",
+            "Med (ns)": "21792.0",
+            "Min (ns)": "8416",
+            "Max (ns)": "393252",
+            "StdDev (ns)": "80618.8",
+            "Name": "reduction_region_0_3"
+          },
+          {
+            "Time (%)": "3.6",
+            "Total Time (ns)": "3403010",
+            "Instances": "20",
+            "Avg (ns)": "170150.5",
+            "Med (ns)": "169906.0",
+            "Min (ns)": "158530",
+            "Max (ns)": "177730",
+            "StdDev (ns)": "4974.6",
+            "Name": "resident_adam_5"
+          },
+          {
+            "Time (%)": "3.5",
+            "Total Time (ns)": "3290341",
+            "Instances": "40",
+            "Avg (ns)": "82258.5",
+            "Med (ns)": "82160.5",
+            "Min (ns)": "80481",
+            "Max (ns)": "84258",
+            "StdDev (ns)": "1084.4",
+            "Name": "resident_accumulate_9"
+          },
+          {
+            "Time (%)": "2.0",
+            "Total Time (ns)": "1924179",
+            "Instances": "5",
+            "Avg (ns)": "384835.8",
+            "Med (ns)": "384868.0",
+            "Min (ns)": "381828",
+            "Max (ns)": "386916",
+            "StdDev (ns)": "1890.7",
+            "Name": "reduction_region_0_4"
+          },
+          {
+            "Time (%)": "2.0",
+            "Total Time (ns)": "1915170",
+            "Instances": "20",
+            "Avg (ns)": "95758.5",
+            "Med (ns)": "96208.0",
+            "Min (ns)": "93696",
+            "Max (ns)": "96928",
+            "StdDev (ns)": "1174.0",
+            "Name": "pointwise_region_0_33"
+          },
+          {
+            "Time (%)": "1.9",
+            "Total Time (ns)": "1812983",
+            "Instances": "40",
+            "Avg (ns)": "45324.6",
+            "Med (ns)": "45265.0",
+            "Min (ns)": "28768",
+            "Max (ns)": "61985",
+            "StdDev (ns)": "16479.6",
+            "Name": "matmul_region_0_6"
+          },
+          {
+            "Time (%)": "1.9",
+            "Total Time (ns)": "1790225",
+            "Instances": "20",
+            "Avg (ns)": "89511.3",
+            "Med (ns)": "89521.0",
+            "Min (ns)": "87489",
+            "Max (ns)": "91264",
+            "StdDev (ns)": "1060.2",
+            "Name": "resident_accumulate_13"
+          },
+          {
+            "Time (%)": "1.9",
+            "Total Time (ns)": "1763730",
+            "Instances": "20",
+            "Avg (ns)": "88186.5",
+            "Med (ns)": "88225.0",
+            "Min (ns)": "85505",
+            "Max (ns)": "90913",
+            "StdDev (ns)": "1315.7",
+            "Name": "resident_accumulate_5"
+          },
+          {
+            "Time (%)": "1.7",
+            "Total Time (ns)": "1552524",
+            "Instances": "20",
+            "Avg (ns)": "77626.2",
+            "Med (ns)": "60047.5",
+            "Min (ns)": "58784",
+            "Max (ns)": "411365",
+            "StdDev (ns)": "78557.5",
+            "Name": "reduction_region_0_21"
+          },
+          {
+            "Time (%)": "1.4",
+            "Total Time (ns)": "1320786",
+            "Instances": "40",
+            "Avg (ns)": "33019.7",
+            "Med (ns)": "26512.5",
+            "Min (ns)": "26337",
+            "Max (ns)": "284163",
+            "StdDev (ns)": "40728.0",
+            "Name": "reindex_5"
+          },
+          {
+            "Time (%)": "1.4",
+            "Total Time (ns)": "1298898",
+            "Instances": "20",
+            "Avg (ns)": "64944.9",
+            "Med (ns)": "64929.0",
+            "Min (ns)": "64737",
+            "Max (ns)": "65153",
+            "StdDev (ns)": "126.0",
+            "Name": "matmul_region_0_10"
+          },
+          {
+            "Time (%)": "1.2",
+            "Total Time (ns)": "1167916",
+            "Instances": "20",
+            "Avg (ns)": "58395.8",
+            "Med (ns)": "47840.5",
+            "Min (ns)": "47744",
+            "Max (ns)": "258946",
+            "StdDev (ns)": "47204.7",
+            "Name": "reduction_region_0_27"
+          },
+          {
+            "Time (%)": "1.2",
+            "Total Time (ns)": "1132559",
+            "Instances": "20",
+            "Avg (ns)": "56628.0",
+            "Med (ns)": "56096.5",
+            "Min (ns)": "52801",
+            "Max (ns)": "61856",
+            "StdDev (ns)": "2735.4",
+            "Name": "resident_adam_3"
+          },
+          {
+            "Time (%)": "1.2",
+            "Total Time (ns)": "1131402",
+            "Instances": "5",
+            "Avg (ns)": "226280.4",
+            "Med (ns)": "224002.0",
+            "Min (ns)": "222850",
+            "Max (ns)": "232066",
+            "StdDev (ns)": "4222.8",
+            "Name": "resident_adam_7"
+          },
+          {
+            "Time (%)": "1.2",
+            "Total Time (ns)": "1111913",
+            "Instances": "20",
+            "Avg (ns)": "55595.7",
+            "Med (ns)": "55856.5",
+            "Min (ns)": "52481",
+            "Max (ns)": "58113",
+            "StdDev (ns)": "1974.2",
+            "Name": "pointwise_region_0_52"
+          },
+          {
+            "Time (%)": "1.2",
+            "Total Time (ns)": "1110407",
+            "Instances": "60",
+            "Avg (ns)": "18506.8",
+            "Med (ns)": "14368.0",
+            "Min (ns)": "14144",
+            "Max (ns)": "27039",
+            "StdDev (ns)": "5970.3",
+            "Name": "broadcast_axis_3"
+          },
+          {
+            "Time (%)": "1.0",
+            "Total Time (ns)": "969226",
+            "Instances": "20",
+            "Avg (ns)": "48461.3",
+            "Med (ns)": "48432.5",
+            "Min (ns)": "48128",
+            "Max (ns)": "48960",
+            "StdDev (ns)": "233.2",
+            "Name": "reduction_region_1_28"
+          },
+          {
+            "Time (%)": "1.0",
+            "Total Time (ns)": "919881",
+            "Instances": "20",
+            "Avg (ns)": "45994.1",
+            "Med (ns)": "45953.0",
+            "Min (ns)": "45792",
+            "Max (ns)": "46337",
+            "StdDev (ns)": "157.4",
+            "Name": "matmul_region_0_9"
+          },
+          {
+            "Time (%)": "0.8",
+            "Total Time (ns)": "726082",
+            "Instances": "125",
+            "Avg (ns)": "5808.7",
+            "Med (ns)": "3488.0",
+            "Min (ns)": "3392",
+            "Max (ns)": "8960",
+            "StdDev (ns)": "2482.4",
+            "Name": "linear_cast_0"
+          },
+          {
+            "Time (%)": "0.7",
+            "Total Time (ns)": "683463",
+            "Instances": "5",
+            "Avg (ns)": "136692.6",
+            "Med (ns)": "136801.0",
+            "Min (ns)": "135810",
+            "Max (ns)": "137506",
+            "StdDev (ns)": "613.3",
+            "Name": "indexed_cross_entropy_backward_3"
+          },
+          {
+            "Time (%)": "0.7",
+            "Total Time (ns)": "663336",
+            "Instances": "40",
+            "Avg (ns)": "16583.4",
+            "Med (ns)": "16176.0",
+            "Min (ns)": "11392",
+            "Max (ns)": "21760",
+            "StdDev (ns)": "3920.7",
+            "Name": "pointwise_region_0_4"
+          },
+          {
+            "Time (%)": "0.6",
+            "Total Time (ns)": "607428",
+            "Instances": "20",
+            "Avg (ns)": "30371.4",
+            "Med (ns)": "14880.0",
+            "Min (ns)": "14848",
+            "Max (ns)": "324867",
+            "StdDev (ns)": "69317.1",
+            "Name": "pointwise_region_0_22"
+          },
+          {
+            "Time (%)": "0.6",
+            "Total Time (ns)": "604198",
+            "Instances": "5",
+            "Avg (ns)": "120839.6",
+            "Med (ns)": "120770.0",
+            "Min (ns)": "120577",
+            "Max (ns)": "121185",
+            "StdDev (ns)": "224.4",
+            "Name": "matmul_region_0_4"
+          },
+          {
+            "Time (%)": "0.6",
+            "Total Time (ns)": "570140",
+            "Instances": "20",
+            "Avg (ns)": "28507.0",
+            "Med (ns)": "28352.0",
+            "Min (ns)": "27103",
+            "Max (ns)": "32448",
+            "StdDev (ns)": "1155.1",
+            "Name": "pointwise_region_0_20"
+          },
+          {
+            "Time (%)": "0.6",
+            "Total Time (ns)": "569030",
+            "Instances": "5",
+            "Avg (ns)": "113806.0",
+            "Med (ns)": "113793.0",
+            "Min (ns)": "113697",
+            "Max (ns)": "113922",
+            "StdDev (ns)": "97.9",
+            "Name": "matmul_region_0_0"
+          },
+          {
+            "Time (%)": "0.6",
+            "Total Time (ns)": "552672",
+            "Instances": "40",
+            "Avg (ns)": "13816.8",
+            "Med (ns)": "13824.0",
+            "Min (ns)": "13695",
+            "Max (ns)": "13953",
+            "StdDev (ns)": "95.0",
+            "Name": "concat_7"
+          },
+          {
+            "Time (%)": "0.6",
+            "Total Time (ns)": "537089",
+            "Instances": "20",
+            "Avg (ns)": "26854.5",
+            "Med (ns)": "26832.0",
+            "Min (ns)": "26688",
+            "Max (ns)": "27008",
+            "StdDev (ns)": "87.2",
+            "Name": "broadcast_axis_6"
+          },
+          {
+            "Time (%)": "0.6",
+            "Total Time (ns)": "535207",
+            "Instances": "20",
+            "Avg (ns)": "26760.4",
+            "Med (ns)": "26624.5",
+            "Min (ns)": "26464",
+            "Max (ns)": "27232",
+            "StdDev (ns)": "284.7",
+            "Name": "reindex_1"
+          },
+          {
+            "Time (%)": "0.6",
+            "Total Time (ns)": "531076",
+            "Instances": "20",
+            "Avg (ns)": "26553.8",
+            "Med (ns)": "26512.5",
+            "Min (ns)": "26400",
+            "Max (ns)": "27008",
+            "StdDev (ns)": "158.8",
+            "Name": "reindex_6"
+          },
+          {
+            "Time (%)": "0.6",
+            "Total Time (ns)": "522118",
+            "Instances": "20",
+            "Avg (ns)": "26105.9",
+            "Med (ns)": "25952.5",
+            "Min (ns)": "24704",
+            "Max (ns)": "27393",
+            "StdDev (ns)": "906.6",
+            "Name": "resident_accumulate_11"
+          },
+          {
+            "Time (%)": "0.5",
+            "Total Time (ns)": "514917",
+            "Instances": "5",
+            "Avg (ns)": "102983.4",
+            "Med (ns)": "103041.0",
+            "Min (ns)": "102753",
+            "Max (ns)": "103265",
+            "StdDev (ns)": "213.9",
+            "Name": "indexed_cross_entropy_55"
+          },
+          {
+            "Time (%)": "0.5",
+            "Total Time (ns)": "471869",
+            "Instances": "125",
+            "Avg (ns)": "3775.0",
+            "Med (ns)": "2784.0",
+            "Min (ns)": "2752",
+            "Max (ns)": "7104",
+            "StdDev (ns)": "1502.6",
+            "Name": "mul_13"
+          },
+          {
+            "Time (%)": "0.4",
+            "Total Time (ns)": "398789",
+            "Instances": "20",
+            "Avg (ns)": "19939.5",
+            "Med (ns)": "19856.0",
+            "Min (ns)": "18657",
+            "Max (ns)": "21888",
+            "StdDev (ns)": "729.2",
+            "Name": "pointwise_region_1_23"
+          },
+          {
+            "Time (%)": "0.4",
+            "Total Time (ns)": "385380",
+            "Instances": "5",
+            "Avg (ns)": "77076.0",
+            "Med (ns)": "77120.0",
+            "Min (ns)": "76353",
+            "Max (ns)": "77953",
+            "StdDev (ns)": "591.6",
+            "Name": "resident_accumulate_59"
+          },
+          {
+            "Time (%)": "0.4",
+            "Total Time (ns)": "375044",
+            "Instances": "5",
+            "Avg (ns)": "75008.8",
+            "Med (ns)": "75105.0",
+            "Min (ns)": "74497",
+            "Max (ns)": "75393",
+            "StdDev (ns)": "355.5",
+            "Name": "pointwise_region_4_66"
+          },
+          {
+            "Time (%)": "0.4",
+            "Total Time (ns)": "363810",
+            "Instances": "20",
+            "Avg (ns)": "18190.5",
+            "Med (ns)": "18176.0",
+            "Min (ns)": "17216",
+            "Max (ns)": "19936",
+            "StdDev (ns)": "788.8",
+            "Name": "reduction_region_3_61"
+          },
+          {
+            "Time (%)": "0.4",
+            "Total Time (ns)": "356033",
+            "Instances": "100",
+            "Avg (ns)": "3560.3",
+            "Med (ns)": "2784.0",
+            "Min (ns)": "2752",
+            "Max (ns)": "5376",
+            "StdDev (ns)": "995.7",
+            "Name": "mul_16"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "324293",
+            "Instances": "20",
+            "Avg (ns)": "16214.7",
+            "Med (ns)": "16128.0",
+            "Min (ns)": "16096",
+            "Max (ns)": "17760",
+            "StdDev (ns)": "364.8",
+            "Name": "pointwise_region_3_25"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "312355",
+            "Instances": "20",
+            "Avg (ns)": "15617.8",
+            "Med (ns)": "15616.0",
+            "Min (ns)": "15584",
+            "Max (ns)": "15680",
+            "StdDev (ns)": "24.4",
+            "Name": "pointwise_region_2_24"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "310211",
+            "Instances": "40",
+            "Avg (ns)": "7755.3",
+            "Med (ns)": "8496.0",
+            "Min (ns)": "6208",
+            "Max (ns)": "11296",
+            "StdDev (ns)": "1548.9",
+            "Name": "add_2"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "305922",
+            "Instances": "20",
+            "Avg (ns)": "15296.1",
+            "Med (ns)": "15280.0",
+            "Min (ns)": "15232",
+            "Max (ns)": "15456",
+            "StdDev (ns)": "54.0",
+            "Name": "concat_12"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "301475",
+            "Instances": "20",
+            "Avg (ns)": "15073.8",
+            "Med (ns)": "15057.0",
+            "Min (ns)": "14912",
+            "Max (ns)": "15584",
+            "StdDev (ns)": "177.5",
+            "Name": "exp_13"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "290111",
+            "Instances": "20",
+            "Avg (ns)": "14505.6",
+            "Med (ns)": "14384.0",
+            "Min (ns)": "14304",
+            "Max (ns)": "15200",
+            "StdDev (ns)": "217.4",
+            "Name": "pointwise_region_4_26"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "275233",
+            "Instances": "15",
+            "Avg (ns)": "18348.9",
+            "Med (ns)": "18304.0",
+            "Min (ns)": "17184",
+            "Max (ns)": "19776",
+            "StdDev (ns)": "655.6",
+            "Name": "reduction_region_2_56"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "245729",
+            "Instances": "20",
+            "Avg (ns)": "12286.5",
+            "Med (ns)": "12272.0",
+            "Min (ns)": "12192",
+            "Max (ns)": "12384",
+            "StdDev (ns)": "62.7",
+            "Name": "pointwise_region_0_5"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "218658",
+            "Instances": "20",
+            "Avg (ns)": "10932.9",
+            "Med (ns)": "10864.0",
+            "Min (ns)": "10496",
+            "Max (ns)": "11457",
+            "StdDev (ns)": "300.5",
+            "Name": "reduction_region_0_58"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "164322",
+            "Instances": "15",
+            "Avg (ns)": "10954.8",
+            "Med (ns)": "10816.0",
+            "Min (ns)": "10624",
+            "Max (ns)": "11552",
+            "StdDev (ns)": "322.3",
+            "Name": "reduction_region_3_57"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "163330",
+            "Instances": "60",
+            "Avg (ns)": "2722.2",
+            "Med (ns)": "2720.0",
+            "Min (ns)": "2688",
+            "Max (ns)": "2753",
+            "StdDev (ns)": "21.9",
+            "Name": "narrow_2"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "159172",
+            "Instances": "40",
+            "Avg (ns)": "3979.3",
+            "Med (ns)": "3968.0",
+            "Min (ns)": "3840",
+            "Max (ns)": "4129",
+            "StdDev (ns)": "107.5",
+            "Name": "reduction_region_0_42"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "156481",
+            "Instances": "40",
+            "Avg (ns)": "3912.0",
+            "Med (ns)": "3872.0",
+            "Min (ns)": "3776",
+            "Max (ns)": "4256",
+            "StdDev (ns)": "108.7",
+            "Name": "reduction_region_0_41"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "155423",
+            "Instances": "55",
+            "Avg (ns)": "2825.9",
+            "Med (ns)": "2784.0",
+            "Min (ns)": "2719",
+            "Max (ns)": "3296",
+            "StdDev (ns)": "137.6",
+            "Name": "add_33"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "154785",
+            "Instances": "40",
+            "Avg (ns)": "3869.6",
+            "Med (ns)": "3856.0",
+            "Min (ns)": "3776",
+            "Max (ns)": "4160",
+            "StdDev (ns)": "81.2",
+            "Name": "reduction_region_1_59"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "144001",
+            "Instances": "5",
+            "Avg (ns)": "28800.2",
+            "Med (ns)": "29472.0",
+            "Min (ns)": "26240",
+            "Max (ns)": "30881",
+            "StdDev (ns)": "1992.4",
+            "Name": "resident_adam_6"
+          },
+          {
+            "Time (%)": "0.2",
+            "Total Time (ns)": "143039",
+            "Instances": "25",
+            "Avg (ns)": "5721.6",
+            "Med (ns)": "5759.0",
+            "Min (ns)": "5344",
+            "Max (ns)": "6240",
+            "StdDev (ns)": "276.2",
+            "Name": "pointwise_region_0_39"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "131841",
+            "Instances": "5",
+            "Avg (ns)": "26368.2",
+            "Med (ns)": "26368.0",
+            "Min (ns)": "26112",
+            "Max (ns)": "26656",
+            "StdDev (ns)": "208.7",
+            "Name": "reduction_region_1_5"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "128321",
+            "Instances": "5",
+            "Avg (ns)": "25664.2",
+            "Med (ns)": "25664.0",
+            "Min (ns)": "25248",
+            "Max (ns)": "26048",
+            "StdDev (ns)": "330.4",
+            "Name": "reduction_region_1_4"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "122497",
+            "Instances": "25",
+            "Avg (ns)": "4899.9",
+            "Med (ns)": "5216.0",
+            "Min (ns)": "2719",
+            "Max (ns)": "5824",
+            "StdDev (ns)": "1124.7",
+            "Name": "pointwise_region_1_40"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "115137",
+            "Instances": "30",
+            "Avg (ns)": "3837.9",
+            "Med (ns)": "3824.0",
+            "Min (ns)": "3744",
+            "Max (ns)": "3936",
+            "StdDev (ns)": "56.4",
+            "Name": "reduction_region_0_54"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "112831",
+            "Instances": "40",
+            "Avg (ns)": "2820.8",
+            "Med (ns)": "2784.0",
+            "Min (ns)": "2720",
+            "Max (ns)": "3296",
+            "StdDev (ns)": "119.0",
+            "Name": "add_36"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "112324",
+            "Instances": "20",
+            "Avg (ns)": "5616.2",
+            "Med (ns)": "5856.5",
+            "Min (ns)": "4288",
+            "Max (ns)": "6528",
+            "StdDev (ns)": "847.3",
+            "Name": "div_25"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "110712",
+            "Instances": "90",
+            "Avg (ns)": "1230.1",
+            "Med (ns)": "1184.0",
+            "Min (ns)": "1120",
+            "Max (ns)": "1632",
+            "StdDev (ns)": "115.9",
+            "Name": "resident_accumulate_0"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "110366",
+            "Instances": "25",
+            "Avg (ns)": "4414.6",
+            "Med (ns)": "4768.0",
+            "Min (ns)": "2816",
+            "Max (ns)": "5216",
+            "StdDev (ns)": "828.8",
+            "Name": "div_22"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "107902",
+            "Instances": "40",
+            "Avg (ns)": "2697.6",
+            "Med (ns)": "2688.0",
+            "Min (ns)": "2656",
+            "Max (ns)": "2848",
+            "StdDev (ns)": "47.6",
+            "Name": "mul_7"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "97503",
+            "Instances": "60",
+            "Avg (ns)": "1625.1",
+            "Med (ns)": "1632.0",
+            "Min (ns)": "1536",
+            "Max (ns)": "1824",
+            "StdDev (ns)": "48.6",
+            "Name": "broadcast_axis_2"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "92416",
+            "Instances": "5",
+            "Avg (ns)": "18483.2",
+            "Med (ns)": "18496.0",
+            "Min (ns)": "17504",
+            "Max (ns)": "19488",
+            "StdDev (ns)": "915.7",
+            "Name": "reduction_region_3_70"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "91360",
+            "Instances": "5",
+            "Avg (ns)": "18272.0",
+            "Med (ns)": "18592.0",
+            "Min (ns)": "17184",
+            "Max (ns)": "19072",
+            "StdDev (ns)": "758.3",
+            "Name": "reduction_region_2_54"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "89089",
+            "Instances": "20",
+            "Avg (ns)": "4454.5",
+            "Med (ns)": "4320.0",
+            "Min (ns)": "4288",
+            "Max (ns)": "4896",
+            "StdDev (ns)": "225.7",
+            "Name": "pointwise_region_0_53"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "88638",
+            "Instances": "15",
+            "Avg (ns)": "5909.2",
+            "Med (ns)": "5791.0",
+            "Min (ns)": "5568",
+            "Max (ns)": "6464",
+            "StdDev (ns)": "296.0",
+            "Name": "pointwise_region_0_38"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "85311",
+            "Instances": "10",
+            "Avg (ns)": "8531.1",
+            "Med (ns)": "8448.0",
+            "Min (ns)": "8095",
+            "Max (ns)": "9216",
+            "StdDev (ns)": "466.3",
+            "Name": "embedding_backward_47"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "81121",
+            "Instances": "15",
+            "Avg (ns)": "5408.1",
+            "Med (ns)": "5248.0",
+            "Min (ns)": "5089",
+            "Max (ns)": "5824",
+            "StdDev (ns)": "286.1",
+            "Name": "pointwise_region_1_39"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "75232",
+            "Instances": "40",
+            "Avg (ns)": "1880.8",
+            "Med (ns)": "1824.0",
+            "Min (ns)": "1792",
+            "Max (ns)": "2144",
+            "StdDev (ns)": "93.5",
+            "Name": "resident_accumulate_8"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "70367",
+            "Instances": "20",
+            "Avg (ns)": "3518.4",
+            "Med (ns)": "3504.0",
+            "Min (ns)": "3328",
+            "Max (ns)": "3776",
+            "StdDev (ns)": "121.4",
+            "Name": "pointwise_region_4_57"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "65503",
+            "Instances": "25",
+            "Avg (ns)": "2620.1",
+            "Med (ns)": "2624.0",
+            "Min (ns)": "2592",
+            "Max (ns)": "2656",
+            "StdDev (ns)": "16.8",
+            "Name": "neg_35"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "64513",
+            "Instances": "15",
+            "Avg (ns)": "4300.9",
+            "Med (ns)": "4320.0",
+            "Min (ns)": "4097",
+            "Max (ns)": "4352",
+            "StdDev (ns)": "60.0",
+            "Name": "pointwise_region_0_50"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "58624",
+            "Instances": "20",
+            "Avg (ns)": "2931.2",
+            "Med (ns)": "2944.0",
+            "Min (ns)": "2880",
+            "Max (ns)": "2976",
+            "StdDev (ns)": "28.2",
+            "Name": "pointwise_region_1_54"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "58465",
+            "Instances": "20",
+            "Avg (ns)": "2923.3",
+            "Med (ns)": "2880.0",
+            "Min (ns)": "2720",
+            "Max (ns)": "3296",
+            "StdDev (ns)": "172.1",
+            "Name": "pointwise_region_2_41"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "55389",
+            "Instances": "20",
+            "Avg (ns)": "2769.5",
+            "Med (ns)": "2753.0",
+            "Min (ns)": "2751",
+            "Max (ns)": "2816",
+            "StdDev (ns)": "21.8",
+            "Name": "pointwise_region_2_55"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "55104",
+            "Instances": "5",
+            "Avg (ns)": "11020.8",
+            "Med (ns)": "10912.0",
+            "Min (ns)": "10688",
+            "Max (ns)": "11680",
+            "StdDev (ns)": "381.7",
+            "Name": "reduction_region_3_55"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "54209",
+            "Instances": "20",
+            "Avg (ns)": "2710.5",
+            "Med (ns)": "2720.0",
+            "Min (ns)": "2656",
+            "Max (ns)": "2752",
+            "StdDev (ns)": "27.5",
+            "Name": "pointwise_region_3_56"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "53344",
+            "Instances": "20",
+            "Avg (ns)": "2667.2",
+            "Med (ns)": "2624.0",
+            "Min (ns)": "2592",
+            "Max (ns)": "2912",
+            "StdDev (ns)": "97.5",
+            "Name": "neg_38"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "53248",
+            "Instances": "5",
+            "Avg (ns)": "10649.6",
+            "Med (ns)": "10656.0",
+            "Min (ns)": "10560",
+            "Max (ns)": "10720",
+            "StdDev (ns)": "61.6",
+            "Name": "resident_accumulate_58"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "53216",
+            "Instances": "5",
+            "Avg (ns)": "10643.2",
+            "Med (ns)": "10624.0",
+            "Min (ns)": "10400",
+            "Max (ns)": "10848",
+            "StdDev (ns)": "170.2",
+            "Name": "reduction_region_4_71"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "48352",
+            "Instances": "15",
+            "Avg (ns)": "3223.5",
+            "Med (ns)": "3168.0",
+            "Min (ns)": "2944",
+            "Max (ns)": "3616",
+            "StdDev (ns)": "213.1",
+            "Name": "pointwise_region_3_53"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "47874",
+            "Instances": "40",
+            "Avg (ns)": "1196.9",
+            "Med (ns)": "1184.0",
+            "Min (ns)": "1151",
+            "Max (ns)": "1280",
+            "StdDev (ns)": "33.8",
+            "Name": "resident_accumulate_4"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "44031",
+            "Instances": "15",
+            "Avg (ns)": "2935.4",
+            "Med (ns)": "2976.0",
+            "Min (ns)": "2752",
+            "Max (ns)": "3137",
+            "StdDev (ns)": "132.8",
+            "Name": "pointwise_region_2_40"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "44001",
+            "Instances": "15",
+            "Avg (ns)": "2933.4",
+            "Med (ns)": "2944.0",
+            "Min (ns)": "2912",
+            "Max (ns)": "2945",
+            "StdDev (ns)": "15.7",
+            "Name": "pointwise_region_1_51"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "41604",
+            "Instances": "15",
+            "Avg (ns)": "2773.6",
+            "Med (ns)": "2753.0",
+            "Min (ns)": "2752",
+            "Max (ns)": "2880",
+            "StdDev (ns)": "35.6",
+            "Name": "pointwise_region_2_52"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "39071",
+            "Instances": "20",
+            "Avg (ns)": "1953.6",
+            "Med (ns)": "1888.0",
+            "Min (ns)": "1824",
+            "Max (ns)": "2240",
+            "StdDev (ns)": "127.7",
+            "Name": "resident_accumulate_12"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "38464",
+            "Instances": "10",
+            "Avg (ns)": "3846.4",
+            "Med (ns)": "3840.0",
+            "Min (ns)": "3776",
+            "Max (ns)": "3904",
+            "StdDev (ns)": "49.6",
+            "Name": "reduction_region_0_40"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "38368",
+            "Instances": "10",
+            "Avg (ns)": "3836.8",
+            "Med (ns)": "3824.0",
+            "Min (ns)": "3776",
+            "Max (ns)": "3904",
+            "StdDev (ns)": "43.9",
+            "Name": "reduction_region_0_52"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "38336",
+            "Instances": "10",
+            "Avg (ns)": "3833.6",
+            "Med (ns)": "3824.0",
+            "Min (ns)": "3808",
+            "Max (ns)": "3872",
+            "StdDev (ns)": "29.4",
+            "Name": "reduction_region_1_68"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "33022",
+            "Instances": "5",
+            "Avg (ns)": "6604.4",
+            "Med (ns)": "6656.0",
+            "Min (ns)": "6463",
+            "Max (ns)": "6719",
+            "StdDev (ns)": "116.8",
+            "Name": "embedding_16"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "32578",
+            "Instances": "20",
+            "Avg (ns)": "1628.9",
+            "Med (ns)": "1632.0",
+            "Min (ns)": "1600",
+            "Max (ns)": "1633",
+            "StdDev (ns)": "9.9",
+            "Name": "broadcast_axis_5"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "27358",
+            "Instances": "5",
+            "Avg (ns)": "5471.6",
+            "Med (ns)": "5472.0",
+            "Min (ns)": "5440",
+            "Max (ns)": "5503",
+            "StdDev (ns)": "22.3",
+            "Name": "split_bf16_sum_0"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "27138",
+            "Instances": "10",
+            "Avg (ns)": "2713.8",
+            "Med (ns)": "2720.0",
+            "Min (ns)": "2688",
+            "Max (ns)": "2752",
+            "StdDev (ns)": "20.3",
+            "Name": "pointwise_region_2_50"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "26656",
+            "Instances": "5",
+            "Avg (ns)": "5331.2",
+            "Med (ns)": "5312.0",
+            "Min (ns)": "5312",
+            "Max (ns)": "5376",
+            "StdDev (ns)": "28.6",
+            "Name": "embedding_2"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "26624",
+            "Instances": "5",
+            "Avg (ns)": "5324.8",
+            "Med (ns)": "5312.0",
+            "Min (ns)": "5280",
+            "Max (ns)": "5408",
+            "StdDev (ns)": "48.5",
+            "Name": "pointwise_region_0_37"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "24256",
+            "Instances": "5",
+            "Avg (ns)": "4851.2",
+            "Med (ns)": "4896.0",
+            "Min (ns)": "4736",
+            "Max (ns)": "4928",
+            "StdDev (ns)": "80.3",
+            "Name": "pointwise_region_1_38"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "23553",
+            "Instances": "5",
+            "Avg (ns)": "4710.6",
+            "Med (ns)": "4672.0",
+            "Min (ns)": "4640",
+            "Max (ns)": "4800",
+            "StdDev (ns)": "69.6",
+            "Name": "pointwise_region_0_62"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "15458",
+            "Instances": "5",
+            "Avg (ns)": "3091.6",
+            "Med (ns)": "3040.0",
+            "Min (ns)": "3009",
+            "Max (ns)": "3296",
+            "StdDev (ns)": "116.5",
+            "Name": "pointwise_region_2_39"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "14848",
+            "Instances": "5",
+            "Avg (ns)": "2969.6",
+            "Med (ns)": "2944.0",
+            "Min (ns)": "2912",
+            "Max (ns)": "3104",
+            "StdDev (ns)": "76.4",
+            "Name": "pointwise_region_3_65"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "14720",
+            "Instances": "5",
+            "Avg (ns)": "2944.0",
+            "Med (ns)": "2944.0",
+            "Min (ns)": "2912",
+            "Max (ns)": "2976",
+            "StdDev (ns)": "22.6",
+            "Name": "pointwise_region_1_63"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "14593",
+            "Instances": "5",
+            "Avg (ns)": "2918.6",
+            "Med (ns)": "2944.0",
+            "Min (ns)": "2752",
+            "Max (ns)": "3040",
+            "StdDev (ns)": "109.4",
+            "Name": "pointwise_region_2_64"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "14019",
+            "Instances": "5",
+            "Avg (ns)": "2803.8",
+            "Med (ns)": "2816.0",
+            "Min (ns)": "2785",
+            "Max (ns)": "2817",
+            "StdDev (ns)": "17.2",
+            "Name": "pointwise_region_0_48"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "13985",
+            "Instances": "5",
+            "Avg (ns)": "2797.0",
+            "Med (ns)": "2785.0",
+            "Min (ns)": "2784",
+            "Max (ns)": "2816",
+            "StdDev (ns)": "16.9",
+            "Name": "add_4"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "13599",
+            "Instances": "5",
+            "Avg (ns)": "2719.8",
+            "Med (ns)": "2752.0",
+            "Min (ns)": "2559",
+            "Max (ns)": "2816",
+            "StdDev (ns)": "111.2",
+            "Name": "resident_adam_batch_3"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "13344",
+            "Instances": "5",
+            "Avg (ns)": "2668.8",
+            "Med (ns)": "2656.0",
+            "Min (ns)": "2656",
+            "Max (ns)": "2688",
+            "StdDev (ns)": "17.5",
+            "Name": "pointwise_region_1_49"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "13313",
+            "Instances": "5",
+            "Avg (ns)": "2662.6",
+            "Med (ns)": "2656.0",
+            "Min (ns)": "2656",
+            "Max (ns)": "2688",
+            "StdDev (ns)": "14.2",
+            "Name": "mul_8"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "12673",
+            "Instances": "5",
+            "Avg (ns)": "2534.6",
+            "Med (ns)": "2464.0",
+            "Min (ns)": "2400",
+            "Max (ns)": "2753",
+            "StdDev (ns)": "149.4",
+            "Name": "resident_adam_batch_4"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "12544",
+            "Instances": "5",
+            "Avg (ns)": "2508.8",
+            "Med (ns)": "2464.0",
+            "Min (ns)": "2368",
+            "Max (ns)": "2752",
+            "StdDev (ns)": "144.2",
+            "Name": "resident_adam_batch_0"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "10943",
+            "Instances": "5",
+            "Avg (ns)": "2188.6",
+            "Med (ns)": "2176.0",
+            "Min (ns)": "2144",
+            "Max (ns)": "2240",
+            "StdDev (ns)": "36.4",
+            "Name": "resident_adam_batch_1"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "9920",
+            "Instances": "5",
+            "Avg (ns)": "1984.0",
+            "Med (ns)": "1984.0",
+            "Min (ns)": "1952",
+            "Max (ns)": "2016",
+            "StdDev (ns)": "32.0",
+            "Name": "resident_adam_batch_2"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "8769",
+            "Instances": "5",
+            "Avg (ns)": "1753.8",
+            "Med (ns)": "1345.0",
+            "Min (ns)": "1344",
+            "Max (ns)": "2368",
+            "StdDev (ns)": "560.7",
+            "Name": "reduction_region_0_67"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "5887",
+            "Instances": "5",
+            "Avg (ns)": "1177.4",
+            "Med (ns)": "1152.0",
+            "Min (ns)": "1152",
+            "Max (ns)": "1247",
+            "StdDev (ns)": "41.3",
+            "Name": "pointwise_region_0_177"
+          }
+        ],
+        "cuda_gpu_mem_time_sum": [
+          {
+            "Time (%)": "71.7",
+            "Total Time (ns)": "3769900",
+            "Count": "300",
+            "Avg (ns)": "12566.3",
+            "Med (ns)": "1504.0",
+            "Min (ns)": "1057",
+            "Max (ns)": "55361",
+            "StdDev (ns)": "16369.5",
+            "Operation": "[CUDA memcpy Device-to-Device]"
+          },
+          {
+            "Time (%)": "27.9",
+            "Total Time (ns)": "1464976",
+            "Count": "15",
+            "Avg (ns)": "97665.1",
+            "Med (ns)": "8801.0",
+            "Min (ns)": "1696",
+            "Max (ns)": "296579",
+            "StdDev (ns)": "135355.5",
+            "Operation": "[CUDA memset]"
+          },
+          {
+            "Time (%)": "0.3",
+            "Total Time (ns)": "16672",
+            "Count": "15",
+            "Avg (ns)": "1111.5",
+            "Med (ns)": "1088.0",
+            "Min (ns)": "1087",
+            "Max (ns)": "1249",
+            "StdDev (ns)": "47.8",
+            "Operation": "[CUDA memcpy Device-to-Host]"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "7712",
+            "Count": "20",
+            "Avg (ns)": "385.6",
+            "Med (ns)": "384.0",
+            "Min (ns)": "288",
+            "Max (ns)": "832",
+            "StdDev (ns)": "111.1",
+            "Operation": "[CUDA memcpy Host-to-Device]"
+          }
+        ],
+        "cuda_api_sum": [
+          {
+            "Time (%)": "92.0",
+            "Total Time (ns)": "92883805",
+            "Num Calls": "15",
+            "Avg (ns)": "6192253.7",
+            "Med (ns)": "3241268.0",
+            "Min (ns)": "413203",
+            "Max (ns)": "15389371",
+            "StdDev (ns)": "6437917.8",
+            "Name": "cuMemcpyDtoHAsync_v2"
+          },
+          {
+            "Time (%)": "3.6",
+            "Total Time (ns)": "3616126",
+            "Num Calls": "5",
+            "Avg (ns)": "723225.2",
+            "Med (ns)": "638549.0",
+            "Min (ns)": "565470",
+            "Max (ns)": "1191917",
+            "StdDev (ns)": "264963.8",
+            "Name": "cuGraphLaunch"
+          },
+          {
+            "Time (%)": "1.5",
+            "Total Time (ns)": "1476616",
+            "Num Calls": "300",
+            "Avg (ns)": "4922.1",
+            "Med (ns)": "4183.0",
+            "Min (ns)": "3617",
+            "Max (ns)": "25077",
+            "StdDev (ns)": "1943.4",
+            "Name": "cuMemcpyDtoDAsync_v2"
+          },
+          {
+            "Time (%)": "1.4",
+            "Total Time (ns)": "1392278",
+            "Num Calls": "460",
+            "Avg (ns)": "3026.7",
+            "Med (ns)": "2796.0",
+            "Min (ns)": "2655",
+            "Max (ns)": "13515",
+            "StdDev (ns)": "845.6",
+            "Name": "cuLaunchKernel"
+          },
+          {
+            "Time (%)": "1.3",
+            "Total Time (ns)": "1343393",
+            "Num Calls": "16",
+            "Avg (ns)": "83962.1",
+            "Med (ns)": "1878.0",
+            "Min (ns)": "601",
+            "Max (ns)": "293145",
+            "StdDev (ns)": "126443.8",
+            "Name": "cuStreamSynchronize"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "99012",
+            "Num Calls": "20",
+            "Avg (ns)": "4950.6",
+            "Med (ns)": "3882.5",
+            "Min (ns)": "2765",
+            "Max (ns)": "20398",
+            "StdDev (ns)": "3860.5",
+            "Name": "cuMemcpyHtoDAsync_v2"
+          },
+          {
+            "Time (%)": "0.1",
+            "Total Time (ns)": "79890",
+            "Num Calls": "5",
+            "Avg (ns)": "15978.0",
+            "Med (ns)": "6853.0",
+            "Min (ns)": "6772",
+            "Max (ns)": "50305",
+            "StdDev (ns)": "19216.9",
+            "Name": "cuMemsetD8Async"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "18926",
+            "Num Calls": "1",
+            "Avg (ns)": "18926.0",
+            "Med (ns)": "18926.0",
+            "Min (ns)": "18926",
+            "Max (ns)": "18926",
+            "StdDev (ns)": "0.0",
+            "Name": "cuProfilerStart"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "3155",
+            "Num Calls": "1",
+            "Avg (ns)": "3155.0",
+            "Med (ns)": "3155.0",
+            "Min (ns)": "3155",
+            "Max (ns)": "3155",
+            "StdDev (ns)": "0.0",
+            "Name": "cuCtxSynchronize"
+          },
+          {
+            "Time (%)": "0.0",
+            "Total Time (ns)": "430",
+            "Num Calls": "1",
+            "Avg (ns)": "430.0",
+            "Med (ns)": "430.0",
+            "Min (ns)": "430",
+            "Max (ns)": "430",
+            "StdDev (ns)": "0.0",
+            "Name": "cuProfilerStop"
+          }
+        ]
+      },
+      "kernel_ms_per_update": {
+        "matmul": 7.1610076,
+        "adam": 2.9539246000000006,
+        "view_materialization": 1.2476492,
+        "reduction": 2.3190359999999997,
+        "gradient_accumulation": 1.6155861999999999,
+        "other": 3.508128999999999
+      },
+      "kernel_time_percent": {
+        "matmul": 38.07966470106463,
+        "adam": 15.70790936183708,
+        "view_materialization": 6.6345500318351185,
+        "reduction": 12.331799970397757,
+        "gradient_accumulation": 8.591106758728637,
+        "other": 18.654969176136767
+      },
+      "profiled_result": {
+        "archive": "target/transformer-training/scale-screen/w1024_s512/archive",
+        "backend": "tnsr mixed BF16 resident Adam replay",
+        "config": {
+          "batch": 1,
+          "epsilon": 9.999999747378752e-06,
+          "heads": 16,
+          "hidden": 2752,
+          "layers": 4,
+          "learning_rate": 9.999999747378752e-05,
+          "max_grad_norm": 1.0,
+          "sequence": 512,
+          "vocab": 4096,
+          "width": 1024
+        },
+        "graph_nodes_with_gradients": 2118,
+        "master_parameter_bytes": 221493248,
+        "memory": {
+          "after_qualification": {
+            "current_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3758096384,
+              "used_current": 2840888160,
+              "used_high": 3732001140
+            },
+            "default_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3758096384,
+              "used_current": 2840888160,
+              "used_high": 3732001140
+            },
+            "same_pool": true
+          },
+          "after_setup": {
+            "current_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3758096384,
+              "used_current": 2618962292,
+              "used_high": 3732001140
+            },
+            "default_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3758096384,
+              "used_current": 2618962292,
+              "used_high": 3732001140
+            },
+            "same_pool": true
+          },
+          "initial": {
+            "current_pool": {
+              "reserved_current": 0,
+              "reserved_high": 0,
+              "used_current": 0,
+              "used_high": 0
+            },
+            "default_pool": {
+              "reserved_current": 0,
+              "reserved_high": 0,
+              "used_current": 0,
+              "used_high": 0
+            },
+            "same_pool": true
+          },
+          "lifetime_peak_before_reset": {
+            "current_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3758096384,
+              "used_current": 2840888160,
+              "used_high": 3732001140
+            },
+            "default_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3758096384,
+              "used_current": 2840888160,
+              "used_high": 3732001140
+            },
+            "same_pool": true
+          },
+          "scope": "CUDA current/default process memory-pool accounting only; USED_HIGH/RESERVED_HIGH are exact for each queried pool, not whole-process VRAM; excludes modules/context and other pools. Root separately samples whole-process NVML. High-water marks reset only after warmups; no allocations released by reset.",
+          "steady_after_timing": {
+            "current_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3422552064,
+              "used_current": 2840888160,
+              "used_high": 2840888160
+            },
+            "default_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3422552064,
+              "used_current": 2840888160,
+              "used_high": 2840888160
+            },
+            "same_pool": true
+          },
+          "steady_initial_after_reset": {
+            "current_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3422552064,
+              "used_current": 2840888160,
+              "used_high": 2840888160
+            },
+            "default_pool": {
+              "reserved_current": 3422552064,
+              "reserved_high": 3422552064,
+              "used_current": 2840888160,
+              "used_high": 2840888160
+            },
+            "same_pool": true
+          },
+          "tensor_payload_info": {
+            "bf16_bytes": 345159680,
+            "bf16_tensor_core_programs": 87,
+            "exact_index_bytes": 6144,
+            "f32_bytes": 723331404,
+            "immutable_source_bytes": 1065288,
+            "kernels": 586,
+            "replay": true,
+            "reused_allocations": 406,
+            "unpooled_bytes": 2181529932
+          }
+        },
+        "numerics": {
+          "adam": {
+            "batch_size": 8,
+            "beta1": 0.9,
+            "beta2": 0.999,
+            "epsilon": 1e-08,
+            "learning_rate": 9.999999747378752e-05,
+            "weight_decay": 0.0
+          },
+          "autograd": "primitive default; no compact-softmax/split-K rewrite",
+          "clip_epsilon": 1e-06,
+          "experimental_kernel_flags": false,
+          "matmul_precision": "Tf32x3",
+          "storage": "explicit BF16 linears/attention/FFN multiply; f32 residuals/LN/softmax/masters/Adam"
+        },
+        "parameter_elements": 55373312,
+        "parameter_tensors": 60,
+        "profiled": true,
+        "qualification": {
+          "config": {
+            "batch": 1,
+            "epsilon": 9.999999747378752e-06,
+            "heads": 16,
+            "hidden": 2752,
+            "layers": 4,
+            "learning_rate": 9.999999747378752e-05,
+            "max_grad_norm": 1.0,
+            "sequence": 512,
+            "vocab": 4096,
+            "width": 1024
+          },
+          "dtype": "f32-le",
+          "gradient_norm_before_clip": 10.463745013942038,
+          "gradient_scale": 0.09556806832551956,
+          "gradients_file": "qual_gradients.f32",
+          "loss": 8.55615234375,
+          "offset_units": "f32 elements",
+          "optimizer_step": 1,
+          "scope": "untimed first complete update; gradients are clipped; weights are post-Adam; snapshot tensors follow original archive order",
+          "snapshot_seconds": 0.784375947,
+          "tensors": [
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "final_norm.bias",
+              "offset": 0,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "final_norm.weight",
+              "offset": 1024,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.0.attn_norm.bias",
+              "offset": 2048,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.0.attn_norm.weight",
+              "offset": 3072,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.0.down.bias",
+              "offset": 4096,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.0.down.weight",
+              "offset": 5120,
+              "shape": [
+                1024,
+                2752
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.0.ffn_norm.bias",
+              "offset": 2823168,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.0.ffn_norm.weight",
+              "offset": 2824192,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 2752,
+              "group": "train",
+              "name": "layer.0.gate.bias",
+              "offset": 2825216,
+              "shape": [
+                2752
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.0.gate.weight",
+              "offset": 2827968,
+              "shape": [
+                2752,
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.0.out.bias",
+              "offset": 5646016,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1048576,
+              "group": "train",
+              "name": "layer.0.out.weight",
+              "offset": 5647040,
+              "shape": [
+                1024,
+                1024
+              ]
+            },
+            {
+              "count": 3072,
+              "group": "train",
+              "name": "layer.0.qkv.bias",
+              "offset": 6695616,
+              "shape": [
+                3072
+              ]
+            },
+            {
+              "count": 3145728,
+              "group": "train",
+              "name": "layer.0.qkv.weight",
+              "offset": 6698688,
+              "shape": [
+                3072,
+                1024
+              ]
+            },
+            {
+              "count": 2752,
+              "group": "train",
+              "name": "layer.0.up.bias",
+              "offset": 9844416,
+              "shape": [
+                2752
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.0.up.weight",
+              "offset": 9847168,
+              "shape": [
+                2752,
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.1.attn_norm.bias",
+              "offset": 12665216,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.1.attn_norm.weight",
+              "offset": 12666240,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.1.down.bias",
+              "offset": 12667264,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.1.down.weight",
+              "offset": 12668288,
+              "shape": [
+                1024,
+                2752
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.1.ffn_norm.bias",
+              "offset": 15486336,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.1.ffn_norm.weight",
+              "offset": 15487360,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 2752,
+              "group": "train",
+              "name": "layer.1.gate.bias",
+              "offset": 15488384,
+              "shape": [
+                2752
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.1.gate.weight",
+              "offset": 15491136,
+              "shape": [
+                2752,
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.1.out.bias",
+              "offset": 18309184,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1048576,
+              "group": "train",
+              "name": "layer.1.out.weight",
+              "offset": 18310208,
+              "shape": [
+                1024,
+                1024
+              ]
+            },
+            {
+              "count": 3072,
+              "group": "train",
+              "name": "layer.1.qkv.bias",
+              "offset": 19358784,
+              "shape": [
+                3072
+              ]
+            },
+            {
+              "count": 3145728,
+              "group": "train",
+              "name": "layer.1.qkv.weight",
+              "offset": 19361856,
+              "shape": [
+                3072,
+                1024
+              ]
+            },
+            {
+              "count": 2752,
+              "group": "train",
+              "name": "layer.1.up.bias",
+              "offset": 22507584,
+              "shape": [
+                2752
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.1.up.weight",
+              "offset": 22510336,
+              "shape": [
+                2752,
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.2.attn_norm.bias",
+              "offset": 25328384,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.2.attn_norm.weight",
+              "offset": 25329408,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.2.down.bias",
+              "offset": 25330432,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.2.down.weight",
+              "offset": 25331456,
+              "shape": [
+                1024,
+                2752
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.2.ffn_norm.bias",
+              "offset": 28149504,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.2.ffn_norm.weight",
+              "offset": 28150528,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 2752,
+              "group": "train",
+              "name": "layer.2.gate.bias",
+              "offset": 28151552,
+              "shape": [
+                2752
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.2.gate.weight",
+              "offset": 28154304,
+              "shape": [
+                2752,
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.2.out.bias",
+              "offset": 30972352,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1048576,
+              "group": "train",
+              "name": "layer.2.out.weight",
+              "offset": 30973376,
+              "shape": [
+                1024,
+                1024
+              ]
+            },
+            {
+              "count": 3072,
+              "group": "train",
+              "name": "layer.2.qkv.bias",
+              "offset": 32021952,
+              "shape": [
+                3072
+              ]
+            },
+            {
+              "count": 3145728,
+              "group": "train",
+              "name": "layer.2.qkv.weight",
+              "offset": 32025024,
+              "shape": [
+                3072,
+                1024
+              ]
+            },
+            {
+              "count": 2752,
+              "group": "train",
+              "name": "layer.2.up.bias",
+              "offset": 35170752,
+              "shape": [
+                2752
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.2.up.weight",
+              "offset": 35173504,
+              "shape": [
+                2752,
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.3.attn_norm.bias",
+              "offset": 37991552,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.3.attn_norm.weight",
+              "offset": 37992576,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.3.down.bias",
+              "offset": 37993600,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.3.down.weight",
+              "offset": 37994624,
+              "shape": [
+                1024,
+                2752
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.3.ffn_norm.bias",
+              "offset": 40812672,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.3.ffn_norm.weight",
+              "offset": 40813696,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 2752,
+              "group": "train",
+              "name": "layer.3.gate.bias",
+              "offset": 40814720,
+              "shape": [
+                2752
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.3.gate.weight",
+              "offset": 40817472,
+              "shape": [
+                2752,
+                1024
+              ]
+            },
+            {
+              "count": 1024,
+              "group": "train",
+              "name": "layer.3.out.bias",
+              "offset": 43635520,
+              "shape": [
+                1024
+              ]
+            },
+            {
+              "count": 1048576,
+              "group": "train",
+              "name": "layer.3.out.weight",
+              "offset": 43636544,
+              "shape": [
+                1024,
+                1024
+              ]
+            },
+            {
+              "count": 3072,
+              "group": "train",
+              "name": "layer.3.qkv.bias",
+              "offset": 44685120,
+              "shape": [
+                3072
+              ]
+            },
+            {
+              "count": 3145728,
+              "group": "train",
+              "name": "layer.3.qkv.weight",
+              "offset": 44688192,
+              "shape": [
+                3072,
+                1024
+              ]
+            },
+            {
+              "count": 2752,
+              "group": "train",
+              "name": "layer.3.up.bias",
+              "offset": 47833920,
+              "shape": [
+                2752
+              ]
+            },
+            {
+              "count": 2818048,
+              "group": "train",
+              "name": "layer.3.up.weight",
+              "offset": 47836672,
+              "shape": [
+                2752,
+                1024
+              ]
+            },
+            {
+              "count": 524288,
+              "group": "train",
+              "name": "position.weight",
+              "offset": 50654720,
+              "shape": [
+                512,
+                1024
+              ]
+            },
+            {
+              "count": 4194304,
+              "group": "train",
+              "name": "token.weight",
+              "offset": 51179008,
+              "shape": [
+                4096,
+                1024
+              ]
+            }
+          ],
+          "weights_file": "qual_weights.f32"
+        },
+        "qualification_step": {
+          "elapsed_ms": 161.19830399999998,
+          "gradient_norm_before_clip": 10.463745013942038,
+          "gradient_scale": 0.09556806832551956,
+          "index": 0,
+          "info": {
+            "bf16_bytes": 345159680,
+            "bf16_tensor_core_programs": 87,
+            "exact_index_bytes": 6144,
+            "f32_bytes": 723331404,
+            "immutable_source_bytes": 1065288,
+            "kernels": 586,
+            "replay": true,
+            "reused_allocations": 406,
+            "unpooled_bytes": 2181529932
+          },
+          "kernel_launches": 677,
+          "loss": 8.55615234375,
+          "optimizer_step": 1,
+          "phase": "qualification",
+          "replay_active": true,
+          "transfers": {
+            "f32_bytes": 0,
+            "f32_uploads": 0,
+            "index_bytes": 6144,
+            "index_uploads": 3,
+            "parameter_bytes": 0,
+            "parameter_copies": 0,
+            "parameter_refresh_seconds": 6.933e-06,
+            "upload_seconds": 0.000303264
+          }
+        },
+        "samples": [
+          {
+            "elapsed_ms": 21.252713999999997,
+            "gradient_norm_before_clip": 5.898569431471552,
+            "gradient_scale": 0.16953259706497192,
+            "index": 0,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 0.576999306678772,
+            "optimizer_step": 7,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000506049,
+              "upload_seconds": 0.000352568
+            }
+          },
+          {
+            "elapsed_ms": 19.827705,
+            "gradient_norm_before_clip": 2.6342146674222473,
+            "gradient_scale": 0.37961962819099426,
+            "index": 1,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 0.2480514794588089,
+            "optimizer_step": 8,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000281573,
+              "upload_seconds": 0.000275913
+            }
+          },
+          {
+            "elapsed_ms": 20.630064,
+            "gradient_norm_before_clip": 1.0843089674486919,
+            "gradient_scale": 0.9222455024719238,
+            "index": 2,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 0.10018178820610046,
+            "optimizer_step": 9,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.00027465,
+              "upload_seconds": 0.000282986
+            }
+          },
+          {
+            "elapsed_ms": 19.811875999999998,
+            "gradient_norm_before_clip": 0.41767641343503054,
+            "gradient_scale": 1.0,
+            "index": 3,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 0.03907989710569382,
+            "optimizer_step": 10,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000289729,
+              "upload_seconds": 0.000276383
+            }
+          },
+          {
+            "elapsed_ms": 20.528212,
+            "gradient_norm_before_clip": 0.22012757054289675,
+            "gradient_scale": 1.0,
+            "index": 4,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 0.01919122040271759,
+            "optimizer_step": 11,
+            "phase": "measured",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000260984,
+              "upload_seconds": 0.000277015
+            }
+          }
+        ],
+        "setup": {
+          "archive_load_seconds": 0.315725264,
+          "graph_build_seconds": 0.106134655,
+          "mixed_compile_seconds": 0.514456119,
+          "resident_owner_seconds": 0.061484526,
+          "total_seconds": 1.410036241
+        },
+        "timing": {
+          "mean_ms": 20.4101142,
+          "measured_updates": 5,
+          "median_ms": 20.528212,
+          "qualification_updates": 1,
+          "replay_active_steps": 5,
+          "replay_fallback_steps": 0,
+          "scope": "synchronized complete step: begin/zero, exact-index feed creation+upload, forward+loss, backward, gradient accumulation, norm+clip, Adam+health, device publications, scalar loss readback; excludes archive/setup/qualification snapshots; fixed batch",
+          "tokens_per_second_from_total_time": 25085.601921815804,
+          "warmup_updates": 5
+        },
+        "warmups": [
+          {
+            "elapsed_ms": 19.553055999999998,
+            "gradient_norm_before_clip": 15.54810473308614,
+            "gradient_scale": 0.0643165186047554,
+            "index": 0,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 6.855523109436035,
+            "optimizer_step": 2,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000251296,
+              "upload_seconds": 0.000357277
+            }
+          },
+          {
+            "elapsed_ms": 20.188889000000003,
+            "gradient_norm_before_clip": 24.68356871388586,
+            "gradient_scale": 0.040512777864933014,
+            "index": 1,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 4.891532897949219,
+            "optimizer_step": 3,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000196832,
+              "upload_seconds": 0.000277746
+            }
+          },
+          {
+            "elapsed_ms": 19.417268,
+            "gradient_norm_before_clip": 23.026651614386154,
+            "gradient_scale": 0.04342793673276901,
+            "index": 2,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 3.3133926391601562,
+            "optimizer_step": 4,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.00019008,
+              "upload_seconds": 0.000278377
+            }
+          },
+          {
+            "elapsed_ms": 20.213275,
+            "gradient_norm_before_clip": 16.539254397800292,
+            "gradient_scale": 0.060462214052677155,
+            "index": 3,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 2.0923666954040527,
+            "optimizer_step": 5,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.00020081,
+              "upload_seconds": 0.000274279
+            }
+          },
+          {
+            "elapsed_ms": 19.586849,
+            "gradient_norm_before_clip": 10.299030176818,
+            "gradient_scale": 0.0970965102314949,
+            "index": 4,
+            "info": {
+              "bf16_bytes": 345159680,
+              "bf16_tensor_core_programs": 87,
+              "exact_index_bytes": 6144,
+              "f32_bytes": 723331404,
+              "immutable_source_bytes": 1065288,
+              "kernels": 586,
+              "replay": true,
+              "reused_allocations": 406,
+              "unpooled_bytes": 2181529932
+            },
+            "kernel_launches": 677,
+            "loss": 1.1721644401550293,
+            "optimizer_step": 6,
+            "phase": "warmup",
+            "replay_active": true,
+            "transfers": {
+              "f32_bytes": 0,
+              "f32_uploads": 0,
+              "index_bytes": 6144,
+              "index_uploads": 3,
+              "parameter_bytes": 221493248,
+              "parameter_copies": 60,
+              "parameter_refresh_seconds": 0.000191622,
+              "upload_seconds": 0.000276062
+            }
+          }
+        ]
+      },
+      "first_step_snapshots_bitwise_equal_to_original_native": true,
+      "first_step_snapshot_sha256": {
+        "qual_gradients.f32": "45920ed8d0af43e3bb135f76a15a4d9704a63b8f43d53e294a8a661a77e3dc4d",
+        "qual_weights.f32": "31f42988366f14f450963ca42975063cd1a53f30b3844f5bae403832be54ae72"
+      },
+      "report_path": "target/transformer-training/profiles-v1/w1024_s512.nsys-rep",
+      "sqlite_path": "target/transformer-training/profiles-v1/w1024_s512.sqlite"
+    }
+  },
+  "source_sha256": {
+    "examples/transformer_training_bench/training.rs": "5cbe0af3efe83d289918738bdafd0a373115092ec012e025606778aac40e7fae",
+    "target/release/examples/transformer_training_bench": "8443b94d689f4936d2675340704a05d265c153d47fd55da14e7d317686df9683"
+  }
+}

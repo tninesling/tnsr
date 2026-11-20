@@ -1,0 +1,30 @@
+{
+  "qualified": true,
+  "scope": "Original Global forward Rust generator prefix byte-exact and source-bound live CPU Global IR/PTX identity/default versus explicit Scalar identity. No external historical PTX golden comparison is claimed.",
+  "prefix_sha256": "f35f02880951dd01bb38c1034ec52f7ab39745d20fc519d1a6ffdd5d779c79d1",
+  "prefix_bytes": 15736,
+  "source_archive": {
+    "path": "docs/benchmarks/transformer-training-sources/attention-register-live-v1-20261119.tar.gz",
+    "sha256": "5ffa9d710088a9888f79a25304467c19507b7d50703db2fe4d50ceffe57820d3",
+    "bytes": 1516257,
+    "files": 402,
+    "reopened_all_members_verified": true,
+    "runtime_equivalent_isolated_v2_archive": "38fd0a07875b6c13be31158ca3397197dd65e8df39bae5b2c73c4aa6aae714d2",
+    "sole_delta_vs_isolated_v2": "Comment correction in forward.rs; all runtime/CLI/testcode bytes identical."
+  },
+  "live_default_identity_test": {
+    "path": "target/attention-register-live-build-v1/retained-default-prefix-test.log",
+    "sha256": "0aece01f8eb0e43f58fe04e73d022d5c0a55428c6d6f110d4d8b7cf961b4417b"
+  },
+  "CPU_tests": {
+    "path": "target/attention-register-live-build-v1/cpu-tests-v1.log",
+    "sha256": "540dcd4516b3ae39feb87aa85e4b04b402daa0836a75c399a7eae39ef86f110d"
+  },
+  "optional_external_golden_limit": "TNSR_ONLINE_SCALAR_GOLDENS and the historical golden files were not bound for this run. The legacy revision4-named test may compare current default/explicit Scalar without external files; its name alone does not establish historical golden equality.",
+  "historical_builder_default_prefix": {
+    "path": "target/attention-register-live-build-v1/default-prefix.json",
+    "sha256": "8b67183a760544f24a679cc4761ad7a248d2f7366f2b05537401724139e789d9",
+    "qualified": true
+  },
+  "historical_builder_metadata_preserved": true
+}

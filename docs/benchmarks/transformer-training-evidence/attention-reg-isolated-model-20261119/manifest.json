@@ -1,0 +1,267 @@
+{
+  "archive": {
+    "path": "docs/benchmarks/transformer-training-evidence/attention-reg-isolated-model-20261119/raw-evidence.tar.gz",
+    "sha256": "053ac13d819044b2a3bd3674f40574bd8c6aa618339183ddeb345683814ad36f",
+    "bytes": 242772
+  },
+  "members": {
+    "target/attention-reg-isolated-build-v1/README.md": {
+      "sha256": "9402da190326b16ff0b959cc49ceba049dcaca0c1aea26c999aaf24ddcebe61b",
+      "bytes": 2472
+    },
+    "target/attention-reg-isolated-build-v1/base.json": {
+      "sha256": "771316280e82b0d67a797f86e0f581b1670551ad748777f6bc74536c16c9e2f3",
+      "bytes": 63874
+    },
+    "target/attention-reg-isolated-build-v1/binary.json": {
+      "sha256": "9a11434aa52b83b50cd185f85d2240180c185114f7873ac0b30f3796792cf517",
+      "bytes": 409
+    },
+    "target/attention-reg-isolated-build-v1/check-attempt1.log": {
+      "sha256": "1ca9cca3865410cf8fd7dd0b385913fd1c94fe6635b5e5202f101098900ceeff",
+      "bytes": 489
+    },
+    "target/attention-reg-isolated-build-v1/check-attempt2.log": {
+      "sha256": "d52a933b166c6312048bcf19979f40a9ca743f1ede69f8b1bb741c667111f60a",
+      "bytes": 575
+    },
+    "target/attention-reg-isolated-build-v1/check-attempt3.log": {
+      "sha256": "a5c67a1ddf98df367194573c6c4936b2e874b4bdea297f017098ba4f5c8715e2",
+      "bytes": 138
+    },
+    "target/attention-reg-isolated-build-v1/check-cpu-default-v1.log": {
+      "sha256": "fecede7c2157efe2f16c8c8b9dce94b0fb4dd384dca8207046c8bf7636eb0ffe",
+      "bytes": 72
+    },
+    "target/attention-reg-isolated-build-v1/check-final-v1.log": {
+      "sha256": "e5093ff25bd4c30da8fa3fd2c49a8f1fcad8ff7bb37cd2702d8135ce96e980b7",
+      "bytes": 138
+    },
+    "target/attention-reg-isolated-build-v1/cli-help.txt": {
+      "sha256": "dfeeec4d1bd6cb5b1875f94417d3eedc1a512193ce5173fcf69b8c5a40508c1e",
+      "bytes": 5095
+    },
+    "target/attention-reg-isolated-build-v1/cli-tests-edit.py": {
+      "sha256": "52a17b76e3598ca9851261512bfe71adc723e507b41c559adf3caf6114b4ffde",
+      "bytes": 2150
+    },
+    "target/attention-reg-isolated-build-v1/clippy-v1.log": {
+      "sha256": "3c474044fa6b1a3664427492ab6155b582a5513b3b1ce42c566080c022e84fc2",
+      "bytes": 139
+    },
+    "target/attention-reg-isolated-build-v1/cpu-tests-v1.log": {
+      "sha256": "b48a3db7dc33b73f08a3a62d4f678ca83320c055d596bebe1d9467deeaad97e8",
+      "bytes": 2716
+    },
+    "target/attention-reg-isolated-build-v1/fmt-final-v1.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "target/attention-reg-isolated-build-v1/ignored-list.log": {
+      "sha256": "667da8a21f27bae7bb4005cf9a53c8aa8c5fe4cc6e4afdeec9c30aa761b9de1a",
+      "bytes": 9538
+    },
+    "target/attention-reg-isolated-build-v1/implement.py": {
+      "sha256": "c16c38216fc196be2f78b4b5cc001a1f70e5d208f49375f71fcb1cd41336deca",
+      "bytes": 5063
+    },
+    "target/attention-reg-isolated-build-v1/isolated.patch": {
+      "sha256": "11ddb7187a038d7ede9be2a73e8f99fa8521b84683818abacea3e41ff5237aa7",
+      "bytes": 41725
+    },
+    "target/attention-reg-isolated-build-v1/qualification.json": {
+      "sha256": "6d5e518b4e6d2e565aca9b4fd20c17287569c0d9af6338e9381844d73372133c",
+      "bytes": 2018
+    },
+    "target/attention-reg-isolated-build-v1/release-build.jsonl": {
+      "sha256": "9b9b56d6df65ac02115bbbd6276182444a7f9cdf2b9f24ce01e3c51cf04c465c",
+      "bytes": 190252
+    },
+    "target/attention-reg-isolated-build-v1/release-build.log": {
+      "sha256": "9a7aaf4c754ca861afb82b540dd7b12c9a1dea76d6a3c83b334fb13d3195e9d3",
+      "bytes": 129
+    },
+    "target/attention-reg-isolated-build-v1/runtime-edit.py": {
+      "sha256": "6d46b1ba96b7c39c2c506d806c91368d1d6ee3dcb712d93cada2a292d7ab77e4",
+      "bytes": 5609
+    },
+    "target/attention-reg-isolated-build-v1/seal.py": {
+      "sha256": "5bd96f8e931170000d24f85c82fcf2559ca55e6325238ef1a235167394bbfb09",
+      "bytes": 5925
+    },
+    "target/attention-reg-isolated-build-v1/source-after.json": {
+      "sha256": "d7aa9f33b3857f8772807c4bb1db6b97c45885a53c77c770974f673f93061562",
+      "bytes": 60454
+    },
+    "target/attention-reg-isolated-build-v1/source-archive.json": {
+      "sha256": "5c678f7f219b0a72169ea803d237dd03655dac755f26f056e56642b56ab12385",
+      "bytes": 353
+    },
+    "target/attention-reg-isolated-build-v1/source-before.json": {
+      "sha256": "d7aa9f33b3857f8772807c4bb1db6b97c45885a53c77c770974f673f93061562",
+      "bytes": 60454
+    },
+    "target/attention-reg-isolated-build-v1/source-delta-proof.json": {
+      "sha256": "4fde42a7bcea4e4c6227f9835d36194bb212b4be9ad48a0af13c5b580e248b34",
+      "bytes": 2812
+    },
+    "target/attention-reg-isolated-build-v1/test-build.jsonl": {
+      "sha256": "70d006273b3f6d55c9c35589742ce6881a4dfdaf079fd5a3744e4692ffb8bb60",
+      "bytes": 184975
+    },
+    "target/attention-reg-isolated-build-v1/test-build.log": {
+      "sha256": "f998b36cde88d3eafe6c4c7446b77487d2cc7771780272ff473c471c507ca5d1",
+      "bytes": 73
+    },
+    "target/attention-reg-isolated-build-v2/README.md": {
+      "sha256": "f380cef28ce88fdec7283bbaba54215935f7e7b41c2934751d3ac7c66afd761e",
+      "bytes": 1262
+    },
+    "target/attention-reg-isolated-build-v2/audit-and-package.py": {
+      "sha256": "b673be456b7b3c4b1f4986145237d519691c76565ed0b86a3ae892c3b6ac2a76",
+      "bytes": 15455
+    },
+    "target/attention-reg-isolated-build-v2/base.json": {
+      "sha256": "46cbf2f50f785c1d71e843610851e7522631299e7ceb88d41ecaae7376d620e1",
+      "bytes": 64125
+    },
+    "target/attention-reg-isolated-build-v2/binary.json": {
+      "sha256": "9426c4b7192dfc9fbaa08de9ac6d48b0d080e18b703c5b7028e7be24e9434554",
+      "bytes": 409
+    },
+    "target/attention-reg-isolated-build-v2/check-final-v1.log": {
+      "sha256": "b2e9114a3c5bbaf5d8c93b530442d9a9f18db728ceb683e23a2833f0ee30b68d",
+      "bytes": 139
+    },
+    "target/attention-reg-isolated-build-v2/cli-help.txt": {
+      "sha256": "dfeeec4d1bd6cb5b1875f94417d3eedc1a512193ce5173fcf69b8c5a40508c1e",
+      "bytes": 5095
+    },
+    "target/attention-reg-isolated-build-v2/clippy-v1.log": {
+      "sha256": "3120996ae602854b4fb7815e92bea188d0da770f14e7248a409e3d09574ef2a4",
+      "bytes": 139
+    },
+    "target/attention-reg-isolated-build-v2/cpu-tests-v1.log": {
+      "sha256": "8c1ae4314e1445b9a326c8388150fd06a8eeaedc53d93e81cf48a319f86b3c21",
+      "bytes": 2716
+    },
+    "target/attention-reg-isolated-build-v2/fmt-final-v1.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "target/attention-reg-isolated-build-v2/ignored-list.log": {
+      "sha256": "667da8a21f27bae7bb4005cf9a53c8aa8c5fe4cc6e4afdeec9c30aa761b9de1a",
+      "bytes": 9538
+    },
+    "target/attention-reg-isolated-build-v2/qualification.json": {
+      "sha256": "a3d0f5ee52729d01a7fb0c01c65fc5c34ed04b3c8b9018b57cb1f87706f86848",
+      "bytes": 2096
+    },
+    "target/attention-reg-isolated-build-v2/release-build.jsonl": {
+      "sha256": "05c0cdcfee18e16811b2445a515ae30cba7c0c980a4b7b8442b1f9b87705d823",
+      "bytes": 190250
+    },
+    "target/attention-reg-isolated-build-v2/release-build.log": {
+      "sha256": "a70da5408e7a6da7efe97b23011504833b16a7875bda14543f2504b5b8c7d97a",
+      "bytes": 62
+    },
+    "target/attention-reg-isolated-build-v2/seal.py": {
+      "sha256": "a7012da2e6efb1a277b8afb79bd04493cd529c091dd0f9a3e316376fb1565f53",
+      "bytes": 5691
+    },
+    "target/attention-reg-isolated-build-v2/source-after.json": {
+      "sha256": "f6a2b9dd1891eb52a4d9888b626e1af1c0758e55babbec192d7948146214db5e",
+      "bytes": 60454
+    },
+    "target/attention-reg-isolated-build-v2/source-archive.json": {
+      "sha256": "130ab69da298c11bf89d0c3b4d2f614db927dc63b7a83fe21a36805600dc2b7f",
+      "bytes": 353
+    },
+    "target/attention-reg-isolated-build-v2/source-before.json": {
+      "sha256": "f6a2b9dd1891eb52a4d9888b626e1af1c0758e55babbec192d7948146214db5e",
+      "bytes": 60454
+    },
+    "target/attention-reg-isolated-build-v2/source-delta-proof.json": {
+      "sha256": "5265ceb17abbcb0a270e703d3713505024ccad01ac531a7b64170b0522390198",
+      "bytes": 724
+    },
+    "target/attention-reg-isolated-build-v2/test-build.jsonl": {
+      "sha256": "6b56253eeba2fe89dfacff1eaab59fd80dc12bd8332cd5fdfeb1d776d801777a",
+      "bytes": 184975
+    },
+    "target/attention-reg-isolated-build-v2/test-build.log": {
+      "sha256": "6ee7cdbc5065df89c7612edd452e7559642235c2a00b4b952a53916f720d44e5",
+      "bytes": 73
+    },
+    "target/attention-reg-isolated-build-v2/test-only-v2.patch": {
+      "sha256": "50eb5deea98a7c540b944cb9580ef4798345f9a250e2a29a96a81c2a67a7ba73",
+      "bytes": 4579
+    },
+    "target/attention-reg-isolated-model-v2/artifacts/exact-state-register-statistics-b32-unique-v16384.json": {
+      "sha256": "4557d229045ae93ee89b65b4f3e08c9c744dce495d7f8863224c5213ff75fd27",
+      "bytes": 29572
+    },
+    "target/attention-reg-isolated-model-v2/artifacts/global-prune-4-pairs-214-values.json": {
+      "sha256": "89909f8720c63bc9bac986eb1deb1c7d6f0015bc446fbedb68e8298ab43712f0",
+      "bytes": 4597
+    },
+    "target/attention-reg-isolated-model-v2/exit.json": {
+      "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2",
+      "bytes": 21
+    },
+    "target/attention-reg-isolated-model-v2/launch.json": {
+      "sha256": "a353816c52073193141eb1e2b4ab7f12c230f590c82debe23c1eb47d018de11f",
+      "bytes": 1482
+    },
+    "target/attention-reg-isolated-model-v2/test.log": {
+      "sha256": "619df5e8f6a40a43024be2c207b17206896ef11214520dde6577fb86b3673cf5",
+      "bytes": 290
+    },
+    "target/attention-reg-isolated-model-audit-v2/audit.json": {
+      "sha256": "6d0c1bd258625ae85b4cf05de279558cdbcd4fb463cf301da4a80167c40d413e",
+      "bytes": 5025
+    },
+    "target/attention-reg-isolated-model-audit-v2/promotion-8-files.patch": {
+      "sha256": "f0cedac68bd236d0584ce1206b3289980c3233063c7ab0d1a0004257d4a3a063",
+      "bytes": 42488
+    },
+    "target/attention-reg-isolated-model-audit-v2/promotion-review.json": {
+      "sha256": "14e123bf9c13330b1a2ec0328b69bbbbc68d30cff831d0a1062b3d19517f5bb6",
+      "bytes": 3922
+    }
+  },
+  "source_archive": {
+    "path": "docs/benchmarks/transformer-training-sources/attention-reg-isolated-v2-20261119.tar.gz",
+    "sha256": "38fd0a07875b6c13be31158ca3397197dd65e8df39bae5b2c73c4aa6aae714d2",
+    "bytes": 1516232,
+    "files": 402,
+    "reopened_all_members_verified": true,
+    "base_archive_sha256": "e2b85a9c2d8082a0d5ab6fc2d5b4320636995489cacee061b2d7a6a5c4823445"
+  },
+  "base400_archive": {
+    "path": "docs/benchmarks/transformer-training-sources/split128-live-v1-20261119.tar.gz",
+    "sha256": "8b02d6e3560aa6565e811fa2d533451f8b893b9b92a6ae0595c083dfd4b9b1f6",
+    "files": 400,
+    "base_manifest": "target/attention-forward-register-stats-build-v1/source-before.json",
+    "scope": "Experimental complete-model split128x64 option with wholeSquare64fallback; defaultOff unchanged; inheritedsealedattentionCFGTEST prototype included but not enabled by flag.",
+    "reopened_all_members_verified": true
+  },
+  "binaries_payload_excluded": true,
+  "binary_identity": {
+    "tests": {
+      "path": "target/attention-reg-isolated-build-v2/retained/tests-retained",
+      "sha256": "19756c720e1397300812bdcc3de3d9c76d66e3f556a70e7c9eb2e9bdfc313942",
+      "bytes": 226470064
+    },
+    "training": {
+      "path": "target/attention-reg-isolated-build-v2/retained/training-retained",
+      "sha256": "75510034a46befb35ef49fad43c580137223d6835f9e577534610a76b9fe512d",
+      "bytes": 8698704
+    }
+  },
+  "prior_durable_leaf_manifest": {
+    "path": "docs/benchmarks/transformer-training-evidence/attention-forward-register-stats-20261119/manifest.json",
+    "sha256": "080389dad6e6a7c13fdfa525a6cb9e0dcbc2f4926642d036cbb9ea274d012769"
+  },
+  "all_archive_members_reopened_verified": true
+}

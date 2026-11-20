@@ -1,0 +1,115 @@
+{
+  "audit_passed": true,
+  "disposition": "PARKED",
+  "reason": "Scoped parameter loads preserve math but do not reduce actual registers or increase capacity at any of the three lengths.",
+  "scope": "One CFG(test) resource/math experiment; no timing, performance claim, production adoption, model benchmark/profile count, or parity change.",
+  "source_validation": "Archive only; all384 archived files match sealed before/after manifests. Current Rust tree not inspected.",
+  "source_archive": {
+    "path": "docs/benchmarks/transformer-training-sources/paired-vector-scoped-parameters-v3-formatted-20261119.tar.gz",
+    "sha256": "2e994ea35fff5bc4b59274c12963476decb6e632737d9834111d1f70b835d9ff",
+    "files": 384,
+    "scope": "CFGTEST explicit uniform-region parameter loads; default production/ordinary lowering unchanged; no timing or adoption claim."
+  },
+  "preformat_attempt": {
+    "source_archive": {
+      "path": "docs/benchmarks/transformer-training-sources/paired-vector-scoped-parameters-v3-20261119.tar.gz",
+      "sha256": "a2729a6e8719c274cc41ff6e0fa153b8c0b8f2e7b5e2a10625124a1874f1d52e",
+      "files": 384,
+      "scope": "CFGTEST explicit uniform-region parameter loads; production default and ordinary lowering unchanged; no timing or adoption claim."
+    },
+    "fmt_failed": true,
+    "only_followup_source_change": "rustfmt module ordering in src/ptx/graph.rs",
+    "binary": {
+      "path": "target/paired-vector-batch-build-v3/retained/tests-retained",
+      "sha256": "e70155f9dd8f0900e078b7cc2aca54fc350284b57f9602ba12acec53f8636234",
+      "source_before_after_equal": true,
+      "bytes": 223207792,
+      "actual_retained_path": "target/paired-vector-batch-build-v3-preformat/retained/tests-retained",
+      "original_recorded_path_is_pre_rename": true
+    }
+  },
+  "binary": {
+    "path": "target/paired-vector-batch-build-v3/retained/tests-retained",
+    "sha256": "e70155f9dd8f0900e078b7cc2aca54fc350284b57f9602ba12acec53f8636234",
+    "source_before_after_equal": true,
+    "bytes": 223207792
+  },
+  "source_delta_from_v2": [
+    "src/ptx/graph.rs",
+    "src/ptx/graph/scoped_parameters.rs",
+    "src/ptx/resident/vector_adam/batched.rs",
+    "src/ptx/resident/vector_adam/batched/gpu.rs",
+    "src/ptx/resident/vector_adam/batched/gpu/scoped.rs",
+    "src/ptx/resident/vector_adam/batched/scoped.rs"
+  ],
+  "cases": [
+    {
+      "length": 1048576,
+      "raw_ptx_sha256": "7c1892a92a46251ab2d65ac2c1afff15e32dc7bfbb8b8668de64061b64fa8596",
+      "canonical_prefix_sha256": "9e8a46882bc4b73f9ca53c04aeec19041f791f60b51aca1ee592f718a0915c5a",
+      "registers": [
+        40,
+        56,
+        56
+      ],
+      "capacity256": [
+        6,
+        4,
+        4
+      ],
+      "arrays": 360,
+      "readonly_arrays": 120
+    },
+    {
+      "length": 2818048,
+      "raw_ptx_sha256": "26ec8143274b204f50b3671129f090dad9b32dc2ef441a7346b9872ee4abd7de",
+      "canonical_prefix_sha256": "7c8a0ff18843931215178cd94d18d40a1ce97305b4b6f1bd5552f55991bcd939",
+      "registers": [
+        40,
+        56,
+        56
+      ],
+      "capacity256": [
+        6,
+        4,
+        4
+      ],
+      "arrays": 360,
+      "readonly_arrays": 120
+    },
+    {
+      "length": 3145728,
+      "raw_ptx_sha256": "9157b6619b4e6ee7c09368ba5d8d725f0923c09b8cd4718e984d7ad8bad0c978",
+      "canonical_prefix_sha256": "fd17b9051f995c9f80e5a63f106d9aef14263cac1d2dfd25300e7b9558d7f1a0",
+      "registers": [
+        40,
+        56,
+        56
+      ],
+      "capacity256": [
+        6,
+        4,
+        4
+      ],
+      "arrays": 360,
+      "readonly_arrays": 120
+    }
+  ],
+  "total_array_comparisons": 1080,
+  "total_readonly_checks": 360,
+  "comparisons_derivation": "3 lengths \u00d76 feeds \u00d7(1 direct+2 poisoned capture replays) \u00d74 members \u00d75 outputs; readonly:3\u00d76\u00d74\u00d75. Non-NaN bits exact, NaN classes equal, output canaries and input guards retained.",
+  "binding_proofs": "Sealed source: typed ten-span ABI per member checked by admitted(); disjoint current inputs/output ranges; input order weight/BF16-gradient/moment/variance/settings and staged weight/moment/variance/health/BF16-shadow. GPU compares separate canonical0 against scoped2 with identical feeds. CPU seven tests bind uniform guards, fail-closed scope dominance, complete inverse/canonical bodies, ABI alignment, disjoint writes and region/health coverage.",
+  "execution_binding": {
+    "root_post_terminal_launch_attestation": "target/paired-vector-scoped-leaf-v1/launch-attestation.json",
+    "attestation_sha256": "51a80ab22929282ef741679a1367f07bca0e44b6e7a984c9d6ecf34e70925137",
+    "session": 94115,
+    "exit_code": 0,
+    "exact_command_binary_manifest_matches": true,
+    "origin": "Root tool-call attestation recorded after terminal completion; not a pre-existing shell log"
+  },
+  "limitations": [
+    "Resource capacity is a CUDA occupancy API bound, not measured occupancy or latency.",
+    "No additional correctness rerun or timing performed during audit.",
+    "Binary payload intentionally excluded from durable evidence."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "status": "PASS_DURABLE_RAW_AND_METADATA_BYTE_VERIFICATION",
+  "directory": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119",
+  "raw_archive": {
+    "path": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-f32.tar.gz",
+    "sha256": "3f53aa772f752b7d4149400e879dca5933f554ec756312a2b4caf4874820b1ed",
+    "bytes": 242815195,
+    "objects": 5,
+    "aliases": 9,
+    "uncompressed_F32_bytes": 304701440,
+    "compression_level": 1,
+    "gzip_mtime": 0
+  },
+  "metadata_archive": {
+    "path": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/trace-and-provenance.tar.gz",
+    "sha256": "b05ece560b0dd1d48b8706f337ca75cc4fb86fd20e785fe087183fe8c03503dd",
+    "bytes": 5317584,
+    "files": 79,
+    "gzip_mtime": 0
+  },
+  "raw_manifest": {
+    "path": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/raw-manifest.json",
+    "sha256": "88d37f0015681b44fe0ec1014c7d137f80e7ab92c5dce3859721a58d1a20b76d"
+  },
+  "metadata_manifest": {
+    "path": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/metadata-manifest.json",
+    "sha256": "811d4e265543850d3100c9953a8829ec59bd40117215af148ab4e2b486aa2ae4"
+  },
+  "restore_helper": {
+    "path": "docs/benchmarks/transformer-training-evidence/packed-b32-profile-20261119/restore-raw.py",
+    "sha256": "c4e24cfad858dec2c967958a81d80376239693262deb22a8bad8fa15e94e5792"
+  },
+  "prior_gzip_backup": {
+    "path": "docs/benchmarks/transformer-training-sources/published-68-campaigns-before-packed-b32-profile-20261119.json.gz",
+    "sha256": "9cf31df0299926482374b3f355d3381724f77bb4da8ab96e48d96589c41b7002"
+  },
+  "all_archive_members_decompressed_and_SHA256_verified": true,
+  "executable_or_compiler_binaries_included": false,
+  "scope": "Raw F32 data and trace/SQLite/source/metadata retained outside target. Original target aliases identify byte-equivalent objects; restoring raw archive recreates aliases with hardlinks. No native/profiler/tool executable copied."
+}

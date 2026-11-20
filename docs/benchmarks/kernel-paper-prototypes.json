@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "base_commit": "10b8461cf09d9ed14c3f9cd8d382b72e45188c7b",
+  "status": "opt_in_prototypes_resident_benchmarks_complete_pending_full_workload",
+  "defaults_enabled": false,
+  "gpu_executed": true,
+  "gpu_timing_performed": true,
+  "validation": {
+    "cpu_nextest": {
+      "passed": 309,
+      "skipped": 0
+    },
+    "cuda_feature_library_nextest": {
+      "passed": 299,
+      "skipped": 4,
+      "device_required": false
+    },
+    "cuda_all_targets_check": "passed",
+    "all_targets_all_features_clippy": "passed",
+    "scan_emitted_ir_comparison_cases": 1296,
+    "gpu_required_bf16_probe": {
+      "status": "passed_outside_sandbox",
+      "kernel_executed": true,
+      "output_comparison_executed": true
+    },
+    "gpu_required_suite": {
+      "passed": 16,
+      "skipped": 0,
+      "test_binaries": [
+        "matmul_shared_memory_reuse",
+        "ptx_online"
+      ],
+      "run_id": "03259df1-6b8a-42cc-9771-4fd67586d357",
+      "test_threads": 1,
+      "device_required": true,
+      "execution_namespace": "host_outside_sandbox",
+      "command": "TNSR_REQUIRE_CUDA=1 cargo nextest run --offline --features cuda --test matmul_shared_memory_reuse --test ptx_online --test-threads 1 --no-fail-fast --status-level fail --final-status-level fail"
+    },
+    "resident_benchmark": {
+      "processes": 80,
+      "paired_samples": 4480,
+      "output_bits_equal_before_and_after_timing": true,
+      "source_and_binary_hashes_verified": true
+    }
+  },
+  "assembly": {
+    "kind": "offline_ptx_assembly",
+    "assembler": "ptxas: NVIDIA (R) Ptx optimizing assembler\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Tue_May_27_02:18:05_PDT_2025\nCuda compilation tools, release 12.9, V12.9.86\nBuild cuda_12.9.r12.9/compiler.36037853_0",
+    "architecture": "sm_89",
+    "modules": 194,
+    "functions": 194,
+    "failures": 0,
+    "spilled_functions": 0,
+    "arena_manifest_resources_verified": 192,
+    "full_report": "target/paper-kernels/assembly.json",
+    "full_report_sha256": "d6979275897299208bbec1b7a24ed74858c956372202183474a70ecf475f6c62",
+    "selected_examples": [
+      {
+        "file": "arena-bf16-aligned-a0b0-DoubleBuffered-reusefalse.ptx",
+        "ptx_sha256": "47bc6ea4a77807308ee1d3bad2d600ff2795f61ae366cb39cd35e5ec8227639c",
+        "exit_code": 0,
+        "cubin_sha256": "846d3cca2a265999b72a81bd8beca5ff5e2b571f383d7d8223efa67a3571054f",
+        "functions": [
+          {
+            "name": "matmul_region_0_0",
+            "registers": 82,
+            "shared_bytes": 35840,
+            "spill_store_bytes": 0,
+            "spill_load_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "arena-bf16-aligned-a0b0-DoubleBuffered-reusetrue.ptx",
+        "ptx_sha256": "9ed289fb373f55b07ec4123c5e4fd2bb0725126405bce80de907665ee0efaa21",
+        "exit_code": 0,
+        "cubin_sha256": "e5c3e0f2699262c480053e60ed1e6484f3d0b089c7c253a6cde319311c3b7f20",
+        "functions": [
+          {
+            "name": "matmul_region_0_0",
+            "registers": 82,
+            "shared_bytes": 19456,
+            "spill_store_bytes": 0,
+            "spill_load_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "online-baseline.ptx",
+        "ptx_sha256": "c06451509e2f9e6a051d7769f062e0297606edfa561238aa8c038f14247df6ff",
+        "exit_code": 0,
+        "cubin_sha256": "84235d0ca2e574664d48e9a7fc3ffc8f5c24cfc627191d030c393d94c253ff37",
+        "functions": [
+          {
+            "name": "online_region_0_0",
+            "registers": 32,
+            "shared_bytes": 132,
+            "spill_store_bytes": 0,
+            "spill_load_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "online-shared.ptx",
+        "ptx_sha256": "baea217e0508f5931426ab3c632487c61d40d43a74871f041d85a6125b43b59b",
+        "exit_code": 0,
+        "cubin_sha256": "dce364c870784d1d092b82183e524123f12494f49170299afea8fe942779a302",
+        "functions": [
+          {
+            "name": "online_region_0_0",
+            "registers": 32,
+            "shared_bytes": 132,
+            "spill_store_bytes": 0,
+            "spill_load_bytes": 0
+          }
+        ]
+      }
+    ]
+  },
+  "pending": [
+    "SASS audit of representative winning and regressing cases",
+    "mixed-program option propagation and selective qualification",
+    "matched complete training and inference benchmarks"
+  ],
+  "source_sha256": {
+    "src/ptx/executor.rs": "25047e9e01f09f3aaa808fa88a198fa3b37cfad106e70ec550d5d825cd0d255c",
+    "src/ptx/plan.rs": "510840f8e6c531c859516f419f5ed53fbca9d572f4fe5843b27ebb5ef1e668bb",
+    "src/ptx/graph.rs": "785c1d073534e634e5cc371ce278506f5d8bb1507ccbe71e6f206c90a06ef134",
+    "src/ptx/graph/shared_reuse.rs": "a5419168e07fd6778916b884545b2d96d5ae679fff47c8355062240b7708cc16",
+    "src/tile/graph.rs": "68566dfecfad8c57cc12bc0019ae05e88ddc477ae5be78a4f2d8e0b167ee5993",
+    "src/tile/ir.rs": "638267c27c5160bafd2335e3d6f56a4b12963cebb654c998cc7b314889c90d99",
+    "src/tile/builder.rs": "46d2f3458e41a0cec01ad2eb00d6a4867a38da751c2a77127adbef8ecca3248a",
+    "src/tile/layout.rs": "4d84f228d4ada3c7abf70a3de76807725fabaaf1421ad5d3081fb866ab70ab6a",
+    "src/tile/matmul_schedule.rs": "6cb5c17264883aa804a5b6da73a2778efc227420398b3a4fcce5d7b5519e9554",
+    "src/tile/normalized_schedule.rs": "8e9322ee2d8a716b481de295e2a0fe2d4b8b033bace49b265b813a116a7ea008",
+    "src/tile/normalized_schedule/tests.rs": "5517bcdac57fc7836b73ff30adee8836eaf8a9c4854b3670cdf0c8a7b262b0b5",
+    "src/tile/online_region.rs": "04958bc48c41de1dfc4846ce8556438970a68f3cab9fbff1c3846d40b3d466f6",
+    "src/ptx/plan/online.rs": "ba2ac47f87f2fe203a3edcd83d950e6dd4d4cf835fecdf2c3d7c09cd0be16243",
+    "src/ptx/plan/fusion_features.rs": "0b701b7c148fdb91fa2825fd8215b80505c1e74e050af1c5f57c14b302a3db0a",
+    "src/tile/fusion_cost.rs": "b873dbf7d51ce52231c285d238d5802923a6b520be2bbb6727025e625873c66d",
+    "tests/matmul_shared_memory_reuse.rs": "4d5374f0293c2b0bab862714856fa7ff86a1c7b292833ff1a861ab51490c297c",
+    "tests/ptx_online.rs": "3f12ceae9c29998f805eac4ed9a868af5470f59ae75127bc9c2be3523c3db3db",
+    "integrations/kernel_research/assemble_ptx.py": "075fddbc78a5c7a2c1f5efe03007817aa16be39fb8000b11d49590058bb23e66"
+  },
+  "gpu_access": {
+    "host_device": "NVIDIA GeForce RTX 4080",
+    "driver": "580.196.07",
+    "host_device_nodes_visible": true,
+    "sandbox_device_nodes_visible": false,
+    "resolution": "run GPU commands outside the sandbox"
+  },
+  "initial_sandbox_failure": [
+    "initial sandboxed process had no /dev/nvidia* nodes and returned CUDA_ERROR_NO_DEVICE; host availability was not checked at that time"
+  ],
+  "resident_benchmark_report": "docs/benchmarks/kernel-paper-performance.json"
+}

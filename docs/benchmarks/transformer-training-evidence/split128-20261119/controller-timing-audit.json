@@ -1,0 +1,1345 @@
+{
+  "status": "PASS",
+  "phase": "timing",
+  "plan_sha256": "8f477e335ed2d2613f588729bf27ee505dc3d29235d7148bb48de95086ce958c",
+  "report_sha256": "8979fc5b21957dba7978e52922750706e538a686219340d942db0188f20cb61b",
+  "workers": 6,
+  "timed_updates": 384,
+  "fixed_comparisons": 4,
+  "native_state_rows": 1284,
+  "exact_f64_scalar_values": 1926,
+  "snapshots": [
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qual_gradients.f32",
+      "sha256": "c33e1e6301d8da2559777034bab723edd57116a5d78f04bac021ca33c26d1853",
+      "bytes": 60940288
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/artifacts/qual_weights.f32",
+      "sha256": "3b55fb391e81a0a493dc64129b7317eb9c364dc0aa7a3bc29cbf4801c0fa22b0",
+      "bytes": 60940288
+    }
+  ],
+  "summaries": {
+    "native_baseline": {
+      "successful_processes": 2,
+      "median_complete_update_ms": 51.754815,
+      "tokens_per_second": 316569.5790816758,
+      "process_medians_ms": [
+        51.85521,
+        51.65442
+      ],
+      "nvml_observed_process_peak_mib": 6288
+    },
+    "native": {
+      "successful_processes": 2,
+      "median_complete_update_ms": 51.26829125,
+      "tokens_per_second": 319573.7482278581,
+      "process_medians_ms": [
+        51.2153285,
+        51.321253999999996
+      ],
+      "nvml_observed_process_peak_mib": 6290
+    },
+    "pytorch_cudagraph_sdpa": {
+      "successful_processes": 2,
+      "median_complete_update_ms": 30.190971247066045,
+      "tokens_per_second": 542678.7984368736,
+      "process_medians_ms": [
+        30.318527497001924,
+        30.063414997130167
+      ],
+      "nvml_observed_process_peak_mib": 1968
+    }
+  },
+  "paired": [
+    {
+      "trial": 0,
+      "baseline_ms": 51.85521,
+      "candidate_ms": 51.2153285,
+      "reduction_percent": 1.2339772609155402,
+      "pool_deltas": {
+        "initial": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "after_setup": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "after_qualification": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "lifetime_peak_before_reset": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "steady_initial_after_reset": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "steady_after_timing": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        }
+      },
+      "payload_byte_deltas": {
+        "bf16_bytes": 0,
+        "bf16_master_shadow_alias_bytes": 0,
+        "contiguous_bias_reshape_avoided_bytes": 0,
+        "direct_master_bytes": 0,
+        "exact_index_bytes": 0,
+        "f32_bytes": 0,
+        "immutable_source_bytes": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 0,
+        "unpooled_bytes": 0
+      },
+      "NVML_baseline_mib": 6288,
+      "NVML_candidate_mib": 6224,
+      "NVML_delta_mib": -64
+    },
+    {
+      "trial": 1,
+      "baseline_ms": 51.65442,
+      "candidate_ms": 51.321253999999996,
+      "reduction_percent": 0.6449903028627668,
+      "pool_deltas": {
+        "initial": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "after_setup": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "after_qualification": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "lifetime_peak_before_reset": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "steady_initial_after_reset": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        },
+        "steady_after_timing": {
+          "reserved_current": 0,
+          "reserved_high": 0,
+          "used_current": 0,
+          "used_high": 0
+        }
+      },
+      "payload_byte_deltas": {
+        "bf16_bytes": 0,
+        "bf16_master_shadow_alias_bytes": 0,
+        "contiguous_bias_reshape_avoided_bytes": 0,
+        "direct_master_bytes": 0,
+        "exact_index_bytes": 0,
+        "f32_bytes": 0,
+        "immutable_source_bytes": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 0,
+        "unpooled_bytes": 0
+      },
+      "NVML_baseline_mib": 6224,
+      "NVML_candidate_mib": 6290,
+      "NVML_delta_mib": 66
+    }
+  ],
+  "memory": [
+    {
+      "mode": "native_baseline",
+      "trial": 0,
+      "stages": {
+        "initial": {
+          "current_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "default_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "same_pool": true
+        },
+        "after_setup": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "after_qualification": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "lifetime_peak_before_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "steady_initial_after_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        },
+        "steady_after_timing": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        }
+      },
+      "tensor_payload_info": {
+        "attention_softmax_backward_regions": 0,
+        "attention_softmax_regions": 0,
+        "attention_training_forward_fallback_regions": 0,
+        "attention_training_forward_materializations": 0,
+        "attention_training_forward_regions": 0,
+        "batched_attention_query_width_programs": 0,
+        "batched_attention_score_programs": 0,
+        "batched_attention_tall_programs": 0,
+        "batched_attention_wide_programs": 0,
+        "batched_attention_width_query_programs": 0,
+        "bf16_bytes": 2424883200,
+        "bf16_eight_compute_warp_programs": 0,
+        "bf16_master_shadow_alias_bytes": 0,
+        "bf16_master_shadow_cast_aliases": 0,
+        "bf16_tensor_core_programs": 63,
+        "column_reduction_eight_regions": 0,
+        "column_reduction_four_regions": 38,
+        "contiguous_bias_reshape_alias_steps": 20,
+        "contiguous_bias_reshape_avoided_bytes": 704643072,
+        "contiguous_bias_reshape_fallback_steps": 0,
+        "direct_capture_hits": 319,
+        "direct_capture_misses": 2,
+        "direct_capture_variants": 2,
+        "direct_master_bytes": 60940288,
+        "direct_master_parameters": 60,
+        "exact_index_bytes": 133120,
+        "f32_bytes": 2635714892,
+        "fused_nt128_bias_fallback_programs": 8,
+        "fused_nt128_bias_ldmatrix_fallback_programs": 0,
+        "fused_nt128_bias_ldmatrix_programs": 12,
+        "fused_nt128_bias_ldmatrix_rejections": [],
+        "fused_nt128_bias_ldmatrix_selections": [
+          "node 47: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 189: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 133: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 242: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 383: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 327: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 436: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 577: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 521: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 630: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 771: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 715: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256"
+        ],
+        "fused_nt128_bias_programs": 13,
+        "fused_nt128_bias_rejections": [
+          "node 90: requires complete single-kernel original Program",
+          "node 199: requires whole dense physical A/W/bias buffers",
+          "node 284: requires complete single-kernel original Program",
+          "node 393: requires whole dense physical A/W/bias buffers",
+          "node 478: requires complete single-kernel original Program",
+          "node 587: requires whole dense physical A/W/bias buffers",
+          "node 672: requires complete single-kernel original Program",
+          "node 781: requires whole dense physical A/W/bias buffers"
+        ],
+        "immutable_source_bytes": 1065288,
+        "indexed_loss_cooperative_ordered_backward_programs": 1,
+        "indexed_loss_cooperative_ordered_forward_programs": 1,
+        "kernels": 298,
+        "large_bf16_square128_streamed_fallback_programs": 0,
+        "large_bf16_square128_streamed_programs": 0,
+        "large_bf16_tall_programs": 0,
+        "large_bf16_wide_programs": 0,
+        "layer_norm_pair_backward_regions": 9,
+        "layer_norm_pair_fallback_regions": 0,
+        "layer_norm_pair_forward_regions": 9,
+        "medium_bf16_square_programs": 0,
+        "medium_bf16_tall_programs": 0,
+        "nn128x64_ldmatrix_fallback_programs": 0,
+        "nn128x64_ldmatrix_programs": 0,
+        "nn128x64_ldmatrix_rejections": [],
+        "nn128x64_ldmatrix_selections": [],
+        "online_attention_packed_backward_fallback_regions": 0,
+        "online_attention_packed_backward_pack_kernels_removed": 4,
+        "online_attention_packed_backward_regions": 4,
+        "online_attention_packed_backward_rejections": [],
+        "online_attention_pair_numerical_screen_async16_pairs": 4,
+        "online_attention_pair_numerical_screen_fallback_pairs": 0,
+        "online_attention_pair_numerical_screen_pairs": 4,
+        "online_attention_pair_numerical_screen_rejections": [],
+        "online_attention_pair_numerical_screen_scalar_pairs": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 6291456,
+        "ordinary_bf16_four_warp_programs": 0,
+        "physical_order_cast_materializations": 21,
+        "plain_bf16_output_fallback_programs": 0,
+        "plain_bf16_output_programs": 21,
+        "qkv_grad_pack_regions": 0,
+        "replay": true,
+        "reused_allocations": 349,
+        "small_grid_split_k_fallback_programs": 0,
+        "small_grid_split_k_programs": 0,
+        "split_k_rectangle128x64_fallback_programs": 0,
+        "split_k_rectangle128x64_programs": 0,
+        "split_k_rectangle128x64_rejections": [],
+        "split_k_rectangle128x64_selections": [],
+        "split_k_square64_fallback_programs": 4,
+        "split_k_square64_programs": 17,
+        "swiglu_pair_backward_regions": 4,
+        "swiglu_pair_forward_regions": 4,
+        "transposed_bf16_output_programs": 0,
+        "unpooled_bytes": 13449707852
+      },
+      "sampled_process_peak_mib": 6288
+    },
+    {
+      "mode": "native_baseline",
+      "trial": 1,
+      "stages": {
+        "initial": {
+          "current_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "default_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "same_pool": true
+        },
+        "after_setup": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "after_qualification": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "lifetime_peak_before_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "steady_initial_after_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        },
+        "steady_after_timing": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        }
+      },
+      "tensor_payload_info": {
+        "attention_softmax_backward_regions": 0,
+        "attention_softmax_regions": 0,
+        "attention_training_forward_fallback_regions": 0,
+        "attention_training_forward_materializations": 0,
+        "attention_training_forward_regions": 0,
+        "batched_attention_query_width_programs": 0,
+        "batched_attention_score_programs": 0,
+        "batched_attention_tall_programs": 0,
+        "batched_attention_wide_programs": 0,
+        "batched_attention_width_query_programs": 0,
+        "bf16_bytes": 2424883200,
+        "bf16_eight_compute_warp_programs": 0,
+        "bf16_master_shadow_alias_bytes": 0,
+        "bf16_master_shadow_cast_aliases": 0,
+        "bf16_tensor_core_programs": 63,
+        "column_reduction_eight_regions": 0,
+        "column_reduction_four_regions": 38,
+        "contiguous_bias_reshape_alias_steps": 20,
+        "contiguous_bias_reshape_avoided_bytes": 704643072,
+        "contiguous_bias_reshape_fallback_steps": 0,
+        "direct_capture_hits": 319,
+        "direct_capture_misses": 2,
+        "direct_capture_variants": 2,
+        "direct_master_bytes": 60940288,
+        "direct_master_parameters": 60,
+        "exact_index_bytes": 133120,
+        "f32_bytes": 2635714892,
+        "fused_nt128_bias_fallback_programs": 8,
+        "fused_nt128_bias_ldmatrix_fallback_programs": 0,
+        "fused_nt128_bias_ldmatrix_programs": 12,
+        "fused_nt128_bias_ldmatrix_rejections": [],
+        "fused_nt128_bias_ldmatrix_selections": [
+          "node 47: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 189: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 133: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 242: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 383: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 327: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 436: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 577: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 521: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 630: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 771: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 715: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256"
+        ],
+        "fused_nt128_bias_programs": 13,
+        "fused_nt128_bias_rejections": [
+          "node 90: requires complete single-kernel original Program",
+          "node 199: requires whole dense physical A/W/bias buffers",
+          "node 284: requires complete single-kernel original Program",
+          "node 393: requires whole dense physical A/W/bias buffers",
+          "node 478: requires complete single-kernel original Program",
+          "node 587: requires whole dense physical A/W/bias buffers",
+          "node 672: requires complete single-kernel original Program",
+          "node 781: requires whole dense physical A/W/bias buffers"
+        ],
+        "immutable_source_bytes": 1065288,
+        "indexed_loss_cooperative_ordered_backward_programs": 1,
+        "indexed_loss_cooperative_ordered_forward_programs": 1,
+        "kernels": 298,
+        "large_bf16_square128_streamed_fallback_programs": 0,
+        "large_bf16_square128_streamed_programs": 0,
+        "large_bf16_tall_programs": 0,
+        "large_bf16_wide_programs": 0,
+        "layer_norm_pair_backward_regions": 9,
+        "layer_norm_pair_fallback_regions": 0,
+        "layer_norm_pair_forward_regions": 9,
+        "medium_bf16_square_programs": 0,
+        "medium_bf16_tall_programs": 0,
+        "nn128x64_ldmatrix_fallback_programs": 0,
+        "nn128x64_ldmatrix_programs": 0,
+        "nn128x64_ldmatrix_rejections": [],
+        "nn128x64_ldmatrix_selections": [],
+        "online_attention_packed_backward_fallback_regions": 0,
+        "online_attention_packed_backward_pack_kernels_removed": 4,
+        "online_attention_packed_backward_regions": 4,
+        "online_attention_packed_backward_rejections": [],
+        "online_attention_pair_numerical_screen_async16_pairs": 4,
+        "online_attention_pair_numerical_screen_fallback_pairs": 0,
+        "online_attention_pair_numerical_screen_pairs": 4,
+        "online_attention_pair_numerical_screen_rejections": [],
+        "online_attention_pair_numerical_screen_scalar_pairs": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 6291456,
+        "ordinary_bf16_four_warp_programs": 0,
+        "physical_order_cast_materializations": 21,
+        "plain_bf16_output_fallback_programs": 0,
+        "plain_bf16_output_programs": 21,
+        "qkv_grad_pack_regions": 0,
+        "replay": true,
+        "reused_allocations": 349,
+        "small_grid_split_k_fallback_programs": 0,
+        "small_grid_split_k_programs": 0,
+        "split_k_rectangle128x64_fallback_programs": 0,
+        "split_k_rectangle128x64_programs": 0,
+        "split_k_rectangle128x64_rejections": [],
+        "split_k_rectangle128x64_selections": [],
+        "split_k_square64_fallback_programs": 4,
+        "split_k_square64_programs": 17,
+        "swiglu_pair_backward_regions": 4,
+        "swiglu_pair_forward_regions": 4,
+        "transposed_bf16_output_programs": 0,
+        "unpooled_bytes": 13449707852
+      },
+      "sampled_process_peak_mib": 6224
+    },
+    {
+      "mode": "native",
+      "trial": 0,
+      "stages": {
+        "initial": {
+          "current_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "default_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "same_pool": true
+        },
+        "after_setup": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "after_qualification": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "lifetime_peak_before_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "steady_initial_after_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        },
+        "steady_after_timing": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        }
+      },
+      "tensor_payload_info": {
+        "attention_softmax_backward_regions": 0,
+        "attention_softmax_regions": 0,
+        "attention_training_forward_fallback_regions": 0,
+        "attention_training_forward_materializations": 0,
+        "attention_training_forward_regions": 0,
+        "batched_attention_query_width_programs": 0,
+        "batched_attention_score_programs": 0,
+        "batched_attention_tall_programs": 0,
+        "batched_attention_wide_programs": 0,
+        "batched_attention_width_query_programs": 0,
+        "bf16_bytes": 2424883200,
+        "bf16_eight_compute_warp_programs": 0,
+        "bf16_master_shadow_alias_bytes": 0,
+        "bf16_master_shadow_cast_aliases": 0,
+        "bf16_tensor_core_programs": 63,
+        "column_reduction_eight_regions": 0,
+        "column_reduction_four_regions": 38,
+        "contiguous_bias_reshape_alias_steps": 20,
+        "contiguous_bias_reshape_avoided_bytes": 704643072,
+        "contiguous_bias_reshape_fallback_steps": 0,
+        "direct_capture_hits": 319,
+        "direct_capture_misses": 2,
+        "direct_capture_variants": 2,
+        "direct_master_bytes": 60940288,
+        "direct_master_parameters": 60,
+        "exact_index_bytes": 133120,
+        "f32_bytes": 2635714892,
+        "fused_nt128_bias_fallback_programs": 8,
+        "fused_nt128_bias_ldmatrix_fallback_programs": 0,
+        "fused_nt128_bias_ldmatrix_programs": 12,
+        "fused_nt128_bias_ldmatrix_rejections": [],
+        "fused_nt128_bias_ldmatrix_selections": [
+          "node 47: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 189: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 133: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 242: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 383: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 327: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 436: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 577: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 521: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 630: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 771: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 715: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256"
+        ],
+        "fused_nt128_bias_programs": 13,
+        "fused_nt128_bias_rejections": [
+          "node 90: requires complete single-kernel original Program",
+          "node 199: requires whole dense physical A/W/bias buffers",
+          "node 284: requires complete single-kernel original Program",
+          "node 393: requires whole dense physical A/W/bias buffers",
+          "node 478: requires complete single-kernel original Program",
+          "node 587: requires whole dense physical A/W/bias buffers",
+          "node 672: requires complete single-kernel original Program",
+          "node 781: requires whole dense physical A/W/bias buffers"
+        ],
+        "immutable_source_bytes": 1065288,
+        "indexed_loss_cooperative_ordered_backward_programs": 1,
+        "indexed_loss_cooperative_ordered_forward_programs": 1,
+        "kernels": 298,
+        "large_bf16_square128_streamed_fallback_programs": 0,
+        "large_bf16_square128_streamed_programs": 0,
+        "large_bf16_tall_programs": 0,
+        "large_bf16_wide_programs": 0,
+        "layer_norm_pair_backward_regions": 9,
+        "layer_norm_pair_fallback_regions": 0,
+        "layer_norm_pair_forward_regions": 9,
+        "medium_bf16_square_programs": 0,
+        "medium_bf16_tall_programs": 0,
+        "nn128x64_ldmatrix_fallback_programs": 0,
+        "nn128x64_ldmatrix_programs": 0,
+        "nn128x64_ldmatrix_rejections": [],
+        "nn128x64_ldmatrix_selections": [],
+        "online_attention_packed_backward_fallback_regions": 0,
+        "online_attention_packed_backward_pack_kernels_removed": 4,
+        "online_attention_packed_backward_regions": 4,
+        "online_attention_packed_backward_rejections": [],
+        "online_attention_pair_numerical_screen_async16_pairs": 4,
+        "online_attention_pair_numerical_screen_fallback_pairs": 0,
+        "online_attention_pair_numerical_screen_pairs": 4,
+        "online_attention_pair_numerical_screen_rejections": [],
+        "online_attention_pair_numerical_screen_scalar_pairs": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 6291456,
+        "ordinary_bf16_four_warp_programs": 0,
+        "physical_order_cast_materializations": 21,
+        "plain_bf16_output_fallback_programs": 0,
+        "plain_bf16_output_programs": 21,
+        "qkv_grad_pack_regions": 0,
+        "replay": true,
+        "reused_allocations": 349,
+        "small_grid_split_k_fallback_programs": 0,
+        "small_grid_split_k_programs": 0,
+        "split_k_rectangle128x64_fallback_programs": 4,
+        "split_k_rectangle128x64_programs": 17,
+        "split_k_rectangle128x64_rejections": [
+          "node=1036 [512,16384]x[16384,512]: current Square64 fallback unavailable or outside exact physical family",
+          "node=1318 [512,16384]x[16384,512]: current Square64 fallback unavailable or outside exact physical family",
+          "node=1600 [512,16384]x[16384,512]: current Square64 fallback unavailable or outside exact physical family",
+          "node=1882 [512,16384]x[16384,512]: current Square64 fallback unavailable or outside exact physical family"
+        ],
+        "split_k_rectangle128x64_selections": [
+          "node=841 [512,16384]x[16384,4096] Resources { registers: 96, shared: 32768, local: 0, max_threads: 640, capacity: 2 }",
+          "node=903 [1408,16384]x[16384,512] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=969 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=955 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1119 [512,16384]x[16384,1536] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1185 [1408,16384]x[16384,512] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1251 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1237 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1401 [512,16384]x[16384,1536] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1467 [1408,16384]x[16384,512] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1533 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1519 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1683 [512,16384]x[16384,1536] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1749 [1408,16384]x[16384,512] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1815 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1801 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1965 [512,16384]x[16384,1536] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }"
+        ],
+        "split_k_square64_fallback_programs": 4,
+        "split_k_square64_programs": 0,
+        "swiglu_pair_backward_regions": 4,
+        "swiglu_pair_forward_regions": 4,
+        "transposed_bf16_output_programs": 0,
+        "unpooled_bytes": 13449707852
+      },
+      "sampled_process_peak_mib": 6224
+    },
+    {
+      "mode": "native",
+      "trial": 1,
+      "stages": {
+        "initial": {
+          "current_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "default_pool": {
+            "reserved_current": 0,
+            "reserved_high": 0,
+            "used_current": 0,
+            "used_high": 0
+          },
+          "same_pool": true
+        },
+        "after_setup": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5426674324,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "after_qualification": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "lifetime_peak_before_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 6341787648,
+            "used_current": 5487614860,
+            "used_high": 6302628500
+          },
+          "same_pool": true
+        },
+        "steady_initial_after_reset": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        },
+        "steady_after_timing": {
+          "current_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "default_pool": {
+            "reserved_current": 5838471168,
+            "reserved_high": 5838471168,
+            "used_current": 5487614860,
+            "used_high": 5487614860
+          },
+          "same_pool": true
+        }
+      },
+      "tensor_payload_info": {
+        "attention_softmax_backward_regions": 0,
+        "attention_softmax_regions": 0,
+        "attention_training_forward_fallback_regions": 0,
+        "attention_training_forward_materializations": 0,
+        "attention_training_forward_regions": 0,
+        "batched_attention_query_width_programs": 0,
+        "batched_attention_score_programs": 0,
+        "batched_attention_tall_programs": 0,
+        "batched_attention_wide_programs": 0,
+        "batched_attention_width_query_programs": 0,
+        "bf16_bytes": 2424883200,
+        "bf16_eight_compute_warp_programs": 0,
+        "bf16_master_shadow_alias_bytes": 0,
+        "bf16_master_shadow_cast_aliases": 0,
+        "bf16_tensor_core_programs": 63,
+        "column_reduction_eight_regions": 0,
+        "column_reduction_four_regions": 38,
+        "contiguous_bias_reshape_alias_steps": 20,
+        "contiguous_bias_reshape_avoided_bytes": 704643072,
+        "contiguous_bias_reshape_fallback_steps": 0,
+        "direct_capture_hits": 319,
+        "direct_capture_misses": 2,
+        "direct_capture_variants": 2,
+        "direct_master_bytes": 60940288,
+        "direct_master_parameters": 60,
+        "exact_index_bytes": 133120,
+        "f32_bytes": 2635714892,
+        "fused_nt128_bias_fallback_programs": 8,
+        "fused_nt128_bias_ldmatrix_fallback_programs": 0,
+        "fused_nt128_bias_ldmatrix_programs": 12,
+        "fused_nt128_bias_ldmatrix_rejections": [],
+        "fused_nt128_bias_ldmatrix_selections": [
+          "node 47: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 189: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 133: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 242: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 383: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 327: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 436: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 577: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 521: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 630: ldmatrix coalesced selected M=16384 N=1536 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 771: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256",
+          "node 715: ldmatrix coalesced selected M=16384 N=1408 K=512 registers=126 shared=40960 local=0 APIcapacity=2 at256"
+        ],
+        "fused_nt128_bias_programs": 13,
+        "fused_nt128_bias_rejections": [
+          "node 90: requires complete single-kernel original Program",
+          "node 199: requires whole dense physical A/W/bias buffers",
+          "node 284: requires complete single-kernel original Program",
+          "node 393: requires whole dense physical A/W/bias buffers",
+          "node 478: requires complete single-kernel original Program",
+          "node 587: requires whole dense physical A/W/bias buffers",
+          "node 672: requires complete single-kernel original Program",
+          "node 781: requires whole dense physical A/W/bias buffers"
+        ],
+        "immutable_source_bytes": 1065288,
+        "indexed_loss_cooperative_ordered_backward_programs": 1,
+        "indexed_loss_cooperative_ordered_forward_programs": 1,
+        "kernels": 298,
+        "large_bf16_square128_streamed_fallback_programs": 0,
+        "large_bf16_square128_streamed_programs": 0,
+        "large_bf16_tall_programs": 0,
+        "large_bf16_wide_programs": 0,
+        "layer_norm_pair_backward_regions": 9,
+        "layer_norm_pair_fallback_regions": 0,
+        "layer_norm_pair_forward_regions": 9,
+        "medium_bf16_square_programs": 0,
+        "medium_bf16_tall_programs": 0,
+        "nn128x64_ldmatrix_fallback_programs": 0,
+        "nn128x64_ldmatrix_programs": 0,
+        "nn128x64_ldmatrix_rejections": [],
+        "nn128x64_ldmatrix_selections": [],
+        "online_attention_packed_backward_fallback_regions": 0,
+        "online_attention_packed_backward_pack_kernels_removed": 4,
+        "online_attention_packed_backward_regions": 4,
+        "online_attention_packed_backward_rejections": [],
+        "online_attention_pair_numerical_screen_async16_pairs": 4,
+        "online_attention_pair_numerical_screen_fallback_pairs": 0,
+        "online_attention_pair_numerical_screen_pairs": 4,
+        "online_attention_pair_numerical_screen_rejections": [],
+        "online_attention_pair_numerical_screen_scalar_pairs": 0,
+        "online_attention_pair_numerical_screen_workspace_bytes": 6291456,
+        "ordinary_bf16_four_warp_programs": 0,
+        "physical_order_cast_materializations": 21,
+        "plain_bf16_output_fallback_programs": 0,
+        "plain_bf16_output_programs": 21,
+        "qkv_grad_pack_regions": 0,
+        "replay": true,
+        "reused_allocations": 349,
+        "small_grid_split_k_fallback_programs": 0,
+        "small_grid_split_k_programs": 0,
+        "split_k_rectangle128x64_fallback_programs": 4,
+        "split_k_rectangle128x64_programs": 17,
+        "split_k_rectangle128x64_rejections": [
+          "node=1036 [512,16384]x[16384,512]: current Square64 fallback unavailable or outside exact physical family",
+          "node=1318 [512,16384]x[16384,512]: current Square64 fallback unavailable or outside exact physical family",
+          "node=1600 [512,16384]x[16384,512]: current Square64 fallback unavailable or outside exact physical family",
+          "node=1882 [512,16384]x[16384,512]: current Square64 fallback unavailable or outside exact physical family"
+        ],
+        "split_k_rectangle128x64_selections": [
+          "node=841 [512,16384]x[16384,4096] Resources { registers: 96, shared: 32768, local: 0, max_threads: 640, capacity: 2 }",
+          "node=903 [1408,16384]x[16384,512] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=969 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=955 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1119 [512,16384]x[16384,1536] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1185 [1408,16384]x[16384,512] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1251 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1237 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1401 [512,16384]x[16384,1536] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1467 [1408,16384]x[16384,512] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1533 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1519 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1683 [512,16384]x[16384,1536] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1749 [1408,16384]x[16384,512] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1815 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1801 [512,16384]x[16384,1408] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }",
+          "node=1965 [512,16384]x[16384,1536] Resources { registers: 98, shared: 32768, local: 0, max_threads: 512, capacity: 2 }"
+        ],
+        "split_k_square64_fallback_programs": 4,
+        "split_k_square64_programs": 0,
+        "swiglu_pair_backward_regions": 4,
+        "swiglu_pair_forward_regions": 4,
+        "transposed_bf16_output_programs": 0,
+        "unpooled_bytes": 13449707852
+      },
+      "sampled_process_peak_mib": 6290
+    }
+  ],
+  "guard_contexts": [
+    {
+      "pid": 6181,
+      "name": "/snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration",
+      "type": "C+G",
+      "baseline_mib": 6,
+      "process_start_ticks": 1997
+    }
+  ],
+  "raw_files": [
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-before.xml",
+      "sha256": "21bb67970ee529132db46219893e99cfd38e4183ca429362c61f2c162d06fbd9",
+      "bytes": 67766
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-after.xml",
+      "sha256": "2b9e62632ef3de40c3f4a4f2d61177e1533380e0cb21f00678a49d73a252a272",
+      "bytes": 67778
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-pmon.txt",
+      "sha256": "42757fd24fa4004e57b7afdfa69fe70e1497db856b204c0bd6ecc3eff867572e",
+      "bytes": 14354
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/nvml-raw.csv",
+      "sha256": "70bab8280c299137f95418c1db7fad16502e5118caf79eb8b00229ba2274ee2b",
+      "bytes": 8861
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/process.json",
+      "sha256": "da623fc6855d90f7f8b48bbc0edc6700fec24d59895bbf28f62a4e47c2414eef",
+      "bytes": 3107635
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/stdout.log",
+      "sha256": "405b88e6c6a8fcd68c894f4fbb2c8062b8fee4426abbc7871acefc47d1c0c10e",
+      "bytes": 2293748
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-before.xml",
+      "sha256": "e375253b2ca9f38a4762a7c012a141dacc1783da5459b9e69ac695e442d112aa",
+      "bytes": 67774
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-after.xml",
+      "sha256": "05bc3f32ff993a8727edaacc2497ce9610c560247b658f3aa95a6f7cbb22a05c",
+      "bytes": 67778
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-pmon.txt",
+      "sha256": "9030da256c09a5b0725b8db92278f82066e34dad7bec0f2dff4abdebf6c8d650",
+      "bytes": 14354
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/nvml-raw.csv",
+      "sha256": "2bed83356a1198eba61ce0bb1c2c919c223a53db794232782d03381dba593d65",
+      "bytes": 8839
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/process.json",
+      "sha256": "5ced6a6a02cf084efc86614040f1ac39972ebe36da45f839732e7caa3c6ca879",
+      "bytes": 3107410
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/stdout.log",
+      "sha256": "959dbead4e4e1af55e34b4e69d14674cf87e6c7ef97d625abf923600a65f5a67",
+      "bytes": 2293686
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native_baseline/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-before.xml",
+      "sha256": "7cf37207502e76762ec0c419a4d571f1d05a634379d37d0bb1c0460357f27924",
+      "bytes": 67776
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-after.xml",
+      "sha256": "fb8f4b6aa3e59ee7d2b67b28e057e9e01225ffb9e626b37d9d2610185675254c",
+      "bytes": 67776
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-pmon.txt",
+      "sha256": "7ecf9d85b7bbc7a07cbf6c45c11a2558fc128323a75696ee26939c5249244428",
+      "bytes": 14942
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/nvml-raw.csv",
+      "sha256": "4240f84fe391fe529ca4adef473016ed8b12768d77c81602c8ba78dc86212782",
+      "bytes": 9045
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/process.json",
+      "sha256": "d6f3705e8d15638b5a683a69620352d1b783c5f06166e0f1088fae681089111c",
+      "bytes": 4002693
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/stdout.log",
+      "sha256": "8586506527b1c472652518045394dad537c418ef901c4fbf57b25897d09a0d51",
+      "bytes": 3093288
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-before.xml",
+      "sha256": "303bb0161ceb577045311dac50f2630a8c1af4afb72202fff957691db61b784f",
+      "bytes": 67767
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-after.xml",
+      "sha256": "3ae72681c732434d2d66fba54dffe8c7d19ec2652f1015570435e7c00f22f054",
+      "bytes": 67776
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-pmon.txt",
+      "sha256": "f4153c00850c1b0470f7efaf6bd788e8b47470fa6a43abfdbc73b7ed302b6b58",
+      "bytes": 14942
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/nvml-raw.csv",
+      "sha256": "f683de1d18c2065dc7b68452aabb36b6f75b3c587eb745161ae121fa1f82fd9c",
+      "bytes": 9013
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/process.json",
+      "sha256": "2fdd74e0f7b2e251d9ca96c27ca8a9b2169c61d3089db8fe3e6fb3417eab2d9b",
+      "bytes": 4002210
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/stdout.log",
+      "sha256": "bc4a16d5000257ab6466c830a7541aa5137c8c4165abf089229c15f1db3053bf",
+      "bytes": 3093093
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-native/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "5c384d756e61df21d711eae804f554cd33a8791e3cddae5044a6d5103a90f177",
+      "bytes": 67774
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "477afe335cf72a3fbba497d101d6fdf07ff603617d98d69a046e843f305d3920",
+      "bytes": 67776
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "ee841232183e102fa5d5cc49289e7cabd121b394c3a732c8917101abee373c0e",
+      "bytes": 10643
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "7f2008562aa6783f378bd3d29f57a2bfd1426ca040bb54883f15678ed8845c25",
+      "bytes": 6263
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "905cc084b52b717693b2c1904210e1a5782be515d382f3917c3f98998fd59b7f",
+      "bytes": 95581
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "1da6b763665effb7af7e0432b6ca110abc77ae2b71403a01fbe6331cdcce3865",
+      "bytes": 42777
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial0-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-before.xml",
+      "sha256": "c23bad9aeaf001201db90f4ec536bb1d407da4863a57768bfc5619b3e3b018e1",
+      "bytes": 67769
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-after.xml",
+      "sha256": "2aee83c185125ab27573f52b022eb23b5ab1f6a0c455db6e9b14aa11ca012ab7",
+      "bytes": 67769
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon.txt",
+      "sha256": "79fe925f53b831c7feaaf4da80cfdb0a661475a74aeebc3fb33bec357278ddbf",
+      "bytes": 11231
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/desktop-context-pmon-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-raw.csv",
+      "sha256": "f6447c7400caed6d3314aefb66ab416a33a68eda09b85d73f3ac4134684c4b17",
+      "bytes": 6249
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/nvml-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/process.json",
+      "sha256": "273004a1d62c41cdf02bb6b996c8c015759842d23d3f366bfee4b54030108270",
+      "bytes": 95804
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stdout.log",
+      "sha256": "3e4f2b4491ae387626b96d98bc64ff12ddda0c6a5fd1d668b6a2d321c438e605",
+      "bytes": 42826
+    },
+    {
+      "path": "target/split128-model-v1/timing/w512_s512_b32/trial1-pytorch_cudagraph_sdpa/stderr.log",
+      "sha256": "b3fed7b74e5d568329e471cd1c1c91b34f2647eb66e70d36124c40a5319d71f5",
+      "bytes": 283
+    }
+  ],
+  "strongest_historical_target": {
+    "median_ms": 29.49940098915249,
+    "campaign": "fused_nt128_bias_ldmatrix_b32",
+    "mode": "pytorch_cudagraph_sdpa"
+  },
+  "performance_claim": true,
+  "adoption": false,
+  "scope": "Complete-update experiment only; keep historical29.499400989 target and report fresh control separately. Pool measurements, module/JIT NVML sampled differences and payload counters are distinct. No capacity, memory-saving or causal claim.",
+  "reads_closed": true
+}

@@ -1,0 +1,108 @@
+{
+  "status": "PASS",
+  "scope": "Component experiment only; no complete-model parity or promotion claim.",
+  "report_sha256": "59ecf90b4cb4f1324d396380999dc53046ca7b324adf7c3878bdf48d849c284b",
+  "events": 864,
+  "captured_invocations": 27648,
+  "output_comparisons": 432,
+  "readonly_comparisons": 60,
+  "rows": [
+    {
+      "worker": 0,
+      "length": 2818048,
+      "median_us": {
+        "scalar_bf16_1024": 87.6774974167347,
+        "scalar_bf16_256": 84.12649855017662,
+        "vector_bf16_256": 78.79849895834923
+      },
+      "ratio_old1024_to_vector": 1.1126797918203832,
+      "ratio_old256_to_vector": 1.067615496008923,
+      "nvml_peak_mib": 562,
+      "allocator_before": {
+        "torch_allocated_current": 141041152,
+        "torch_reserved_current": 161480704,
+        "torch_peak_allocated": 141041152,
+        "torch_peak_reserved": 161480704
+      },
+      "allocator_after": {
+        "torch_allocated_current": 141042176,
+        "torch_reserved_current": 163577856,
+        "torch_peak_allocated": 141042176,
+        "torch_peak_reserved": 163577856
+      }
+    },
+    {
+      "worker": 0,
+      "length": 3145728,
+      "median_us": {
+        "scalar_bf16_1024": 127.23000347614288,
+        "scalar_bf16_256": 126.23700499534607,
+        "vector_bf16_256": 122.79650196433067
+      },
+      "ratio_old1024_to_vector": 1.0361044609650203,
+      "ratio_old256_to_vector": 1.028017923768014,
+      "nvml_peak_mib": 562,
+      "allocator_before": {
+        "torch_allocated_current": 157440512,
+        "torch_reserved_current": 281018368,
+        "torch_peak_allocated": 157440512,
+        "torch_peak_reserved": 281018368
+      },
+      "allocator_after": {
+        "torch_allocated_current": 157441536,
+        "torch_reserved_current": 192937984,
+        "torch_peak_allocated": 157441536,
+        "torch_peak_reserved": 281018368
+      }
+    },
+    {
+      "worker": 1,
+      "length": 3145728,
+      "median_us": {
+        "scalar_bf16_1024": 126.70399993658066,
+        "scalar_bf16_256": 124.62250143289566,
+        "vector_bf16_256": 120.44800072908401
+      },
+      "ratio_old1024_to_vector": 1.0519394192483764,
+      "ratio_old256_to_vector": 1.0346581153571912,
+      "nvml_peak_mib": 480,
+      "allocator_before": {
+        "torch_allocated_current": 157440512,
+        "torch_reserved_current": 180355072,
+        "torch_peak_allocated": 157440512,
+        "torch_peak_reserved": 180355072
+      },
+      "allocator_after": {
+        "torch_allocated_current": 157441536,
+        "torch_reserved_current": 182452224,
+        "torch_peak_allocated": 157441536,
+        "torch_peak_reserved": 182452224
+      }
+    },
+    {
+      "worker": 1,
+      "length": 2818048,
+      "median_us": {
+        "scalar_bf16_1024": 90.92549979686737,
+        "scalar_bf16_256": 90.38400277495384,
+        "vector_bf16_256": 84.76799726486206
+      },
+      "ratio_old1024_to_vector": 1.0726394716247203,
+      "ratio_old256_to_vector": 1.0662514827682466,
+      "nvml_peak_mib": 480,
+      "allocator_before": {
+        "torch_allocated_current": 141041152,
+        "torch_reserved_current": 195035136,
+        "torch_peak_allocated": 157441536,
+        "torch_peak_reserved": 195035136
+      },
+      "allocator_after": {
+        "torch_allocated_current": 141042176,
+        "torch_reserved_current": 195035136,
+        "torch_peak_allocated": 157441536,
+        "torch_peak_reserved": 195035136
+      }
+    }
+  ],
+  "reads_closed": true
+}

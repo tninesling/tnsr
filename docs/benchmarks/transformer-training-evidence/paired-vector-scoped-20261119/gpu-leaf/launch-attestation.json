@@ -1,0 +1,24 @@
+{
+  "origin": "Root tool-call attestation recorded after terminal completion; not a pre-existing shell log",
+  "session_id": 94115,
+  "exit_code": 0,
+  "elapsed_test_seconds": 101.95,
+  "command": [
+    "flock",
+    "/tmp/tnsr-bench.cuda0.lock",
+    "env",
+    "TNSR_REQUIRE_CUDA=1",
+    "TNSR_PAIRED_VECTOR_SCOPED_DIR=/home/taylor/code/tnsr/target/paired-vector-scoped-leaf-v1",
+    "TNSR_PAIRED_VECTOR_BATCH_QUALIFIED_PTX_DIR=/home/taylor/code/tnsr/target/paired-vector-batch-leaf-v1",
+    "target/paired-vector-batch-build-v3/retained/tests-retained",
+    "ptx::resident::vector_adam::batched::tests::gpu::scoped_parameters::paired_vector_scoped_parameters_preserve_canonical_math_and_health",
+    "--ignored",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "stdout_stderr": "target/paired-vector-scoped-leaf-v1/test.log",
+  "scope": "Untimed correctness/resources only; no isolation/performance claim",
+  "binary_manifest": "target/paired-vector-batch-build-v3/binary.json",
+  "source_manifest": "target/paired-vector-batch-build-v3/source-archive.json"
+}

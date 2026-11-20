@@ -1,0 +1,30 @@
+{
+  "status": "PASS_BUILD_OWNER_RECEIPT_SELF_CLOSE_LEAF_ONLY",
+  "reviewer_role": "Prototype author/build owner; not independent audit",
+  "archive": {
+    "path": "docs/benchmarks/transformer-training-evidence/split-square128-isolated-20261119/evidence.tar.gz",
+    "sha256": "c15c2ca676f23a1cf16129eaca91bcb8c02bce28af0ab353d00fa78d4104a293",
+    "bytes": 3318823,
+    "members": 62,
+    "reopened_all_members_verified": true
+  },
+  "members_manifest": {
+    "path": "docs/benchmarks/transformer-training-evidence/split-square128-isolated-20261119/members.json",
+    "sha256": "4ef861e30723dddf6f0e26049fd5486d49a71dbb1619ebbb4c61486abc33f75a"
+  },
+  "addendum": {
+    "path": "target/split-square128-build-owner-close-v1/qualification-addendum.json",
+    "sha256": "88560e1889c8a75daa4ce6876d50156cdc4195d913c2c09ff9a06dc085e5c85c"
+  },
+  "controller": {
+    "path": "target/split-square128-build-owner-close-v1/close.py",
+    "sha256": "fd0ca82286ba03fc941eccd341a7572e81a4fb8b28a0e403d6f08ec5f0197054"
+  },
+  "source_archive_sha256": "e0da231e50e075eb428c6685d5c22fa93b7de1196614bb58c7f7e5b71df702f1",
+  "test_binary_sha256": "9cc142ebf45cb0a5c5d77ab29bddefe0615df264255e601c19ec01708441c086",
+  "BUILD_READY_qualification_sha256": "22b819551a5c52b45b7e11378694d37101820620724f3dcb948f60576acb75ac",
+  "raw_numeric_arrays_persisted": false,
+  "executables_archived": false,
+  "complete_update_or_performance_qualification": false,
+  "independent_review_pending": true
+}

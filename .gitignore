@@ -5,3 +5,20 @@ mnist_trace.json
 
 __pycache__/
 *.py[cod]
+
+# Large local benchmark captures and duplicate source snapshots. Keep the
+# compact scorecard, reports and audit manifests in Git instead.
+docs/benchmarks/kernel-paper-performance.json
+docs/benchmarks/transformer-training-performance.json
+docs/benchmarks/transformer-training-parity.json
+docs/benchmarks/transformer-training-parity.json.gz
+docs/benchmarks/transformer-training-sources/**
+!docs/benchmarks/transformer-training-sources/*.py
+!docs/benchmarks/transformer-training-sources/*.rs
+!docs/benchmarks/transformer-training-sources/README.md
+docs/benchmarks/transformer-training-evidence/**
+!docs/benchmarks/transformer-training-evidence/**/
+!docs/benchmarks/transformer-training-evidence/**/*.md
+!docs/benchmarks/transformer-training-evidence/**/*.json
+docs/benchmarks/transformer-training-evidence/**/publication/
+docs/benchmarks/transformer-training-evidence/**/paired-vector-batch-build-v3*/
